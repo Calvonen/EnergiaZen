@@ -1,15 +1,48 @@
-import { View, Text, StyleSheet } from "react-native";
+import { useEffect, useMemo, useRef } from "react";
+import { Animated, StyleSheet, Text, View } from "react-native";
+
+const currentPrice = 2.4;
+const cheapPriceLimit = 5;
+const expensivePriceLimit = 15;
 
 export default function HomeScreen() {
+  const priceAnimation = useRef(new Animated.Value(currentPrice)).current;
+
+  useEffect(() => {
+    priceAnimation.stopAnimation();
+
+    Animated.timing(priceAnimation, {
+      toValue: currentPrice,
+      duration: 800,
+      useNativeDriver: false,
+    }).start();
+  }, [priceAnimation]);
+
+  const ringAnimatedStyle = useMemo(
+    () => ({
+      borderColor: priceAnimation.interpolate({
+        inputRange: [cheapPriceLimit, expensivePriceLimit],
+        outputRange: ["#7dff9b", "#ff8c7d"],
+        extrapolate: "clamp",
+      }),
+      shadowColor: priceAnimation.interpolate({
+        inputRange: [cheapPriceLimit, expensivePriceLimit],
+        outputRange: ["#7dff9b", "#ff8c7d"],
+        extrapolate: "clamp",
+      }),
+    }),
+    [priceAnimation]
+  );
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
 
-      <View style={styles.ring}>
+      <Animated.View style={[styles.ring, ringAnimatedStyle]}>
         <Text style={styles.decision}>LÄMMITÄ NYT</Text>
         <Text style={styles.price}>2,4</Text>
         <Text style={styles.unit}>c/kWh</Text>
-      </View>
+      </Animated.View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>🔥 Varaaja</Text>
@@ -41,10 +74,8 @@ const styles = StyleSheet.create({
     height: 250,
     borderRadius: 125,
     borderWidth: 5,
-    borderColor: "#7dff9b",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#7dff9b",
     shadowOpacity: 0.9,
     shadowRadius: 35,
     elevation: 20,
