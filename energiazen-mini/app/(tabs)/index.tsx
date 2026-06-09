@@ -1,98 +1,95 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { View, Text, StyleSheet } from "react-native";
 
 export default function HomeScreen() {
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <View style={styles.container}>
+      <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      <View style={styles.ring}>
+        <Text style={styles.decision}>LÄMMITÄ NYT</Text>
+        <Text style={styles.price}>2,4</Text>
+        <Text style={styles.unit}>c/kWh</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🔥 Varaaja</Text>
+        <Text style={styles.cardValue}>58 °C</Text>
+      </View>
+
+      <Text style={styles.info}>💧 Lämmin vesi riittää noin 17 h</Text>
+      <Text style={styles.info}>🌙 Seuraava halpa jakso 01:00–05:00</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
+    backgroundColor: "#050816",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  title: {
+    color: "white",
+    fontSize: 30,
+    fontWeight: "900",
+    marginBottom: 34,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  ring: {
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    borderWidth: 5,
+    borderColor: "#7dff9b",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#7dff9b",
+    shadowOpacity: 0.9,
+    shadowRadius: 35,
+    elevation: 20,
+    marginBottom: 34,
+  },
+  decision: {
+    color: "#7dff9b",
+    fontSize: 22,
+    fontWeight: "900",
+    marginBottom: 14,
+  },
+  price: {
+    color: "white",
+    fontSize: 64,
+    fontWeight: "900",
+  },
+  unit: {
+    color: "#a6ffd0",
+    fontSize: 18,
+    marginTop: -4,
+  },
+  card: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(125,255,155,0.35)",
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 20,
+    width: "100%",
+    marginBottom: 18,
+  },
+  cardTitle: {
+    color: "#9cb8ff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  cardValue: {
+    color: "white",
+    fontSize: 34,
+    fontWeight: "900",
+    marginTop: 6,
+  },
+  info: {
+    color: "#c8d4ff",
+    fontSize: 16,
+    textAlign: "center",
+    marginTop: 12,
   },
 });
