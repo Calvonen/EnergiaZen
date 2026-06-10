@@ -365,7 +365,7 @@ export default function HomeScreen() {
               ],
             ]}
           >
-            <Text style={styles.cardLabel}>🔥 Varaajan lämpötila</Text>
+            <Text style={styles.cardIcon}>🔥</Text>
             <Text style={styles.cardValue}>{tankTemperature} °C</Text>
             <Text
               style={[
@@ -381,7 +381,7 @@ export default function HomeScreen() {
           </Animated.View>
 
           <View style={styles.metricCard}>
-            <Text style={styles.cardLabel}>💧 Lämmin vesi riittää</Text>
+            <Text style={styles.cardIcon}>💧</Text>
             <Text style={styles.cardValue}>{warmWaterHours} h</Text>
           </View>
         </View>
@@ -723,12 +723,14 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   metricCard: {
+    alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.08)",
     borderColor: "rgba(125,232,255,0.24)",
     borderRadius: 24,
     borderWidth: 1,
     flex: 1,
     minHeight: 104,
+    justifyContent: "center",
     paddingHorizontal: 14,
     paddingVertical: 12,
     shadowColor: "#1df4c2",
@@ -741,25 +743,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.32,
     shadowRadius: 20,
   },
-  cardLabel: {
-    color: "#b7c7ea",
-    fontSize: 14,
-    fontWeight: "800",
-    lineHeight: 18,
+  cardIcon: {
+    fontSize: 22,
+    lineHeight: 26,
+    marginBottom: 2,
+    textAlign: "center",
   },
   cardValue: {
     color: "#ffffff",
     fontSize: 32,
     fontWeight: "900",
     letterSpacing: -0.8,
-    marginTop: 12,
+    lineHeight: 38,
+    textAlign: "center",
   },
   heatingStateText: {
     color: "#8ea4cf",
     fontSize: 12,
     fontWeight: "900",
     letterSpacing: 0.2,
-    marginTop: 3,
+    marginTop: 2,
+    textAlign: "center",
   },
   activeHeatingStateText: {
     textShadowColor: "rgba(255,255,255,0.18)",
