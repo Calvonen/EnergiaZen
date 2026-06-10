@@ -59,6 +59,12 @@ type HourlyPrice = {
   price: number;
 };
 
+type HeatingPlanStatus = "completed" | "planned" | "missed";
+
+type HeatingPlanHour = HourlyPrice & {
+  status: HeatingPlanStatus;
+};
+
 function getPriceTheme(price: number) {
   if (price <= 3) {
     return { ringColor: "#72ff9d" };
@@ -168,15 +174,40 @@ function getAveragePrice(prices: HourlyPrice[]) {
 function selectHeatingRecommendation(
   prices: HourlyPrice[],
   currentHourStart: Date,
+  heatedHourNumbers: Set<number>,
 ) {
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
     new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
   );
-  const remainingTodayPrices = prices.filter(
+  const todayPrices = prices.filter(
+    (item) => formatHelsinkiDateKey(item.date) === todayKey,
+  );
+  const remainingTodayPrices = todayPrices.filter(
+    (item) => item.endDate.getTime() > currentHourStart.getTime(),
+  );
+  const plannedTodayHours = getCheapestHours(todayPrices, dailyHeatingHours);
+  const completedTodayHours = sortHoursChronologically(
+    todayPrices.filter(
+      (item) =>
+        heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
+        item.date.getTime() <= currentHourStart.getTime(),
+    ),
+  ).slice(0, dailyHeatingHours);
+  const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
+  const completedHourNumbers = new Set(
+    completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
+  );
+  const missedPlannedTodayHours = plannedTodayHours.filter(
     (item) =>
-      formatHelsinkiDateKey(item.date) === todayKey &&
-      item.endDate.getTime() > currentHourStart.getTime(),
+      !completedHourIds.has(item.id) &&
+      item.endDate.getTime() <= currentHourStart.getTime(),
+  );
+  const remainingHeatingNeed = Math.max(
+    dailyHeatingHours -
+      completedTodayHours.length -
+      missedPlannedTodayHours.length,
+    0,
   );
   const tomorrowPrices = prices.filter(
     (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
@@ -194,10 +225,59 @@ function selectHeatingRecommendation(
     cheapestTomorrowHours.length === dailyHeatingHours
       ? getAveragePrice(cheapestTomorrowHours)
       : null;
+  const toPlanHours = (selectedHours: HourlyPrice[]) => {
+    const plannedById = new Map<string, HourlyPrice>();
+
+    for (const item of selectedHours) {
+      plannedById.set(item.id, item);
+    }
+
+    for (const item of completedTodayHours) {
+      plannedById.set(item.id, item);
+    }
+
+    for (const item of missedPlannedTodayHours) {
+      plannedById.set(item.id, item);
+    }
+
+    return sortHoursChronologically([...plannedById.values()]).map(
+      (item): HeatingPlanHour => {
+        const isCompleted = completedHourIds.has(item.id);
+        const isMissed =
+          !isCompleted && item.endDate.getTime() <= currentHourStart.getTime();
+
+        return {
+          ...item,
+          status: isCompleted ? "completed" : isMissed ? "missed" : "planned",
+        };
+      },
+    );
+  };
+  const futureCandidates = (source: HourlyPrice[]) =>
+    source.filter(
+      (item) =>
+        item.endDate.getTime() > currentHourStart.getTime() &&
+        !completedHourIds.has(item.id) &&
+        !completedHourNumbers.has(getHelsinkiHourNumber(item.date)),
+    );
+
+  if (remainingHeatingNeed === 0) {
+    return {
+      hours: toPlanHours([]),
+      realizedHours: completedTodayHours.length,
+      reason: "Päivän 3 h lämmitystavoite on täynnä",
+    };
+  }
 
   if (averageTomorrowPrice === null || averageTodayPrice === null) {
     return {
-      hours: sortHoursChronologically(cheapestTodayHours),
+      hours: toPlanHours(
+        getCheapestHours(
+          futureCandidates(remainingTodayPrices),
+          remainingHeatingNeed,
+        ),
+      ),
+      realizedHours: completedTodayHours.length,
       reason: "Normaali 3 h lämmitys",
     };
   }
@@ -218,9 +298,13 @@ function selectHeatingRecommendation(
 
   if (tomorrowIsClearlyCheaper && warmWaterCanWait) {
     return {
-      hours: sortHoursChronologically(
-        getCheapestHours(remainingTodayPrices, maintenanceHeatingHours),
+      hours: toPlanHours(
+        getCheapestHours(
+          futureCandidates(remainingTodayPrices),
+          Math.min(maintenanceHeatingHours, remainingHeatingNeed),
+        ),
       ),
+      realizedHours: completedTodayHours.length,
       reason: "Huomenna selvästi halvempaa – säästetään varaajaa",
     };
   }
@@ -229,16 +313,19 @@ function selectHeatingRecommendation(
     (item) => item.price < averageTomorrowPrice + priceDifferenceThreshold,
   );
   const selectedHours = getCheapestHours(
-    acceptableTodayHours.length >= dailyHeatingHours
-      ? acceptableTodayHours
-      : remainingTodayPrices,
-    dailyHeatingHours,
+    futureCandidates(
+      acceptableTodayHours.length >= remainingHeatingNeed
+        ? acceptableTodayHours
+        : remainingTodayPrices,
+    ),
+    remainingHeatingNeed,
   );
   const todayIsClearlyCheaper =
     averageTomorrowPrice - averageTodayPrice > priceDifferenceThreshold;
 
   return {
-    hours: sortHoursChronologically(selectedHours),
+    hours: toPlanHours(selectedHours),
+    realizedHours: completedTodayHours.length,
     reason: todayIsClearlyCheaper
       ? "Tänään edullisempaa kuin huomenna"
       : "Normaali 3 h lämmitys",
@@ -308,9 +395,15 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
+  const todayHeatedHourNumbers = useMemo(() => new Set(todayHeatedHours), []);
   const heatingRecommendation = useMemo(
-    () => selectHeatingRecommendation(hourlyPrices, currentHourStart),
-    [currentHourStart, hourlyPrices],
+    () =>
+      selectHeatingRecommendation(
+        hourlyPrices,
+        currentHourStart,
+        todayHeatedHourNumbers,
+      ),
+    [currentHourStart, hourlyPrices, todayHeatedHourNumbers],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -332,11 +425,22 @@ export default function HomeScreen() {
 
     const plannedHours =
       selectedDay === "today"
-        ? recommendedHeatingHours
+        ? recommendedHeatingHours.filter((item) => item.status === "planned")
         : tomorrowPlannedHeatingHours;
 
     return new Set(plannedHours.map((item) => item.id));
   }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
+  const missedHeatingHourIds = useMemo(() => {
+    if (selectedDay !== "today") {
+      return new Set<string>();
+    }
+
+    return new Set(
+      recommendedHeatingHours
+        .filter((item) => item.status === "missed")
+        .map((item) => item.id),
+    );
+  }, [recommendedHeatingHours, selectedDay]);
   const heatedHourNumbers = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set(yesterdayHeatedHours);
@@ -573,24 +677,42 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cheapPeriodCard}>
-          <Text style={styles.cheapPeriodLabel}>⭐ Halvimmat tunnit</Text>
+          <Text style={styles.cheapPeriodLabel}>Päivän lämmitys</Text>
+          <Text style={styles.heatingProgressText}>
+            Toteutunut {heatingRecommendation.realizedHours}/{dailyHeatingHours}
+            h
+          </Text>
           {recommendedHeatingHours.length === 0 ? (
             <Text style={styles.heatingHoursMessage}>
-              Haetaan lämmitystunteja...
+              {heatingRecommendation.realizedHours >= dailyHeatingHours
+                ? "Päivän tavoite täynnä"
+                : "Haetaan lämmitystunteja..."}
             </Text>
           ) : (
             <View style={styles.heatingHoursList}>
               <Text style={styles.heatingReasonText}>
                 {heatingRecommendation.reason}
               </Text>
-              {recommendedHeatingHours.map((item) => (
-                <View key={item.id} style={styles.heatingHourRow}>
-                  <Text style={styles.heatingHourTime}>{item.hourLabel}</Text>
-                  <Text style={styles.heatingHourPrice}>
-                    {formatFinnishDecimal(item.price)} c/kWh
-                  </Text>
-                </View>
-              ))}
+              {recommendedHeatingHours.map((item) => {
+                const heatingMarker =
+                  item.status === "completed"
+                    ? "🔥"
+                    : item.status === "missed"
+                      ? "⚠️"
+                      : "⭐";
+
+                return (
+                  <View key={item.id} style={styles.heatingHourRow}>
+                    <Text style={styles.heatingHourMarker}>
+                      {heatingMarker}
+                    </Text>
+                    <Text style={styles.heatingHourTime}>{item.hourLabel}</Text>
+                    <Text style={styles.heatingHourPrice}>
+                      {formatFinnishDecimal(item.price)} c/kWh
+                    </Text>
+                  </View>
+                );
+              })}
             </View>
           )}
         </View>
@@ -705,14 +827,20 @@ export default function HomeScreen() {
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
-                          const isHeatedHour = heatedHourNumbers.has(
-                            getHelsinkiHourNumber(item.date),
-                          );
+                          const isHeatedHour =
+                            heatedHourNumbers.has(
+                              getHelsinkiHourNumber(item.date),
+                            ) &&
+                            (selectedDay !== "today" ||
+                              item.date.getTime() <=
+                                currentHourStart.getTime());
                           const heatingMarker = isHeatedHour
                             ? "🔥"
-                            : plannedHeatingHourIds.has(item.id)
-                              ? "⭐"
-                              : null;
+                            : missedHeatingHourIds.has(item.id)
+                              ? "⚠️"
+                              : plannedHeatingHourIds.has(item.id)
+                                ? "⭐"
+                                : null;
                           const barHeight = Math.max(
                             (Math.max(item.price, 0) / chartScaleMax) *
                               chartPlotHeight,
@@ -1009,6 +1137,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: "center",
   },
+  heatingProgressText: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 6,
+    textAlign: "center",
+  },
   heatingHoursList: {
     gap: 5,
     marginTop: 8,
@@ -1025,6 +1160,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
+  },
+  heatingHourMarker: {
+    fontSize: 18,
+    lineHeight: 24,
+    marginRight: 7,
+    minWidth: 24,
+    textAlign: "center",
   },
   heatingHourTime: {
     color: "#ffffff",
