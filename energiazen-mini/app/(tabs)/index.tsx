@@ -1,12 +1,30 @@
-import { View, Text, StyleSheet } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+
+const currentPrice = 2.4;
+const cheapPriceLimit = 5;
+const expensivePriceLimit = 15;
+
+function getPriceColor(price: number) {
+  if (price <= cheapPriceLimit) {
+    return "#7dff9b";
+  }
+
+  if (price >= expensivePriceLimit) {
+    return "#ff8c7d";
+  }
+
+  return "#ffd27d";
+}
 
 export default function HomeScreen() {
+  const ringColor = getPriceColor(currentPrice);
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
 
-      <View style={styles.ring}>
-        <Text style={styles.decision}>LÄMMITÄ NYT</Text>
+      <View style={[styles.ring, { borderColor: ringColor }]}>
+        <Text style={[styles.decision, { color: ringColor }]}>LÄMMITÄ NYT</Text>
         <Text style={styles.price}>2,4</Text>
         <Text style={styles.unit}>c/kWh</Text>
       </View>
@@ -41,17 +59,12 @@ const styles = StyleSheet.create({
     height: 250,
     borderRadius: 125,
     borderWidth: 5,
-    borderColor: "#7dff9b",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#7dff9b",
-    shadowOpacity: 0.9,
-    shadowRadius: 35,
     elevation: 20,
     marginBottom: 34,
   },
   decision: {
-    color: "#7dff9b",
     fontSize: 22,
     fontWeight: "900",
     marginBottom: 14,
