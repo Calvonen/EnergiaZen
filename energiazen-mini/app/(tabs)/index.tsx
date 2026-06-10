@@ -80,9 +80,7 @@ function getChartDayKey(day: DaySelection, date = new Date()) {
     return formatHelsinkiDateKey(date);
   }
 
-  return formatHelsinkiDateKey(
-    new Date(date.getTime() + 24 * 60 * 60 * 1000),
-  );
+  return formatHelsinkiDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
 }
 
 function startOfCurrentHour(date = new Date()) {
@@ -335,9 +333,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cheapPeriodCard}>
-          <Text style={styles.cheapPeriodLabel}>
-            🌙 Suositellut lämmitystunnit
-          </Text>
+          <Text style={styles.cheapPeriodLabel}>🌙 Halvimmat tunnit</Text>
           {recommendedHeatingHours.length === 0 ? (
             <Text style={styles.heatingHoursMessage}>
               Haetaan lämmitystunteja...
@@ -360,7 +356,6 @@ export default function HomeScreen() {
           <View style={styles.chartHeader}>
             <View>
               <Text style={styles.chartTitle}>Päivän hintakaavio</Text>
-              <Text style={styles.chartSubtitle}>00:00–23:00</Text>
             </View>
             <Text style={styles.chartUnit}>c/kWh</Text>
           </View>
@@ -488,8 +483,8 @@ export default function HomeScreen() {
                     ?.hourLabel ?? "12:00"}
                 </Text>
                 <Text style={styles.chartTime}>
-                  {chartHourlyPrices[chartHourlyPrices.length - 1]
-                    ?.hourLabel ?? "23:00"}
+                  {chartHourlyPrices[chartHourlyPrices.length - 1]?.hourLabel ??
+                    "23:00"}
                 </Text>
               </View>
 
@@ -637,8 +632,9 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     flex: 1,
-    minHeight: 126,
-    padding: 16,
+    minHeight: 104,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     shadowColor: "#1df4c2",
     shadowOpacity: 0.18,
     shadowRadius: 18,
@@ -647,13 +643,14 @@ const styles = StyleSheet.create({
     color: "#b7c7ea",
     fontSize: 14,
     fontWeight: "800",
-    lineHeight: 20,
+    lineHeight: 18,
   },
   cardValue: {
     color: "#ffffff",
-    fontSize: 34,
+    fontSize: 32,
     fontWeight: "900",
-    marginTop: 18,
+    letterSpacing: -0.8,
+    marginTop: 12,
   },
   cheapPeriodCard: {
     alignItems: "center",
@@ -661,8 +658,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(54,244,212,0.28)",
     borderRadius: 26,
     borderWidth: 1,
-    marginBottom: 18,
-    padding: 18,
+    marginBottom: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     width: "100%",
   },
   cheapPeriodLabel: {
@@ -678,8 +676,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   heatingHoursList: {
-    gap: 8,
-    marginTop: 10,
+    gap: 5,
+    marginTop: 8,
     width: "100%",
   },
   heatingHourRow: {
@@ -689,15 +687,17 @@ const styles = StyleSheet.create({
   },
   heatingHourTime: {
     color: "#ffffff",
-    fontSize: 22,
+    fontSize: 21,
     fontWeight: "900",
+    lineHeight: 27,
     minWidth: 78,
     textAlign: "left",
   },
   heatingHourPrice: {
     color: "#cfe9ff",
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "800",
+    lineHeight: 24,
     minWidth: 116,
     textAlign: "left",
   },
