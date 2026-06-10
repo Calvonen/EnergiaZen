@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -275,6 +276,8 @@ export default function HomeScreen() {
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [priceError, setPriceError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DaySelection>("today");
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
@@ -361,49 +364,61 @@ export default function HomeScreen() {
     null,
   );
 
+  const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch(priceApiUrl, {
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error("Price fetch failed");
+      }
+
+      const data = (await response.json()) as SpotPriceResponse[];
+      const prices = normalizeSpotPrices(data);
+
+      if (prices.length === 0) {
+        throw new Error("Hourly prices missing from response");
+      }
+
+      setHourlyPrices(prices);
+      setSelectedHourlyPrice((selected) =>
+        selected
+          ? (prices.find((item) => item.id === selected.id) ?? null)
+          : null,
+      );
+      setPriceError(null);
+    } catch {
+      if (!signal?.aborted) {
+        setPriceError(
+          "Hintojen päivitys epäonnistui. Näytetään aiemmat tiedot.",
+        );
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
 
-    async function fetchHourlyPrices() {
-      setIsPriceLoading(true);
-      try {
-        const response = await fetch(priceApiUrl, {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Price fetch failed");
-        }
-
-        const data = (await response.json()) as SpotPriceResponse[];
-        const prices = normalizeSpotPrices(data);
-
-        if (prices.length === 0) {
-          throw new Error("Hourly prices missing from response");
-        }
-
-        setHourlyPrices(prices);
-        setSelectedHourlyPrice((selected) =>
-          selected
-            ? (prices.find((item) => item.id === selected.id) ?? null)
-            : null,
-        );
-      } catch {
-        if (!controller.signal.aborted) {
-          setHourlyPrices([]);
-          setSelectedHourlyPrice(null);
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsPriceLoading(false);
-        }
+    setIsPriceLoading(true);
+    fetchHourlyPrices(controller.signal).finally(() => {
+      if (!controller.signal.aborted) {
+        setIsPriceLoading(false);
       }
-    }
-
-    fetchHourlyPrices();
+    });
 
     return () => controller.abort();
-  }, []);
+  }, [fetchHourlyPrices]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+
+    try {
+      await fetchHourlyPrices();
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [fetchHourlyPrices]);
 
   useEffect(() => {
     setSelectedHourlyPrice((selected) =>
@@ -472,11 +487,25 @@ export default function HomeScreen() {
 
       <ScrollView
         contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            colors={["#36f4d4"]}
+            onRefresh={handleRefresh}
+            progressBackgroundColor="#050816"
+            refreshing={isRefreshing}
+            tintColor="#36f4d4"
+          />
+        }
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
           <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
           <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
+          {priceError ? (
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {priceError}
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.ringStage}>
@@ -848,6 +877,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     marginTop: 5,
+    textAlign: "center",
+  },
+  errorText: {
+    color: "#ffad4d",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 6,
     textAlign: "center",
   },
   ringStage: {
