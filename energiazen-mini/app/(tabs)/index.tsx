@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, ScrollView, StyleSheet, Text, View } from "react-native";
 
-const currentPrice = 2.4;
 const tankTemperature = 58;
 const warmWaterHours = 17;
 const nextCheapPeriod = "01:00–05:00";
 const hourlyPrices = [9.4, 8.2, 5.1, 2.8, 2.4, 3.2, 6.8, 10.5, 13.2, 16.5, 18.1, 14.8, 10.9, 7.5, 4.8, 3.9, 5.7, 8.6, 12.4, 15.2, 11.1, 7.2, 4.3, 3.1];
+const priceApiUrl = "https://api.spot-hinta.fi/JustNow?region=FI&priceResolution=60";
+
+type SpotPriceResponse = {
+  PriceNoTax?: number | null;
+  PriceWithTax?: number | null;
+};
 
 function getPriceTheme(price: number) {
   if (price <= 3) {
@@ -29,8 +34,46 @@ function formatFinnishDecimal(value: number) {
 
 export default function HomeScreen() {
   const pulseAnimation = useRef(new Animated.Value(0)).current;
-  const { ringColor, status } = getPriceTheme(currentPrice);
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [isPriceLoading, setIsPriceLoading] = useState(true);
+  const { ringColor, status } = currentPrice === null ? { ringColor: "#36f4d4", status: "" } : getPriceTheme(currentPrice);
   const maxChartPrice = Math.max(...hourlyPrices);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function fetchCurrentPrice() {
+      setIsPriceLoading(true);
+      try {
+        const response = await fetch(priceApiUrl, { signal: controller.signal });
+
+        if (!response.ok) {
+          throw new Error("Price fetch failed");
+        }
+
+        const data = (await response.json()) as SpotPriceResponse;
+        const price = data.PriceWithTax ?? data.PriceNoTax;
+
+        if (typeof price !== "number" || Number.isNaN(price)) {
+          throw new Error("Price missing from response");
+        }
+
+        setCurrentPrice(price);
+      } catch {
+        if (!controller.signal.aborted) {
+          setCurrentPrice(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsPriceLoading(false);
+        }
+      }
+    }
+
+    fetchCurrentPrice();
+
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const animation = Animated.loop(
@@ -85,9 +128,15 @@ export default function HomeScreen() {
         <View style={styles.ringStage}>
           <Animated.View style={[styles.pulse, pulseStyle, { borderColor: ringColor, shadowColor: ringColor }]} />
           <View style={[styles.ring, { borderColor: ringColor, shadowColor: ringColor }]}>
-            <Text style={[styles.status, { color: ringColor }]}>{status}</Text>
-            <Text style={styles.price}>{formatFinnishDecimal(currentPrice)}</Text>
-            <Text style={styles.unit}>c/kWh</Text>
+            {currentPrice === null ? (
+              <Text style={styles.priceMessage}>{isPriceLoading ? "Haetaan hintaa..." : "Hintaa ei saatavilla"}</Text>
+            ) : (
+              <>
+                <Text style={[styles.status, { color: ringColor }]}>{status}</Text>
+                <Text style={styles.price}>{formatFinnishDecimal(currentPrice)}</Text>
+                <Text style={styles.unit}>c/kWh</Text>
+              </>
+            )}
           </View>
         </View>
 
@@ -229,6 +278,14 @@ const styles = StyleSheet.create({
     fontSize: 68,
     fontWeight: "900",
     letterSpacing: -2,
+  },
+  priceMessage: {
+    color: "#ffffff",
+    fontSize: 23,
+    fontWeight: "900",
+    lineHeight: 31,
+    paddingHorizontal: 28,
+    textAlign: "center",
   },
   unit: {
     color: "#cfe9ff",
