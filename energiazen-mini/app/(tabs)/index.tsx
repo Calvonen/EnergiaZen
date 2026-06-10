@@ -28,6 +28,10 @@ function getPriceTheme(price: number) {
   return { ringColor: "#ff5f6d", status: "KALLIS" };
 }
 
+function normalizePriceToCents(value: number) {
+  return value < 1 ? value * 100 : value;
+}
+
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
@@ -52,13 +56,18 @@ export default function HomeScreen() {
         }
 
         const data = (await response.json()) as SpotPriceResponse;
+        console.log("Spot price API response", data);
+
         const price = data.PriceWithTax ?? data.PriceNoTax;
 
         if (typeof price !== "number" || Number.isNaN(price)) {
           throw new Error("Price missing from response");
         }
 
-        setCurrentPrice(price);
+        const normalizedPrice = normalizePriceToCents(price);
+        console.log("Normalized spot price (c/kWh)", normalizedPrice);
+
+        setCurrentPrice(normalizedPrice);
       } catch {
         if (!controller.signal.aborted) {
           setCurrentPrice(null);
