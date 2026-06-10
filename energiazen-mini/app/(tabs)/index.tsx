@@ -20,8 +20,10 @@ const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
+const yesterdayHeatedHours = [1, 4, 6];
+const todayHeatedHours = [0, 5];
 
-type DaySelection = "today" | "tomorrow";
+type DaySelection = "yesterday" | "today" | "tomorrow";
 
 const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
@@ -31,6 +33,12 @@ const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
 });
 
 const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "2-digit",
+  hour12: false,
+  timeZone: "Europe/Helsinki",
+});
+
+const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   hour12: false,
   timeZone: "Europe/Helsinki",
@@ -83,11 +91,35 @@ function formatHelsinkiDateKey(date: Date) {
 }
 
 function getChartDayKey(day: DaySelection, date = new Date()) {
+  if (day === "yesterday") {
+    return formatHelsinkiDateKey(
+      new Date(date.getTime() - 24 * 60 * 60 * 1000),
+    );
+  }
+
   if (day === "today") {
     return formatHelsinkiDateKey(date);
   }
 
   return formatHelsinkiDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
+}
+
+function getHelsinkiHourNumber(date: Date) {
+  const hour = Number(helsinkiHourFormatter.format(date));
+
+  return hour === 24 ? 0 : hour;
+}
+
+function getDayLabel(day: DaySelection) {
+  if (day === "yesterday") {
+    return "Eilen";
+  }
+
+  if (day === "today") {
+    return "Tänään";
+  }
+
+  return "Huomenna";
 }
 
 function startOfCurrentHour(date = new Date()) {
@@ -278,6 +310,41 @@ export default function HomeScreen() {
     [currentHourStart, hourlyPrices],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
+  const tomorrowPlannedHeatingHours = useMemo(() => {
+    const tomorrowKey = getChartDayKey("tomorrow");
+
+    return sortHoursChronologically(
+      getCheapestHours(
+        hourlyPrices.filter(
+          (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
+        ),
+        dailyHeatingHours,
+      ),
+    );
+  }, [hourlyPrices]);
+  const plannedHeatingHourIds = useMemo(() => {
+    if (selectedDay === "yesterday") {
+      return new Set<string>();
+    }
+
+    const plannedHours =
+      selectedDay === "today"
+        ? recommendedHeatingHours
+        : tomorrowPlannedHeatingHours;
+
+    return new Set(plannedHours.map((item) => item.id));
+  }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
+  const heatedHourNumbers = useMemo(() => {
+    if (selectedDay === "yesterday") {
+      return new Set(yesterdayHeatedHours);
+    }
+
+    if (selectedDay === "today") {
+      return new Set(todayHeatedHours);
+    }
+
+    return new Set<number>();
+  }, [selectedDay]);
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
       item.date.getTime() <= currentHourStart.getTime() &&
@@ -502,15 +569,17 @@ export default function HomeScreen() {
         <View style={styles.chartCard}>
           <View style={styles.chartHeader}>
             <View>
-              <Text style={styles.chartTitle}>Päivän hintakaavio</Text>
+              <Text style={styles.chartTitle}>
+                {getDayLabel(selectedDay)} hintakaavio
+              </Text>
             </View>
             <Text style={styles.chartUnit}>c/kWh</Text>
           </View>
 
           <View style={styles.daySelector}>
-            {(["today", "tomorrow"] as const).map((day) => {
+            {(["yesterday", "today", "tomorrow"] as const).map((day) => {
               const isActive = selectedDay === day;
-              const label = day === "today" ? "Tänään" : "Huomenna";
+              const label = getDayLabel(day);
 
               return (
                 <Pressable
@@ -548,7 +617,9 @@ export default function HomeScreen() {
                 <Text style={styles.chartMessage}>
                   {selectedDay === "tomorrow"
                     ? "Huomisen hinnat eivät ole vielä saatavilla"
-                    : "Hintakaaviota ei saatavilla"}
+                    : selectedDay === "yesterday"
+                      ? "Eilisen hintoja ei ole saatavilla"
+                      : "Hintakaaviota ei saatavilla"}
                 </Text>
               </View>
             ) : (
@@ -605,6 +676,14 @@ export default function HomeScreen() {
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
+                          const isHeatedHour = heatedHourNumbers.has(
+                            getHelsinkiHourNumber(item.date),
+                          );
+                          const heatingMarker = isHeatedHour
+                            ? "🔥"
+                            : plannedHeatingHourIds.has(item.id)
+                              ? "⭐"
+                              : null;
                           const barHeight = Math.max(
                             (Math.max(item.price, 0) / chartScaleMax) *
                               chartPlotHeight,
@@ -642,6 +721,15 @@ export default function HomeScreen() {
                                   </Text>
                                   <View style={styles.chartTooltipArrow} />
                                 </View>
+                              ) : null}
+
+                              {heatingMarker ? (
+                                <Text
+                                  pointerEvents="none"
+                                  style={styles.chartHourMarker}
+                                >
+                                  {heatingMarker}
+                                </Text>
                               ) : null}
 
                               <View
@@ -1047,6 +1135,12 @@ const styles = StyleSheet.create({
     height: chartPlotHeight,
     justifyContent: "flex-end",
     overflow: "visible",
+  },
+  chartHourMarker: {
+    fontSize: 15,
+    lineHeight: 17,
+    marginBottom: 3,
+    textAlign: "center",
   },
   chartBar: {
     borderRadius: 8,
