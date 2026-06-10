@@ -10,7 +10,6 @@ import {
 
 const tankTemperature = 58;
 const warmWaterHours = 17;
-const nextCheapPeriod = "01:00–05:00";
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const hoursToShow = 24;
@@ -112,14 +111,34 @@ export default function HomeScreen() {
       item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now(),
   );
   const currentPrice = currentPriceItem?.price ?? null;
-  const { ringColor, status } =
+  const { ringColor } =
     currentPrice === null
-      ? { ringColor: "#36f4d4", status: "" }
+      ? { ringColor: "#36f4d4" }
       : getPriceTheme(currentPrice);
   const maxChartPrice = Math.max(
     ...hourlyPrices.map((item) => Math.max(item.price, 0)),
     1,
   );
+  const recommendedHeatingHours = useMemo(
+    () =>
+      [...hourlyPrices]
+        .sort((a, b) => {
+          if (a.price === b.price) {
+            return a.date.getTime() - b.date.getTime();
+          }
+
+          return a.price - b.price;
+        })
+        .slice(0, 3)
+        .sort((a, b) => a.date.getTime() - b.date.getTime()),
+    [hourlyPrices],
+  );
+  const isHeatingNow = recommendedHeatingHours.some(
+    (item) =>
+      item.date.getTime() <= currentHourStart.getTime() &&
+      item.endDate.getTime() > currentHourStart.getTime(),
+  );
+  const ringStatus = isHeatingNow ? "LÄMMITÄ NYT" : "ODOTA";
   const cheapestHour = hourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -249,7 +268,7 @@ export default function HomeScreen() {
             ) : (
               <>
                 <Text style={[styles.status, { color: ringColor }]}>
-                  {status}
+                  {ringStatus}
                 </Text>
                 <Text style={styles.price}>
                   {formatFinnishDecimal(currentPrice)}
@@ -273,8 +292,25 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cheapPeriodCard}>
-          <Text style={styles.cheapPeriodLabel}>🌙 Seuraava halpa jakso</Text>
-          <Text style={styles.cheapPeriodValue}>{nextCheapPeriod}</Text>
+          <Text style={styles.cheapPeriodLabel}>
+            🌙 Suositellut lämmitystunnit
+          </Text>
+          {recommendedHeatingHours.length === 0 ? (
+            <Text style={styles.heatingHoursMessage}>
+              Haetaan lämmitystunteja...
+            </Text>
+          ) : (
+            <View style={styles.heatingHoursList}>
+              {recommendedHeatingHours.map((item) => (
+                <View key={item.id} style={styles.heatingHourRow}>
+                  <Text style={styles.heatingHourTime}>{item.hourLabel}</Text>
+                  <Text style={styles.heatingHourPrice}>
+                    {formatFinnishDecimal(item.price)} c/kWh
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={styles.chartCard}>
@@ -552,11 +588,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
   },
-  cheapPeriodValue: {
+  heatingHoursMessage: {
     color: "#ffffff",
-    fontSize: 30,
+    fontSize: 22,
     fontWeight: "900",
-    marginTop: 6,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  heatingHoursList: {
+    gap: 8,
+    marginTop: 10,
+    width: "100%",
+  },
+  heatingHourRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+  },
+  heatingHourTime: {
+    color: "#ffffff",
+    fontSize: 22,
+    fontWeight: "900",
+    minWidth: 78,
+    textAlign: "left",
+  },
+  heatingHourPrice: {
+    color: "#cfe9ff",
+    fontSize: 18,
+    fontWeight: "800",
+    minWidth: 116,
+    textAlign: "left",
   },
   chartCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
