@@ -659,15 +659,6 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.chartCard}>
-          <View style={styles.chartHeader}>
-            <View>
-              <Text style={styles.chartTitle}>
-                {getDayLabel(selectedDay)} hintakaavio
-              </Text>
-            </View>
-            <Text style={styles.chartUnit}>c/kWh</Text>
-          </View>
-
           <View style={styles.daySelector}>
             {(["yesterday", "today", "tomorrow"] as const).map((day) => {
               const isActive = selectedDay === day;
@@ -740,6 +731,9 @@ export default function HomeScreen() {
                     </View>
 
                     <View style={styles.chartPlot}>
+                      <Text pointerEvents="none" style={styles.chartInnerUnit}>
+                        c/kWh
+                      </Text>
                       <View pointerEvents="none" style={styles.chartGrid}>
                         {chartScaleValues.map((value) => (
                           <View
@@ -1053,27 +1047,6 @@ const styles = StyleSheet.create({
     padding: 16,
     width: "100%",
   },
-  chartHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  chartTitle: {
-    color: "#f8fbff",
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  chartSubtitle: {
-    color: "#8ea4cf",
-    fontSize: 12,
-    fontWeight: "800",
-    marginTop: 3,
-  },
-  chartUnit: {
-    color: "#8ea4cf",
-    fontSize: 13,
-    fontWeight: "800",
-  },
   daySelector: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderColor: "rgba(255,255,255,0.12)",
@@ -1081,7 +1054,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: "row",
     gap: 6,
-    marginBottom: 14,
+    marginBottom: 8,
     padding: 5,
   },
   daySelectorButton: {
@@ -1109,16 +1082,16 @@ const styles = StyleSheet.create({
     color: "#f8fbff",
   },
   chartContent: {
-    minHeight: 234,
+    minHeight: 214,
   },
   chartEmptyState: {
     alignItems: "center",
     flex: 1,
     justifyContent: "center",
-    minHeight: 234,
+    minHeight: 214,
   },
   chartTouchArea: {
-    height: 144,
+    height: 124,
     justifyContent: "flex-end",
   },
   chartPlotRow: {
@@ -1146,6 +1119,16 @@ const styles = StyleSheet.create({
     height: chartPlotHeight,
     overflow: "visible",
     position: "relative",
+  },
+  chartInnerUnit: {
+    color: "rgba(207,233,255,0.58)",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    lineHeight: 12,
+    position: "absolute",
+    right: 0,
+    top: -16,
   },
   chartGrid: {
     bottom: 0,
