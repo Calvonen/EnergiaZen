@@ -12,7 +12,9 @@ const tankTemperature = 58;
 const warmWaterHours = 17;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
-const hoursToShow = 24;
+const dailyHeatingHours = 3;
+const maintenanceHeatingHours = 1;
+const priceDifferenceThreshold = 2;
 const chartPriceStep = 5;
 const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
@@ -106,6 +108,110 @@ function getChartScaleValues(maxPrice: number) {
   );
 }
 
+function getCheapestHours(prices: HourlyPrice[], count: number) {
+  return [...prices]
+    .sort((a, b) => {
+      if (a.price === b.price) {
+        return a.date.getTime() - b.date.getTime();
+      }
+
+      return a.price - b.price;
+    })
+    .slice(0, count);
+}
+
+function sortHoursChronologically(prices: HourlyPrice[]) {
+  return [...prices].sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+function getAveragePrice(prices: HourlyPrice[]) {
+  if (prices.length === 0) {
+    return null;
+  }
+
+  return prices.reduce((sum, item) => sum + item.price, 0) / prices.length;
+}
+
+function selectHeatingRecommendation(
+  prices: HourlyPrice[],
+  currentHourStart: Date,
+) {
+  const todayKey = formatHelsinkiDateKey(currentHourStart);
+  const tomorrowKey = formatHelsinkiDateKey(
+    new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
+  );
+  const remainingTodayPrices = prices.filter(
+    (item) =>
+      formatHelsinkiDateKey(item.date) === todayKey &&
+      item.endDate.getTime() > currentHourStart.getTime(),
+  );
+  const tomorrowPrices = prices.filter(
+    (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
+  );
+  const cheapestTodayHours = getCheapestHours(
+    remainingTodayPrices,
+    dailyHeatingHours,
+  );
+  const cheapestTomorrowHours = getCheapestHours(
+    tomorrowPrices,
+    dailyHeatingHours,
+  );
+  const averageTodayPrice = getAveragePrice(cheapestTodayHours);
+  const averageTomorrowPrice =
+    cheapestTomorrowHours.length === dailyHeatingHours
+      ? getAveragePrice(cheapestTomorrowHours)
+      : null;
+
+  if (averageTomorrowPrice === null || averageTodayPrice === null) {
+    return {
+      hours: sortHoursChronologically(cheapestTodayHours),
+      reason: "Normaali 3 h lämmitys",
+    };
+  }
+
+  const firstCheapTomorrowHour = sortHoursChronologically(
+    cheapestTomorrowHours,
+  )[0];
+  const hoursUntilFirstCheapTomorrow = Math.max(
+    0,
+    Math.ceil(
+      (firstCheapTomorrowHour.date.getTime() - currentHourStart.getTime()) /
+        (60 * 60 * 1000),
+    ),
+  );
+  const warmWaterCanWait = warmWaterHours >= hoursUntilFirstCheapTomorrow;
+  const tomorrowIsClearlyCheaper =
+    averageTodayPrice - averageTomorrowPrice > priceDifferenceThreshold;
+
+  if (tomorrowIsClearlyCheaper && warmWaterCanWait) {
+    return {
+      hours: sortHoursChronologically(
+        getCheapestHours(remainingTodayPrices, maintenanceHeatingHours),
+      ),
+      reason: "Huomenna selvästi halvempaa – säästetään varaajaa",
+    };
+  }
+
+  const acceptableTodayHours = remainingTodayPrices.filter(
+    (item) => item.price < averageTomorrowPrice + priceDifferenceThreshold,
+  );
+  const selectedHours = getCheapestHours(
+    acceptableTodayHours.length >= dailyHeatingHours
+      ? acceptableTodayHours
+      : remainingTodayPrices,
+    dailyHeatingHours,
+  );
+  const todayIsClearlyCheaper =
+    averageTomorrowPrice - averageTodayPrice > priceDifferenceThreshold;
+
+  return {
+    hours: sortHoursChronologically(selectedHours),
+    reason: todayIsClearlyCheaper
+      ? "Tänään edullisempaa kuin huomenna"
+      : "Normaali 3 h lämmitys",
+  };
+}
+
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
   return data
     .map((item) => {
@@ -149,13 +255,6 @@ export default function HomeScreen() {
       ),
     [chartDayKey, hourlyPrices],
   );
-  const futureHourlyPrices = useMemo(
-    () =>
-      hourlyPrices
-        .filter((item) => item.endDate.getTime() > currentHourStart.getTime())
-        .slice(0, hoursToShow),
-    [currentHourStart, hourlyPrices],
-  );
   const currentPriceItem = hourlyPrices.find(
     (item) =>
       item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now(),
@@ -174,20 +273,11 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
-  const recommendedHeatingHours = useMemo(
-    () =>
-      [...futureHourlyPrices]
-        .sort((a, b) => {
-          if (a.price === b.price) {
-            return a.date.getTime() - b.date.getTime();
-          }
-
-          return a.price - b.price;
-        })
-        .slice(0, 3)
-        .sort((a, b) => a.date.getTime() - b.date.getTime()),
-    [futureHourlyPrices],
+  const heatingRecommendation = useMemo(
+    () => selectHeatingRecommendation(hourlyPrices, currentHourStart),
+    [currentHourStart, hourlyPrices],
   );
+  const recommendedHeatingHours = heatingRecommendation.hours;
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
       item.date.getTime() <= currentHourStart.getTime() &&
@@ -394,6 +484,9 @@ export default function HomeScreen() {
             </Text>
           ) : (
             <View style={styles.heatingHoursList}>
+              <Text style={styles.heatingReasonText}>
+                {heatingRecommendation.reason}
+              </Text>
               {recommendedHeatingHours.map((item) => (
                 <View key={item.id} style={styles.heatingHourRow}>
                   <Text style={styles.heatingHourTime}>{item.hourLabel}</Text>
@@ -796,6 +889,13 @@ const styles = StyleSheet.create({
     gap: 5,
     marginTop: 8,
     width: "100%",
+  },
+  heatingReasonText: {
+    color: "#bfffee",
+    fontSize: 13,
+    fontWeight: "900",
+    marginBottom: 2,
+    textAlign: "center",
   },
   heatingHourRow: {
     alignItems: "center",
