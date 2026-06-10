@@ -50,18 +50,18 @@ type HourlyPrice = {
 
 function getPriceTheme(price: number) {
   if (price <= 3) {
-    return { ringColor: "#72ff9d", status: "HALPA" };
+    return { ringColor: "#72ff9d" };
   }
 
   if (price <= 8) {
-    return { ringColor: "#36f4d4", status: "NORMAALI" };
+    return { ringColor: "#36f4d4" };
   }
 
   if (price < 15) {
-    return { ringColor: "#ffad4d", status: "NORMAALI" };
+    return { ringColor: "#ffad4d" };
   }
 
-  return { ringColor: "#ff5f6d", status: "KALLIS" };
+  return { ringColor: "#ff5f6d" };
 }
 
 function normalizePriceToCents(value: number) {
@@ -193,7 +193,6 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
-  const ringStatus = isHeatingNow ? "LÄMMITÄ NYT" : "ODOTA";
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -295,6 +294,19 @@ export default function HomeScreen() {
     }),
     [pulseAnimation],
   );
+  const heatingCardPulseStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          scale: pulseAnimation.interpolate({
+            inputRange: [0, 1],
+            outputRange: [1, 1.018],
+          }),
+        },
+      ],
+    }),
+    [pulseAnimation],
+  );
 
   return (
     <View style={styles.screen}>
@@ -330,9 +342,6 @@ export default function HomeScreen() {
               </Text>
             ) : (
               <>
-                <Text style={[styles.status, { color: ringColor }]}>
-                  {ringStatus}
-                </Text>
                 <Text style={styles.price}>
                   {formatFinnishDecimal(currentPrice)}
                 </Text>
@@ -343,10 +352,33 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cardsRow}>
-          <View style={styles.metricCard}>
+          <Animated.View
+            style={[
+              styles.metricCard,
+              isHeatingNow && [
+                styles.heatingMetricCard,
+                {
+                  borderColor: ringColor,
+                  shadowColor: ringColor,
+                },
+                heatingCardPulseStyle,
+              ],
+            ]}
+          >
             <Text style={styles.cardLabel}>🔥 Varaajan lämpötila</Text>
             <Text style={styles.cardValue}>{tankTemperature} °C</Text>
-          </View>
+            <Text
+              style={[
+                styles.heatingStateText,
+                isHeatingNow && [
+                  styles.activeHeatingStateText,
+                  { color: ringColor },
+                ],
+              ]}
+            >
+              {isHeatingNow ? "Lämmittää" : "Ei lämmitä"}
+            </Text>
+          </Animated.View>
 
           <View style={styles.metricCard}>
             <Text style={styles.cardLabel}>💧 Lämmin vesi riittää</Text>
@@ -664,14 +696,6 @@ const styles = StyleSheet.create({
     shadowRadius: 34,
     width: 244,
   },
-  status: {
-    fontSize: 21,
-    fontWeight: "900",
-    letterSpacing: 2.2,
-    marginBottom: 10,
-    textShadowColor: "rgba(255,255,255,0.2)",
-    textShadowRadius: 12,
-  },
   price: {
     color: "#ffffff",
     fontSize: 68,
@@ -711,6 +735,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 18,
   },
+  heatingMetricCard: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1.5,
+    shadowOpacity: 0.32,
+    shadowRadius: 20,
+  },
   cardLabel: {
     color: "#b7c7ea",
     fontSize: 14,
@@ -723,6 +753,17 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.8,
     marginTop: 12,
+  },
+  heatingStateText: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+    marginTop: 3,
+  },
+  activeHeatingStateText: {
+    textShadowColor: "rgba(255,255,255,0.18)",
+    textShadowRadius: 8,
   },
   cheapPeriodCard: {
     alignItems: "center",
