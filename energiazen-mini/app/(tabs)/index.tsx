@@ -302,15 +302,12 @@ export default function HomeScreen() {
                       item.date.getTime() <= currentHourStart.getTime() &&
                       item.endDate.getTime() > currentHourStart.getTime();
                     const isCheapest = cheapestHour?.id === item.id;
-                    const isMostExpensive = mostExpensiveHour?.id === item.id;
                     const isSelected = selectedHourlyPrice?.id === item.id;
                     const barHeight =
                       18 + (Math.max(item.price, 0) / maxChartPrice) * 64;
                     const barColor = isCheapest
                       ? "#72ff9d"
-                      : isMostExpensive
-                        ? "#ff5f6d"
-                        : getPriceTheme(item.price).ringColor;
+                      : getPriceTheme(item.price).ringColor;
 
                     return (
                       <Pressable
@@ -611,9 +608,11 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   currentChartBar: {
+    borderWidth: 2,
     opacity: 1,
-    shadowOpacity: 0.72,
-    shadowRadius: 14,
+    shadowColor: "#ffffff",
+    shadowOpacity: 0.42,
+    shadowRadius: 12,
   },
   selectedChartBar: {
     borderWidth: 2,
