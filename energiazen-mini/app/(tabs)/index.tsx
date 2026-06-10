@@ -78,8 +78,8 @@ export default function HomeScreen() {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.eyebrow}>EnergiaZen Mini</Text>
-          <Text style={styles.title}>Älykäs energianhallinta</Text>
+          <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
+          <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
         </View>
 
         <View style={styles.ringStage}>
@@ -151,36 +151,42 @@ const styles = StyleSheet.create({
   glow: {
     borderRadius: 999,
     height: 280,
-    opacity: 0.42,
+    opacity: 0.27,
     position: "absolute",
+    shadowOpacity: 0.55,
+    shadowRadius: 72,
     width: 280,
   },
   greenGlow: {
-    backgroundColor: "#0cff8a",
+    backgroundColor: "#54eaa0",
+    boxShadow: "0 0 92px 44px rgba(84,234,160,0.32)",
     right: -150,
+    shadowColor: "#54eaa0",
     top: 80,
   },
   blueGlow: {
-    backgroundColor: "#168cff",
+    backgroundColor: "#5aa7ff",
     bottom: 70,
+    boxShadow: "0 0 96px 46px rgba(90,167,255,0.3)",
     left: -170,
+    shadowColor: "#5aa7ff",
   },
   header: {
     alignItems: "center",
-    marginBottom: 22,
-  },
-  eyebrow: {
-    color: "#7de8ff",
-    fontSize: 14,
-    fontWeight: "800",
-    letterSpacing: 2.4,
-    textTransform: "uppercase",
+    marginBottom: 12,
   },
   title: {
     color: "#f7fbff",
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: "900",
-    marginTop: 8,
+    letterSpacing: -0.4,
+    textAlign: "center",
+  },
+  subtitle: {
+    color: "#b9d7ff",
+    fontSize: 15,
+    fontWeight: "700",
+    marginTop: 5,
     textAlign: "center",
   },
   ringStage: {
