@@ -13,6 +13,11 @@ const warmWaterHours = 17;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const hoursToShow = 24;
+const chartPriceStep = 5;
+const chartMinimumScaleMax = 10;
+const chartPlotHeight = 96;
+const chartGridMaxPosition = chartPlotHeight - 1;
+const chartMinimumBarHeight = 8;
 
 type DaySelection = "today" | "tomorrow";
 
@@ -89,6 +94,18 @@ function startOfCurrentHour(date = new Date()) {
   return currentHour;
 }
 
+function getChartScaleValues(maxPrice: number) {
+  const roundedMax = Math.max(
+    Math.ceil(maxPrice / chartPriceStep) * chartPriceStep,
+    chartMinimumScaleMax,
+  );
+
+  return Array.from(
+    { length: roundedMax / chartPriceStep + 1 },
+    (_, index) => index * chartPriceStep,
+  );
+}
+
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
   return data
     .map((item) => {
@@ -150,8 +167,13 @@ export default function HomeScreen() {
       : getPriceTheme(currentPrice);
   const maxChartPrice = Math.max(
     ...chartHourlyPrices.map((item) => Math.max(item.price, 0)),
-    1,
+    0,
   );
+  const chartScaleValues = useMemo(
+    () => getChartScaleValues(maxChartPrice),
+    [maxChartPrice],
+  );
+  const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
   const recommendedHeatingHours = useMemo(
     () =>
       [...futureHourlyPrices]
@@ -411,73 +433,115 @@ export default function HomeScreen() {
                   onPress={() => setSelectedHourlyPrice(null)}
                   style={styles.chartTouchArea}
                 >
-                  <View style={styles.chartBars}>
-                    {chartHourlyPrices.map((item) => {
-                      const isCurrentHour =
-                        item.date.getTime() <= currentHourStart.getTime() &&
-                        item.endDate.getTime() > currentHourStart.getTime();
-                      const isPastHour =
-                        selectedDay === "today" &&
-                        item.endDate.getTime() <= currentHourStart.getTime();
-                      const isCheapest = cheapestHour?.id === item.id;
-                      const isSelected = selectedHourlyPrice?.id === item.id;
-                      const barHeight =
-                        18 + (Math.max(item.price, 0) / maxChartPrice) * 64;
-                      const barColor = isCheapest
-                        ? "#72ff9d"
-                        : getPriceTheme(item.price).ringColor;
-
-                      return (
-                        <Pressable
-                          accessibilityHint="Näyttää valitun tunnin hinnan kaavion yläpuolella."
-                          accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
-                          accessibilityRole="button"
-                          key={item.id}
-                          onPress={(event) => {
-                            event.stopPropagation();
-                            setSelectedHourlyPrice(item);
-                          }}
-                          style={styles.chartBarButton}
+                  <View style={styles.chartPlotRow}>
+                    <View pointerEvents="none" style={styles.chartScale}>
+                      {chartScaleValues.map((value) => (
+                        <Text
+                          key={value}
+                          style={[
+                            styles.chartScaleLabel,
+                            {
+                              bottom:
+                                (value / chartScaleMax) * chartGridMaxPosition,
+                            },
+                          ]}
                         >
-                          {isSelected ? (
-                            <View
-                              pointerEvents="none"
-                              style={[
-                                styles.chartTooltip,
-                                { bottom: barHeight + 12 },
-                              ]}
-                            >
-                              <Text style={styles.chartTooltipTime}>
-                                {item.hourLabel}
-                              </Text>
-                              <Text style={styles.chartTooltipPrice}>
-                                {formatFinnishDecimal(item.price)} c/kWh
-                              </Text>
-                              <View style={styles.chartTooltipArrow} />
-                            </View>
-                          ) : null}
+                          {value}
+                        </Text>
+                      ))}
+                    </View>
 
+                    <View style={styles.chartPlot}>
+                      <View pointerEvents="none" style={styles.chartGrid}>
+                        {chartScaleValues.map((value) => (
                           <View
+                            key={value}
                             style={[
-                              styles.chartBar,
+                              styles.chartGridLine,
                               {
-                                backgroundColor: barColor,
-                                borderColor: isSelected
-                                  ? "#ffffff"
-                                  : isCurrentHour
-                                    ? "rgba(255,255,255,0.74)"
-                                    : "transparent",
-                                height: barHeight,
-                                shadowColor: barColor,
+                                bottom:
+                                  (value / chartScaleMax) *
+                                  chartGridMaxPosition,
                               },
-                              isPastHour && styles.pastChartBar,
-                              isCurrentHour && styles.currentChartBar,
-                              isSelected && styles.selectedChartBar,
                             ]}
                           />
-                        </Pressable>
-                      );
-                    })}
+                        ))}
+                      </View>
+
+                      <View style={styles.chartBars}>
+                        {chartHourlyPrices.map((item) => {
+                          const isCurrentHour =
+                            item.date.getTime() <= currentHourStart.getTime() &&
+                            item.endDate.getTime() > currentHourStart.getTime();
+                          const isPastHour =
+                            selectedDay === "today" &&
+                            item.endDate.getTime() <=
+                              currentHourStart.getTime();
+                          const isCheapest = cheapestHour?.id === item.id;
+                          const isSelected =
+                            selectedHourlyPrice?.id === item.id;
+                          const barHeight = Math.max(
+                            (Math.max(item.price, 0) / chartScaleMax) *
+                              chartPlotHeight,
+                            chartMinimumBarHeight,
+                          );
+                          const barColor = isCheapest
+                            ? "#72ff9d"
+                            : getPriceTheme(item.price).ringColor;
+
+                          return (
+                            <Pressable
+                              accessibilityHint="Näyttää valitun tunnin hinnan kaavion yläpuolella."
+                              accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
+                              accessibilityRole="button"
+                              key={item.id}
+                              onPress={(event) => {
+                                event.stopPropagation();
+                                setSelectedHourlyPrice(item);
+                              }}
+                              style={styles.chartBarButton}
+                            >
+                              {isSelected ? (
+                                <View
+                                  pointerEvents="none"
+                                  style={[
+                                    styles.chartTooltip,
+                                    { bottom: barHeight + 12 },
+                                  ]}
+                                >
+                                  <Text style={styles.chartTooltipTime}>
+                                    {item.hourLabel}
+                                  </Text>
+                                  <Text style={styles.chartTooltipPrice}>
+                                    {formatFinnishDecimal(item.price)} c/kWh
+                                  </Text>
+                                  <View style={styles.chartTooltipArrow} />
+                                </View>
+                              ) : null}
+
+                              <View
+                                style={[
+                                  styles.chartBar,
+                                  {
+                                    backgroundColor: barColor,
+                                    borderColor: isSelected
+                                      ? "#ffffff"
+                                      : isCurrentHour
+                                        ? "rgba(255,255,255,0.74)"
+                                        : "transparent",
+                                    height: barHeight,
+                                    shadowColor: barColor,
+                                  },
+                                  isPastHour && styles.pastChartBar,
+                                  isCurrentHour && styles.currentChartBar,
+                                  isSelected && styles.selectedChartBar,
+                                ]}
+                              />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
                   </View>
                 </Pressable>
 
@@ -785,17 +849,57 @@ const styles = StyleSheet.create({
     height: 144,
     justifyContent: "flex-end",
   },
+  chartPlotRow: {
+    alignItems: "flex-end",
+    flexDirection: "row",
+    gap: 8,
+    overflow: "visible",
+  },
+  chartScale: {
+    height: chartPlotHeight,
+    position: "relative",
+    width: 24,
+  },
+  chartScaleLabel: {
+    color: "rgba(207,233,255,0.52)",
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 12,
+    position: "absolute",
+    right: 0,
+    transform: [{ translateY: 6 }],
+  },
+  chartPlot: {
+    flex: 1,
+    height: chartPlotHeight,
+    overflow: "visible",
+    position: "relative",
+  },
+  chartGrid: {
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  chartGridLine: {
+    backgroundColor: "rgba(207,233,255,0.1)",
+    height: 1,
+    left: 0,
+    position: "absolute",
+    right: 0,
+  },
   chartBars: {
     alignItems: "flex-end",
     flexDirection: "row",
     gap: 4,
-    height: 96,
+    height: chartPlotHeight,
     overflow: "visible",
   },
   chartBarButton: {
     alignItems: "center",
     flex: 1,
-    height: 96,
+    height: chartPlotHeight,
     justifyContent: "flex-end",
     overflow: "visible",
   },
