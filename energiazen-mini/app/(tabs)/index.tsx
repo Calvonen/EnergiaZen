@@ -14,6 +14,15 @@ const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const hoursToShow = 24;
 
+type DaySelection = "today" | "tomorrow";
+
+const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
 const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -62,6 +71,20 @@ function formatHourLabel(date: Date) {
   return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
 }
 
+function formatHelsinkiDateKey(date: Date) {
+  return helsinkiDateKeyFormatter.format(date);
+}
+
+function getChartDayKey(day: DaySelection, date = new Date()) {
+  if (day === "today") {
+    return formatHelsinkiDateKey(date);
+  }
+
+  return formatHelsinkiDateKey(
+    new Date(date.getTime() + 24 * 60 * 60 * 1000),
+  );
+}
+
 function startOfCurrentHour(date = new Date()) {
   const currentHour = new Date(date);
   currentHour.setMinutes(0, 0, 0);
@@ -69,8 +92,6 @@ function startOfCurrentHour(date = new Date()) {
 }
 
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
-  const currentHour = startOfCurrentHour();
-
   return data
     .map((item) => {
       const price = item.PriceWithTax ?? item.PriceNoTax;
@@ -94,18 +115,32 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
       } satisfies HourlyPrice;
     })
     .filter((item): item is HourlyPrice => item !== null)
-    .filter((item) => item.endDate.getTime() > currentHour.getTime())
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(0, hoursToShow);
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 export default function HomeScreen() {
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
+  const [selectedDay, setSelectedDay] = useState<DaySelection>("today");
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
   const currentHourStart = startOfCurrentHour();
+  const chartDayKey = getChartDayKey(selectedDay);
+  const chartHourlyPrices = useMemo(
+    () =>
+      hourlyPrices.filter(
+        (item) => formatHelsinkiDateKey(item.date) === chartDayKey,
+      ),
+    [chartDayKey, hourlyPrices],
+  );
+  const futureHourlyPrices = useMemo(
+    () =>
+      hourlyPrices
+        .filter((item) => item.endDate.getTime() > currentHourStart.getTime())
+        .slice(0, hoursToShow),
+    [currentHourStart, hourlyPrices],
+  );
   const currentPriceItem = hourlyPrices.find(
     (item) =>
       item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now(),
@@ -116,12 +151,12 @@ export default function HomeScreen() {
       ? { ringColor: "#36f4d4" }
       : getPriceTheme(currentPrice);
   const maxChartPrice = Math.max(
-    ...hourlyPrices.map((item) => Math.max(item.price, 0)),
+    ...chartHourlyPrices.map((item) => Math.max(item.price, 0)),
     1,
   );
   const recommendedHeatingHours = useMemo(
     () =>
-      [...hourlyPrices]
+      [...futureHourlyPrices]
         .sort((a, b) => {
           if (a.price === b.price) {
             return a.date.getTime() - b.date.getTime();
@@ -131,7 +166,7 @@ export default function HomeScreen() {
         })
         .slice(0, 3)
         .sort((a, b) => a.date.getTime() - b.date.getTime()),
-    [hourlyPrices],
+    [futureHourlyPrices],
   );
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
@@ -139,12 +174,12 @@ export default function HomeScreen() {
       item.endDate.getTime() > currentHourStart.getTime(),
   );
   const ringStatus = isHeatingNow ? "LÄMMITÄ NYT" : "ODOTA";
-  const cheapestHour = hourlyPrices.reduce<HourlyPrice | null>(
+  const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
     null,
   );
-  const mostExpensiveHour = hourlyPrices.reduce<HourlyPrice | null>(
+  const mostExpensiveHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (mostExpensive, item) =>
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
@@ -193,6 +228,14 @@ export default function HomeScreen() {
 
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    setSelectedHourlyPrice((selected) =>
+      selected && chartHourlyPrices.some((item) => item.id === selected.id)
+        ? selected
+        : null,
+    );
+  }, [chartHourlyPrices]);
 
   useEffect(() => {
     const animation = Animated.loop(
@@ -315,16 +358,50 @@ export default function HomeScreen() {
 
         <View style={styles.chartCard}>
           <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>24 h hintakaavio</Text>
+            <View>
+              <Text style={styles.chartTitle}>Päivän hintakaavio</Text>
+              <Text style={styles.chartSubtitle}>00:00–23:00</Text>
+            </View>
             <Text style={styles.chartUnit}>c/kWh</Text>
           </View>
 
+          <View style={styles.daySelector}>
+            {(["today", "tomorrow"] as const).map((day) => {
+              const isActive = selectedDay === day;
+              const label = day === "today" ? "Tänään" : "Huomenna";
+
+              return (
+                <Pressable
+                  accessibilityLabel={`Näytä ${label.toLowerCase()} hintakaavio`}
+                  accessibilityRole="button"
+                  key={day}
+                  onPress={() => setSelectedDay(day)}
+                  style={[
+                    styles.daySelectorButton,
+                    isActive && styles.activeDaySelectorButton,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.daySelectorText,
+                      isActive && styles.activeDaySelectorText,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           {isPriceLoading && hourlyPrices.length === 0 ? (
+            <Text style={styles.chartMessage}>Haetaan päivän hintoja...</Text>
+          ) : chartHourlyPrices.length === 0 ? (
             <Text style={styles.chartMessage}>
-              Haetaan seuraavan 24 tunnin hintoja...
+              {selectedDay === "tomorrow"
+                ? "Huomisen hinnat eivät ole vielä saatavilla"
+                : "Hintakaaviota ei saatavilla"}
             </Text>
-          ) : hourlyPrices.length === 0 ? (
-            <Text style={styles.chartMessage}>Hintakaaviota ei saatavilla</Text>
           ) : (
             <>
               <Pressable
@@ -333,10 +410,13 @@ export default function HomeScreen() {
                 style={styles.chartTouchArea}
               >
                 <View style={styles.chartBars}>
-                  {hourlyPrices.map((item) => {
+                  {chartHourlyPrices.map((item) => {
                     const isCurrentHour =
                       item.date.getTime() <= currentHourStart.getTime() &&
                       item.endDate.getTime() > currentHourStart.getTime();
+                    const isPastHour =
+                      selectedDay === "today" &&
+                      item.endDate.getTime() <= currentHourStart.getTime();
                     const isCheapest = cheapestHour?.id === item.id;
                     const isSelected = selectedHourlyPrice?.id === item.id;
                     const barHeight =
@@ -388,6 +468,7 @@ export default function HomeScreen() {
                               height: barHeight,
                               shadowColor: barColor,
                             },
+                            isPastHour && styles.pastChartBar,
                             isCurrentHour && styles.currentChartBar,
                             isSelected && styles.selectedChartBar,
                           ]}
@@ -400,14 +481,15 @@ export default function HomeScreen() {
 
               <View style={styles.chartTimes}>
                 <Text style={styles.chartTime}>
-                  {hourlyPrices[0]?.hourLabel ?? "--:--"}
+                  {chartHourlyPrices[0]?.hourLabel ?? "00:00"}
                 </Text>
                 <Text style={styles.chartTime}>
-                  {hourlyPrices[Math.floor(hourlyPrices.length / 2)]
-                    ?.hourLabel ?? "--:--"}
+                  {chartHourlyPrices[Math.floor(chartHourlyPrices.length / 2)]
+                    ?.hourLabel ?? "12:00"}
                 </Text>
                 <Text style={styles.chartTime}>
-                  {hourlyPrices[hourlyPrices.length - 1]?.hourLabel ?? "--:--"}
+                  {chartHourlyPrices[chartHourlyPrices.length - 1]
+                    ?.hourLabel ?? "23:00"}
                 </Text>
               </View>
 
@@ -637,10 +719,48 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "900",
   },
+  chartSubtitle: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 3,
+  },
   chartUnit: {
     color: "#8ea4cf",
     fontSize: 13,
     fontWeight: "800",
+  },
+  daySelector: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 14,
+    padding: 5,
+  },
+  daySelectorButton: {
+    alignItems: "center",
+    borderRadius: 999,
+    flex: 1,
+    paddingVertical: 10,
+  },
+  activeDaySelectorButton: {
+    backgroundColor: "rgba(54,244,212,0.18)",
+    borderColor: "rgba(191,255,238,0.38)",
+    borderWidth: 1,
+    shadowColor: "#36f4d4",
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+  },
+  daySelectorText: {
+    color: "#8ea4cf",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  activeDaySelectorText: {
+    color: "#f8fbff",
   },
   chartTouchArea: {
     height: 144,
@@ -667,6 +787,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     width: "100%",
+  },
+  pastChartBar: {
+    opacity: 0.28,
+    shadowOpacity: 0.08,
   },
   currentChartBar: {
     borderWidth: 2,
