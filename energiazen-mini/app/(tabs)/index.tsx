@@ -1,15 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 const tankTemperature = 58;
 const warmWaterHours = 17;
 const nextCheapPeriod = "01:00–05:00";
-const hourlyPrices = [9.4, 8.2, 5.1, 2.8, 2.4, 3.2, 6.8, 10.5, 13.2, 16.5, 18.1, 14.8, 10.9, 7.5, 4.8, 3.9, 5.7, 8.6, 12.4, 15.2, 11.1, 7.2, 4.3, 3.1];
-const priceApiUrl = "https://api.spot-hinta.fi/JustNow?region=FI&priceResolution=60";
+const priceApiUrl = "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
+const hoursToShow = 24;
+
+const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "2-digit",
+  hour12: false,
+  timeZone: "Europe/Helsinki",
+});
 
 type SpotPriceResponse = {
+  DateTime?: string | null;
   PriceNoTax?: number | null;
   PriceWithTax?: number | null;
+};
+
+type HourlyPrice = {
+  date: Date;
+  endDate: Date;
+  hourLabel: string;
+  id: string;
+  price: number;
 };
 
 function getPriceTheme(price: number) {
@@ -36,17 +51,64 @@ function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
 
+function formatHourLabel(date: Date) {
+  return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
+}
+
+function startOfCurrentHour(date = new Date()) {
+  const currentHour = new Date(date);
+  currentHour.setMinutes(0, 0, 0);
+  return currentHour;
+}
+
+function normalizeSpotPrices(data: SpotPriceResponse[]) {
+  const currentHour = startOfCurrentHour();
+
+  return data
+    .map((item) => {
+      const price = item.PriceWithTax ?? item.PriceNoTax;
+      const date = item.DateTime ? new Date(item.DateTime) : null;
+
+      if (!date || Number.isNaN(date.getTime()) || typeof price !== "number" || Number.isNaN(price)) {
+        return null;
+      }
+
+      return {
+        date,
+        endDate: new Date(date.getTime() + 60 * 60 * 1000),
+        hourLabel: formatHourLabel(date),
+        id: item.DateTime ?? date.toISOString(),
+        price: normalizePriceToCents(price),
+      } satisfies HourlyPrice;
+    })
+    .filter((item): item is HourlyPrice => item !== null)
+    .filter((item) => item.endDate.getTime() > currentHour.getTime())
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(0, hoursToShow);
+}
+
 export default function HomeScreen() {
   const pulseAnimation = useRef(new Animated.Value(0)).current;
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
+  const [selectedHourlyPrice, setSelectedHourlyPrice] = useState<HourlyPrice | null>(null);
+  const currentHourStart = startOfCurrentHour();
+  const currentPriceItem = hourlyPrices.find(
+    (item) => item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now()
+  );
+  const currentPrice = currentPriceItem?.price ?? null;
   const { ringColor, status } = currentPrice === null ? { ringColor: "#36f4d4", status: "" } : getPriceTheme(currentPrice);
-  const maxChartPrice = Math.max(...hourlyPrices);
+  const maxChartPrice = Math.max(...hourlyPrices.map((item) => Math.max(item.price, 0)), 1);
+  const cheapestHour = hourlyPrices.reduce<HourlyPrice | null>((cheapest, item) => (!cheapest || item.price < cheapest.price ? item : cheapest), null);
+  const mostExpensiveHour = hourlyPrices.reduce<HourlyPrice | null>(
+    (mostExpensive, item) => (!mostExpensive || item.price > mostExpensive.price ? item : mostExpensive),
+    null
+  );
 
   useEffect(() => {
     const controller = new AbortController();
 
-    async function fetchCurrentPrice() {
+    async function fetchHourlyPrices() {
       setIsPriceLoading(true);
       try {
         const response = await fetch(priceApiUrl, { signal: controller.signal });
@@ -55,22 +117,25 @@ export default function HomeScreen() {
           throw new Error("Price fetch failed");
         }
 
-        const data = (await response.json()) as SpotPriceResponse;
-        console.log("Spot price API response", data);
+        const data = (await response.json()) as SpotPriceResponse[];
+        const prices = normalizeSpotPrices(data);
 
-        const price = data.PriceWithTax ?? data.PriceNoTax;
-
-        if (typeof price !== "number" || Number.isNaN(price)) {
-          throw new Error("Price missing from response");
+        if (prices.length === 0) {
+          throw new Error("Hourly prices missing from response");
         }
 
-        const normalizedPrice = normalizePriceToCents(price);
-        console.log("Normalized spot price (c/kWh)", normalizedPrice);
+        setHourlyPrices(prices);
+        setSelectedHourlyPrice((selected) => {
+          if (!selected) {
+            return prices.find((item) => item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now()) ?? prices[0];
+          }
 
-        setCurrentPrice(normalizedPrice);
+          return prices.find((item) => item.id === selected.id) ?? prices[0];
+        });
       } catch {
         if (!controller.signal.aborted) {
-          setCurrentPrice(null);
+          setHourlyPrices([]);
+          setSelectedHourlyPrice(null);
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -79,7 +144,7 @@ export default function HomeScreen() {
       }
     }
 
-    fetchCurrentPrice();
+    fetchHourlyPrices();
 
     return () => controller.abort();
   }, []);
@@ -172,20 +237,69 @@ export default function HomeScreen() {
             <Text style={styles.chartUnit}>c/kWh</Text>
           </View>
 
-          <View style={styles.chartBars}>
-            {hourlyPrices.map((price, index) => {
-              const barHeight = 18 + (price / maxChartPrice) * 64;
-              const barColor = getPriceTheme(price).ringColor;
+          {isPriceLoading && hourlyPrices.length === 0 ? (
+            <Text style={styles.chartMessage}>Haetaan seuraavan 24 tunnin hintoja...</Text>
+          ) : hourlyPrices.length === 0 ? (
+            <Text style={styles.chartMessage}>Hintakaaviota ei saatavilla</Text>
+          ) : (
+            <>
+              <View style={styles.chartBars}>
+                {hourlyPrices.map((item) => {
+                  const isCurrentHour = item.date.getTime() <= currentHourStart.getTime() && item.endDate.getTime() > currentHourStart.getTime();
+                  const isCheapest = cheapestHour?.id === item.id;
+                  const isMostExpensive = mostExpensiveHour?.id === item.id;
+                  const isSelected = selectedHourlyPrice?.id === item.id;
+                  const barHeight = 18 + (Math.max(item.price, 0) / maxChartPrice) * 64;
+                  const barColor = isCheapest ? "#72ff9d" : isMostExpensive ? "#ff5f6d" : getPriceTheme(item.price).ringColor;
 
-              return <View key={`${price}-${index}`} style={[styles.chartBar, { height: barHeight, backgroundColor: barColor }]} />;
-            })}
-          </View>
+                  return (
+                    <Pressable
+                      accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
+                      accessibilityRole="button"
+                      key={item.id}
+                      onPress={() => setSelectedHourlyPrice(item)}
+                      style={styles.chartBarButton}
+                    >
+                      <View
+                        style={[
+                          styles.chartBar,
+                          {
+                            backgroundColor: barColor,
+                            borderColor: isCurrentHour ? "#ffffff" : isSelected ? "rgba(255,255,255,0.72)" : "transparent",
+                            height: barHeight,
+                            shadowColor: barColor,
+                          },
+                          isCurrentHour && styles.currentChartBar,
+                          isSelected && styles.selectedChartBar,
+                        ]}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
 
-          <View style={styles.chartTimes}>
-            <Text style={styles.chartTime}>00</Text>
-            <Text style={styles.chartTime}>12</Text>
-            <Text style={styles.chartTime}>24</Text>
-          </View>
+              <View style={styles.chartTimes}>
+                <Text style={styles.chartTime}>{hourlyPrices[0]?.hourLabel ?? "--:--"}</Text>
+                <Text style={styles.chartTime}>{hourlyPrices[Math.floor(hourlyPrices.length / 2)]?.hourLabel ?? "--:--"}</Text>
+                <Text style={styles.chartTime}>{hourlyPrices[hourlyPrices.length - 1]?.hourLabel ?? "--:--"}</Text>
+              </View>
+
+              {selectedHourlyPrice ? (
+                <Text style={styles.selectedPriceText}>
+                  {selectedHourlyPrice.hourLabel}: {formatFinnishDecimal(selectedHourlyPrice.price)} c/kWh
+                </Text>
+              ) : null}
+
+              <View style={styles.extremePrices}>
+                <Text style={styles.extremePriceText}>
+                  Halvin tunti: {cheapestHour ? `${cheapestHour.hourLabel} (${formatFinnishDecimal(cheapestHour.price)} c/kWh)` : "--"}
+                </Text>
+                <Text style={styles.extremePriceText}>
+                  Kallein tunti: {mostExpensiveHour ? `${mostExpensiveHour.hourLabel} (${formatFinnishDecimal(mostExpensiveHour.price)} c/kWh)` : "--"}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -382,10 +496,28 @@ const styles = StyleSheet.create({
     gap: 4,
     height: 92,
   },
+  chartBarButton: {
+    alignItems: "center",
+    flex: 1,
+    height: 92,
+    justifyContent: "flex-end",
+  },
   chartBar: {
     borderRadius: 8,
-    flex: 1,
+    borderWidth: 1.5,
     opacity: 0.9,
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    width: "100%",
+  },
+  currentChartBar: {
+    opacity: 1,
+    shadowOpacity: 0.72,
+    shadowRadius: 14,
+  },
+  selectedChartBar: {
+    opacity: 1,
+    transform: [{ translateY: -4 }],
   },
   chartTimes: {
     flexDirection: "row",
@@ -396,5 +528,32 @@ const styles = StyleSheet.create({
     color: "#8190b5",
     fontSize: 12,
     fontWeight: "800",
+  },
+  chartMessage: {
+    color: "#cfe9ff",
+    fontSize: 15,
+    fontWeight: "800",
+    paddingVertical: 34,
+    textAlign: "center",
+  },
+  selectedPriceText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "900",
+    marginTop: 12,
+    textAlign: "center",
+  },
+  extremePrices: {
+    borderTopColor: "rgba(255,255,255,0.1)",
+    borderTopWidth: 1,
+    gap: 6,
+    marginTop: 14,
+    paddingTop: 14,
+  },
+  extremePriceText: {
+    color: "#d9e9ff",
+    fontSize: 14,
+    fontWeight: "800",
+    textAlign: "center",
   },
 });
