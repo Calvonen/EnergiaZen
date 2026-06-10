@@ -333,7 +333,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cheapPeriodCard}>
-          <Text style={styles.cheapPeriodLabel}>🌙 Halvimmat tunnit</Text>
+          <Text style={styles.cheapPeriodLabel}>⭐ Halvimmat tunnit</Text>
           {recommendedHeatingHours.length === 0 ? (
             <Text style={styles.heatingHoursMessage}>
               Haetaan lämmitystunteja...
@@ -389,121 +389,129 @@ export default function HomeScreen() {
             })}
           </View>
 
-          {isPriceLoading && hourlyPrices.length === 0 ? (
-            <Text style={styles.chartMessage}>Haetaan päivän hintoja...</Text>
-          ) : chartHourlyPrices.length === 0 ? (
-            <Text style={styles.chartMessage}>
-              {selectedDay === "tomorrow"
-                ? "Huomisen hinnat eivät ole vielä saatavilla"
-                : "Hintakaaviota ei saatavilla"}
-            </Text>
-          ) : (
-            <>
-              <Pressable
-                accessibilityLabel="Tyhjennä kaavion valinta"
-                onPress={() => setSelectedHourlyPrice(null)}
-                style={styles.chartTouchArea}
-              >
-                <View style={styles.chartBars}>
-                  {chartHourlyPrices.map((item) => {
-                    const isCurrentHour =
-                      item.date.getTime() <= currentHourStart.getTime() &&
-                      item.endDate.getTime() > currentHourStart.getTime();
-                    const isPastHour =
-                      selectedDay === "today" &&
-                      item.endDate.getTime() <= currentHourStart.getTime();
-                    const isCheapest = cheapestHour?.id === item.id;
-                    const isSelected = selectedHourlyPrice?.id === item.id;
-                    const barHeight =
-                      18 + (Math.max(item.price, 0) / maxChartPrice) * 64;
-                    const barColor = isCheapest
-                      ? "#72ff9d"
-                      : getPriceTheme(item.price).ringColor;
+          <View style={styles.chartContent}>
+            {isPriceLoading && hourlyPrices.length === 0 ? (
+              <View style={styles.chartEmptyState}>
+                <Text style={styles.chartMessage}>
+                  Haetaan päivän hintoja...
+                </Text>
+              </View>
+            ) : chartHourlyPrices.length === 0 ? (
+              <View style={styles.chartEmptyState}>
+                <Text style={styles.chartMessage}>
+                  {selectedDay === "tomorrow"
+                    ? "Huomisen hinnat eivät ole vielä saatavilla"
+                    : "Hintakaaviota ei saatavilla"}
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Pressable
+                  accessibilityLabel="Tyhjennä kaavion valinta"
+                  onPress={() => setSelectedHourlyPrice(null)}
+                  style={styles.chartTouchArea}
+                >
+                  <View style={styles.chartBars}>
+                    {chartHourlyPrices.map((item) => {
+                      const isCurrentHour =
+                        item.date.getTime() <= currentHourStart.getTime() &&
+                        item.endDate.getTime() > currentHourStart.getTime();
+                      const isPastHour =
+                        selectedDay === "today" &&
+                        item.endDate.getTime() <= currentHourStart.getTime();
+                      const isCheapest = cheapestHour?.id === item.id;
+                      const isSelected = selectedHourlyPrice?.id === item.id;
+                      const barHeight =
+                        18 + (Math.max(item.price, 0) / maxChartPrice) * 64;
+                      const barColor = isCheapest
+                        ? "#72ff9d"
+                        : getPriceTheme(item.price).ringColor;
 
-                    return (
-                      <Pressable
-                        accessibilityHint="Näyttää valitun tunnin hinnan kaavion yläpuolella."
-                        accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
-                        accessibilityRole="button"
-                        key={item.id}
-                        onPress={(event) => {
-                          event.stopPropagation();
-                          setSelectedHourlyPrice(item);
-                        }}
-                        style={styles.chartBarButton}
-                      >
-                        {isSelected ? (
+                      return (
+                        <Pressable
+                          accessibilityHint="Näyttää valitun tunnin hinnan kaavion yläpuolella."
+                          accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
+                          accessibilityRole="button"
+                          key={item.id}
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            setSelectedHourlyPrice(item);
+                          }}
+                          style={styles.chartBarButton}
+                        >
+                          {isSelected ? (
+                            <View
+                              pointerEvents="none"
+                              style={[
+                                styles.chartTooltip,
+                                { bottom: barHeight + 12 },
+                              ]}
+                            >
+                              <Text style={styles.chartTooltipTime}>
+                                {item.hourLabel}
+                              </Text>
+                              <Text style={styles.chartTooltipPrice}>
+                                {formatFinnishDecimal(item.price)} c/kWh
+                              </Text>
+                              <View style={styles.chartTooltipArrow} />
+                            </View>
+                          ) : null}
+
                           <View
-                            pointerEvents="none"
                             style={[
-                              styles.chartTooltip,
-                              { bottom: barHeight + 12 },
+                              styles.chartBar,
+                              {
+                                backgroundColor: barColor,
+                                borderColor: isSelected
+                                  ? "#ffffff"
+                                  : isCurrentHour
+                                    ? "rgba(255,255,255,0.74)"
+                                    : "transparent",
+                                height: barHeight,
+                                shadowColor: barColor,
+                              },
+                              isPastHour && styles.pastChartBar,
+                              isCurrentHour && styles.currentChartBar,
+                              isSelected && styles.selectedChartBar,
                             ]}
-                          >
-                            <Text style={styles.chartTooltipTime}>
-                              {item.hourLabel}
-                            </Text>
-                            <Text style={styles.chartTooltipPrice}>
-                              {formatFinnishDecimal(item.price)} c/kWh
-                            </Text>
-                            <View style={styles.chartTooltipArrow} />
-                          </View>
-                        ) : null}
+                          />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </Pressable>
 
-                        <View
-                          style={[
-                            styles.chartBar,
-                            {
-                              backgroundColor: barColor,
-                              borderColor: isSelected
-                                ? "#ffffff"
-                                : isCurrentHour
-                                  ? "rgba(255,255,255,0.74)"
-                                  : "transparent",
-                              height: barHeight,
-                              shadowColor: barColor,
-                            },
-                            isPastHour && styles.pastChartBar,
-                            isCurrentHour && styles.currentChartBar,
-                            isSelected && styles.selectedChartBar,
-                          ]}
-                        />
-                      </Pressable>
-                    );
-                  })}
+                <View style={styles.chartTimes}>
+                  <Text style={styles.chartTime}>
+                    {chartHourlyPrices[0]?.hourLabel ?? "00:00"}
+                  </Text>
+                  <Text style={styles.chartTime}>
+                    {chartHourlyPrices[Math.floor(chartHourlyPrices.length / 2)]
+                      ?.hourLabel ?? "12:00"}
+                  </Text>
+                  <Text style={styles.chartTime}>
+                    {chartHourlyPrices[chartHourlyPrices.length - 1]
+                      ?.hourLabel ?? "23:00"}
+                  </Text>
                 </View>
-              </Pressable>
 
-              <View style={styles.chartTimes}>
-                <Text style={styles.chartTime}>
-                  {chartHourlyPrices[0]?.hourLabel ?? "00:00"}
-                </Text>
-                <Text style={styles.chartTime}>
-                  {chartHourlyPrices[Math.floor(chartHourlyPrices.length / 2)]
-                    ?.hourLabel ?? "12:00"}
-                </Text>
-                <Text style={styles.chartTime}>
-                  {chartHourlyPrices[chartHourlyPrices.length - 1]?.hourLabel ??
-                    "23:00"}
-                </Text>
-              </View>
-
-              <View style={styles.extremePrices}>
-                <Text style={styles.extremePriceText}>
-                  Halvin tunti:{" "}
-                  {cheapestHour
-                    ? `${cheapestHour.hourLabel} (${formatFinnishDecimal(cheapestHour.price)} c/kWh)`
-                    : "--"}
-                </Text>
-                <Text style={styles.extremePriceText}>
-                  Kallein tunti:{" "}
-                  {mostExpensiveHour
-                    ? `${mostExpensiveHour.hourLabel} (${formatFinnishDecimal(mostExpensiveHour.price)} c/kWh)`
-                    : "--"}
-                </Text>
-              </View>
-            </>
-          )}
+                <View style={styles.extremePrices}>
+                  <Text style={styles.extremePriceText}>
+                    Halvin tunti:{" "}
+                    {cheapestHour
+                      ? `${cheapestHour.hourLabel} (${formatFinnishDecimal(cheapestHour.price)} c/kWh)`
+                      : "--"}
+                  </Text>
+                  <Text style={styles.extremePriceText}>
+                    Kallein tunti:{" "}
+                    {mostExpensiveHour
+                      ? `${mostExpensiveHour.hourLabel} (${formatFinnishDecimal(mostExpensiveHour.price)} c/kWh)`
+                      : "--"}
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -742,7 +750,9 @@ const styles = StyleSheet.create({
   },
   daySelectorButton: {
     alignItems: "center",
+    borderColor: "transparent",
     borderRadius: 999,
+    borderWidth: 1,
     flex: 1,
     paddingVertical: 10,
   },
@@ -761,6 +771,15 @@ const styles = StyleSheet.create({
   },
   activeDaySelectorText: {
     color: "#f8fbff",
+  },
+  chartContent: {
+    minHeight: 234,
+  },
+  chartEmptyState: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 234,
   },
   chartTouchArea: {
     height: 144,
@@ -861,7 +880,6 @@ const styles = StyleSheet.create({
     color: "#cfe9ff",
     fontSize: 15,
     fontWeight: "800",
-    paddingVertical: 34,
     textAlign: "center",
   },
   extremePrices: {
