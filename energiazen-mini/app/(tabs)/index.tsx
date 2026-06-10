@@ -645,76 +645,17 @@ export default function HomeScreen() {
           <Animated.View
             style={[
               styles.metricCard,
-              isHeatingNow && [
-                styles.heatingMetricCard,
-                {
-                  borderColor: ringColor,
-                  shadowColor: ringColor,
-                },
-                heatingCardPulseStyle,
-              ],
+              isHeatingNow && [styles.heatingMetricCard, heatingCardPulseStyle],
             ]}
           >
             <Text style={styles.cardIcon}>🔥</Text>
             <Text style={styles.cardValue}>{tankTemperature} °C</Text>
-            <Text
-              style={[
-                styles.heatingStateText,
-                isHeatingNow && [
-                  styles.activeHeatingStateText,
-                  { color: ringColor },
-                ],
-              ]}
-            >
-              {isHeatingNow ? "Lämmittää" : "Ei lämmitä"}
-            </Text>
           </Animated.View>
 
           <View style={styles.metricCard}>
             <Text style={styles.cardIcon}>💧</Text>
             <Text style={styles.cardValue}>{warmWaterHours} h</Text>
           </View>
-        </View>
-
-        <View style={styles.cheapPeriodCard}>
-          <Text style={styles.cheapPeriodLabel}>Päivän lämmitys</Text>
-          <Text style={styles.heatingProgressText}>
-            Toteutunut {heatingRecommendation.realizedHours}/{dailyHeatingHours}
-            h
-          </Text>
-          {recommendedHeatingHours.length === 0 ? (
-            <Text style={styles.heatingHoursMessage}>
-              {heatingRecommendation.realizedHours >= dailyHeatingHours
-                ? "Päivän tavoite täynnä"
-                : "Haetaan lämmitystunteja..."}
-            </Text>
-          ) : (
-            <View style={styles.heatingHoursList}>
-              <Text style={styles.heatingReasonText}>
-                {heatingRecommendation.reason}
-              </Text>
-              {recommendedHeatingHours.map((item) => {
-                const heatingMarker =
-                  item.status === "completed"
-                    ? "🔥"
-                    : item.status === "missed"
-                      ? "⚠️"
-                      : "⭐";
-
-                return (
-                  <View key={item.id} style={styles.heatingHourRow}>
-                    <Text style={styles.heatingHourMarker}>
-                      {heatingMarker}
-                    </Text>
-                    <Text style={styles.heatingHourTime}>{item.hourLabel}</Text>
-                    <Text style={styles.heatingHourPrice}>
-                      {formatFinnishDecimal(item.price)} c/kWh
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          )}
         </View>
 
         <View style={styles.chartCard}>
@@ -1083,10 +1024,12 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
   },
   heatingMetricCard: {
-    backgroundColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,95,109,0.14)",
+    borderColor: "rgba(255,95,109,0.58)",
     borderWidth: 1.5,
-    shadowOpacity: 0.32,
-    shadowRadius: 20,
+    shadowColor: "#ff5f6d",
+    shadowOpacity: 0.62,
+    shadowRadius: 26,
   },
   cardIcon: {
     fontSize: 22,
@@ -1101,88 +1044,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.8,
     lineHeight: 38,
     textAlign: "center",
-  },
-  heatingStateText: {
-    color: "#8ea4cf",
-    fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 0.2,
-    marginTop: 2,
-    textAlign: "center",
-  },
-  activeHeatingStateText: {
-    textShadowColor: "rgba(255,255,255,0.18)",
-    textShadowRadius: 8,
-  },
-  cheapPeriodCard: {
-    alignItems: "center",
-    backgroundColor: "rgba(54,244,212,0.09)",
-    borderColor: "rgba(54,244,212,0.28)",
-    borderRadius: 26,
-    borderWidth: 1,
-    marginBottom: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    width: "100%",
-  },
-  cheapPeriodLabel: {
-    color: "#bed1ff",
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  heatingHoursMessage: {
-    color: "#ffffff",
-    fontSize: 22,
-    fontWeight: "900",
-    marginTop: 8,
-    textAlign: "center",
-  },
-  heatingProgressText: {
-    color: "#ffffff",
-    fontSize: 22,
-    fontWeight: "900",
-    marginTop: 6,
-    textAlign: "center",
-  },
-  heatingHoursList: {
-    gap: 5,
-    marginTop: 8,
-    width: "100%",
-  },
-  heatingReasonText: {
-    color: "#bfffee",
-    fontSize: 13,
-    fontWeight: "900",
-    marginBottom: 2,
-    textAlign: "center",
-  },
-  heatingHourRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
-  },
-  heatingHourMarker: {
-    fontSize: 18,
-    lineHeight: 24,
-    marginRight: 7,
-    minWidth: 24,
-    textAlign: "center",
-  },
-  heatingHourTime: {
-    color: "#ffffff",
-    fontSize: 21,
-    fontWeight: "900",
-    lineHeight: 27,
-    minWidth: 78,
-    textAlign: "left",
-  },
-  heatingHourPrice: {
-    color: "#cfe9ff",
-    fontSize: 17,
-    fontWeight: "800",
-    lineHeight: 24,
-    minWidth: 116,
-    textAlign: "left",
   },
   chartCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
