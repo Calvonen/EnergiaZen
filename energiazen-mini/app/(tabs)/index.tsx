@@ -24,6 +24,7 @@ const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
+const actualHeatingHours = ["08:00", "09:00", "10:00"];
 
 type DaySelection = "yesterday" | "today" | "tomorrow";
 
@@ -35,12 +36,6 @@ const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
 });
 
 const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
-  hour: "2-digit",
-  hour12: false,
-  timeZone: "Europe/Helsinki",
-});
-
-const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   hour12: false,
   timeZone: "Europe/Helsinki",
@@ -221,32 +216,6 @@ function getChartDayKey(day: DaySelection, date = new Date()) {
   return formatHelsinkiDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
 }
 
-function getHelsinkiHourNumber(date: Date) {
-  const hour = Number(helsinkiHourFormatter.format(date));
-
-  return hour === 24 ? 0 : hour;
-}
-
-function getMockActualHeatingHours(
-  currentHourStart: Date,
-): Partial<Record<DaySelection, number[]>> {
-  const currentHelsinkiHour = getHelsinkiHourNumber(currentHourStart);
-  const latestCompletedTodayHour =
-    currentHelsinkiHour === 0 ? 0 : currentHelsinkiHour - 1;
-  const mockTodayHeatingHours = Array.from(
-    { length: Math.min(dailyHeatingHours, latestCompletedTodayHour + 1) },
-    (_, index) => latestCompletedTodayHour - index,
-  )
-    .reverse()
-    .filter((hour) => hour >= 0);
-
-  // Väliaikainen mock-toteumadata: pidetään lista epätyhjänä, jotta 🔥-ikonit näkyvät testauksessa.
-  return {
-    today: mockTodayHeatingHours,
-    yesterday: [5, 6, 7],
-  };
-}
-
 function getDayLabel(day: DaySelection) {
   if (day === "yesterday") {
     return "Eilen";
@@ -304,7 +273,7 @@ function getAveragePrice(prices: HourlyPrice[]) {
 function selectHeatingRecommendation(
   prices: HourlyPrice[],
   currentHourStart: Date,
-  heatedHourNumbers: Set<number>,
+  heatedHourLabels: Set<string>,
 ) {
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
@@ -319,13 +288,13 @@ function selectHeatingRecommendation(
   const completedTodayHours = sortHoursChronologically(
     todayPrices.filter(
       (item) =>
-        heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
+        heatedHourLabels.has(item.hourLabel) &&
         item.date.getTime() <= currentHourStart.getTime(),
     ),
   ).slice(0, dailyHeatingHours);
   const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
-  const completedHourNumbers = new Set(
-    completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
+  const completedHourLabels = new Set(
+    completedTodayHours.map((item) => item.hourLabel),
   );
   const remainingHeatingNeed = Math.max(
     dailyHeatingHours - completedTodayHours.length,
@@ -370,7 +339,7 @@ function selectHeatingRecommendation(
       (item) =>
         item.endDate.getTime() > currentHourStart.getTime() &&
         !completedHourIds.has(item.id) &&
-        !completedHourNumbers.has(getHelsinkiHourNumber(item.date)),
+        !completedHourLabels.has(item.hourLabel),
     );
 
   if (remainingHeatingNeed === 0) {
@@ -508,22 +477,18 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
-  const actualHeatingHours = useMemo(
-    () => getMockActualHeatingHours(currentHourStart),
-    [currentHourStart],
-  );
-  const todayActualHeatingHourNumbers = useMemo(
-    () => new Set(actualHeatingHours.today),
-    [actualHeatingHours],
+  const todayActualHeatingHourLabels = useMemo(
+    () => new Set(actualHeatingHours),
+    [],
   );
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
         hourlyPrices,
         currentHourStart,
-        todayActualHeatingHourNumbers,
+        todayActualHeatingHourLabels,
       ),
-    [currentHourStart, hourlyPrices, todayActualHeatingHourNumbers],
+    [currentHourStart, hourlyPrices, todayActualHeatingHourLabels],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -550,9 +515,9 @@ export default function HomeScreen() {
 
     return new Set(selectedHours.map((item) => item.id));
   }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
-  const heatedHourNumbers = useMemo(
-    () => new Set(actualHeatingHours[selectedDay] ?? []),
-    [actualHeatingHours, selectedDay],
+  const visibleActualHeatingHourLabels = useMemo(
+    () => new Set(selectedDay === "today" ? actualHeatingHours : []),
+    [selectedDay],
   );
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
@@ -924,9 +889,8 @@ export default function HomeScreen() {
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
-                          const hasActualHeating = heatedHourNumbers.has(
-                            getHelsinkiHourNumber(item.date),
-                          );
+                          const hasActualHeating =
+                            visibleActualHeatingHourLabels.has(item.hourLabel);
                           const heatingMarker = getHeatingMarker({
                             hasActualHeating,
                             isPastHour,
@@ -983,7 +947,10 @@ export default function HomeScreen() {
                               {heatingMarker ? (
                                 <Text
                                   pointerEvents="none"
-                                  style={styles.chartHourMarker}
+                                  style={[
+                                    styles.chartHourMarker,
+                                    { bottom: barHeight + 2 },
+                                  ]}
                                 >
                                   {heatingMarker}
                                 </Text>
@@ -1408,7 +1375,7 @@ const styles = StyleSheet.create({
   chartHourMarker: {
     fontSize: 11,
     lineHeight: 13,
-    marginBottom: 2,
+    position: "absolute",
     textAlign: "center",
   },
   chartBar: {
