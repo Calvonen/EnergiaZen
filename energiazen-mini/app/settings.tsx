@@ -1,44 +1,132 @@
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { defaultSettings } from "@/lib/settings";
+import {
+  defaultSettings,
+  EditableSettingKey,
+  loadSettings,
+  saveSettings,
+} from "@/lib/settings";
 
-const settingsRows = [
-  {
-    accent: "#36f4d4",
-    label: "Varaajan koko",
-    value: `${defaultSettings.tankVolumeLiters} l`,
+type SettingsRow = {
+  accent: string;
+  key?: EditableSettingKey;
+  label: string;
+  value: string;
+};
+
+const editableSettings = {
+  heatingHoursPerDay: {
+    max: 6,
+    min: 1,
+    unit: "h / vrk",
   },
-  {
-    accent: "#54eaa0",
-    label: "Lämmitystarve",
-    value: `${defaultSettings.heatingHoursPerDay} h / vrk`,
+  priceDifferenceThresholdCents: {
+    max: 10,
+    min: 0,
+    unit: "c/kWh",
   },
-  {
-    accent: "#ffcf5a",
-    label: "Hintaeron raja",
-    value: `${defaultSettings.priceDifferenceThresholdCents} c/kWh`,
+  showersAtMaxTemperature: {
+    max: 10,
+    min: 3,
+    unit: "suihkua",
   },
-  {
-    accent: "#5aa7ff",
-    label: "Minimilämpö",
-    value: `${defaultSettings.minTankTemperature} °C`,
-  },
-  {
-    accent: "#ff5f6d",
-    label: "Maksimilämpö",
-    value: `${defaultSettings.maxTankTemperature} °C`,
-  },
-  {
-    accent: "#b889ff",
-    label: "Täysi varaaja",
-    value: `${defaultSettings.showersAtMaxTemperature} suihkua`,
-  },
-] as const;
+} as const satisfies Record<
+  EditableSettingKey,
+  { max: number; min: number; unit: string }
+>;
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const [settings, setSettings] = useState(defaultSettings);
+  const [selectedSettingKey, setSelectedSettingKey] =
+    useState<EditableSettingKey | null>(null);
+
+  const settingsRows = useMemo(
+    (): SettingsRow[] => [
+      {
+        accent: "#36f4d4",
+        label: "Varaajan koko",
+        value: `${settings.tankVolumeLiters} l`,
+      },
+      {
+        accent: "#54eaa0",
+        key: "heatingHoursPerDay",
+        label: "Lämmitystarve",
+        value: `${settings.heatingHoursPerDay} h / vrk`,
+      },
+      {
+        accent: "#ffcf5a",
+        key: "priceDifferenceThresholdCents",
+        label: "Hintaeron raja",
+        value: `${settings.priceDifferenceThresholdCents} c/kWh`,
+      },
+      {
+        accent: "#5aa7ff",
+        label: "Minimilämpö",
+        value: `${settings.minTankTemperature} °C`,
+      },
+      {
+        accent: "#ff5f6d",
+        label: "Maksimilämpö",
+        value: `${settings.maxTankTemperature} °C`,
+      },
+      {
+        accent: "#b889ff",
+        key: "showersAtMaxTemperature",
+        label: "Täysi varaaja",
+        value: `${settings.showersAtMaxTemperature} suihkua`,
+      },
+    ],
+    [settings],
+  );
+
+  const selectedRow = settingsRows.find(
+    (row) => row.key === selectedSettingKey,
+  );
+  const selectedSetting = selectedSettingKey
+    ? editableSettings[selectedSettingKey]
+    : null;
+  const selectedSettingOptions = selectedSetting
+    ? Array.from(
+        { length: selectedSetting.max - selectedSetting.min + 1 },
+        (_, index) => selectedSetting.min + index,
+      )
+    : [];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadSettings().then((storedSettings) => {
+      if (isMounted) {
+        setSettings(storedSettings);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const updateSetting = (key: EditableSettingKey, value: number) => {
+    const updatedSettings = {
+      ...settings,
+      [key]: value,
+    };
+
+    setSettings(updatedSettings);
+    setSelectedSettingKey(null);
+    saveSettings(updatedSettings).catch(() => undefined);
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -74,17 +162,76 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.settingsCard}>
-          {settingsRows.map((row) => (
-            <View key={row.label} style={styles.settingRow}>
-              <View
-                style={[styles.settingAccent, { backgroundColor: row.accent }]}
-              />
-              <Text style={styles.settingLabel}>{row.label}</Text>
-              <Text style={styles.settingValue}>{row.value}</Text>
-            </View>
-          ))}
+          {settingsRows.map((row) => {
+            const rowContent = (
+              <>
+                <View
+                  style={[
+                    styles.settingAccent,
+                    { backgroundColor: row.accent },
+                  ]}
+                />
+                <Text style={styles.settingLabel}>{row.label}</Text>
+                <Text style={styles.settingValue}>{row.value}</Text>
+              </>
+            );
+
+            if (row.key) {
+              const rowKey = row.key;
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={row.label}
+                  onPress={() => setSelectedSettingKey(rowKey)}
+                  style={styles.settingRow}
+                >
+                  {rowContent}
+                </Pressable>
+              );
+            }
+
+            return (
+              <View key={row.label} style={styles.settingRow}>
+                {rowContent}
+              </View>
+            );
+          })}
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setSelectedSettingKey(null)}
+        transparent
+        visible={selectedSettingKey !== null}
+      >
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setSelectedSettingKey(null)}
+          style={styles.selectorOverlay}
+        >
+          <Pressable style={styles.selectorCard}>
+            <Text style={styles.selectorTitle}>{selectedRow?.label}</Text>
+            {selectedSettingKey && selectedSetting ? (
+              <View style={styles.selectorOptions}>
+                {selectedSettingOptions.map((option) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    key={option}
+                    onPress={() => updateSetting(selectedSettingKey, option)}
+                    style={styles.selectorOption}
+                  >
+                    <Text style={styles.selectorOptionText}>
+                      {option} {selectedSetting.unit}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -236,5 +383,40 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.2,
     textAlign: "right",
+  },
+  selectorCard: {
+    backgroundColor: "#10172a",
+    borderColor: "rgba(255,255,255,0.16)",
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 18,
+    width: "82%",
+  },
+  selectorOption: {
+    borderBottomColor: "rgba(255,255,255,0.09)",
+    borderBottomWidth: 1,
+    paddingVertical: 14,
+  },
+  selectorOptions: {
+    marginTop: 8,
+  },
+  selectorOptionText: {
+    color: "#ffffff",
+    fontSize: 17,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  selectorOverlay: {
+    alignItems: "center",
+    backgroundColor: "rgba(5,8,22,0.72)",
+    flex: 1,
+    justifyContent: "center",
+    padding: 20,
+  },
+  selectorTitle: {
+    color: "#d9e9ff",
+    fontSize: 18,
+    fontWeight: "900",
+    textAlign: "center",
   },
 });
