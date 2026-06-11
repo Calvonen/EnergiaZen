@@ -18,7 +18,6 @@ const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const dailyHeatingHours = 3;
 const maintenanceHeatingHours = 1;
-const hasActualHeatingData = false;
 const priceDifferenceThreshold = 2;
 const chartPriceStep = 5;
 const chartMinimumScaleMax = 10;
@@ -66,8 +65,8 @@ type HourlyPrice = {
   price: number;
 };
 
-type HeatingPlanStatus = "completed" | "planned" | "missed";
-type HeatingMarker = "🔥" | "★" | "⚠️" | null;
+type HeatingPlanStatus = "completed" | "planned";
+type HeatingMarker = "🔥" | "★" | null;
 
 type HeatingPlanHour = HourlyPrice & {
   status: HeatingPlanStatus;
@@ -158,21 +157,15 @@ function getHeatingMarkerLabel(marker: HeatingMarker) {
     return "Lämmitys toteutui";
   }
 
-  if (marker === "⚠️") {
-    return "Suunniteltu, ei toteutunut";
-  }
-
   return null;
 }
 
 function getHeatingMarker({
   hasActualHeating,
-  hasActualHeatingData,
   isPastHour,
   isSelectedHeatingHour,
 }: {
   hasActualHeating: boolean;
-  hasActualHeatingData: boolean;
   isPastHour: boolean;
   isSelectedHeatingHour: boolean;
 }): HeatingMarker {
@@ -180,15 +173,11 @@ function getHeatingMarker({
     return "🔥";
   }
 
-  if (!isSelectedHeatingHour) {
-    return null;
+  if (isSelectedHeatingHour && !isPastHour) {
+    return "★";
   }
 
-  if (isPastHour) {
-    return hasActualHeatingData ? "⚠️" : null;
-  }
-
-  return "★";
+  return null;
 }
 
 function getPriceTheme(price: number) {
@@ -301,7 +290,6 @@ function selectHeatingRecommendation(
   prices: HourlyPrice[],
   currentHourStart: Date,
   heatedHourNumbers: Set<number>,
-  hasActualHeatingData: boolean,
 ) {
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
@@ -313,7 +301,6 @@ function selectHeatingRecommendation(
   const remainingTodayPrices = todayPrices.filter(
     (item) => item.endDate.getTime() > currentHourStart.getTime(),
   );
-  const plannedTodayHours = getCheapestHours(todayPrices, dailyHeatingHours);
   const completedTodayHours = sortHoursChronologically(
     todayPrices.filter(
       (item) =>
@@ -325,17 +312,8 @@ function selectHeatingRecommendation(
   const completedHourNumbers = new Set(
     completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
   );
-  const missedPlannedTodayHours = hasActualHeatingData
-    ? plannedTodayHours.filter(
-        (item) =>
-          !completedHourIds.has(item.id) &&
-          item.endDate.getTime() <= currentHourStart.getTime(),
-      )
-    : [];
   const remainingHeatingNeed = Math.max(
-    dailyHeatingHours -
-      completedTodayHours.length -
-      missedPlannedTodayHours.length,
+    dailyHeatingHours - completedTodayHours.length,
     0,
   );
   const tomorrowPrices = prices.filter(
@@ -365,23 +343,11 @@ function selectHeatingRecommendation(
       plannedById.set(item.id, item);
     }
 
-    for (const item of missedPlannedTodayHours) {
-      plannedById.set(item.id, item);
-    }
-
     return sortHoursChronologically([...plannedById.values()]).map(
-      (item): HeatingPlanHour => {
-        const isCompleted = completedHourIds.has(item.id);
-        const isMissed =
-          hasActualHeatingData &&
-          !isCompleted &&
-          item.endDate.getTime() <= currentHourStart.getTime();
-
-        return {
-          ...item,
-          status: isCompleted ? "completed" : isMissed ? "missed" : "planned",
-        };
-      },
+      (item): HeatingPlanHour => ({
+        ...item,
+        status: completedHourIds.has(item.id) ? "completed" : "planned",
+      }),
     );
   };
   const futureCandidates = (source: HourlyPrice[]) =>
@@ -537,7 +503,6 @@ export default function HomeScreen() {
         hourlyPrices,
         currentHourStart,
         todayActualHeatingHourNumbers,
-        hasActualHeatingData,
       ),
     [currentHourStart, hourlyPrices, todayActualHeatingHourNumbers],
   );
@@ -940,13 +905,11 @@ export default function HomeScreen() {
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
-                          const hasActualHeating =
-                            heatedHourNumbers.has(
-                              getHelsinkiHourNumber(item.date),
-                            ) && isPastHour;
+                          const hasActualHeating = heatedHourNumbers.has(
+                            getHelsinkiHourNumber(item.date),
+                          );
                           const heatingMarker = getHeatingMarker({
                             hasActualHeating,
-                            hasActualHeatingData,
                             isPastHour,
                             isSelectedHeatingHour: selectedHeatingHourIds.has(
                               item.id,
