@@ -24,10 +24,13 @@ const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
-const yesterdayHeatedHours = [1, 4, 6];
-const todayHeatedHours = [0, 5];
 
 type DaySelection = "yesterday" | "today" | "tomorrow";
+
+const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
+  today: [],
+  yesterday: [],
+};
 
 const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
@@ -132,18 +135,32 @@ function getWarmWaterEstimate(temperature: number) {
   };
 }
 
-function getWarmWaterCardTheme(fillRatio: number) {
-  const ratio = clamp(fillRatio, 0, 1);
-  const accent = mixColors("#26d9d2", "#f4ad55", ratio);
-  const glow = mixColors("#16bfc8", "#9be36d", ratio);
+function getWarmWaterCardTheme() {
+  const accent = "#26d9d2";
 
   return {
     backgroundColor: `${accent}2b`,
     borderColor: `${accent}a8`,
     fillColor: accent,
-    shadowColor: glow,
-    surfaceColor: mixColors("#d9fff9", "#fff0b8", ratio),
+    shadowColor: "#16bfc8",
+    surfaceColor: "#d9fff9",
   };
+}
+
+function getHeatingMarkerLabel(marker: string | null) {
+  if (marker === "⭐") {
+    return "Valittu lämmitykseen";
+  }
+
+  if (marker === "🔥") {
+    return "Lämmitys toteutui";
+  }
+
+  if (marker === "⚠️") {
+    return "Suunniteltu, ei toteutunut";
+  }
+
+  return null;
 }
 
 function getPriceTheme(price: number) {
@@ -477,15 +494,18 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
-  const todayHeatedHourNumbers = useMemo(() => new Set(todayHeatedHours), []);
+  const todayActualHeatingHourNumbers = useMemo(
+    () => new Set(actualHeatingHours.today ?? []),
+    [],
+  );
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
         hourlyPrices,
         currentHourStart,
-        todayHeatedHourNumbers,
+        todayActualHeatingHourNumbers,
       ),
-    [currentHourStart, hourlyPrices, todayHeatedHourNumbers],
+    [currentHourStart, hourlyPrices, todayActualHeatingHourNumbers],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -523,17 +543,10 @@ export default function HomeScreen() {
         .map((item) => item.id),
     );
   }, [recommendedHeatingHours, selectedDay]);
-  const heatedHourNumbers = useMemo(() => {
-    if (selectedDay === "yesterday") {
-      return new Set(yesterdayHeatedHours);
-    }
-
-    if (selectedDay === "today") {
-      return new Set(todayHeatedHours);
-    }
-
-    return new Set<number>();
-  }, [selectedDay]);
+  const heatedHourNumbers = useMemo(
+    () => new Set(actualHeatingHours[selectedDay] ?? []),
+    [selectedDay],
+  );
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
       item.date.getTime() <= currentHourStart.getTime() &&
@@ -541,7 +554,7 @@ export default function HomeScreen() {
   );
   const temperatureCardTheme = getTemperatureCardTheme(tankTemperature);
   const warmWaterEstimate = getWarmWaterEstimate(tankTemperature);
-  const warmWaterCardTheme = getWarmWaterCardTheme(warmWaterEstimate.fillRatio);
+  const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
   const warmWaterShowersLabel = `${formatFinnishDecimal(
     warmWaterEstimate.showersLeft,
@@ -909,7 +922,7 @@ export default function HomeScreen() {
                               getHelsinkiHourNumber(item.date),
                             ) &&
                             (selectedDay !== "today" ||
-                              item.date.getTime() <=
+                              item.endDate.getTime() <=
                                 currentHourStart.getTime());
                           const heatingMarker = isHeatedHour
                             ? "🔥"
@@ -918,6 +931,8 @@ export default function HomeScreen() {
                               : plannedHeatingHourIds.has(item.id)
                                 ? "⭐"
                                 : null;
+                          const heatingMarkerLabel =
+                            getHeatingMarkerLabel(heatingMarker);
                           const barHeight = Math.max(
                             (Math.max(item.price, 0) / chartScaleMax) *
                               chartPlotHeight,
@@ -930,7 +945,7 @@ export default function HomeScreen() {
                           return (
                             <Pressable
                               accessibilityHint="Näyttää valitun tunnin hinnan kaavion yläpuolella."
-                              accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta`}
+                              accessibilityLabel={`${item.hourLabel}, ${formatFinnishDecimal(item.price)} senttiä kilowattitunnilta${heatingMarkerLabel ? `, ${heatingMarkerLabel}` : ""}`}
                               accessibilityRole="button"
                               key={item.id}
                               onPress={(event) => {
@@ -953,6 +968,11 @@ export default function HomeScreen() {
                                   <Text style={styles.chartTooltipPrice}>
                                     {formatFinnishDecimal(item.price)} c/kWh
                                   </Text>
+                                  {heatingMarkerLabel ? (
+                                    <Text style={styles.chartTooltipMarker}>
+                                      {heatingMarker} {heatingMarkerLabel}
+                                    </Text>
+                                  ) : null}
                                   <View style={styles.chartTooltipArrow} />
                                 </View>
                               ) : null}
@@ -1383,9 +1403,9 @@ const styles = StyleSheet.create({
     overflow: "visible",
   },
   chartHourMarker: {
-    fontSize: 15,
-    lineHeight: 17,
-    marginBottom: 3,
+    fontSize: 11,
+    lineHeight: 13,
+    marginBottom: 2,
     textAlign: "center",
   },
   chartBar: {
@@ -1421,14 +1441,14 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     left: "50%",
-    marginLeft: -43,
+    marginLeft: -55,
     paddingHorizontal: 10,
     paddingVertical: 8,
     position: "absolute",
     shadowColor: "#36f4d4",
     shadowOpacity: 0.32,
     shadowRadius: 16,
-    width: 86,
+    width: 110,
     zIndex: 10,
   },
   chartTooltipTime: {
@@ -1442,6 +1462,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "900",
     lineHeight: 16,
+  },
+  chartTooltipMarker: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 4,
+    textAlign: "center",
   },
   chartTooltipArrow: {
     borderLeftColor: "transparent",
