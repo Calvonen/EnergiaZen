@@ -7,6 +7,27 @@ import {
 const warmWaterHoursForPlanningAtDefaultTemperature = 17;
 const maintenanceHeatingHours = 1;
 
+function getTemperatureBasedHeatingNeed(tankTemperature: number) {
+  if (tankTemperature < 50) {
+    return {
+      hours: 3,
+      reason: "Varaaja alle 50 °C → 3 h lämmitys",
+    };
+  }
+
+  if (tankTemperature < 65) {
+    return {
+      hours: 2,
+      reason: "Varaaja 50–64 °C → 2 h lämmitys",
+    };
+  }
+
+  return {
+    hours: 1,
+    reason: "Varaaja yli 65 °C → 1 h lämmitys",
+  };
+}
+
 export type DaySelection = "yesterday" | "today" | "tomorrow";
 
 export type HourlyPrice = {
@@ -101,6 +122,10 @@ export function selectHeatingRecommendation(
   settings: EnergiaZenSettings = defaultSettings,
   tankTemperature = defaultTankTemperature,
 ) {
+  const temperatureBasedHeatingNeed =
+    getTemperatureBasedHeatingNeed(tankTemperature);
+  const heatingHoursPerDay = temperatureBasedHeatingNeed.hours;
+  const heatingReason = temperatureBasedHeatingNeed.reason;
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
     new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
@@ -113,7 +138,7 @@ export function selectHeatingRecommendation(
   );
   const plannedTodayHours = getCheapestHours(
     todayPrices,
-    settings.heatingHoursPerDay,
+    heatingHoursPerDay,
   );
   const completedTodayHours = sortHoursChronologically(
     todayPrices.filter(
@@ -121,7 +146,7 @@ export function selectHeatingRecommendation(
         heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
         item.date.getTime() <= currentHourStart.getTime(),
     ),
-  ).slice(0, settings.heatingHoursPerDay);
+  ).slice(0, heatingHoursPerDay);
   const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
   const completedHourNumbers = new Set(
     completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
@@ -132,7 +157,7 @@ export function selectHeatingRecommendation(
       item.endDate.getTime() <= currentHourStart.getTime(),
   );
   const remainingHeatingNeed = Math.max(
-    settings.heatingHoursPerDay -
+    heatingHoursPerDay -
       completedTodayHours.length -
       missedPlannedTodayHours.length,
     0,
@@ -142,15 +167,15 @@ export function selectHeatingRecommendation(
   );
   const cheapestTodayHours = getCheapestHours(
     remainingTodayPrices,
-    settings.heatingHoursPerDay,
+    heatingHoursPerDay,
   );
   const cheapestTomorrowHours = getCheapestHours(
     tomorrowPrices,
-    settings.heatingHoursPerDay,
+    heatingHoursPerDay,
   );
   const averageTodayPrice = getAveragePrice(cheapestTodayHours);
   const averageTomorrowPrice =
-    cheapestTomorrowHours.length === settings.heatingHoursPerDay
+    cheapestTomorrowHours.length === heatingHoursPerDay
       ? getAveragePrice(cheapestTomorrowHours)
       : null;
   const toPlanHours = (selectedHours: HourlyPrice[]) => {
@@ -193,7 +218,7 @@ export function selectHeatingRecommendation(
     return {
       hours: toPlanHours([]),
       realizedHours: completedTodayHours.length,
-      reason: `Päivän ${settings.heatingHoursPerDay} h lämmitystavoite on täynnä`,
+      reason: heatingReason,
     };
   }
 
@@ -206,7 +231,7 @@ export function selectHeatingRecommendation(
         ),
       ),
       realizedHours: completedTodayHours.length,
-      reason: `Normaali ${settings.heatingHoursPerDay} h lämmitys`,
+      reason: heatingReason,
     };
   }
 
@@ -239,7 +264,7 @@ export function selectHeatingRecommendation(
         ),
       ),
       realizedHours: completedTodayHours.length,
-      reason: "Huomenna selvästi halvempaa – säästetään varaajaa",
+      reason: heatingReason,
     };
   }
 
@@ -256,15 +281,9 @@ export function selectHeatingRecommendation(
     ),
     remainingHeatingNeed,
   );
-  const todayIsClearlyCheaper =
-    averageTomorrowPrice - averageTodayPrice >
-    settings.priceDifferenceThresholdCents;
-
   return {
     hours: toPlanHours(selectedHours),
     realizedHours: completedTodayHours.length,
-    reason: todayIsClearlyCheaper
-      ? "Tänään edullisempaa kuin huomenna"
-      : `Normaali ${settings.heatingHoursPerDay} h lämmitys`,
+    reason: heatingReason,
   };
 }
