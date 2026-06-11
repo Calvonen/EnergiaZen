@@ -4,7 +4,7 @@ Pörssisähkön ja lämminvesivaraajan ohjaussovellus.
 
 ## Käynnistys Codespacesissa
 
-Siirry projektikansioon:
+Avaa terminaali ja siirry projektikansioon:
 
 ```bash
 cd /workspaces/EnergiaZen/energiazen-mini
@@ -16,71 +16,72 @@ Asenna riippuvuudet tarvittaessa:
 npm install
 ```
 
-Käynnistä Expo:
+Käynnistä Expo Go -palvelin:
 
 ```bash
-npx expo start --clear
+npx expo start --host tunnel --clear
 ```
 
-### Pikakomento (valinnainen)
+Odota että Metro Bundler käynnistyy.
 
-Luo zen-komento:
+Kun näet esimerkiksi:
 
-```bash
-echo "alias zen='cd /workspaces/EnergiaZen/energiazen-mini && npx expo start --clear'" >> ~/.bashrc
-source ~/.bashrc
+```text
+Using Expo Go
+Android Bundled ...
 ```
 
-Tämän jälkeen sovelluksen voi käynnistää komennolla:
-
-```bash
-zen
-```
+sovellus on valmis käytettäväksi.
 
 ## Testaus puhelimella
 
-1. Avaa Expo Go
+1. Asenna Expo Go
 2. Käynnistä projekti Codespacesissa
-3. Skannaa QR-koodi
-4. Sovellus latautuu puhelimeen
+3. Avaa Expo Go
+4. Valitse EnergiaZen viimeisimmistä projekteista
+
+Jos sovellus ei yhdisty:
+
+```bash
+Ctrl + C
+npx expo start --host tunnel --clear
+```
+
+## Projektin päivitys
+
+Hae uusimmat muutokset:
+
+```bash
+git pull
+```
 
 ## Tietolähteet
 
-### Sähkön hinta
+### Nykyinen sähkön hinta
 
-Nykyinen tuntihinta:
-
-```text
 https://api.spot-hinta.fi/JustNow?region=FI&priceResolution=60
-```
 
-### Päivän hinnat
+### Päivän ja huomisen hinnat
 
-```text
 https://api.spot-hinta.fi/TodayAndDayForward?region=FI
-```
 
 ## Tulevat ominaisuudet
 
 - ESP32 lämpötilamittaus
 - Shelly-ohjaus
 - Varaajan energiasisällön laskenta
-- "Suihkuja jäljellä" -mittari
+- Suihkuja jäljellä -mittari
 - Lämmityshistorian seuranta
-- APK-julkaisu Androidille
+- Android APK
 
-## Git
+## Huomioita
 
-Päivitä projekti:
+Codespaces voi sammua käyttämättömänä.
 
-```bash
-git pull
-```
-
-Tallenna muutokset:
+Jos Expo Go menettää yhteyden:
 
 ```bash
-git add .
-git commit -m "Kuvaus muutoksista"
-git push
+npx expo start --host tunnel --clear
 ```
+
+käynnistää palvelimen uudelleen.
