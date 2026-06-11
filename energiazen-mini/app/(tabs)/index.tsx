@@ -10,7 +10,9 @@ import {
 } from "react-native";
 
 const tankTemperature = 58;
-const warmWaterHours = 17;
+const warmWaterHoursForPlanning = 17;
+const warmWaterMockShowers = 3.5;
+const warmWaterMockFillRatio = 0.7;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const dailyHeatingHours = 3;
@@ -64,6 +66,51 @@ type HeatingPlanStatus = "completed" | "planned" | "missed";
 type HeatingPlanHour = HourlyPrice & {
   status: HeatingPlanStatus;
 };
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function hexToRgb(hexColor: string) {
+  const normalizedColor = hexColor.replace("#", "");
+
+  return {
+    r: parseInt(normalizedColor.slice(0, 2), 16),
+    g: parseInt(normalizedColor.slice(2, 4), 16),
+    b: parseInt(normalizedColor.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex({ r, g, b }: { r: number; g: number; b: number }) {
+  const toHex = (channel: number) =>
+    Math.round(channel).toString(16).padStart(2, "0");
+
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function mixColors(startColor: string, endColor: string, ratio: number) {
+  const start = hexToRgb(startColor);
+  const end = hexToRgb(endColor);
+
+  return rgbToHex({
+    r: start.r + (end.r - start.r) * ratio,
+    g: start.g + (end.g - start.g) * ratio,
+    b: start.b + (end.b - start.b) * ratio,
+  });
+}
+
+function getTemperatureCardTheme(temperature: number) {
+  const ratio = clamp((temperature - 20) / (80 - 20), 0, 1);
+  const accent = mixColors("#188bff", "#ff3f46", ratio);
+  const deepAccent = mixColors("#0b4f9f", "#8f151d", ratio);
+
+  return {
+    accent,
+    backgroundColor: `${accent}33`,
+    borderColor: `${accent}b8`,
+    shadowColor: deepAccent,
+  };
+}
 
 function getPriceTheme(price: number) {
   if (price <= 3) {
@@ -292,7 +339,8 @@ function selectHeatingRecommendation(
         (60 * 60 * 1000),
     ),
   );
-  const warmWaterCanWait = warmWaterHours >= hoursUntilFirstCheapTomorrow;
+  const warmWaterCanWait =
+    warmWaterHoursForPlanning >= hoursUntilFirstCheapTomorrow;
   const tomorrowIsClearlyCheaper =
     averageTodayPrice - averageTomorrowPrice > priceDifferenceThreshold;
 
@@ -457,6 +505,13 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
+  const temperatureCardTheme = getTemperatureCardTheme(tankTemperature);
+  const warmWaterFillPercent = Math.round(
+    clamp(warmWaterMockFillRatio, 0, 1) * 100,
+  );
+  const warmWaterShowersLabel = `${formatFinnishDecimal(
+    warmWaterMockShowers,
+  )} suihkua jäljellä`;
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -643,18 +698,56 @@ export default function HomeScreen() {
 
         <View style={styles.cardsRow}>
           <Animated.View
+            accessibilityLabel={`Varaajan lämpötila ${tankTemperature} astetta${
+              isHeatingNow ? ", lämmitys käynnissä" : ""
+            }`}
             style={[
               styles.metricCard,
-              isHeatingNow && [styles.heatingMetricCard, heatingCardPulseStyle],
+              styles.temperatureCard,
+              {
+                backgroundColor: temperatureCardTheme.backgroundColor,
+                borderColor: temperatureCardTheme.borderColor,
+                shadowColor: temperatureCardTheme.shadowColor,
+              },
+              isHeatingNow && heatingCardPulseStyle,
             ]}
           >
-            <Text style={styles.cardIcon}>🔥</Text>
-            <Text style={styles.cardValue}>{tankTemperature} °C</Text>
+            <View style={styles.cardLabelRow}>
+              <Text style={styles.cardIcon}>🔥</Text>
+              <Text style={styles.cardLabel}>Varaaja</Text>
+            </View>
+            <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+            <Text style={styles.cardStatus}>
+              {isHeatingNow ? "Lämpenee nyt" : "Lämpö tallessa"}
+            </Text>
           </Animated.View>
 
-          <View style={styles.metricCard}>
-            <Text style={styles.cardIcon}>💧</Text>
-            <Text style={styles.cardValue}>{warmWaterHours} h</Text>
+          <View
+            accessibilityLabel={`Lämmintä vettä ${warmWaterShowersLabel}`}
+            style={[styles.metricCard, styles.waterCard]}
+          >
+            <View style={styles.cardLabelRow}>
+              <Text style={styles.cardIcon}>💧</Text>
+              <Text style={styles.cardLabel}>Lämmin vesi</Text>
+            </View>
+            <View style={styles.tankVisual}>
+              <View
+                style={[
+                  styles.tankFill,
+                  { height: `${warmWaterFillPercent}%` },
+                ]}
+              />
+              <View
+                style={[
+                  styles.tankSurface,
+                  { bottom: `${warmWaterFillPercent}%` },
+                ]}
+              />
+              <View style={[styles.tankBubble, styles.tankBubbleOne]} />
+              <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
+              <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+            </View>
+            <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
           </View>
         </View>
 
@@ -1004,39 +1097,123 @@ const styles = StyleSheet.create({
   },
   metricCard: {
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(125,232,255,0.24)",
-    borderRadius: 24,
-    borderWidth: 1,
-    flex: 1,
-    minHeight: 104,
-    justifyContent: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    shadowColor: "#1df4c2",
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-  },
-  heatingMetricCard: {
-    backgroundColor: "rgba(255,95,109,0.14)",
-    borderColor: "rgba(255,95,109,0.58)",
+    borderRadius: 28,
     borderWidth: 1.5,
-    shadowColor: "#ff5f6d",
-    shadowOpacity: 0.62,
-    shadowRadius: 26,
+    flex: 1,
+    justifyContent: "space-between",
+    minHeight: 168,
+    overflow: "hidden",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    shadowOpacity: 0.38,
+    shadowRadius: 24,
+  },
+  temperatureCard: {
+    borderWidth: 1.5,
+  },
+  waterCard: {
+    backgroundColor: "rgba(22,126,255,0.16)",
+    borderColor: "rgba(116,207,255,0.62)",
+    shadowColor: "#167eff",
+  },
+  cardLabelRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    justifyContent: "center",
+    minHeight: 24,
   },
   cardIcon: {
-    fontSize: 22,
-    lineHeight: 26,
-    marginBottom: 2,
+    fontSize: 18,
+    lineHeight: 22,
     textAlign: "center",
   },
-  cardValue: {
-    color: "#ffffff",
-    fontSize: 32,
+  cardLabel: {
+    color: "rgba(247,251,255,0.82)",
+    fontSize: 12,
     fontWeight: "900",
-    letterSpacing: -0.8,
-    lineHeight: 38,
+    letterSpacing: 0.3,
+    textAlign: "center",
+    textTransform: "uppercase",
+  },
+  temperatureValue: {
+    color: "#ffffff",
+    fontSize: 54,
+    fontWeight: "900",
+    letterSpacing: -2.2,
+    lineHeight: 62,
+    marginTop: 4,
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.24)",
+    textShadowOffset: { height: 2, width: 0 },
+    textShadowRadius: 10,
+  },
+  cardStatus: {
+    color: "rgba(247,251,255,0.86)",
+    fontSize: 13,
+    fontWeight: "800",
+    lineHeight: 17,
+    textAlign: "center",
+  },
+  tankVisual: {
+    backgroundColor: "rgba(2,11,30,0.42)",
+    borderColor: "rgba(221,247,255,0.72)",
+    borderRadius: 20,
+    borderWidth: 2,
+    height: 78,
+    marginTop: 6,
+    overflow: "hidden",
+    position: "relative",
+    width: 58,
+  },
+  tankFill: {
+    backgroundColor: "#40d9ff",
+    borderTopColor: "rgba(255,255,255,0.42)",
+    borderTopWidth: 1,
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    shadowColor: "#40d9ff",
+    shadowOpacity: 0.56,
+    shadowRadius: 16,
+  },
+  tankSurface: {
+    backgroundColor: "rgba(255,255,255,0.78)",
+    borderRadius: 999,
+    height: 3,
+    left: 8,
+    marginBottom: -1.5,
+    position: "absolute",
+    right: 8,
+  },
+  tankBubble: {
+    backgroundColor: "rgba(255,255,255,0.78)",
+    borderRadius: 999,
+    height: 5,
+    position: "absolute",
+    width: 5,
+  },
+  tankBubbleOne: {
+    bottom: 14,
+    left: 16,
+  },
+  tankBubbleTwo: {
+    bottom: 34,
+    right: 14,
+  },
+  tankBubbleThree: {
+    bottom: 48,
+    left: 25,
+    opacity: 0.72,
+  },
+  waterValue: {
+    color: "#f8fbff",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: -0.2,
+    lineHeight: 20,
+    marginTop: 6,
     textAlign: "center",
   },
   chartCard: {
