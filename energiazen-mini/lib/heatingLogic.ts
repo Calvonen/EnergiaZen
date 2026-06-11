@@ -28,6 +28,16 @@ function getTemperatureBasedHeatingNeed(tankTemperature: number) {
   };
 }
 
+export function getEffectiveHeatingHours(
+  settings: EnergiaZenSettings = defaultSettings,
+  tankTemperature = defaultTankTemperature,
+) {
+  return Math.min(
+    settings.heatingHoursPerDay,
+    getTemperatureBasedHeatingNeed(tankTemperature).hours,
+  );
+}
+
 export type DaySelection = "yesterday" | "today" | "tomorrow";
 
 export type HourlyPrice = {
@@ -124,7 +134,10 @@ export function selectHeatingRecommendation(
 ) {
   const temperatureBasedHeatingNeed =
     getTemperatureBasedHeatingNeed(tankTemperature);
-  const heatingHoursPerDay = temperatureBasedHeatingNeed.hours;
+  const effectiveHeatingHours = getEffectiveHeatingHours(
+    settings,
+    tankTemperature,
+  );
   const heatingReason = temperatureBasedHeatingNeed.reason;
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
@@ -138,7 +151,7 @@ export function selectHeatingRecommendation(
   );
   const plannedTodayHours = getCheapestHours(
     todayPrices,
-    heatingHoursPerDay,
+    effectiveHeatingHours,
   );
   const completedTodayHours = sortHoursChronologically(
     todayPrices.filter(
@@ -146,7 +159,7 @@ export function selectHeatingRecommendation(
         heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
         item.date.getTime() <= currentHourStart.getTime(),
     ),
-  ).slice(0, heatingHoursPerDay);
+  ).slice(0, effectiveHeatingHours);
   const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
   const completedHourNumbers = new Set(
     completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
@@ -157,7 +170,7 @@ export function selectHeatingRecommendation(
       item.endDate.getTime() <= currentHourStart.getTime(),
   );
   const remainingHeatingNeed = Math.max(
-    heatingHoursPerDay -
+    effectiveHeatingHours -
       completedTodayHours.length -
       missedPlannedTodayHours.length,
     0,
@@ -167,15 +180,15 @@ export function selectHeatingRecommendation(
   );
   const cheapestTodayHours = getCheapestHours(
     remainingTodayPrices,
-    heatingHoursPerDay,
+    effectiveHeatingHours,
   );
   const cheapestTomorrowHours = getCheapestHours(
     tomorrowPrices,
-    heatingHoursPerDay,
+    effectiveHeatingHours,
   );
   const averageTodayPrice = getAveragePrice(cheapestTodayHours);
   const averageTomorrowPrice =
-    cheapestTomorrowHours.length === heatingHoursPerDay
+    cheapestTomorrowHours.length === effectiveHeatingHours
       ? getAveragePrice(cheapestTomorrowHours)
       : null;
   const toPlanHours = (selectedHours: HourlyPrice[]) => {
