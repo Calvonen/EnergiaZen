@@ -9,43 +9,31 @@ import {
   View,
 } from "react-native";
 
+import {
+  DaySelection,
+  formatHelsinkiDateKey,
+  getCheapestHours,
+  getHelsinkiHourNumber,
+  HourlyPrice,
+  selectHeatingRecommendation,
+  sortHoursChronologically,
+} from "@/lib/heatingLogic";
+import { defaultSettings } from "@/lib/settings";
+
 const tankTemperature = 58;
-const warmWaterHoursForPlanning = 17;
-const minimumWarmWaterTemperature = 20;
-const maximumWarmWaterTemperature = 80;
-const maximumWarmWaterShowers = 6;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
-const dailyHeatingHours = 3;
-const maintenanceHeatingHours = 1;
-const priceDifferenceThreshold = 2;
 const chartPriceStep = 5;
 const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 
-type DaySelection = "yesterday" | "today" | "tomorrow";
-
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
   yesterday: [],
 };
-
-const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
-  day: "2-digit",
-  month: "2-digit",
-  timeZone: "Europe/Helsinki",
-  year: "numeric",
-});
-
 const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
-  hour: "2-digit",
-  hour12: false,
-  timeZone: "Europe/Helsinki",
-});
-
-const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   hour12: false,
   timeZone: "Europe/Helsinki",
@@ -55,20 +43,6 @@ type SpotPriceResponse = {
   DateTime?: string | null;
   PriceNoTax?: number | null;
   PriceWithTax?: number | null;
-};
-
-type HourlyPrice = {
-  date: Date;
-  endDate: Date;
-  hourLabel: string;
-  id: string;
-  price: number;
-};
-
-type HeatingPlanStatus = "completed" | "planned" | "missed";
-
-type HeatingPlanHour = HourlyPrice & {
-  status: HeatingPlanStatus;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -105,8 +79,8 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
 
 function getTemperatureCardTheme(temperature: number) {
   const ratio = clamp(
-    (temperature - minimumWarmWaterTemperature) /
-      (maximumWarmWaterTemperature - minimumWarmWaterTemperature),
+    (temperature - defaultSettings.minTankTemperature) /
+      (defaultSettings.maxTankTemperature - defaultSettings.minTankTemperature),
     0,
     1,
   );
@@ -124,13 +98,18 @@ function getTemperatureCardTheme(temperature: number) {
 function getWarmWaterEstimate(temperature: number) {
   // Tämä on alustava arvio. Myöhemmin malli kalibroidaan todellisen suihkukäyttäytymisen perusteella.
   const showersLeft =
-    ((temperature - minimumWarmWaterTemperature) /
-      (maximumWarmWaterTemperature - minimumWarmWaterTemperature)) *
-    maximumWarmWaterShowers;
-  const clampedShowersLeft = clamp(showersLeft, 0, maximumWarmWaterShowers);
+    ((temperature - defaultSettings.minTankTemperature) /
+      (defaultSettings.maxTankTemperature -
+        defaultSettings.minTankTemperature)) *
+    defaultSettings.showersAtMaxTemperature;
+  const clampedShowersLeft = clamp(
+    showersLeft,
+    0,
+    defaultSettings.showersAtMaxTemperature,
+  );
 
   return {
-    fillRatio: clampedShowersLeft / maximumWarmWaterShowers,
+    fillRatio: clampedShowersLeft / defaultSettings.showersAtMaxTemperature,
     showersLeft: clampedShowersLeft,
   };
 }
@@ -191,10 +170,6 @@ function formatHourLabel(date: Date) {
   return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
 }
 
-function formatHelsinkiDateKey(date: Date) {
-  return helsinkiDateKeyFormatter.format(date);
-}
-
 function getChartDayKey(day: DaySelection, date = new Date()) {
   if (day === "yesterday") {
     return formatHelsinkiDateKey(
@@ -207,12 +182,6 @@ function getChartDayKey(day: DaySelection, date = new Date()) {
   }
 
   return formatHelsinkiDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
-}
-
-function getHelsinkiHourNumber(date: Date) {
-  const hour = Number(helsinkiHourFormatter.format(date));
-
-  return hour === 24 ? 0 : hour;
 }
 
 function getDayLabel(day: DaySelection) {
@@ -243,192 +212,6 @@ function getChartScaleValues(maxPrice: number) {
     { length: roundedMax / chartPriceStep + 1 },
     (_, index) => index * chartPriceStep,
   );
-}
-
-function getCheapestHours(prices: HourlyPrice[], count: number) {
-  return [...prices]
-    .sort((a, b) => {
-      if (a.price === b.price) {
-        return a.date.getTime() - b.date.getTime();
-      }
-
-      return a.price - b.price;
-    })
-    .slice(0, count);
-}
-
-function sortHoursChronologically(prices: HourlyPrice[]) {
-  return [...prices].sort((a, b) => a.date.getTime() - b.date.getTime());
-}
-
-function getAveragePrice(prices: HourlyPrice[]) {
-  if (prices.length === 0) {
-    return null;
-  }
-
-  return prices.reduce((sum, item) => sum + item.price, 0) / prices.length;
-}
-
-function selectHeatingRecommendation(
-  prices: HourlyPrice[],
-  currentHourStart: Date,
-  heatedHourNumbers: Set<number>,
-) {
-  const todayKey = formatHelsinkiDateKey(currentHourStart);
-  const tomorrowKey = formatHelsinkiDateKey(
-    new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
-  );
-  const todayPrices = prices.filter(
-    (item) => formatHelsinkiDateKey(item.date) === todayKey,
-  );
-  const remainingTodayPrices = todayPrices.filter(
-    (item) => item.endDate.getTime() > currentHourStart.getTime(),
-  );
-  const plannedTodayHours = getCheapestHours(todayPrices, dailyHeatingHours);
-  const completedTodayHours = sortHoursChronologically(
-    todayPrices.filter(
-      (item) =>
-        heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
-        item.date.getTime() <= currentHourStart.getTime(),
-    ),
-  ).slice(0, dailyHeatingHours);
-  const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
-  const completedHourNumbers = new Set(
-    completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
-  );
-  const missedPlannedTodayHours = plannedTodayHours.filter(
-    (item) =>
-      !completedHourIds.has(item.id) &&
-      item.endDate.getTime() <= currentHourStart.getTime(),
-  );
-  const remainingHeatingNeed = Math.max(
-    dailyHeatingHours -
-      completedTodayHours.length -
-      missedPlannedTodayHours.length,
-    0,
-  );
-  const tomorrowPrices = prices.filter(
-    (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
-  );
-  const cheapestTodayHours = getCheapestHours(
-    remainingTodayPrices,
-    dailyHeatingHours,
-  );
-  const cheapestTomorrowHours = getCheapestHours(
-    tomorrowPrices,
-    dailyHeatingHours,
-  );
-  const averageTodayPrice = getAveragePrice(cheapestTodayHours);
-  const averageTomorrowPrice =
-    cheapestTomorrowHours.length === dailyHeatingHours
-      ? getAveragePrice(cheapestTomorrowHours)
-      : null;
-  const toPlanHours = (selectedHours: HourlyPrice[]) => {
-    const plannedById = new Map<string, HourlyPrice>();
-
-    for (const item of selectedHours) {
-      plannedById.set(item.id, item);
-    }
-
-    for (const item of completedTodayHours) {
-      plannedById.set(item.id, item);
-    }
-
-    for (const item of missedPlannedTodayHours) {
-      plannedById.set(item.id, item);
-    }
-
-    return sortHoursChronologically([...plannedById.values()]).map(
-      (item): HeatingPlanHour => {
-        const isCompleted = completedHourIds.has(item.id);
-        const isMissed =
-          !isCompleted && item.endDate.getTime() <= currentHourStart.getTime();
-
-        return {
-          ...item,
-          status: isCompleted ? "completed" : isMissed ? "missed" : "planned",
-        };
-      },
-    );
-  };
-  const futureCandidates = (source: HourlyPrice[]) =>
-    source.filter(
-      (item) =>
-        item.endDate.getTime() > currentHourStart.getTime() &&
-        !completedHourIds.has(item.id) &&
-        !completedHourNumbers.has(getHelsinkiHourNumber(item.date)),
-    );
-
-  if (remainingHeatingNeed === 0) {
-    return {
-      hours: toPlanHours([]),
-      realizedHours: completedTodayHours.length,
-      reason: "Päivän 3 h lämmitystavoite on täynnä",
-    };
-  }
-
-  if (averageTomorrowPrice === null || averageTodayPrice === null) {
-    return {
-      hours: toPlanHours(
-        getCheapestHours(
-          futureCandidates(remainingTodayPrices),
-          remainingHeatingNeed,
-        ),
-      ),
-      realizedHours: completedTodayHours.length,
-      reason: "Normaali 3 h lämmitys",
-    };
-  }
-
-  const firstCheapTomorrowHour = sortHoursChronologically(
-    cheapestTomorrowHours,
-  )[0];
-  const hoursUntilFirstCheapTomorrow = Math.max(
-    0,
-    Math.ceil(
-      (firstCheapTomorrowHour.date.getTime() - currentHourStart.getTime()) /
-        (60 * 60 * 1000),
-    ),
-  );
-  const warmWaterCanWait =
-    warmWaterHoursForPlanning >= hoursUntilFirstCheapTomorrow;
-  const tomorrowIsClearlyCheaper =
-    averageTodayPrice - averageTomorrowPrice > priceDifferenceThreshold;
-
-  if (tomorrowIsClearlyCheaper && warmWaterCanWait) {
-    return {
-      hours: toPlanHours(
-        getCheapestHours(
-          futureCandidates(remainingTodayPrices),
-          Math.min(maintenanceHeatingHours, remainingHeatingNeed),
-        ),
-      ),
-      realizedHours: completedTodayHours.length,
-      reason: "Huomenna selvästi halvempaa – säästetään varaajaa",
-    };
-  }
-
-  const acceptableTodayHours = remainingTodayPrices.filter(
-    (item) => item.price < averageTomorrowPrice + priceDifferenceThreshold,
-  );
-  const selectedHours = getCheapestHours(
-    futureCandidates(
-      acceptableTodayHours.length >= remainingHeatingNeed
-        ? acceptableTodayHours
-        : remainingTodayPrices,
-    ),
-    remainingHeatingNeed,
-  );
-  const todayIsClearlyCheaper =
-    averageTomorrowPrice - averageTodayPrice > priceDifferenceThreshold;
-
-  return {
-    hours: toPlanHours(selectedHours),
-    realizedHours: completedTodayHours.length,
-    reason: todayIsClearlyCheaper
-      ? "Tänään edullisempaa kuin huomenna"
-      : "Normaali 3 h lämmitys",
-  };
 }
 
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
@@ -516,7 +299,7 @@ export default function HomeScreen() {
         hourlyPrices.filter(
           (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
         ),
-        dailyHeatingHours,
+        defaultSettings.heatingHoursPerDay,
       ),
     );
   }, [hourlyPrices]);
