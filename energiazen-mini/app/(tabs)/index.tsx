@@ -15,6 +15,7 @@ import {
   DaySelection,
   formatHelsinkiDateKey,
   getCheapestHours,
+  getEffectiveHeatingHours,
   getHelsinkiHourNumber,
   HourlyPrice,
   selectHeatingRecommendation,
@@ -316,6 +317,10 @@ export default function HomeScreen() {
     ],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
+  const effectiveHeatingHours = getEffectiveHeatingHours(
+    settings,
+    tankTemperature,
+  );
   const tomorrowPlannedHeatingHours = useMemo(() => {
     const tomorrowKey = getChartDayKey("tomorrow");
 
@@ -324,10 +329,10 @@ export default function HomeScreen() {
         hourlyPrices.filter(
           (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
         ),
-        settings.heatingHoursPerDay,
+        effectiveHeatingHours,
       ),
     );
-  }, [hourlyPrices, settings.heatingHoursPerDay]);
+  }, [effectiveHeatingHours, hourlyPrices]);
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
