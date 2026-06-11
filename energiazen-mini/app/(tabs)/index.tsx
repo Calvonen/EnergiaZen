@@ -66,6 +66,7 @@ type HourlyPrice = {
 };
 
 type HeatingPlanStatus = "completed" | "planned" | "missed";
+type HeatingMarker = "🔥" | "★" | "⚠️" | null;
 
 type HeatingPlanHour = HourlyPrice & {
   status: HeatingPlanStatus;
@@ -147,8 +148,8 @@ function getWarmWaterCardTheme() {
   };
 }
 
-function getHeatingMarkerLabel(marker: string | null) {
-  if (marker === "⭐") {
+function getHeatingMarkerLabel(marker: HeatingMarker) {
+  if (marker === "★") {
     return "Valittu lämmitykseen";
   }
 
@@ -161,6 +162,30 @@ function getHeatingMarkerLabel(marker: string | null) {
   }
 
   return null;
+}
+
+function getHeatingMarker({
+  hasActualHeating,
+  isPastHour,
+  isSelectedHeatingHour,
+}: {
+  hasActualHeating: boolean;
+  isPastHour: boolean;
+  isSelectedHeatingHour: boolean;
+}): HeatingMarker {
+  if (hasActualHeating) {
+    return "🔥";
+  }
+
+  if (!isSelectedHeatingHour) {
+    return null;
+  }
+
+  if (isPastHour) {
+    return "⚠️";
+  }
+
+  return "★";
 }
 
 function getPriceTheme(price: number) {
@@ -520,29 +545,18 @@ export default function HomeScreen() {
       ),
     );
   }, [hourlyPrices]);
-  const plannedHeatingHourIds = useMemo(() => {
+  const selectedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
     }
 
-    const plannedHours =
+    const selectedHours =
       selectedDay === "today"
-        ? recommendedHeatingHours.filter((item) => item.status === "planned")
+        ? recommendedHeatingHours.filter((item) => item.status !== "completed")
         : tomorrowPlannedHeatingHours;
 
-    return new Set(plannedHours.map((item) => item.id));
+    return new Set(selectedHours.map((item) => item.id));
   }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
-  const missedHeatingHourIds = useMemo(() => {
-    if (selectedDay !== "today") {
-      return new Set<string>();
-    }
-
-    return new Set(
-      recommendedHeatingHours
-        .filter((item) => item.status === "missed")
-        .map((item) => item.id),
-    );
-  }, [recommendedHeatingHours, selectedDay]);
   const heatedHourNumbers = useMemo(
     () => new Set(actualHeatingHours[selectedDay] ?? []),
     [selectedDay],
@@ -911,26 +925,22 @@ export default function HomeScreen() {
                             item.date.getTime() <= currentHourStart.getTime() &&
                             item.endDate.getTime() > currentHourStart.getTime();
                           const isPastHour =
-                            selectedDay === "today" &&
+                            selectedDay !== "tomorrow" &&
                             item.endDate.getTime() <=
                               currentHourStart.getTime();
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
-                          const isHeatedHour =
+                          const hasActualHeating =
                             heatedHourNumbers.has(
                               getHelsinkiHourNumber(item.date),
-                            ) &&
-                            (selectedDay !== "today" ||
-                              item.endDate.getTime() <=
-                                currentHourStart.getTime());
-                          const heatingMarker = isHeatedHour
-                            ? "🔥"
-                            : missedHeatingHourIds.has(item.id)
-                              ? "⚠️"
-                              : plannedHeatingHourIds.has(item.id)
-                                ? "⭐"
-                                : null;
+                            ) && isPastHour;
+                          const heatingMarker = getHeatingMarker({
+                            hasActualHeating,
+                            isPastHour,
+                            isSelectedHeatingHour:
+                              selectedHeatingHourIds.has(item.id),
+                          });
                           const heatingMarkerLabel =
                             getHeatingMarkerLabel(heatingMarker);
                           const barHeight = Math.max(
