@@ -372,9 +372,11 @@ export default function HomeScreen() {
   const warmWaterEstimate = getWarmWaterEstimate(tankTemperature, settings);
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
-  const warmWaterShowersLabel = `${formatFinnishDecimal(
+  const warmWaterShowersValue = formatFinnishDecimal(
     warmWaterEstimate.showersLeft,
-  )} suihkua`;
+  );
+  const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
+  const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -604,13 +606,10 @@ export default function HomeScreen() {
               <Text style={styles.cardLabel}>Varaaja</Text>
             </View>
             <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
-            <Text style={styles.cardStatus}>
-              {isHeatingNow ? "Lämpenee nyt" : "Lämpö tallessa"}
-            </Text>
           </Animated.View>
 
           <View
-            accessibilityLabel={`Lämmintä vettä ${warmWaterShowersLabel}`}
+            accessibilityLabel={`Lämmintä vettä ${warmWaterShowersAccessibilityLabel}`}
             style={[
               styles.metricCard,
               styles.waterCard,
@@ -1075,13 +1074,6 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
     textShadowRadius: 10,
-  },
-  cardStatus: {
-    color: "rgba(247,251,255,0.86)",
-    fontSize: 13,
-    fontWeight: "800",
-    lineHeight: 17,
-    textAlign: "center",
   },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
