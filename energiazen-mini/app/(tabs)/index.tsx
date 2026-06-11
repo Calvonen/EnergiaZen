@@ -27,11 +27,6 @@ const chartMinimumBarHeight = 8;
 
 type DaySelection = "yesterday" | "today" | "tomorrow";
 
-const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
-  today: [],
-  yesterday: [],
-};
-
 const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
   month: "2-digit",
@@ -230,6 +225,26 @@ function getHelsinkiHourNumber(date: Date) {
   const hour = Number(helsinkiHourFormatter.format(date));
 
   return hour === 24 ? 0 : hour;
+}
+
+function getMockActualHeatingHours(
+  currentHourStart: Date,
+): Partial<Record<DaySelection, number[]>> {
+  const currentHelsinkiHour = getHelsinkiHourNumber(currentHourStart);
+  const latestCompletedTodayHour =
+    currentHelsinkiHour === 0 ? 0 : currentHelsinkiHour - 1;
+  const mockTodayHeatingHours = Array.from(
+    { length: Math.min(dailyHeatingHours, latestCompletedTodayHour + 1) },
+    (_, index) => latestCompletedTodayHour - index,
+  )
+    .reverse()
+    .filter((hour) => hour >= 0);
+
+  // Väliaikainen mock-toteumadata: pidetään lista epätyhjänä, jotta 🔥-ikonit näkyvät testauksessa.
+  return {
+    today: mockTodayHeatingHours,
+    yesterday: [5, 6, 7],
+  };
 }
 
 function getDayLabel(day: DaySelection) {
@@ -493,9 +508,13 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
+  const actualHeatingHours = useMemo(
+    () => getMockActualHeatingHours(currentHourStart),
+    [currentHourStart],
+  );
   const todayActualHeatingHourNumbers = useMemo(
-    () => new Set(actualHeatingHours.today ?? []),
-    [],
+    () => new Set(actualHeatingHours.today),
+    [actualHeatingHours],
   );
   const heatingRecommendation = useMemo(
     () =>
@@ -533,7 +552,7 @@ export default function HomeScreen() {
   }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
   const heatedHourNumbers = useMemo(
     () => new Set(actualHeatingHours[selectedDay] ?? []),
-    [selectedDay],
+    [actualHeatingHours, selectedDay],
   );
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
