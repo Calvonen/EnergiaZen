@@ -11,8 +11,9 @@ import {
 
 const tankTemperature = 58;
 const warmWaterHoursForPlanning = 17;
-const warmWaterMockShowers = 3.5;
-const warmWaterMockFillRatio = 0.7;
+const minimumWarmWaterTemperature = 20;
+const maximumWarmWaterTemperature = 80;
+const maximumWarmWaterShowers = 6;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const dailyHeatingHours = 3;
@@ -100,7 +101,12 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
 }
 
 function getTemperatureCardTheme(temperature: number) {
-  const ratio = clamp((temperature - 20) / (80 - 20), 0, 1);
+  const ratio = clamp(
+    (temperature - minimumWarmWaterTemperature) /
+      (maximumWarmWaterTemperature - minimumWarmWaterTemperature),
+    0,
+    1,
+  );
   const accent = mixColors("#188bff", "#ff3f46", ratio);
   const deepAccent = mixColors("#0b4f9f", "#8f151d", ratio);
 
@@ -109,6 +115,34 @@ function getTemperatureCardTheme(temperature: number) {
     backgroundColor: `${accent}33`,
     borderColor: `${accent}b8`,
     shadowColor: deepAccent,
+  };
+}
+
+function getWarmWaterEstimate(temperature: number) {
+  // Tämä on alustava arvio. Myöhemmin malli kalibroidaan todellisen suihkukäyttäytymisen perusteella.
+  const showersLeft =
+    ((temperature - minimumWarmWaterTemperature) /
+      (maximumWarmWaterTemperature - minimumWarmWaterTemperature)) *
+    maximumWarmWaterShowers;
+  const clampedShowersLeft = clamp(showersLeft, 0, maximumWarmWaterShowers);
+
+  return {
+    fillRatio: clampedShowersLeft / maximumWarmWaterShowers,
+    showersLeft: clampedShowersLeft,
+  };
+}
+
+function getWarmWaterCardTheme(fillRatio: number) {
+  const ratio = clamp(fillRatio, 0, 1);
+  const accent = mixColors("#26d9d2", "#f4ad55", ratio);
+  const glow = mixColors("#16bfc8", "#9be36d", ratio);
+
+  return {
+    backgroundColor: `${accent}2b`,
+    borderColor: `${accent}a8`,
+    fillColor: accent,
+    shadowColor: glow,
+    surfaceColor: mixColors("#d9fff9", "#fff0b8", ratio),
   };
 }
 
@@ -506,12 +540,12 @@ export default function HomeScreen() {
       item.endDate.getTime() > currentHourStart.getTime(),
   );
   const temperatureCardTheme = getTemperatureCardTheme(tankTemperature);
-  const warmWaterFillPercent = Math.round(
-    clamp(warmWaterMockFillRatio, 0, 1) * 100,
-  );
+  const warmWaterEstimate = getWarmWaterEstimate(tankTemperature);
+  const warmWaterCardTheme = getWarmWaterCardTheme(warmWaterEstimate.fillRatio);
+  const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
   const warmWaterShowersLabel = `${formatFinnishDecimal(
-    warmWaterMockShowers,
-  )} suihkua jäljellä`;
+    warmWaterEstimate.showersLeft,
+  )} suihkua`;
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -724,7 +758,15 @@ export default function HomeScreen() {
 
           <View
             accessibilityLabel={`Lämmintä vettä ${warmWaterShowersLabel}`}
-            style={[styles.metricCard, styles.waterCard]}
+            style={[
+              styles.metricCard,
+              styles.waterCard,
+              {
+                backgroundColor: warmWaterCardTheme.backgroundColor,
+                borderColor: warmWaterCardTheme.borderColor,
+                shadowColor: warmWaterCardTheme.shadowColor,
+              },
+            ]}
           >
             <View style={styles.cardLabelRow}>
               <Text style={styles.cardIcon}>💧</Text>
@@ -734,13 +776,20 @@ export default function HomeScreen() {
               <View
                 style={[
                   styles.tankFill,
-                  { height: `${warmWaterFillPercent}%` },
+                  {
+                    backgroundColor: warmWaterCardTheme.fillColor,
+                    height: `${warmWaterFillPercent}%`,
+                    shadowColor: warmWaterCardTheme.shadowColor,
+                  },
                 ]}
               />
               <View
                 style={[
                   styles.tankSurface,
-                  { bottom: `${warmWaterFillPercent}%` },
+                  {
+                    backgroundColor: warmWaterCardTheme.surfaceColor,
+                    bottom: `${warmWaterFillPercent}%`,
+                  },
                 ]}
               />
               <View style={[styles.tankBubble, styles.tankBubbleOne]} />
@@ -1101,10 +1150,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     flex: 1,
     justifyContent: "space-between",
-    minHeight: 168,
+    minHeight: 160,
     overflow: "hidden",
     paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingVertical: 13,
     shadowOpacity: 0.38,
     shadowRadius: 24,
   },
@@ -1112,9 +1161,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   waterCard: {
-    backgroundColor: "rgba(22,126,255,0.16)",
-    borderColor: "rgba(116,207,255,0.62)",
-    shadowColor: "#167eff",
+    shadowOpacity: 0.42,
   },
   cardLabelRow: {
     alignItems: "center",
@@ -1160,11 +1207,11 @@ const styles = StyleSheet.create({
     borderColor: "rgba(221,247,255,0.72)",
     borderRadius: 20,
     borderWidth: 2,
-    height: 78,
+    height: 74,
     marginTop: 6,
     overflow: "hidden",
     position: "relative",
-    width: 58,
+    width: 56,
   },
   tankFill: {
     backgroundColor: "#40d9ff",
