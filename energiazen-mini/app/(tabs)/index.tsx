@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
   Pressable,
@@ -19,9 +20,12 @@ import {
   selectHeatingRecommendation,
   sortHoursChronologically,
 } from "@/lib/heatingLogic";
-import { defaultSettings, loadSettings } from "@/lib/settings";
+import {
+  defaultSettings,
+  defaultTankTemperature,
+  loadSettings,
+} from "@/lib/settings";
 
-const tankTemperature = 58;
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const chartPriceStep = 5;
@@ -169,6 +173,13 @@ function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
 
+function getEffectiveTankTemperature(settings = defaultSettings) {
+  // Testitilan ollessa pois käytössä palataan oletusarvoon, jonka tilalle ESP32-arvo voidaan myöhemmin kytkeä.
+  return settings.useTestTankTemperature
+    ? settings.testTankTemperature
+    : defaultTankTemperature;
+}
+
 function formatHourLabel(date: Date) {
   return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
 }
@@ -286,6 +297,7 @@ export default function HomeScreen() {
     () => new Set(actualHeatingHours.today ?? []),
     [],
   );
+  const tankTemperature = getEffectiveTankTemperature(settings);
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
@@ -293,8 +305,15 @@ export default function HomeScreen() {
         currentHourStart,
         todayActualHeatingHourNumbers,
         settings,
+        tankTemperature,
       ),
-    [currentHourStart, hourlyPrices, settings, todayActualHeatingHourNumbers],
+    [
+      currentHourStart,
+      hourlyPrices,
+      settings,
+      tankTemperature,
+      todayActualHeatingHourNumbers,
+    ],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -341,7 +360,10 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
-  const temperatureCardTheme = getTemperatureCardTheme(tankTemperature, settings);
+  const temperatureCardTheme = getTemperatureCardTheme(
+    tankTemperature,
+    settings,
+  );
   const warmWaterEstimate = getWarmWaterEstimate(tankTemperature, settings);
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
@@ -359,19 +381,21 @@ export default function HomeScreen() {
     null,
   );
 
-  useEffect(() => {
-    let isMounted = true;
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-    loadSettings().then((storedSettings) => {
-      if (isMounted) {
-        setSettings(storedSettings);
-      }
-    });
+      loadSettings().then((storedSettings) => {
+        if (isActive) {
+          setSettings(storedSettings);
+        }
+      });
 
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+      return () => {
+        isActive = false;
+      };
+    }, []),
+  );
 
   const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
     try {

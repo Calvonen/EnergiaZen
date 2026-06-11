@@ -5,6 +5,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
@@ -39,6 +40,11 @@ const editableSettings = {
     max: 10,
     min: 3,
     unit: "suihkua",
+  },
+  testTankTemperature: {
+    max: 80,
+    min: 20,
+    unit: "°C",
   },
 } as const satisfies Record<
   EditableSettingKey,
@@ -90,7 +96,17 @@ export default function SettingsScreen() {
     [settings],
   );
 
-  const selectedRow = settingsRows.find(
+  const testTemperatureRow = useMemo(
+    (): SettingsRow => ({
+      accent: "#ff8bd1",
+      key: "testTankTemperature",
+      label: "Varaajan lämpötila",
+      value: `${settings.testTankTemperature} °C`,
+    }),
+    [settings.testTankTemperature],
+  );
+
+  const selectedRow = [...settingsRows, testTemperatureRow].find(
     (row) => row.key === selectedSettingKey,
   );
   const selectedSetting = selectedSettingKey
@@ -117,15 +133,24 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  const saveUpdatedSettings = (updatedSettings: typeof settings) => {
+    setSettings(updatedSettings);
+    saveSettings(updatedSettings).catch(() => undefined);
+  };
+
   const updateSetting = (key: EditableSettingKey, value: number) => {
-    const updatedSettings = {
+    saveUpdatedSettings({
       ...settings,
       [key]: value,
-    };
-
-    setSettings(updatedSettings);
+    });
     setSelectedSettingKey(null);
-    saveSettings(updatedSettings).catch(() => undefined);
+  };
+
+  const updateTestTemperatureEnabled = (value: boolean) => {
+    saveUpdatedSettings({
+      ...settings,
+      useTestTankTemperature: value,
+    });
   };
 
   return (
@@ -197,6 +222,47 @@ export default function SettingsScreen() {
               </View>
             );
           })}
+
+          <Text style={styles.sectionLabel}>Testitila</Text>
+          <View style={styles.settingRow}>
+            <View
+              style={[
+                styles.settingAccent,
+                {
+                  backgroundColor: settings.useTestTankTemperature
+                    ? "#72ff9d"
+                    : "#8ea4cf",
+                },
+              ]}
+            />
+            <Text style={styles.settingLabel}>Käytä testilämpötilaa</Text>
+            <Switch
+              accessibilityLabel="Käytä testilämpötilaa"
+              onValueChange={updateTestTemperatureEnabled}
+              thumbColor={
+                settings.useTestTankTemperature ? "#f7fbff" : "#c3cee4"
+              }
+              trackColor={{
+                false: "rgba(142,164,207,0.35)",
+                true: "rgba(54,244,212,0.55)",
+              }}
+              value={settings.useTestTankTemperature}
+            />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSelectedSettingKey("testTankTemperature")}
+            style={styles.settingRow}
+          >
+            <View
+              style={[
+                styles.settingAccent,
+                { backgroundColor: testTemperatureRow.accent },
+              ]}
+            />
+            <Text style={styles.settingLabel}>{testTemperatureRow.label}</Text>
+            <Text style={styles.settingValue}>{testTemperatureRow.value}</Text>
+          </Pressable>
         </View>
       </ScrollView>
 
@@ -214,7 +280,10 @@ export default function SettingsScreen() {
           <Pressable style={styles.selectorCard}>
             <Text style={styles.selectorTitle}>{selectedRow?.label}</Text>
             {selectedSettingKey && selectedSetting ? (
-              <View style={styles.selectorOptions}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                style={styles.selectorOptions}
+              >
                 {selectedSettingOptions.map((option) => (
                   <Pressable
                     accessibilityRole="button"
@@ -227,7 +296,7 @@ export default function SettingsScreen() {
                     </Text>
                   </Pressable>
                 ))}
-              </View>
+              </ScrollView>
             ) : null}
           </Pressable>
         </Pressable>
@@ -355,6 +424,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
+  sectionLabel: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 1,
+    marginTop: 16,
+    paddingBottom: 2,
+    textTransform: "uppercase",
+  },
   settingRow: {
     alignItems: "center",
     borderBottomColor: "rgba(255,255,255,0.09)",
@@ -399,6 +477,7 @@ const styles = StyleSheet.create({
   },
   selectorOptions: {
     marginTop: 8,
+    maxHeight: 360,
   },
   selectorOptionText: {
     color: "#ffffff",

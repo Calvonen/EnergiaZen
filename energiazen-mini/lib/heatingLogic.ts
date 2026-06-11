@@ -1,6 +1,10 @@
-import { defaultSettings, EnergiaZenSettings } from "@/lib/settings";
+import {
+  defaultSettings,
+  defaultTankTemperature,
+  EnergiaZenSettings,
+} from "@/lib/settings";
 
-const warmWaterHoursForPlanning = 17;
+const warmWaterHoursForPlanningAtDefaultTemperature = 17;
 const maintenanceHeatingHours = 1;
 
 export type DaySelection = "yesterday" | "today" | "tomorrow";
@@ -18,6 +22,30 @@ export type HeatingPlanStatus = "completed" | "planned" | "missed";
 export type HeatingPlanHour = HourlyPrice & {
   status: HeatingPlanStatus;
 };
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getWarmWaterHoursForPlanning(
+  tankTemperature: number,
+  settings: EnergiaZenSettings,
+) {
+  const defaultTemperatureRange = Math.max(
+    defaultTankTemperature - settings.minTankTemperature,
+    1,
+  );
+  const currentTemperatureRange = clamp(
+    tankTemperature - settings.minTankTemperature,
+    0,
+    defaultTemperatureRange,
+  );
+
+  return Math.round(
+    (currentTemperatureRange / defaultTemperatureRange) *
+      warmWaterHoursForPlanningAtDefaultTemperature,
+  );
+}
 
 const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
@@ -71,6 +99,7 @@ export function selectHeatingRecommendation(
   currentHourStart: Date,
   heatedHourNumbers: Set<number>,
   settings: EnergiaZenSettings = defaultSettings,
+  tankTemperature = defaultTankTemperature,
 ) {
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
@@ -190,6 +219,10 @@ export function selectHeatingRecommendation(
       (firstCheapTomorrowHour.date.getTime() - currentHourStart.getTime()) /
         (60 * 60 * 1000),
     ),
+  );
+  const warmWaterHoursForPlanning = getWarmWaterHoursForPlanning(
+    tankTemperature,
+    settings,
   );
   const warmWaterCanWait =
     warmWaterHoursForPlanning >= hoursUntilFirstCheapTomorrow;
