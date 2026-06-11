@@ -27,8 +27,7 @@ import {
   loadSettings,
 } from "@/lib/settings";
 
-const priceApiUrl =
-  "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
+const priceApiBaseUrl = "https://www.sahkohinta-api.fi/api/v1/halpa";
 const chartPriceStep = 5;
 const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
@@ -46,9 +45,9 @@ const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
 });
 
 type SpotPriceResponse = {
-  DateTime?: string | null;
-  PriceNoTax?: number | null;
-  PriceWithTax?: number | null;
+  aikaleima_suomi?: string | null;
+  aikaleima_utc?: string | null;
+  hinta?: number | string | null;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -166,10 +165,6 @@ function getPriceTheme(price: number) {
   return { ringColor: "#ff5f6d" };
 }
 
-function normalizePriceToCents(value: number) {
-  return value < 1 ? value * 100 : value;
-}
-
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
@@ -229,17 +224,26 @@ function getChartScaleValues(maxPrice: number) {
   );
 }
 
+function parseSahkohintaDate(item: SpotPriceResponse) {
+  if (item.aikaleima_utc) {
+    return new Date(`${item.aikaleima_utc}Z`);
+  }
+
+  return item.aikaleima_suomi ? new Date(item.aikaleima_suomi) : null;
+}
+
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
   return data
     .map((item) => {
-      const price = item.PriceWithTax ?? item.PriceNoTax;
-      const date = item.DateTime ? new Date(item.DateTime) : null;
+      const numericPrice =
+        typeof item.hinta === "string" ? Number(item.hinta) : item.hinta;
+      const date = parseSahkohintaDate(item);
 
       if (
         !date ||
         Number.isNaN(date.getTime()) ||
-        typeof price !== "number" ||
-        Number.isNaN(price)
+        typeof numericPrice !== "number" ||
+        Number.isNaN(numericPrice)
       ) {
         return null;
       }
@@ -248,18 +252,30 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
         date,
         endDate: new Date(date.getTime() + 60 * 60 * 1000),
         hourLabel: formatHourLabel(date),
-        id: item.DateTime ?? date.toISOString(),
-        price: normalizePriceToCents(price),
+        id: item.aikaleima_utc ?? item.aikaleima_suomi ?? date.toISOString(),
+        price: numericPrice,
       } satisfies HourlyPrice;
     })
     .filter((item): item is HourlyPrice => item !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
+function buildPriceApiUrl(dayKey: string) {
+  const params = new URLSearchParams({
+    aikaraja: dayKey,
+    tulos: "haja",
+    tunnit: "24",
+  });
+
+  return `${priceApiBaseUrl}?${params.toString()}`;
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const pulseAnimation = useRef(new Animated.Value(0)).current;
-  const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
+  const [yesterdayPrices, setYesterdayPrices] = useState<HourlyPrice[]>([]);
+  const [todayPrices, setTodayPrices] = useState<HourlyPrice[]>([]);
+  const [tomorrowPrices, setTomorrowPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
@@ -268,15 +284,22 @@ export default function HomeScreen() {
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
   const currentHourStart = startOfCurrentHour();
-  const chartDayKey = getChartDayKey(selectedDay);
-  const chartHourlyPrices = useMemo(
-    () =>
-      hourlyPrices.filter(
-        (item) => formatHelsinkiDateKey(item.date) === chartDayKey,
-      ),
-    [chartDayKey, hourlyPrices],
+  const hourlyPrices = useMemo(
+    () => [...yesterdayPrices, ...todayPrices, ...tomorrowPrices],
+    [todayPrices, tomorrowPrices, yesterdayPrices],
   );
-  const currentPriceItem = hourlyPrices.find(
+  const chartHourlyPrices = useMemo(() => {
+    if (selectedDay === "yesterday") {
+      return yesterdayPrices;
+    }
+
+    if (selectedDay === "today") {
+      return todayPrices;
+    }
+
+    return tomorrowPrices;
+  }, [selectedDay, todayPrices, tomorrowPrices, yesterdayPrices]);
+  const currentPriceItem = todayPrices.find(
     (item) =>
       item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now(),
   );
@@ -326,13 +349,13 @@ export default function HomeScreen() {
 
     return sortHoursChronologically(
       getCheapestHours(
-        hourlyPrices.filter(
+        tomorrowPrices.filter(
           (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
         ),
         effectiveHeatingHours,
       ),
     );
-  }, [effectiveHeatingHours, hourlyPrices]);
+  }, [effectiveHeatingHours, tomorrowPrices]);
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
@@ -404,9 +427,9 @@ export default function HomeScreen() {
     }, []),
   );
 
-  const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const response = await fetch(priceApiUrl, {
+  const fetchDayPrices = useCallback(
+    async (dayKey: string, signal?: AbortSignal) => {
+      const response = await fetch(buildPriceApiUrl(dayKey), {
         signal,
       });
 
@@ -415,27 +438,71 @@ export default function HomeScreen() {
       }
 
       const data = (await response.json()) as SpotPriceResponse[];
-      const prices = normalizeSpotPrices(data);
+      const prices = normalizeSpotPrices(data).filter(
+        (item) => formatHelsinkiDateKey(item.date) === dayKey,
+      );
 
       if (prices.length === 0) {
         throw new Error("Hourly prices missing from response");
       }
 
-      setHourlyPrices(prices);
+      return prices;
+    },
+    [],
+  );
+
+  const fetchHourlyPrices = useCallback(
+    async (signal?: AbortSignal) => {
+      const yesterdayKey = getChartDayKey("yesterday");
+      const todayKey = getChartDayKey("today");
+      const tomorrowKey = getChartDayKey("tomorrow");
+
+      const [yesterdayResult, todayResult, tomorrowResult] =
+        await Promise.allSettled([
+          fetchDayPrices(yesterdayKey, signal),
+          fetchDayPrices(todayKey, signal),
+          fetchDayPrices(tomorrowKey, signal),
+        ]);
+
+      if (signal?.aborted) {
+        return;
+      }
+
+      if (yesterdayResult.status === "fulfilled") {
+        setYesterdayPrices(yesterdayResult.value);
+      } else {
+        setYesterdayPrices([]);
+      }
+
+      if (tomorrowResult.status === "fulfilled") {
+        setTomorrowPrices(tomorrowResult.value);
+      } else {
+        setTomorrowPrices([]);
+      }
+
+      if (todayResult.status !== "fulfilled") {
+        setPriceError(
+          "Hintojen päivitys epäonnistui. Näytetään aiemmat tiedot.",
+        );
+        return;
+      }
+
+      const prices = [
+        ...(yesterdayResult.status === "fulfilled" ? yesterdayResult.value : []),
+        ...todayResult.value,
+        ...(tomorrowResult.status === "fulfilled" ? tomorrowResult.value : []),
+      ];
+
+      setTodayPrices(todayResult.value);
       setSelectedHourlyPrice((selected) =>
         selected
           ? (prices.find((item) => item.id === selected.id) ?? null)
           : null,
       );
       setPriceError(null);
-    } catch {
-      if (!signal?.aborted) {
-        setPriceError(
-          "Hintojen päivitys epäonnistui. Näytetään aiemmat tiedot.",
-        );
-      }
-    }
-  }, []);
+    },
+    [fetchDayPrices],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -695,7 +762,7 @@ export default function HomeScreen() {
                   {selectedDay === "tomorrow"
                     ? "Huomisen hinnat eivät ole vielä saatavilla"
                     : selectedDay === "yesterday"
-                      ? "Eilisen hintoja ei ole saatavilla"
+                      ? "Ei dataa saatavilla"
                       : "Hintakaaviota ei saatavilla"}
                 </Text>
               </View>
