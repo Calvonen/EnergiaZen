@@ -19,7 +19,7 @@ import {
   selectHeatingRecommendation,
   sortHoursChronologically,
 } from "@/lib/heatingLogic";
-import { defaultSettings } from "@/lib/settings";
+import { defaultSettings, loadSettings } from "@/lib/settings";
 
 const tankTemperature = 58;
 const priceApiUrl =
@@ -78,10 +78,13 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
   });
 }
 
-function getTemperatureCardTheme(temperature: number) {
+function getTemperatureCardTheme(
+  temperature: number,
+  settings = defaultSettings,
+) {
   const ratio = clamp(
-    (temperature - defaultSettings.minTankTemperature) /
-      (defaultSettings.maxTankTemperature - defaultSettings.minTankTemperature),
+    (temperature - settings.minTankTemperature) /
+      (settings.maxTankTemperature - settings.minTankTemperature),
     0,
     1,
   );
@@ -96,21 +99,20 @@ function getTemperatureCardTheme(temperature: number) {
   };
 }
 
-function getWarmWaterEstimate(temperature: number) {
+function getWarmWaterEstimate(temperature: number, settings = defaultSettings) {
   // Tämä on alustava arvio. Myöhemmin malli kalibroidaan todellisen suihkukäyttäytymisen perusteella.
   const showersLeft =
-    ((temperature - defaultSettings.minTankTemperature) /
-      (defaultSettings.maxTankTemperature -
-        defaultSettings.minTankTemperature)) *
-    defaultSettings.showersAtMaxTemperature;
+    ((temperature - settings.minTankTemperature) /
+      (settings.maxTankTemperature - settings.minTankTemperature)) *
+    settings.showersAtMaxTemperature;
   const clampedShowersLeft = clamp(
     showersLeft,
     0,
-    defaultSettings.showersAtMaxTemperature,
+    settings.showersAtMaxTemperature,
   );
 
   return {
-    fillRatio: clampedShowersLeft / defaultSettings.showersAtMaxTemperature,
+    fillRatio: clampedShowersLeft / settings.showersAtMaxTemperature,
     showersLeft: clampedShowersLeft,
   };
 }
@@ -250,6 +252,7 @@ export default function HomeScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DaySelection>("today");
+  const [settings, setSettings] = useState(defaultSettings);
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
   const currentHourStart = startOfCurrentHour();
@@ -289,8 +292,9 @@ export default function HomeScreen() {
         hourlyPrices,
         currentHourStart,
         todayActualHeatingHourNumbers,
+        settings,
       ),
-    [currentHourStart, hourlyPrices, todayActualHeatingHourNumbers],
+    [currentHourStart, hourlyPrices, settings, todayActualHeatingHourNumbers],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -301,10 +305,10 @@ export default function HomeScreen() {
         hourlyPrices.filter(
           (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
         ),
-        defaultSettings.heatingHoursPerDay,
+        settings.heatingHoursPerDay,
       ),
     );
-  }, [hourlyPrices]);
+  }, [hourlyPrices, settings.heatingHoursPerDay]);
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
@@ -337,8 +341,8 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
-  const temperatureCardTheme = getTemperatureCardTheme(tankTemperature);
-  const warmWaterEstimate = getWarmWaterEstimate(tankTemperature);
+  const temperatureCardTheme = getTemperatureCardTheme(tankTemperature, settings);
+  const warmWaterEstimate = getWarmWaterEstimate(tankTemperature, settings);
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
   const warmWaterShowersLabel = `${formatFinnishDecimal(
@@ -354,6 +358,20 @@ export default function HomeScreen() {
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadSettings().then((storedSettings) => {
+      if (isMounted) {
+        setSettings(storedSettings);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
     try {
