@@ -22,7 +22,16 @@ Käynnistä Expo:
 npx expo start --clear
 ```
 
-Tai käytä pikakomentoa:
+### Pikakomento (valinnainen)
+
+Luo zen-komento:
+
+```bash
+echo "alias zen='cd /workspaces/EnergiaZen/energiazen-mini && npx expo start --clear'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Tämän jälkeen sovelluksen voi käynnistää komennolla:
 
 ```bash
 zen
