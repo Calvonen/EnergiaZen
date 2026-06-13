@@ -120,7 +120,7 @@ export default function TemperatureHistoryScreen() {
             <View style={styles.legendRow}>
               <Text style={styles.legendTop}>● Yläanturi</Text>
               <Text style={styles.legendBottom}>● Ala-anturi</Text>
-              <Text style={styles.legendHeating}>▉ Lämmitys päällä</Text>
+              <Text style={styles.legendHeating}>🔥 Lämmitys päällä</Text>
             </View>
 
             <View style={styles.chartRow}>
@@ -145,7 +145,18 @@ export default function TemperatureHistoryScreen() {
                       key={point.timestamp}
                       style={styles.historyColumn}
                     >
-                      {point.heating ? <View style={styles.heatingBand} /> : null}
+                      {point.heating ? (
+                        <>
+                          <View style={styles.heatingShade} />
+                          <Text
+                            accessibilityElementsHidden
+                            importantForAccessibility="no-hide-descendants"
+                            style={styles.heatingIcon}
+                          >
+                            🔥
+                          </Text>
+                        </>
+                      ) : null}
                       <View
                         style={[
                           styles.tempDot,
@@ -207,8 +218,9 @@ const styles = StyleSheet.create({
   chartArea: { flex: 1, height: chartHeight + 30, position: "relative" },
   gridLine: { backgroundColor: "rgba(207,233,255,0.1)", height: 1, left: 0, position: "absolute", right: 0 },
   historyColumns: { flexDirection: "row", height: chartHeight + 30, },
-  historyColumn: { flex: 1, height: chartHeight, justifyContent: "flex-end", position: "relative" },
-  heatingBand: { backgroundColor: "rgba(255,229,143,0.18)", borderColor: "rgba(255,229,143,0.3)", borderLeftWidth: 1, borderRightWidth: 1, bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  historyColumn: { flex: 1, height: chartHeight, justifyContent: "flex-end", overflow: "visible", position: "relative" },
+  heatingShade: { backgroundColor: "rgba(255,211,77,0.12)", bottom: 0, left: "28%", position: "absolute", right: "28%", top: 0, zIndex: 0 },
+  heatingIcon: { fontSize: 11, left: "50%", lineHeight: 13, marginLeft: -6, position: "absolute", textAlign: "center", top: 2, width: 12, zIndex: 3 },
   tempDot: { borderRadius: 999, height: 7, left: "50%", marginBottom: -3.5, marginLeft: -3.5, position: "absolute", width: 7, zIndex: 2 },
   topTempDot: { backgroundColor: "#ffad4d", shadowColor: "#ffad4d", shadowOpacity: 0.7, shadowRadius: 8 },
   bottomTempDot: { backgroundColor: "#36f4d4", shadowColor: "#36f4d4", shadowOpacity: 0.7, shadowRadius: 8 },
