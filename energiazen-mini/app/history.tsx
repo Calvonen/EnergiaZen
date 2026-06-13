@@ -163,18 +163,18 @@ export default function TemperatureHistoryScreen() {
           <View style={styles.summaryRow}>
             <View style={styles.summaryPill}>
               <Text numberOfLines={1} style={styles.summaryLabel}>
-                Ylä
+                Ylä °C
               </Text>
               <Text style={styles.topSummaryValue}>
-                {latestPoint?.topTemp ?? "--"}<Text style={styles.summaryUnit}>°C</Text>
+                {latestPoint?.topTemp ?? "--"}
               </Text>
             </View>
             <View style={styles.summaryPill}>
               <Text numberOfLines={1} style={styles.summaryLabel}>
-                Ala
+                Ala °C
               </Text>
               <Text style={styles.bottomSummaryValue}>
-                {latestPoint?.bottomTemp ?? "--"}<Text style={styles.summaryUnit}>°C</Text>
+                {latestPoint?.bottomTemp ?? "--"}
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -260,12 +260,12 @@ export default function TemperatureHistoryScreen() {
                           importantForAccessibility="no-hide-descendants"
                           style={styles.showerMarker}
                         >
-                          <Text style={styles.showerIcon}>🚿</Text>
                           {visibleShowerCount > 1 ? (
-                            <Text style={styles.showerSuperscript}>
+                            <Text style={styles.showerCount}>
                               {visibleShowerCount}
                             </Text>
                           ) : null}
+                          <Text style={styles.showerIcon}>🚿</Text>
                         </View>
                       ) : null}
                       {index % 6 === 0 ||
@@ -375,14 +375,15 @@ const styles = StyleSheet.create({
     padding: 16,
     width: "100%",
   },
-  summaryRow: { flexDirection: "row", gap: 12, marginBottom: 14 },
+  summaryRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
   summaryPill: {
     backgroundColor: "rgba(5,8,22,0.46)",
     borderColor: "rgba(255,255,255,0.12)",
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     flex: 1,
-    padding: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
   },
   summaryLabel: {
     color: "#b9d7ff",
@@ -392,19 +393,15 @@ const styles = StyleSheet.create({
   },
   topSummaryValue: {
     color: "#ffad4d",
-    fontSize: 34,
+    fontSize: 29,
     fontWeight: "900",
-    marginTop: 4,
+    marginTop: 3,
   },
   bottomSummaryValue: {
     color: "#36f4d4",
-    fontSize: 34,
+    fontSize: 29,
     fontWeight: "900",
-    marginTop: 4,
-  },
-  summaryUnit: {
-    fontSize: 22,
-    fontWeight: "900",
+    marginTop: 3,
   },
   showerSummaryValue: {
     color: "#f7fbff",
@@ -492,9 +489,8 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   showerMarker: {
-    alignItems: "flex-start",
-    bottom: -32,
-    flexDirection: "row",
+    alignItems: "center",
+    bottom: -34,
     justifyContent: "center",
     left: "50%",
     marginLeft: -13,
@@ -508,13 +504,13 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     lineHeight: 17,
   },
-  showerSuperscript: {
+  showerCount: {
     color: "#f7fbff",
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: "900",
-    lineHeight: 8,
-    marginLeft: -1,
-    marginTop: -3,
+    lineHeight: 9,
+    marginBottom: -1,
+    textAlign: "center",
   },
   hourLabel: {
     bottom: -52,
