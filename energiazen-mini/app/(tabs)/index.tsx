@@ -525,6 +525,15 @@ export default function HomeScreen() {
       <View style={[styles.glow, styles.greenGlow]} />
       <View style={[styles.glow, styles.blueGlow]} />
       <Pressable
+        accessibilityLabel="Avaa lämpöhistoria"
+        accessibilityRole="button"
+        onPress={() => router.push("/history")}
+        style={styles.historyButton}
+      >
+        <Text style={styles.historyButtonText}>📈</Text>
+      </Pressable>
+
+      <Pressable
         accessibilityLabel="Avaa asetukset"
         accessibilityRole="button"
         onPress={() => router.push("/settings")}
@@ -924,6 +933,27 @@ const styles = StyleSheet.create({
     boxShadow: "0 0 96px 46px rgba(90,167,255,0.3)",
     left: -170,
     shadowColor: "#5aa7ff",
+  },
+  historyButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    left: 18,
+    position: "absolute",
+    shadowColor: "#36f4d4",
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    top: 48,
+    width: 44,
+    zIndex: 20,
+  },
+  historyButtonText: {
+    fontSize: 20,
+    lineHeight: 24,
   },
   settingsButton: {
     alignItems: "center",
