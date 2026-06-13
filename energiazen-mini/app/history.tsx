@@ -27,10 +27,6 @@ function getShowerCountsByHour(showerTimes: string[]) {
   }, {});
 }
 
-function formatShowerMarker(showerCount: number) {
-  return showerCount === 1 ? "🚿" : `🚿\nx${showerCount}`;
-}
-
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -170,7 +166,7 @@ export default function TemperatureHistoryScreen() {
                 Ylä
               </Text>
               <Text style={styles.topSummaryValue}>
-                {latestPoint?.topTemp ?? "--"}°
+                {latestPoint?.topTemp ?? "--"}<Text style={styles.summaryUnit}>°C</Text>
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -178,7 +174,7 @@ export default function TemperatureHistoryScreen() {
                 Ala
               </Text>
               <Text style={styles.bottomSummaryValue}>
-                {latestPoint?.bottomTemp ?? "--"}°
+                {latestPoint?.bottomTemp ?? "--"}<Text style={styles.summaryUnit}>°C</Text>
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -259,13 +255,18 @@ export default function TemperatureHistoryScreen() {
                         ]}
                       />
                       {visibleShowerCount > 0 ? (
-                        <Text
+                        <View
                           accessibilityElementsHidden
                           importantForAccessibility="no-hide-descendants"
                           style={styles.showerMarker}
                         >
-                          {formatShowerMarker(visibleShowerCount)}
-                        </Text>
+                          <Text style={styles.showerIcon}>🚿</Text>
+                          {visibleShowerCount > 1 ? (
+                            <Text style={styles.showerSuperscript}>
+                              {visibleShowerCount}
+                            </Text>
+                          ) : null}
+                        </View>
                       ) : null}
                       {index % 6 === 0 ||
                       index === visibleHistory.length - 1 ? (
@@ -391,15 +392,19 @@ const styles = StyleSheet.create({
   },
   topSummaryValue: {
     color: "#ffad4d",
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: "900",
     marginTop: 4,
   },
   bottomSummaryValue: {
     color: "#36f4d4",
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: "900",
     marginTop: 4,
+  },
+  summaryUnit: {
+    fontSize: 22,
+    fontWeight: "900",
   },
   showerSummaryValue: {
     color: "#f7fbff",
@@ -487,17 +492,29 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   showerMarker: {
-    bottom: -28,
-    color: "#f7fbff",
-    fontSize: 11,
-    fontWeight: "900",
+    alignItems: "flex-start",
+    bottom: -32,
+    flexDirection: "row",
+    justifyContent: "center",
     left: "50%",
-    lineHeight: 12,
-    marginLeft: -14,
+    marginLeft: -13,
     position: "absolute",
-    textAlign: "center",
-    width: 28,
+    width: 26,
     zIndex: 4,
+  },
+  showerIcon: {
+    color: "#f7fbff",
+    fontSize: 15,
+    fontWeight: "900",
+    lineHeight: 17,
+  },
+  showerSuperscript: {
+    color: "#f7fbff",
+    fontSize: 8,
+    fontWeight: "900",
+    lineHeight: 8,
+    marginLeft: -1,
+    marginTop: -3,
   },
   hourLabel: {
     bottom: -52,
