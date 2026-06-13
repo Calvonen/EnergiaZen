@@ -28,7 +28,7 @@ function getShowerCountsByHour(showerTimes: string[]) {
 }
 
 function formatShowerMarker(showerCount: number) {
-  return showerCount === 1 ? "🚿" : `🚿×${showerCount}`;
+  return showerCount === 1 ? "🚿" : `🚿\nx${showerCount}`;
 }
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -166,19 +166,25 @@ export default function TemperatureHistoryScreen() {
         <View style={styles.historyCard}>
           <View style={styles.summaryRow}>
             <View style={styles.summaryPill}>
-              <Text style={styles.summaryLabel}>Yläanturi</Text>
+              <Text numberOfLines={1} style={styles.summaryLabel}>
+                Ylä
+              </Text>
               <Text style={styles.topSummaryValue}>
                 {latestPoint?.topTemp ?? "--"}°
               </Text>
             </View>
             <View style={styles.summaryPill}>
-              <Text style={styles.summaryLabel}>Ala-anturi</Text>
+              <Text numberOfLines={1} style={styles.summaryLabel}>
+                Ala
+              </Text>
               <Text style={styles.bottomSummaryValue}>
                 {latestPoint?.bottomTemp ?? "--"}°
               </Text>
             </View>
             <View style={styles.summaryPill}>
-              <Text style={styles.summaryLabel}>Suihkut</Text>
+              <Text numberOfLines={1} style={styles.summaryLabel}>
+                Suihkut
+              </Text>
               <Text style={styles.showerSummaryValue}>🚿 {showerTotal}</Text>
             </View>
           </View>
@@ -379,9 +385,9 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     color: "#b9d7ff",
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: "900",
-    textTransform: "uppercase",
   },
   topSummaryValue: {
     color: "#ffad4d",
@@ -422,7 +428,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "right",
   },
-  chartArea: { flex: 1, height: chartHeight + 30, position: "relative" },
+  chartArea: { flex: 1, height: chartHeight + 58, position: "relative" },
   gridLine: {
     backgroundColor: "rgba(207,233,255,0.1)",
     height: 1,
@@ -430,7 +436,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
   },
-  historyColumns: { flexDirection: "row", height: chartHeight + 30 },
+  historyColumns: { flexDirection: "row", height: chartHeight + 58 },
   historyColumn: {
     flex: 1,
     height: chartHeight,
@@ -481,19 +487,20 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   showerMarker: {
-    bottom: 8,
+    bottom: -28,
     color: "#f7fbff",
     fontSize: 11,
     fontWeight: "900",
     left: "50%",
-    marginLeft: -19,
+    lineHeight: 12,
+    marginLeft: -14,
     position: "absolute",
     textAlign: "center",
-    width: 38,
+    width: 28,
     zIndex: 4,
   },
   hourLabel: {
-    bottom: -24,
+    bottom: -52,
     color: "#8190b5",
     fontSize: 9,
     fontWeight: "800",
