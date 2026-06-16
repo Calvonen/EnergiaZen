@@ -26,6 +26,7 @@ import {
   defaultTankTemperature,
   loadSettings,
 } from "@/lib/settings";
+import { supabase } from "@/lib/supabase";
 
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
@@ -267,6 +268,7 @@ export default function HomeScreen() {
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const currentHourStart = startOfCurrentHour();
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
@@ -392,6 +394,19 @@ export default function HomeScreen() {
     useCallback(() => {
       let isActive = true;
 
+      supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => {
+        if (!isActive) {
+          return;
+        }
+
+        if (!data.user) {
+          router.replace("/login");
+          return;
+        }
+
+        setUserEmail(data.user.email ?? null);
+      });
+
       loadSettings().then((storedSettings) => {
         if (isActive) {
           setSettings(storedSettings);
@@ -401,7 +416,7 @@ export default function HomeScreen() {
       return () => {
         isActive = false;
       };
-    }, []),
+    }, [router]),
   );
 
   const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
@@ -558,6 +573,9 @@ export default function HomeScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
           <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
+          {userEmail ? (
+            <Text style={styles.loggedInText}>Kirjautunut: {userEmail}</Text>
+          ) : null}
           {priceError ? (
             <Text accessibilityRole="alert" style={styles.errorText}>
               {priceError}
@@ -992,6 +1010,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     marginTop: 5,
+    textAlign: "center",
+  },
+  loggedInText: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 6,
     textAlign: "center",
   },
   errorText: {
