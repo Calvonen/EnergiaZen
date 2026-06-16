@@ -571,7 +571,7 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
+          <Text style={styles.title}>⚡ EnergiaZen</Text>
           <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
           {userEmail ? (
             <Text style={styles.loggedInText}>Kirjautunut: {userEmail}</Text>
@@ -633,7 +633,10 @@ export default function HomeScreen() {
               <Text style={styles.cardLabel}>Varaaja</Text>
             </View>
             <View style={styles.temperatureStack}>
-              <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+              <View style={styles.temperatureValues}>
+                <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+                <Text style={styles.temperatureLowValue}>39°</Text>
+              </View>
               <View style={styles.temperatureBar} accessible={false}>
                 <View
                   style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
@@ -651,7 +654,6 @@ export default function HomeScreen() {
                   style={[styles.temperatureBarSegment, styles.temperatureBarCold]}
                 />
               </View>
-              <Text style={styles.temperatureLowValue}>39°</Text>
             </View>
           </Animated.View>
 
@@ -1140,8 +1142,14 @@ const styles = StyleSheet.create({
   },
   temperatureStack: {
     alignItems: "center",
-    gap: 3,
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
     marginTop: 1,
+  },
+  temperatureValues: {
+    alignItems: "center",
+    gap: 6,
   },
   temperatureValue: {
     color: "#ffffff",
@@ -1156,14 +1164,14 @@ const styles = StyleSheet.create({
   },
   temperatureBar: {
     alignItems: "center",
-    gap: 2,
+    gap: 3,
   },
   temperatureBarSegment: {
     borderRadius: 5,
-    height: 10,
+    height: 11,
     shadowOpacity: 0.28,
     shadowRadius: 6,
-    width: 22,
+    width: 10,
   },
   temperatureBarHot: {
     backgroundColor: "#ff7a2f",
