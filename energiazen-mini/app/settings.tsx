@@ -17,6 +17,8 @@ import {
   loadSettings,
   saveSettings,
 } from "@/lib/settings";
+import { supabase } from "@/lib/supabase";
+import { useAuthRedirect } from "@/lib/use-auth-redirect";
 
 type SettingsRow = {
   accent: string;
@@ -53,6 +55,7 @@ const editableSettings = {
 
 export default function SettingsScreen() {
   const router = useRouter();
+  useAuthRedirect();
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
@@ -151,6 +154,10 @@ export default function SettingsScreen() {
       ...settings,
       useTestTankTemperature: value,
     });
+  };
+
+  const signOut = () => {
+    supabase.auth.signOut().catch(() => undefined);
   };
 
   return (
@@ -262,6 +269,13 @@ export default function SettingsScreen() {
             />
             <Text style={styles.settingLabel}>{testTemperatureRow.label}</Text>
             <Text style={styles.settingValue}>{testTemperatureRow.value}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={signOut}
+            style={styles.signOutButton}
+          >
+            <Text style={styles.signOutButtonText}>Kirjaudu ulos</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -461,6 +475,17 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.2,
     textAlign: "right",
+  },
+  signOutButton: {
+    alignItems: "center",
+    minHeight: 58,
+    justifyContent: "center",
+    paddingVertical: 14,
+  },
+  signOutButtonText: {
+    color: "#ffad4d",
+    fontSize: 16,
+    fontWeight: "900",
   },
   selectorCard: {
     backgroundColor: "#10172a",

@@ -26,6 +26,7 @@ import {
   defaultTankTemperature,
   loadSettings,
 } from "@/lib/settings";
+import { useAuthRedirect } from "@/lib/use-auth-redirect";
 
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
@@ -259,6 +260,7 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
 export default function HomeScreen() {
   const router = useRouter();
   const pulseAnimation = useRef(new Animated.Value(0)).current;
+  const session = useAuthRedirect();
   const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -558,6 +560,11 @@ export default function HomeScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>⚡ EnergiaZen Mini</Text>
           <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
+          {session?.user?.email ? (
+            <Text style={styles.authStatusText}>
+              Kirjautunut: {session.user.email}
+            </Text>
+          ) : null}
           {priceError ? (
             <Text accessibilityRole="alert" style={styles.errorText}>
               {priceError}
@@ -992,6 +999,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     marginTop: 5,
+    textAlign: "center",
+  },
+  authStatusText: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 4,
     textAlign: "center",
   },
   errorText: {
