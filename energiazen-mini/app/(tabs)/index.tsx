@@ -642,7 +642,16 @@ export default function HomeScreen() {
                   style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
                 />
                 <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
+                />
+                <View
                   style={[styles.temperatureBarSegment, styles.temperatureBarWarm]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarWarm]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarMild]}
                 />
                 <View
                   style={[styles.temperatureBarSegment, styles.temperatureBarMild]}
@@ -1116,6 +1125,7 @@ const styles = StyleSheet.create({
   },
   temperatureCard: {
     borderWidth: 1.5,
+    position: "relative",
   },
   waterCard: {
     shadowOpacity: 0.42,
@@ -1142,36 +1152,42 @@ const styles = StyleSheet.create({
   },
   temperatureStack: {
     alignItems: "center",
+    bottom: 14,
     flexDirection: "row",
-    gap: 8,
-    justifyContent: "center",
-    marginTop: 1,
+    gap: 6,
+    position: "absolute",
+    right: 10,
+    top: 40,
   },
   temperatureValues: {
-    alignItems: "center",
-    gap: 6,
+    alignItems: "flex-end",
+    alignSelf: "stretch",
+    justifyContent: "space-between",
   },
   temperatureValue: {
     color: "#ffffff",
-    fontSize: 36,
+    fontSize: 22,
     fontWeight: "900",
-    letterSpacing: -1.4,
-    lineHeight: 39,
-    textAlign: "center",
+    letterSpacing: -0.7,
+    lineHeight: 25,
+    textAlign: "right",
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
     textShadowRadius: 10,
   },
   temperatureBar: {
     alignItems: "center",
-    gap: 3,
+    alignSelf: "stretch",
+    gap: 4,
+    justifyContent: "space-between",
   },
   temperatureBarSegment: {
-    borderRadius: 5,
-    height: 11,
+    borderRadius: 7,
+    flex: 1,
+    minHeight: 8,
     shadowOpacity: 0.28,
     shadowRadius: 6,
-    width: 10,
+    width: 13,
   },
   temperatureBarHot: {
     backgroundColor: "#ff7a2f",
@@ -1199,7 +1215,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.7,
     lineHeight: 25,
-    textAlign: "center",
+    textAlign: "right",
     textShadowColor: "rgba(0,0,0,0.2)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
