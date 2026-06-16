@@ -634,8 +634,12 @@ export default function HomeScreen() {
             </View>
             <View style={styles.temperatureStack}>
               <View style={styles.temperatureValues}>
-                <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
-                <Text style={styles.temperatureLowValue}>39°</Text>
+                <View style={styles.temperatureTopSensor}>
+                  <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+                </View>
+                <View style={styles.temperatureBottomSensor}>
+                  <Text style={styles.temperatureLowValue}>39°</Text>
+                </View>
               </View>
               <View style={styles.temperatureBar} accessible={false}>
                 <View
@@ -1160,16 +1164,28 @@ const styles = StyleSheet.create({
     top: 40,
   },
   temperatureValues: {
-    alignItems: "flex-end",
     alignSelf: "stretch",
-    justifyContent: "space-between",
+    position: "relative",
+    width: 58,
+  },
+  temperatureTopSensor: {
+    alignItems: "flex-end",
+    position: "absolute",
+    right: 0,
+    top: -14,
+  },
+  temperatureBottomSensor: {
+    alignItems: "flex-end",
+    bottom: -6,
+    position: "absolute",
+    right: 0,
   },
   temperatureValue: {
     color: "#ffffff",
-    fontSize: 22,
+    fontSize: 34,
     fontWeight: "900",
-    letterSpacing: -0.7,
-    lineHeight: 25,
+    letterSpacing: -1.1,
+    lineHeight: 38,
     textAlign: "right",
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
@@ -1211,10 +1227,10 @@ const styles = StyleSheet.create({
   },
   temperatureLowValue: {
     color: "rgba(247,251,255,0.86)",
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: "900",
-    letterSpacing: -0.7,
-    lineHeight: 25,
+    letterSpacing: -0.4,
+    lineHeight: 22,
     textAlign: "right",
     textShadowColor: "rgba(0,0,0,0.2)",
     textShadowOffset: { height: 1, width: 0 },
