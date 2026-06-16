@@ -632,7 +632,27 @@ export default function HomeScreen() {
               <Text style={styles.cardIcon}>🔥</Text>
               <Text style={styles.cardLabel}>Varaaja</Text>
             </View>
-            <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+            <View style={styles.temperatureStack}>
+              <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+              <View style={styles.temperatureBar} accessible={false}>
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarWarm]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarMild]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarCool]}
+                />
+                <View
+                  style={[styles.temperatureBarSegment, styles.temperatureBarCold]}
+                />
+              </View>
+              <Text style={styles.temperatureLowValue}>39°</Text>
+            </View>
           </Animated.View>
 
           <View
@@ -1118,17 +1138,63 @@ const styles = StyleSheet.create({
     textAlign: "center",
     textTransform: "uppercase",
   },
+  temperatureStack: {
+    alignItems: "center",
+    gap: 3,
+    marginTop: 1,
+  },
   temperatureValue: {
     color: "#ffffff",
-    fontSize: 54,
+    fontSize: 36,
     fontWeight: "900",
-    letterSpacing: -2.2,
-    lineHeight: 62,
-    marginTop: 4,
+    letterSpacing: -1.4,
+    lineHeight: 39,
     textAlign: "center",
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
     textShadowRadius: 10,
+  },
+  temperatureBar: {
+    alignItems: "center",
+    gap: 2,
+  },
+  temperatureBarSegment: {
+    borderRadius: 5,
+    height: 10,
+    shadowOpacity: 0.28,
+    shadowRadius: 6,
+    width: 22,
+  },
+  temperatureBarHot: {
+    backgroundColor: "#ff7a2f",
+    shadowColor: "#ff7a2f",
+  },
+  temperatureBarWarm: {
+    backgroundColor: "#ff9b30",
+    shadowColor: "#ff9b30",
+  },
+  temperatureBarMild: {
+    backgroundColor: "#f6d64a",
+    shadowColor: "#f6d64a",
+  },
+  temperatureBarCool: {
+    backgroundColor: "#70d95c",
+    shadowColor: "#70d95c",
+  },
+  temperatureBarCold: {
+    backgroundColor: "#3f94ff",
+    shadowColor: "#3f94ff",
+  },
+  temperatureLowValue: {
+    color: "rgba(247,251,255,0.86)",
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.7,
+    lineHeight: 25,
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.2)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 8,
   },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
