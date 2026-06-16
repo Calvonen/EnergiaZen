@@ -35,6 +35,8 @@ const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
+const temperatureBarSegmentCount = 8;
+const bottomTankTemperature = 39;
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -82,6 +84,34 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
     g: start.g + (end.g - start.g) * ratio,
     b: start.b + (end.b - start.b) * ratio,
   });
+}
+
+function getTemperatureColor(temperature: number) {
+  const normalizedTemperature = clamp(temperature, 20, 80);
+
+  if (normalizedTemperature <= 40) {
+    return mixColors("#188bff", "#26d9a2", (normalizedTemperature - 20) / 20);
+  }
+
+  if (normalizedTemperature <= 60) {
+    return mixColors("#26d9a2", "#ff9b30", (normalizedTemperature - 40) / 20);
+  }
+
+  return mixColors("#ff9b30", "#ff3f46", (normalizedTemperature - 60) / 20);
+}
+
+function getTemperatureBarSegmentColor(
+  segmentIndex: number,
+  segmentCount: number,
+  topTemperature: number,
+  bottomTemperature: number,
+) {
+  const ratioFromTop =
+    segmentCount <= 1 ? 0 : segmentIndex / (segmentCount - 1);
+  const segmentTemperature =
+    topTemperature + (bottomTemperature - topTemperature) * ratioFromTop;
+
+  return getTemperatureColor(segmentTemperature);
 }
 
 function getTemperatureCardTheme(
@@ -635,37 +665,40 @@ export default function HomeScreen() {
             <View style={styles.temperatureStack}>
               <View style={styles.temperatureValues}>
                 <View style={styles.temperatureTopSensor}>
-                  <Text style={styles.temperatureValue}>{tankTemperature}°</Text>
+                  <Text style={styles.temperatureValue}>
+                    {tankTemperature}°
+                  </Text>
                 </View>
                 <View style={styles.temperatureBottomSensor}>
-                  <Text style={styles.temperatureLowValue}>39°</Text>
+                  <Text style={styles.temperatureLowValue}>
+                    {bottomTankTemperature}°
+                  </Text>
                 </View>
               </View>
               <View style={styles.temperatureBar} accessible={false}>
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarHot]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarWarm]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarWarm]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarMild]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarMild]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarCool]}
-                />
-                <View
-                  style={[styles.temperatureBarSegment, styles.temperatureBarCold]}
-                />
+                {Array.from({ length: temperatureBarSegmentCount }).map(
+                  (_, segmentIndex) => {
+                    const segmentColor = getTemperatureBarSegmentColor(
+                      segmentIndex,
+                      temperatureBarSegmentCount,
+                      tankTemperature,
+                      bottomTankTemperature,
+                    );
+
+                    return (
+                      <View
+                        key={`temperature-segment-${segmentIndex}`}
+                        style={[
+                          styles.temperatureBarSegment,
+                          {
+                            backgroundColor: segmentColor,
+                            shadowColor: segmentColor,
+                          },
+                        ]}
+                      />
+                    );
+                  },
+                )}
               </View>
             </View>
           </Animated.View>
@@ -1204,26 +1237,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 6,
     width: 13,
-  },
-  temperatureBarHot: {
-    backgroundColor: "#ff7a2f",
-    shadowColor: "#ff7a2f",
-  },
-  temperatureBarWarm: {
-    backgroundColor: "#ff9b30",
-    shadowColor: "#ff9b30",
-  },
-  temperatureBarMild: {
-    backgroundColor: "#f6d64a",
-    shadowColor: "#f6d64a",
-  },
-  temperatureBarCool: {
-    backgroundColor: "#70d95c",
-    shadowColor: "#70d95c",
-  },
-  temperatureBarCold: {
-    backgroundColor: "#3f94ff",
-    shadowColor: "#3f94ff",
   },
   temperatureLowValue: {
     color: "rgba(247,251,255,0.86)",
