@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   Modal,
   Pressable,
@@ -17,6 +18,7 @@ import {
   loadSettings,
   saveSettings,
 } from "@/lib/settings";
+import { supabase } from "@/lib/supabase";
 
 type SettingsRow = {
   accent: string;
@@ -153,6 +155,27 @@ export default function SettingsScreen() {
     });
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => {
+        if (isActive && !data.user) {
+          router.replace("/login");
+        }
+      });
+
+      return () => {
+        isActive = false;
+      };
+    }, [router]),
+  );
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
       <View style={[styles.glow, styles.greenGlow]} />
@@ -264,6 +287,14 @@ export default function SettingsScreen() {
             <Text style={styles.settingValue}>{testTemperatureRow.value}</Text>
           </Pressable>
         </View>
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={handleSignOut}
+          style={styles.signOutButton}
+        >
+          <Text style={styles.signOutButtonText}>Kirjaudu ulos</Text>
+        </Pressable>
       </ScrollView>
 
       <Modal
@@ -461,6 +492,20 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.2,
     textAlign: "right",
+  },
+  signOutButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,95,109,0.14)",
+    borderColor: "rgba(255,95,109,0.38)",
+    borderRadius: 18,
+    borderWidth: 1,
+    marginTop: 16,
+    paddingVertical: 14,
+  },
+  signOutButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "900",
   },
   selectorCard: {
     backgroundColor: "#10172a",
