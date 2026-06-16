@@ -1,8 +1,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h>
+#include <U8g2lib.h>
 
 // EnergiaZen standalone ESP32 tank monitor
 // Hardware:
@@ -13,17 +12,12 @@
 // Required Arduino libraries:
 // - OneWire
 // - DallasTemperature
-// - Adafruit GFX Library
-// - Adafruit SH110X
+// - U8g2
 
 constexpr uint8_t ONE_WIRE_BUS_PIN = 4;
 constexpr uint8_t OLED_SDA_PIN = 21;
 constexpr uint8_t OLED_SCL_PIN = 22;
 constexpr uint8_t OLED_I2C_ADDRESS = 0x3C;
-constexpr uint8_t OLED_WIDTH = 128;
-constexpr uint8_t OLED_HEIGHT = 64;
-constexpr int OLED_RESET_PIN = -1;
-
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 5000;
 constexpr float MIN_TANK_TEMPERATURE_C = 20.0;
 constexpr float MAX_TANK_TEMPERATURE_C = 80.0;
@@ -31,7 +25,7 @@ constexpr float SHOWERS_AT_MAX_TEMPERATURE = 6.0;
 
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
-Adafruit_SH1106G display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET_PIN);
+U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 
 float topTemperatureC = NAN;
 float bottomTemperatureC = NAN;
@@ -90,24 +84,23 @@ void printTemperatureLine(const char *label, float temperatureC) {
 }
 
 void updateDisplay() {
-  display.clearDisplay();
-  display.setTextColor(SH110X_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
+  display.clearBuffer();
+  display.setFont(u8g2_font_6x12_tf);
+  display.setCursor(0, 12);
 
   display.println("EnergiaZen");
 
-  display.setCursor(0, 18);
+  display.setCursor(0, 28);
   printTemperatureLine("Yla", topTemperatureC);
 
-  display.setCursor(0, 34);
+  display.setCursor(0, 44);
   printTemperatureLine("Ala", bottomTemperatureC);
 
-  display.setCursor(0, 50);
+  display.setCursor(0, 60);
   display.print("Suihkut ");
   display.print(showersLeft, 1);
 
-  display.display();
+  display.sendBuffer();
 }
 
 void setup() {
@@ -117,9 +110,10 @@ void setup() {
   sensors.setResolution(12);
 
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
-  display.begin(OLED_I2C_ADDRESS, true);
-  display.clearDisplay();
-  display.display();
+  display.setI2CAddress(OLED_I2C_ADDRESS << 1);
+  display.begin();
+  display.clearBuffer();
+  display.sendBuffer();
 
   readTemperatures();
   updateDisplay();
