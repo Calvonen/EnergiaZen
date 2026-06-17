@@ -14,18 +14,6 @@ type HistoryTab = "24h" | "7d";
 const chartHeight = 190;
 const chartMinTemp = 30;
 const chartMaxTemp = 70;
-const mockShowerTimes = ["07:10", "19:05", "19:45", "21:00", "21:20", "21:50"];
-
-function getShowerCountsByHour(showerTimes: string[]) {
-  return showerTimes.reduce<Record<string, number>>((counts, showerTime) => {
-    const [hour] = showerTime.split(":");
-    const hourLabel = `${hour}:00`;
-
-    counts[hourLabel] = (counts[hourLabel] ?? 0) + 1;
-
-    return counts;
-  }, {});
-}
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -108,11 +96,7 @@ export default function TemperatureHistoryScreen() {
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30], []);
-  const showerCountsByHour = useMemo(
-    () => getShowerCountsByHour(mockShowerTimes),
-    [],
-  );
-  const showerTotal = mockShowerTimes.length;
+  const showerTotal = latestPoint?.showers ?? 0;
 
   return (
     <View style={styles.screen}>
@@ -211,16 +195,11 @@ export default function TemperatureHistoryScreen() {
               <View style={styles.historyColumns}>
                 {visibleHistory.map((point, index) => {
                   const hourLabel = formatHour(point.timestamp);
-                  const showerCount = showerCountsByHour[hourLabel] ?? 0;
-                  const hasEarlierSameHour = visibleHistory
-                    .slice(0, index)
-                    .some(
-                      (previousPoint) =>
-                        formatHour(previousPoint.timestamp) === hourLabel,
-                    );
-                  const visibleShowerCount = hasEarlierSameHour
-                    ? 0
-                    : showerCount;
+                  const previousPoint = visibleHistory[index - 1];
+                  const visibleShowerCount = Math.max(
+                    point.showers - (previousPoint?.showers ?? 0),
+                    0,
+                  );
 
                   return (
                     <View

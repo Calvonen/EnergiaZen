@@ -1,54 +1,46 @@
+import { supabase } from "@/lib/supabase";
+
 export type TemperatureHistoryPoint = {
   timestamp: string;
   topTemp: number;
   bottomTemp: number;
   heating: boolean;
+  showers: number;
 };
 
-const loggingIntervalMs = 60 * 1000;
-const historyRetentionMs = 7 * 24 * 60 * 60 * 1000;
-const initialHistoryHours = 24;
+type TankReadingRow = {
+  created_at?: string | null;
+  top_temp?: number | null;
+  bottom_temp?: number | null;
+  heating?: boolean | null;
+  showers?: number | null;
+};
 
-let temperatureHistory: TemperatureHistoryPoint[] = createInitialMockHistory();
-let loggingTimer: ReturnType<typeof setInterval> | null = null;
+const pollingIntervalMs = 60 * 1000;
+const historyRetentionMs = 7 * 24 * 60 * 60 * 1000;
+
+let temperatureHistory: TemperatureHistoryPoint[] = [];
+let pollingTimer: ReturnType<typeof setInterval> | null = null;
 const historyListeners = new Set<(points: TemperatureHistoryPoint[]) => void>();
 
-function roundTemperature(value: number) {
-  return Math.round(value * 10) / 10;
-}
-
-function createMockHistoryPoint(date: Date): TemperatureHistoryPoint {
-  const hour = date.getHours();
-  const minuteRatio = date.getMinutes() / 60;
-  const dayProgress = (hour + minuteRatio) / 24;
-  const dayCurve = Math.sin(dayProgress * Math.PI * 2 - Math.PI / 2);
-  const shortCycle = Math.sin((date.getTime() / loggingIntervalMs) * 0.35);
-  const heating = [3, 4, 5, 15, 16, 22].includes(hour);
-  const heatingBoost = heating ? 4.8 : 0;
-
-  return {
-    timestamp: date.toISOString(),
-    topTemp: roundTemperature(
-      57 + dayCurve * 5 + shortCycle * 0.4 + heatingBoost,
-    ),
-    bottomTemp: roundTemperature(
-      43 + dayCurve * 3.5 + shortCycle * 0.25 + heatingBoost * 0.72,
-    ),
-    heating,
-  };
-}
-
-function createInitialMockHistory() {
-  const now = new Date();
-  const startTime =
-    now.getTime() - initialHistoryHours * 60 * loggingIntervalMs;
-  const points: TemperatureHistoryPoint[] = [];
-
-  for (let time = startTime; time <= now.getTime(); time += loggingIntervalMs) {
-    points.push(createMockHistoryPoint(new Date(time)));
+function mapTankReadingToHistoryPoint(
+  reading: TankReadingRow,
+): TemperatureHistoryPoint | null {
+  if (
+    !reading.created_at ||
+    typeof reading.top_temp !== "number" ||
+    typeof reading.bottom_temp !== "number"
+  ) {
+    return null;
   }
 
-  return points;
+  return {
+    bottomTemp: reading.bottom_temp,
+    heating: reading.heating ?? false,
+    showers: reading.showers ?? 0,
+    timestamp: reading.created_at,
+    topTemp: reading.top_temp,
+  };
 }
 
 function pruneHistory(now = new Date()) {
@@ -64,42 +56,55 @@ function notifyHistoryListeners() {
   historyListeners.forEach((listener) => listener(snapshot));
 }
 
-export function saveHistoryPoint(point = createMockHistoryPoint(new Date())) {
-  temperatureHistory = [...temperatureHistory, point].sort(
-    (firstPoint, secondPoint) =>
-      new Date(firstPoint.timestamp).getTime() -
-      new Date(secondPoint.timestamp).getTime(),
-  );
-  pruneHistory(new Date(point.timestamp));
+async function fetchTemperatureHistory() {
+  const retentionStart = new Date(
+    Date.now() - historyRetentionMs,
+  ).toISOString();
+  const { data, error } = await supabase
+    .from("tank_readings")
+    .select("created_at, top_temp, bottom_temp, heating, showers")
+    .gte("created_at", retentionStart)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  temperatureHistory = ((data as TankReadingRow[] | null) ?? [])
+    .map(mapTankReadingToHistoryPoint)
+    .filter((point): point is TemperatureHistoryPoint => point !== null);
+  pruneHistory();
   notifyHistoryListeners();
 
-  return point;
+  return [...temperatureHistory];
+}
+
+export async function refreshTemperatureHistory() {
+  return fetchTemperatureHistory();
 }
 
 export function startTemperatureLogging() {
-  if (loggingTimer) {
+  if (pollingTimer) {
     return;
   }
 
-  saveHistoryPoint();
-  loggingTimer = setInterval(() => {
-    saveHistoryPoint();
-  }, loggingIntervalMs);
+  void fetchTemperatureHistory().catch(() => undefined);
+  pollingTimer = setInterval(() => {
+    void fetchTemperatureHistory().catch(() => undefined);
+  }, pollingIntervalMs);
 }
 
 export function stopTemperatureLogging() {
-  if (!loggingTimer) {
+  if (!pollingTimer) {
     return;
   }
 
-  clearInterval(loggingTimer);
-  loggingTimer = null;
+  clearInterval(pollingTimer);
+  pollingTimer = null;
 }
 
 export async function getTemperatureHistory() {
-  pruneHistory();
-
-  return [...temperatureHistory];
+  return fetchTemperatureHistory();
 }
 
 export function subscribeToTemperatureHistory(
