@@ -36,7 +36,6 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
-const bottomTankTemperature = 39;
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -47,6 +46,13 @@ const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour12: false,
   timeZone: "Europe/Helsinki",
 });
+
+type TankReading = {
+  top_temp?: number | null;
+  bottom_temp?: number | null;
+  showers?: number | null;
+  heating?: boolean | null;
+};
 
 type SpotPriceResponse = {
   DateTime?: string | null;
@@ -299,6 +305,11 @@ export default function HomeScreen() {
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [topTemp, setTopTemp] = useState<number | null>(null);
+  const [bottomTemp, setBottomTemp] = useState<number | null>(null);
+  const [showers, setShowers] = useState<number | null>(null);
+  const [heating, setHeating] = useState(false);
+  const [loading, setLoading] = useState(true);
   const currentHourStart = startOfCurrentHour();
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
@@ -330,7 +341,10 @@ export default function HomeScreen() {
     () => new Set(actualHeatingHours.today ?? []),
     [],
   );
-  const tankTemperature = getEffectiveTankTemperature(settings);
+  const fallbackTankTemperature = getEffectiveTankTemperature(settings);
+  const tankTemperature = topTemp ?? fallbackTankTemperature;
+  const displayedTopTemp = topTemp === null ? "--" : `${topTemp}`;
+  const displayedBottomTemp = bottomTemp === null ? "--" : `${bottomTemp}`;
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
@@ -397,6 +411,7 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
+  const isTankHeating = heating || isHeatingNow;
   const temperatureCardTheme = getTemperatureCardTheme(
     tankTemperature,
     settings,
@@ -404,9 +419,8 @@ export default function HomeScreen() {
   const warmWaterEstimate = getWarmWaterEstimate(tankTemperature, settings);
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
-  const warmWaterShowersValue = formatFinnishDecimal(
-    warmWaterEstimate.showersLeft,
-  );
+  const warmWaterShowersValue =
+    showers === null ? "--" : formatFinnishDecimal(showers);
   const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
@@ -442,6 +456,42 @@ export default function HomeScreen() {
           setSettings(storedSettings);
         }
       });
+
+      setLoading(true);
+      void (async () => {
+        try {
+          const { data } = await supabase
+            .from("tank_readings")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .single();
+
+          if (!isActive) {
+            return;
+          }
+
+          const reading = data as TankReading | null;
+
+          setTopTemp(reading?.top_temp ?? null);
+          setBottomTemp(reading?.bottom_temp ?? null);
+          setShowers(reading?.showers ?? null);
+          setHeating(reading?.heating ?? false);
+        } catch {
+          if (!isActive) {
+            return;
+          }
+
+          setTopTemp(null);
+          setBottomTemp(null);
+          setShowers(null);
+          setHeating(false);
+        } finally {
+          if (isActive) {
+            setLoading(false);
+          }
+        }
+      })();
 
       return () => {
         isActive = false;
@@ -644,9 +694,9 @@ export default function HomeScreen() {
 
         <View style={styles.cardsRow}>
           <Animated.View
-            accessibilityLabel={`Varaajan lämpötila ${tankTemperature} astetta${
-              isHeatingNow ? ", lämmitys käynnissä" : ""
-            }`}
+            accessibilityLabel={`Varaajan lämpötila ${displayedTopTemp} astetta${
+              isTankHeating ? ", lämmitys käynnissä" : ""
+            }${loading ? ", tietoja haetaan" : ""}`}
             style={[
               styles.metricCard,
               styles.temperatureCard,
@@ -655,7 +705,7 @@ export default function HomeScreen() {
                 borderColor: temperatureCardTheme.borderColor,
                 shadowColor: temperatureCardTheme.shadowColor,
               },
-              isHeatingNow && heatingCardPulseStyle,
+              isTankHeating && heatingCardPulseStyle,
             ]}
           >
             <View style={styles.cardLabelRow}>
@@ -666,12 +716,12 @@ export default function HomeScreen() {
               <View style={styles.temperatureValues}>
                 <View style={styles.temperatureTopSensor}>
                   <Text style={styles.temperatureValue}>
-                    {tankTemperature}°
+                    {displayedTopTemp}°
                   </Text>
                 </View>
                 <View style={styles.temperatureBottomSensor}>
                   <Text style={styles.temperatureLowValue}>
-                    {bottomTankTemperature}°
+                    {displayedBottomTemp}°
                   </Text>
                 </View>
               </View>
@@ -682,7 +732,7 @@ export default function HomeScreen() {
                       segmentIndex,
                       temperatureBarSegmentCount,
                       tankTemperature,
-                      bottomTankTemperature,
+                      bottomTemp ?? fallbackTankTemperature,
                     );
 
                     return (
