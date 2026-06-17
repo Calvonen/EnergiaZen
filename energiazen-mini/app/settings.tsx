@@ -136,15 +136,11 @@ export default function SettingsScreen() {
     useCallback(() => {
       let isActive = true;
 
-      supabase.auth
-        .getUser()
-        .then(
-          ({ data }: { data: { user: { email?: string | null } | null } }) => {
-            if (isActive && !data.user) {
-              router.replace("/login");
-            }
-          },
-        );
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (isActive && !session) {
+          router.replace("/login");
+        }
+      });
 
       return () => {
         isActive = false;
