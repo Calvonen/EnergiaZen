@@ -454,8 +454,9 @@ export default function HomeScreen() {
         }
       });
 
-      setLoading(true);
-      void (async () => {
+      const refreshTankReadings = async () => {
+        console.log("tank_readings refreshed");
+
         try {
           const { data, error } = await supabase
             .from("tank_readings")
@@ -493,10 +494,18 @@ export default function HomeScreen() {
             setLoading(false);
           }
         }
-      })();
+      };
+
+      setLoading(true);
+      void refreshTankReadings();
+
+      const tankReadingsInterval = setInterval(() => {
+        void refreshTankReadings();
+      }, 30000);
 
       return () => {
         isActive = false;
+        clearInterval(tankReadingsInterval);
       };
     }, [router]),
   );
