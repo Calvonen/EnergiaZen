@@ -460,14 +460,22 @@ export default function HomeScreen() {
       setLoading(true);
       void (async () => {
         try {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from("tank_readings")
             .select("*")
             .order("created_at", { ascending: false })
             .limit(1)
             .single();
 
+          console.log("tank_readings data", data);
+          console.log("tank_readings error", error);
+
           if (!isActive) {
+            return;
+          }
+
+          if (error) {
+            console.error(error);
             return;
           }
 
