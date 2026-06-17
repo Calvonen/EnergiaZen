@@ -1262,7 +1262,7 @@ const styles = StyleSheet.create({
   temperatureTopSensor: {
     alignItems: "flex-end",
     position: "absolute",
-    right: 0,
+    right: 12,
     top: 0,
   },
   temperatureBottomSensor: {
