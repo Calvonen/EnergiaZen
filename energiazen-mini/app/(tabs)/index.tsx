@@ -1315,12 +1315,14 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   tankUpdatedText: {
-    alignSelf: "flex-start",
+    bottom: 8,
     color: "rgba(247,251,255,0.62)",
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "800",
-    lineHeight: 12,
-    marginTop: 4,
+    left: 14,
+    lineHeight: 11,
+    position: "absolute",
+    right: 66,
   },
   tankUpdatedWarningText: {
     color: "#ffcf7a",
@@ -1329,7 +1331,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     bottom: 14,
     flexDirection: "row",
-    gap: 6,
+    gap: 8,
     position: "absolute",
     right: 10,
     top: 40,
@@ -1342,7 +1344,7 @@ const styles = StyleSheet.create({
   temperatureTopSensor: {
     alignItems: "flex-end",
     position: "absolute",
-    right: 18,
+    right: 4,
     top: 0,
   },
   temperatureBottomSensor: {
