@@ -343,8 +343,8 @@ export default function HomeScreen() {
   );
   const fallbackTankTemperature = getEffectiveTankTemperature(settings);
   const tankTemperature = topTemp ?? fallbackTankTemperature;
-  const displayedTopTemp = topTemp === null ? "--" : `${topTemp}`;
-  const displayedBottomTemp = bottomTemp === null ? "--" : `${bottomTemp}`;
+  const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
+  const displayedBottomTemp = bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
@@ -1262,7 +1262,7 @@ const styles = StyleSheet.create({
   temperatureTopSensor: {
     alignItems: "flex-end",
     position: "absolute",
-    right: 12,
+    right: 18,
     top: 0,
   },
   temperatureBottomSensor: {
@@ -1273,10 +1273,10 @@ const styles = StyleSheet.create({
   },
   temperatureValue: {
     color: "#ffffff",
-    fontSize: 50,
+    fontSize: 46,
     fontWeight: "900",
-    letterSpacing: -1.8,
-    lineHeight: 52,
+    letterSpacing: -1.6,
+    lineHeight: 48,
     textAlign: "right",
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
