@@ -1,7 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -15,26 +15,33 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();
   const segments = useSegments();
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
 
-    const redirectIfNeeded = (isLoggedIn: boolean) => {
+    const redirectIfNeeded = (hasSession: boolean) => {
       const isLoginRoute = segments[0] === 'login';
 
-      if (!isLoggedIn && !isLoginRoute) {
+      if (hasSession && isLoginRoute) {
+        router.replace('/');
+      }
+
+      if (!hasSession && !isLoginRoute) {
         router.replace('/login');
       }
     };
 
-    supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (isMounted) {
-        redirectIfNeeded(Boolean(data.user));
+        redirectIfNeeded(Boolean(session));
+        setIsAuthReady(true);
       }
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event: string, session: { user?: unknown } | null) => {
-      redirectIfNeeded(Boolean(session?.user));
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      redirectIfNeeded(Boolean(session));
+      setIsAuthReady(true);
     });
 
     return () => {
@@ -42,6 +49,10 @@ export default function RootLayout() {
       authListener.subscription.unsubscribe();
     };
   }, [router, segments]);
+
+  if (!isAuthReady) {
+    return null;
+  }
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
