@@ -1,11 +1,8 @@
 import { useState } from "react";
-import { Alert, Button, Text, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { View, Text, TextInput, Button, Alert } from "react-native";
+import { supabase } from "../lib/supabase";
 
-import { supabase } from "@/lib/supabase";
-
-export default function LoginScreen() {
-  const router = useRouter();
+export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -17,10 +14,9 @@ export default function LoginScreen() {
 
     if (error) {
       Alert.alert("Virhe", error.message);
-      return;
+    } else {
+      Alert.alert("Onnistui", "Kirjautuminen onnistui!");
     }
-
-    router.replace("/");
   }
 
   return (
@@ -32,14 +28,15 @@ export default function LoginScreen() {
         gap: 12,
       }}
     >
-      <Text style={{ fontSize: 28, fontWeight: "bold" }}>EnergiaZen</Text>
+      <Text style={{ fontSize: 28, fontWeight: "bold" }}>
+        EnergiaZen
+      </Text>
 
       <TextInput
-        autoCapitalize="none"
-        keyboardType="email-address"
-        onChangeText={setEmail}
         placeholder="Sähköposti"
+        autoCapitalize="none"
         value={email}
+        onChangeText={setEmail}
         style={{
           borderWidth: 1,
           borderRadius: 10,
@@ -48,10 +45,10 @@ export default function LoginScreen() {
       />
 
       <TextInput
-        onChangeText={setPassword}
         placeholder="Salasana"
         secureTextEntry
         value={password}
+        onChangeText={setPassword}
         style={{
           borderWidth: 1,
           borderRadius: 10,
