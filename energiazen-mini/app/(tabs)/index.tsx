@@ -779,16 +779,6 @@ export default function HomeScreen() {
               <Text style={styles.cardIcon}>🔥</Text>
               <Text style={styles.cardLabel}>Varaaja</Text>
             </View>
-            {tankUpdatedStatus ? (
-              <Text
-                style={[
-                  styles.tankUpdatedText,
-                  tankUpdatedStatus.isWarning && styles.tankUpdatedWarningText,
-                ]}
-              >
-                {tankUpdatedStatus.text}
-              </Text>
-            ) : null}
             <View style={styles.temperatureStack}>
               <View style={styles.temperatureValues}>
                 <View style={styles.temperatureTopSensor}>
@@ -800,6 +790,17 @@ export default function HomeScreen() {
                   <Text style={styles.temperatureLowValue}>
                     {displayedBottomTemp}°
                   </Text>
+                  {tankUpdatedStatus ? (
+                    <Text
+                      style={[
+                        styles.tankUpdatedText,
+                        tankUpdatedStatus.isWarning &&
+                          styles.tankUpdatedWarningText,
+                      ]}
+                    >
+                      {tankUpdatedStatus.text}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
               <View style={styles.temperatureBar} accessible={false}>
@@ -1315,14 +1316,12 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   tankUpdatedText: {
-    bottom: 8,
     color: "rgba(247,251,255,0.62)",
     fontSize: 9,
     fontWeight: "800",
-    left: 14,
     lineHeight: 11,
-    position: "absolute",
-    right: 66,
+    marginTop: 7,
+    textAlign: "right",
   },
   tankUpdatedWarningText: {
     color: "#ffcf7a",
