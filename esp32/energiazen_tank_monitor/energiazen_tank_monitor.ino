@@ -85,20 +85,17 @@ void printTemperatureLine(const char *label, float temperatureC) {
 
 void updateDisplay() {
   display.clearBuffer();
-  display.setFont(u8g2_font_6x12_tf);
-  display.setCursor(0, 12);
 
-  display.println("EnergiaZen");
+  display.setFont(u8g2_font_helvB14_tf);
+  display.setCursor(0, 16);
+  display.print("EnergiaZen");
 
-  display.setCursor(0, 28);
-  printTemperatureLine("Yla", topTemperatureC);
+  display.setFont(u8g2_font_helvB18_tf);
+  display.setCursor(0, 40);
+  printTemperatureLine("Y", topTemperatureC);
 
-  display.setCursor(0, 44);
-  printTemperatureLine("Ala", bottomTemperatureC);
-
-  display.setCursor(0, 60);
-  display.print("Suihkut ");
-  display.print(showersLeft, 1);
+  display.setCursor(0, 64);
+  printTemperatureLine("A", bottomTemperatureC);
 
   display.sendBuffer();
 }
