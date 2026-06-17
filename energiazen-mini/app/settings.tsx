@@ -6,7 +6,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from "react-native";
@@ -42,11 +41,6 @@ const editableSettings = {
     max: 10,
     min: 3,
     unit: "suihkua",
-  },
-  testTankTemperature: {
-    max: 80,
-    min: 20,
-    unit: "°C",
   },
 } as const satisfies Record<
   EditableSettingKey,
@@ -98,17 +92,7 @@ export default function SettingsScreen() {
     [settings],
   );
 
-  const testTemperatureRow = useMemo(
-    (): SettingsRow => ({
-      accent: "#ff8bd1",
-      key: "testTankTemperature",
-      label: "Varaajan lämpötila",
-      value: `${settings.testTankTemperature} °C`,
-    }),
-    [settings.testTankTemperature],
-  );
-
-  const selectedRow = [...settingsRows, testTemperatureRow].find(
+  const selectedRow = settingsRows.find(
     (row) => row.key === selectedSettingKey,
   );
   const selectedSetting = selectedSettingKey
@@ -148,22 +132,19 @@ export default function SettingsScreen() {
     setSelectedSettingKey(null);
   };
 
-  const updateTestTemperatureEnabled = (value: boolean) => {
-    saveUpdatedSettings({
-      ...settings,
-      useTestTankTemperature: value,
-    });
-  };
-
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
 
-      supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => {
-        if (isActive && !data.user) {
-          router.replace("/login");
-        }
-      });
+      supabase.auth
+        .getUser()
+        .then(
+          ({ data }: { data: { user: { email?: string | null } | null } }) => {
+            if (isActive && !data.user) {
+              router.replace("/login");
+            }
+          },
+        );
 
       return () => {
         isActive = false;
@@ -245,47 +226,6 @@ export default function SettingsScreen() {
               </View>
             );
           })}
-
-          <Text style={styles.sectionLabel}>Testitila</Text>
-          <View style={styles.settingRow}>
-            <View
-              style={[
-                styles.settingAccent,
-                {
-                  backgroundColor: settings.useTestTankTemperature
-                    ? "#72ff9d"
-                    : "#8ea4cf",
-                },
-              ]}
-            />
-            <Text style={styles.settingLabel}>Käytä testilämpötilaa</Text>
-            <Switch
-              accessibilityLabel="Käytä testilämpötilaa"
-              onValueChange={updateTestTemperatureEnabled}
-              thumbColor={
-                settings.useTestTankTemperature ? "#f7fbff" : "#c3cee4"
-              }
-              trackColor={{
-                false: "rgba(142,164,207,0.35)",
-                true: "rgba(54,244,212,0.55)",
-              }}
-              value={settings.useTestTankTemperature}
-            />
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setSelectedSettingKey("testTankTemperature")}
-            style={styles.settingRow}
-          >
-            <View
-              style={[
-                styles.settingAccent,
-                { backgroundColor: testTemperatureRow.accent },
-              ]}
-            />
-            <Text style={styles.settingLabel}>{testTemperatureRow.label}</Text>
-            <Text style={styles.settingValue}>{testTemperatureRow.value}</Text>
-          </Pressable>
         </View>
 
         <Pressable

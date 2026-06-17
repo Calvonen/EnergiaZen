@@ -211,13 +211,6 @@ function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
 
-function getEffectiveTankTemperature(settings = defaultSettings) {
-  // Testitilan ollessa pois käytössä palataan oletusarvoon, jonka tilalle ESP32-arvo voidaan myöhemmin kytkeä.
-  return settings.useTestTankTemperature
-    ? settings.testTankTemperature
-    : defaultTankTemperature;
-}
-
 function formatHourLabel(date: Date) {
   return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
 }
@@ -341,10 +334,10 @@ export default function HomeScreen() {
     () => new Set(actualHeatingHours.today ?? []),
     [],
   );
-  const fallbackTankTemperature = getEffectiveTankTemperature(settings);
-  const tankTemperature = topTemp ?? fallbackTankTemperature;
+  const tankTemperature = topTemp ?? defaultTankTemperature;
   const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
-  const displayedBottomTemp = bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
+  const displayedBottomTemp =
+    bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
@@ -438,18 +431,22 @@ export default function HomeScreen() {
     useCallback(() => {
       let isActive = true;
 
-      supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => {
-        if (!isActive) {
-          return;
-        }
+      supabase.auth
+        .getUser()
+        .then(
+          ({ data }: { data: { user: { email?: string | null } | null } }) => {
+            if (!isActive) {
+              return;
+            }
 
-        if (!data.user) {
-          router.replace("/login");
-          return;
-        }
+            if (!data.user) {
+              router.replace("/login");
+              return;
+            }
 
-        setUserEmail(data.user.email ?? null);
-      });
+            setUserEmail(data.user.email ?? null);
+          },
+        );
 
       loadSettings().then((storedSettings) => {
         if (isActive) {
@@ -466,9 +463,6 @@ export default function HomeScreen() {
             .order("created_at", { ascending: false })
             .limit(1)
             .single();
-
-          console.log("tank_readings data", data);
-          console.log("tank_readings error", error);
 
           if (!isActive) {
             return;
@@ -740,7 +734,7 @@ export default function HomeScreen() {
                       segmentIndex,
                       temperatureBarSegmentCount,
                       tankTemperature,
-                      bottomTemp ?? fallbackTankTemperature,
+                      bottomTemp ?? defaultTankTemperature,
                     );
 
                     return (
