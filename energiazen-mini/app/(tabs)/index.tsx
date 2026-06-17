@@ -41,13 +41,20 @@ const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
   yesterday: [],
 };
-const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
   timeZone: "Europe/Helsinki",
 });
+const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "2-digit",
+  hour12: false,
+  minute: "2-digit",
+  timeZone: "Europe/Helsinki",
+});
 
 type TankReading = {
+  created_at?: string | null;
   top_temp?: number | null;
   bottom_temp?: number | null;
   showers?: number | null;
@@ -212,7 +219,43 @@ function formatFinnishDecimal(value: number) {
 }
 
 function formatHourLabel(date: Date) {
-  return `${helsinkiTimeFormatter.format(date).replace(".", "")}:00`;
+  return `${helsinkiHourFormatter.format(date).replace(".", "")}:00`;
+}
+
+function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
+  if (!updatedAt) {
+    return null;
+  }
+
+  const updatedDate = new Date(updatedAt);
+
+  if (Number.isNaN(updatedDate.getTime())) {
+    return null;
+  }
+
+  const ageInMinutes = Math.max(
+    0,
+    Math.floor((now.getTime() - updatedDate.getTime()) / (60 * 1000)),
+  );
+
+  if (ageInMinutes < 2) {
+    return {
+      isWarning: false,
+      text: "Päivitetty juuri nyt",
+    };
+  }
+
+  if (ageInMinutes > 10) {
+    return {
+      isWarning: true,
+      text: `Päivitetty ${ageInMinutes} min sitten`,
+    };
+  }
+
+  return {
+    isWarning: false,
+    text: `Päivitetty ${helsinkiTimeFormatter.format(updatedDate)}`,
+  };
 }
 
 function getChartDayKey(day: DaySelection, date = new Date()) {
@@ -302,6 +345,8 @@ export default function HomeScreen() {
   const [bottomTemp, setBottomTemp] = useState<number | null>(null);
   const [showers, setShowers] = useState<number | null>(null);
   const [heating, setHeating] = useState(false);
+  const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const currentHourStart = startOfCurrentHour();
   const chartDayKey = getChartDayKey(selectedDay);
@@ -416,6 +461,7 @@ export default function HomeScreen() {
     showers === null ? "--" : formatFinnishDecimal(showers);
   const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
+  const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -480,6 +526,7 @@ export default function HomeScreen() {
           setBottomTemp(reading?.bottom_temp ?? null);
           setShowers(reading?.showers ?? null);
           setHeating(reading?.heating ?? false);
+          setTankUpdatedAt(reading?.created_at ?? null);
         } catch {
           if (!isActive) {
             return;
@@ -489,6 +536,7 @@ export default function HomeScreen() {
           setBottomTemp(null);
           setShowers(null);
           setHeating(false);
+          setTankUpdatedAt(null);
         } finally {
           if (isActive) {
             setLoading(false);
@@ -555,6 +603,14 @@ export default function HomeScreen() {
 
     return () => controller.abort();
   }, [fetchHourlyPrices]);
+
+  useEffect(() => {
+    const currentTimeInterval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 30000);
+
+    return () => clearInterval(currentTimeInterval);
+  }, []);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -723,6 +779,16 @@ export default function HomeScreen() {
               <Text style={styles.cardIcon}>🔥</Text>
               <Text style={styles.cardLabel}>Varaaja</Text>
             </View>
+            {tankUpdatedStatus ? (
+              <Text
+                style={[
+                  styles.tankUpdatedText,
+                  tankUpdatedStatus.isWarning && styles.tankUpdatedWarningText,
+                ]}
+              >
+                {tankUpdatedStatus.text}
+              </Text>
+            ) : null}
             <View style={styles.temperatureStack}>
               <View style={styles.temperatureValues}>
                 <View style={styles.temperatureTopSensor}>
@@ -1247,6 +1313,17 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     textAlign: "center",
     textTransform: "uppercase",
+  },
+  tankUpdatedText: {
+    alignSelf: "flex-start",
+    color: "rgba(247,251,255,0.62)",
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 12,
+    marginTop: 4,
+  },
+  tankUpdatedWarningText: {
+    color: "#ffcf7a",
   },
   temperatureStack: {
     alignItems: "center",
