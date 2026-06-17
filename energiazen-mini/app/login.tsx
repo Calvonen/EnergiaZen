@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { View, Text, TextInput, Button, Alert } from "react-native";
+import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 
 export default function Login() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -14,9 +16,10 @@ export default function Login() {
 
     if (error) {
       Alert.alert("Virhe", error.message);
-    } else {
-      Alert.alert("Onnistui", "Kirjautuminen onnistui!");
+      return;
     }
+
+    router.replace("/");
   }
 
   return (
