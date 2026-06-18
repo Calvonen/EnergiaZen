@@ -36,7 +36,6 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -687,24 +686,6 @@ export default function HomeScreen() {
     <View style={styles.screen}>
       <View style={[styles.glow, styles.greenGlow]} />
       <View style={[styles.glow, styles.blueGlow]} />
-      <Pressable
-        accessibilityLabel="Avaa lämpöhistoria"
-        accessibilityRole="button"
-        onPress={() => router.push("/history")}
-        style={styles.historyButton}
-      >
-        <Text style={styles.historyButtonText}>📈</Text>
-      </Pressable>
-
-      <Pressable
-        accessibilityLabel="Avaa asetukset"
-        accessibilityRole="button"
-        onPress={() => router.push("/settings")}
-        style={styles.settingsButton}
-      >
-        <Text style={styles.settingsButtonText}>⚙️</Text>
-      </Pressable>
-
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={
@@ -761,13 +742,8 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cardsRow}>
-          <AnimatedPressable
-            accessibilityLabel={`Varaajan lämpötila ${displayedTopTemp} astetta${
-              isTankHeating ? ", lämmitys käynnissä" : ""
-            }${loading ? ", tietoja haetaan" : ""}`}
-            accessibilityRole="button"
-            onPress={() => router.push("/history")}
-            style={({ pressed }) => [
+          <Animated.View
+            style={[
               styles.metricCard,
               styles.temperatureCard,
               {
@@ -776,70 +752,79 @@ export default function HomeScreen() {
                 shadowColor: temperatureCardTheme.shadowColor,
               },
               isTankHeating && heatingCardPulseStyle,
-              pressed && styles.pressedMetricCard,
             ]}
           >
-            <View style={styles.cardLabelRow}>
-              <Text style={styles.cardIcon}>🔥</Text>
-              <Text style={styles.cardLabel}>Varaaja</Text>
-            </View>
-            <View style={styles.temperatureStack}>
-              <View style={styles.temperatureValues}>
-                <View style={styles.temperatureTopSensor}>
-                  <Text style={styles.temperatureValue}>
-                    {displayedTopTemp}°
-                  </Text>
-                </View>
-                <View style={styles.temperatureBottomSensor}>
-                  <Text style={styles.temperatureLowValue}>
-                    {displayedBottomTemp}°
-                  </Text>
-                  {tankUpdatedStatus ? (
-                    <Text
-                      style={[
-                        styles.tankUpdatedText,
-                        tankUpdatedStatus.isWarning &&
-                          styles.tankUpdatedWarningText,
-                      ]}
-                    >
-                      {tankUpdatedStatus.text}
+            <Pressable
+              accessibilityLabel={`Varaajan lämpötila ${displayedTopTemp} astetta${
+                isTankHeating ? ", lämmitys käynnissä" : ""
+              }${loading ? ", tietoja haetaan" : ""}`}
+              accessibilityRole="button"
+              android_ripple={{ color: "rgba(255,255,255,0.1)" }}
+              onPress={() => router.push("/history")}
+              style={({ pressed }) => [
+                styles.metricCardPressable,
+                pressed && styles.pressedMetricCard,
+              ]}
+            >
+              <View style={styles.cardLabelRow}>
+                <Text style={styles.cardIcon}>🔥</Text>
+                <Text style={styles.cardLabel}>Varaaja</Text>
+              </View>
+              <View style={styles.temperatureStack}>
+                <View style={styles.temperatureValues}>
+                  <View style={styles.temperatureTopSensor}>
+                    <Text style={styles.temperatureValue}>
+                      {displayedTopTemp}°
                     </Text>
-                  ) : null}
+                  </View>
+                  <View style={styles.temperatureBottomSensor}>
+                    <Text style={styles.temperatureLowValue}>
+                      {displayedBottomTemp}°
+                    </Text>
+                    {tankUpdatedStatus ? (
+                      <Text
+                        style={[
+                          styles.tankUpdatedText,
+                          tankUpdatedStatus.isWarning &&
+                            styles.tankUpdatedWarningText,
+                        ]}
+                      >
+                        {tankUpdatedStatus.text}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.temperatureBar} accessible={false}>
+                  {Array.from({ length: temperatureBarSegmentCount }).map(
+                    (_, segmentIndex) => {
+                      const segmentColor = getTemperatureBarSegmentColor(
+                        segmentIndex,
+                        temperatureBarSegmentCount,
+                        tankTemperature,
+                        bottomTemp ?? defaultTankTemperature,
+                      );
+
+                      return (
+                        <View
+                          key={`temperature-segment-${segmentIndex}`}
+                          style={[
+                            styles.temperatureBarSegment,
+                            {
+                              backgroundColor: segmentColor,
+                              shadowColor: segmentColor,
+                            },
+                          ]}
+                        />
+                      );
+                    },
+                  )}
                 </View>
               </View>
-              <View style={styles.temperatureBar} accessible={false}>
-                {Array.from({ length: temperatureBarSegmentCount }).map(
-                  (_, segmentIndex) => {
-                    const segmentColor = getTemperatureBarSegmentColor(
-                      segmentIndex,
-                      temperatureBarSegmentCount,
-                      tankTemperature,
-                      bottomTemp ?? defaultTankTemperature,
-                    );
+            </Pressable>
+          </Animated.View>
 
-                    return (
-                      <View
-                        key={`temperature-segment-${segmentIndex}`}
-                        style={[
-                          styles.temperatureBarSegment,
-                          {
-                            backgroundColor: segmentColor,
-                            shadowColor: segmentColor,
-                          },
-                        ]}
-                      />
-                    );
-                  },
-                )}
-              </View>
-            </View>
-          </AnimatedPressable>
-
-          <Pressable
-            accessibilityLabel={`Lämmintä vettä ${warmWaterShowersAccessibilityLabel}`}
-            accessibilityRole="button"
-            onPress={() => router.push("/settings")}
-            style={({ pressed }) => [
+          <View
+            style={[
               styles.metricCard,
               styles.waterCard,
               {
@@ -847,39 +832,49 @@ export default function HomeScreen() {
                 borderColor: warmWaterCardTheme.borderColor,
                 shadowColor: warmWaterCardTheme.shadowColor,
               },
-              pressed && styles.pressedMetricCard,
             ]}
           >
-            <View style={styles.cardLabelRow}>
-              <Text style={styles.cardIcon}>💧</Text>
-              <Text style={styles.cardLabel}>Lämmin vesi</Text>
-            </View>
-            <View style={styles.tankVisual}>
-              <View
-                style={[
-                  styles.tankFill,
-                  {
-                    backgroundColor: warmWaterCardTheme.fillColor,
-                    height: `${warmWaterFillPercent}%`,
-                    shadowColor: warmWaterCardTheme.shadowColor,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.tankSurface,
-                  {
-                    backgroundColor: warmWaterCardTheme.surfaceColor,
-                    bottom: `${warmWaterFillPercent}%`,
-                  },
-                ]}
-              />
-              <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-              <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-              <View style={[styles.tankBubble, styles.tankBubbleThree]} />
-            </View>
-            <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
-          </Pressable>
+            <Pressable
+              accessibilityLabel={`Lämmintä vettä ${warmWaterShowersAccessibilityLabel}`}
+              accessibilityRole="button"
+              android_ripple={{ color: "rgba(255,255,255,0.1)" }}
+              onPress={() => router.push("/settings")}
+              style={({ pressed }) => [
+                styles.metricCardPressable,
+                pressed && styles.pressedMetricCard,
+              ]}
+            >
+              <View style={styles.cardLabelRow}>
+                <Text style={styles.cardIcon}>💧</Text>
+                <Text style={styles.cardLabel}>Lämmin vesi</Text>
+              </View>
+              <View style={styles.tankVisual}>
+                <View
+                  style={[
+                    styles.tankFill,
+                    {
+                      backgroundColor: warmWaterCardTheme.fillColor,
+                      height: `${warmWaterFillPercent}%`,
+                      shadowColor: warmWaterCardTheme.shadowColor,
+                    },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.tankSurface,
+                    {
+                      backgroundColor: warmWaterCardTheme.surfaceColor,
+                      bottom: `${warmWaterFillPercent}%`,
+                    },
+                  ]}
+                />
+                <View style={[styles.tankBubble, styles.tankBubbleOne]} />
+                <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
+                <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+              </View>
+              <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.chartCard}>
@@ -1155,48 +1150,6 @@ const styles = StyleSheet.create({
     left: -170,
     shadowColor: "#5aa7ff",
   },
-  historyButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(255,255,255,0.18)",
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 44,
-    justifyContent: "center",
-    left: 18,
-    position: "absolute",
-    shadowColor: "#36f4d4",
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    top: 48,
-    width: 44,
-    zIndex: 20,
-  },
-  historyButtonText: {
-    fontSize: 20,
-    lineHeight: 24,
-  },
-  settingsButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(255,255,255,0.18)",
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 44,
-    justifyContent: "center",
-    position: "absolute",
-    right: 18,
-    shadowColor: "#36f4d4",
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    top: 48,
-    width: 44,
-    zIndex: 20,
-  },
-  settingsButtonText: {
-    fontSize: 20,
-    lineHeight: 24,
-  },
   header: {
     alignItems: "center",
     marginBottom: 12,
@@ -1295,6 +1248,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.38,
     shadowRadius: 24,
   },
+  metricCardPressable: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "space-between",
+    position: "relative",
+    width: "100%",
+  },
   temperatureCard: {
     borderWidth: 1.5,
     position: "relative",
@@ -1331,7 +1291,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 11,
     marginTop: 7,
-    textAlign: "right",
+    textAlign: "center",
   },
   tankUpdatedWarningText: {
     color: "#ffcf7a",
@@ -1357,7 +1317,7 @@ const styles = StyleSheet.create({
     top: 0,
   },
   temperatureBottomSensor: {
-    alignItems: "flex-end",
+    alignItems: "center",
     bottom: 0,
     position: "absolute",
     right: 0,
