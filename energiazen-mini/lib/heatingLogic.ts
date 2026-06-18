@@ -42,6 +42,7 @@ export type DaySelection = "yesterday" | "today" | "tomorrow";
 
 export type HourlyPrice = {
   date: Date;
+  startDate: string;
   endDate: Date;
   hourLabel: string;
   id: string;
@@ -91,8 +92,18 @@ const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Helsinki",
 });
 
+export function getFinnishDateKey(dateString: string): string {
+  return helsinkiDateKeyFormatter.format(new Date(dateString));
+}
+
+export function getDateKeyOffset(offsetDays: number, date = new Date()): string {
+  return helsinkiDateKeyFormatter.format(
+    new Date(date.getTime() + offsetDays * 24 * 60 * 60 * 1000),
+  );
+}
+
 export function formatHelsinkiDateKey(date: Date) {
-  return helsinkiDateKeyFormatter.format(date);
+  return getFinnishDateKey(date.toISOString());
 }
 
 export function getHelsinkiHourNumber(date: Date) {

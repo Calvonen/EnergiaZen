@@ -13,8 +13,9 @@ import {
 
 import {
   DaySelection,
-  formatHelsinkiDateKey,
   getCheapestHours,
+  getDateKeyOffset,
+  getFinnishDateKey,
   getEffectiveHeatingHours,
   getHelsinkiHourNumber,
   HourlyPrice,
@@ -63,6 +64,8 @@ type TankReading = {
 
 type SpotPriceResponse = {
   DateTime?: string | null;
+  StartDate?: string | null;
+  startDate?: string | null;
   PriceNoTax?: number | null;
   PriceWithTax?: number | null;
 };
@@ -258,18 +261,16 @@ function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
   };
 }
 
-function getChartDayKey(day: DaySelection, date = new Date()) {
+function getChartDayKey(day: DaySelection) {
   if (day === "yesterday") {
-    return formatHelsinkiDateKey(
-      new Date(date.getTime() - 24 * 60 * 60 * 1000),
-    );
+    return getDateKeyOffset(-1);
   }
 
   if (day === "today") {
-    return formatHelsinkiDateKey(date);
+    return getDateKeyOffset(0);
   }
 
-  return formatHelsinkiDateKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
+  return getDateKeyOffset(1);
 }
 
 function getDayLabel(day: DaySelection) {
@@ -306,7 +307,8 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
   return data
     .map((item) => {
       const price = item.PriceWithTax ?? item.PriceNoTax;
-      const date = item.DateTime ? new Date(item.DateTime) : null;
+      const startDate = item.startDate ?? item.StartDate ?? item.DateTime;
+      const date = startDate ? new Date(startDate) : null;
 
       if (
         !date ||
@@ -319,9 +321,10 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
 
       return {
         date,
+        startDate: startDate ?? date.toISOString(),
         endDate: new Date(date.getTime() + 60 * 60 * 1000),
         hourLabel: formatHourLabel(date),
-        id: item.DateTime ?? date.toISOString(),
+        id: startDate ?? date.toISOString(),
         price: normalizePriceToCents(price),
       } satisfies HourlyPrice;
     })
@@ -353,7 +356,7 @@ export default function HomeScreen() {
   const chartHourlyPrices = useMemo(
     () =>
       hourlyPrices.filter(
-        (item) => formatHelsinkiDateKey(item.date) === chartDayKey,
+        (item) => getFinnishDateKey(item.startDate) === chartDayKey,
       ),
     [chartDayKey, hourlyPrices],
   );
@@ -411,7 +414,7 @@ export default function HomeScreen() {
     return sortHoursChronologically(
       getCheapestHours(
         hourlyPrices.filter(
-          (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
+          (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
         ),
         effectiveHeatingHours,
       ),
@@ -570,6 +573,27 @@ export default function HomeScreen() {
 
       const data = (await response.json()) as SpotPriceResponse[];
       const prices = normalizeSpotPrices(data);
+      const yesterdayKey = getDateKeyOffset(-1);
+      const todayKey = getDateKeyOffset(0);
+      const tomorrowKey = getDateKeyOffset(1);
+      const yesterdayCount = prices.filter(
+        (item) => getFinnishDateKey(item.startDate) === yesterdayKey,
+      ).length;
+      const todayCount = prices.filter(
+        (item) => getFinnishDateKey(item.startDate) === todayKey,
+      ).length;
+      const tomorrowCount = prices.filter(
+        (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
+      ).length;
+
+      console.log("Spot prices debug", {
+        totalPricesCount: prices.length,
+        yesterdayCount,
+        todayCount,
+        tomorrowCount,
+        firstStartDate: prices[0]?.startDate ?? null,
+        lastStartDate: prices[prices.length - 1]?.startDate ?? null,
+      });
 
       if (prices.length === 0) {
         throw new Error("Hourly prices missing from response");
@@ -922,7 +946,7 @@ export default function HomeScreen() {
                   {selectedDay === "tomorrow"
                     ? "Huomisen hinnat eivät ole vielä saatavilla"
                     : selectedDay === "yesterday"
-                      ? "Eilisen hintoja ei ole saatavilla"
+                      ? "Ei hintatietoja eiliselle"
                       : "Hintakaaviota ei saatavilla"}
                 </Text>
               </View>
