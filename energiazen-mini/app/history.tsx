@@ -39,6 +39,7 @@ type TankReadingRow = {
 const chartHeight = 190;
 const chartMinTemp = 30;
 const chartMaxTemp = 70;
+const closePointOffset = 2;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -229,10 +230,113 @@ function getPointBottom(temperature: number) {
   return ratio * chartHeight;
 }
 
+function getAdjustedPointBottoms(
+  topTemperature: number,
+  bottomTemperature: number,
+) {
+  const topBottom = getPointBottom(topTemperature);
+  const bottomBottom = getPointBottom(bottomTemperature);
+
+  if (Math.abs(topBottom - bottomBottom) > closePointOffset * 2) {
+    return { bottomBottom, topBottom };
+  }
+
+  return {
+    bottomBottom: Math.max(bottomBottom - closePointOffset, 0),
+    topBottom: Math.min(topBottom + closePointOffset, chartHeight),
+  };
+}
+
+function shouldShowXAxisLabel(
+  index: number,
+  historyLength: number,
+  isDailyView: boolean,
+) {
+  if (isDailyView || historyLength <= 5) {
+    return true;
+  }
+
+  const labelCount = 5;
+  const interval = (historyLength - 1) / (labelCount - 1);
+
+  return Array.from({ length: labelCount }).some(
+    (_, labelIndex) => index === Math.round(labelIndex * interval),
+  );
+}
+
+type ChartLineSegment = {
+  angle: string;
+  color: string;
+  key: string;
+  left: number;
+  top: number;
+  width: number;
+};
+
+function getChartLineSegments(
+  history: (TemperatureHistoryPoint | DailyTemperatureHistoryPoint)[],
+  chartWidth: number,
+) {
+  if (history.length < 2 || chartWidth <= 0) {
+    return [];
+  }
+
+  const columnWidth = chartWidth / history.length;
+  const segments: ChartLineSegment[] = [];
+
+  history.slice(0, -1).forEach((point, index) => {
+    const nextPoint = history[index + 1];
+    const currentTemps = getAdjustedPointBottoms(
+      getTopTemperature(point),
+      getBottomTemperature(point),
+    );
+    const nextTemps = getAdjustedPointBottoms(
+      getTopTemperature(nextPoint),
+      getBottomTemperature(nextPoint),
+    );
+    const currentX = columnWidth * index + columnWidth / 2;
+    const nextX = columnWidth * (index + 1) + columnWidth / 2;
+
+    [
+      {
+        color: "#ffad4d",
+        currentBottom: currentTemps.topBottom,
+        keyPrefix: "top",
+        nextBottom: nextTemps.topBottom,
+      },
+      {
+        color: "#36f4d4",
+        currentBottom: currentTemps.bottomBottom,
+        keyPrefix: "bottom",
+        nextBottom: nextTemps.bottomBottom,
+      },
+    ].forEach(({ color, currentBottom, keyPrefix, nextBottom }) => {
+      const currentY = chartHeight - currentBottom;
+      const nextY = chartHeight - nextBottom;
+      const deltaX = nextX - currentX;
+      const deltaY = nextY - currentY;
+      const width = Math.hypot(deltaX, deltaY);
+      const angle = `${Math.atan2(deltaY, deltaX)}rad`;
+
+      segments.push({
+        angle,
+        color,
+        key: `${keyPrefix}-${index}`,
+        left: currentX,
+        top: currentY,
+        width,
+      });
+    });
+  });
+
+  return segments;
+}
+
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
   const [history, setHistory] = useState<TemperatureHistoryPoint[]>([]);
+  const [chartWidth, setChartWidth] = useState(0);
 
   const fetchHistory = useCallback(async () => {
     const { data, error } = await supabase
@@ -264,8 +368,11 @@ export default function TemperatureHistoryScreen() {
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30], []);
-  const showerTotal = latestPoint?.showers ?? 0;
   const isDailyView = selectedTab === "7d";
+  const lineSegments = useMemo(
+    () => getChartLineSegments(visibleHistory, chartWidth),
+    [chartWidth, visibleHistory],
+  );
 
   return (
     <View style={styles.screen}>
@@ -330,12 +437,6 @@ export default function TemperatureHistoryScreen() {
                 {latestPoint ? getBottomTemperature(latestPoint) : "--"}
               </Text>
             </View>
-            <View style={styles.summaryPill}>
-              <Text numberOfLines={1} style={styles.summaryLabel}>
-                Suihkut
-              </Text>
-              <Text style={styles.showerSummaryValue}>🚿 {showerTotal}</Text>
-            </View>
           </View>
 
           <View style={styles.legendRow}>
@@ -363,13 +464,34 @@ export default function TemperatureHistoryScreen() {
                   ))}
                 </View>
 
-                <View style={styles.chartArea}>
+                <View
+                  onLayout={(event) =>
+                    setChartWidth(event.nativeEvent.layout.width)
+                  }
+                  style={styles.chartArea}
+                >
                   {chartScale.map((value) => (
                     <View
                       key={value}
                       style={[
                         styles.gridLine,
                         { bottom: getPointBottom(value) },
+                      ]}
+                    />
+                  ))}
+
+                  {lineSegments.map((segment) => (
+                    <View
+                      key={segment.key}
+                      style={[
+                        styles.chartLine,
+                        {
+                          backgroundColor: segment.color,
+                          left: segment.left,
+                          top: segment.top,
+                          transform: [{ rotateZ: segment.angle }],
+                          width: segment.width,
+                        },
                       ]}
                     />
                   ))}
@@ -381,17 +503,14 @@ export default function TemperatureHistoryScreen() {
                       const xAxisLabel = isDailyHistoryPoint(point)
                         ? point.dayLabel
                         : formatHour(point.timestamp);
-                      const previousPoint = visibleHistory[index - 1];
-                      const visibleShowerCount = isDailyHistoryPoint(point)
-                        ? point.showers
-                        : Math.max(
-                            point.showers - (previousPoint?.showers ?? 0),
-                            0,
-                          );
+                      const { bottomBottom, topBottom } = getAdjustedPointBottoms(
+                        topTemperature,
+                        bottomTemperature,
+                      );
 
                       return (
                         <View
-                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}${visibleShowerCount > 0 ? `, ${visibleShowerCount} suihkua` : ""}`}
+                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}`}
                           key={
                             isDailyHistoryPoint(point)
                               ? point.dayKey
@@ -415,33 +534,21 @@ export default function TemperatureHistoryScreen() {
                             style={[
                               styles.tempDot,
                               styles.topTempDot,
-                              { bottom: getPointBottom(topTemperature) },
+                              { bottom: topBottom },
                             ]}
                           />
                           <View
                             style={[
                               styles.tempDot,
                               styles.bottomTempDot,
-                              { bottom: getPointBottom(bottomTemperature) },
+                              { bottom: bottomBottom },
                             ]}
                           />
-                          {visibleShowerCount > 0 ? (
-                            <View
-                              accessibilityElementsHidden
-                              importantForAccessibility="no-hide-descendants"
-                              style={styles.showerMarker}
-                            >
-                              {visibleShowerCount > 1 ? (
-                                <Text style={styles.showerCount}>
-                                  {visibleShowerCount}
-                                </Text>
-                              ) : null}
-                              <Text style={styles.showerIcon}>🚿</Text>
-                            </View>
-                          ) : null}
-                          {isDailyView ||
-                          index % 6 === 0 ||
-                          index === visibleHistory.length - 1 ? (
+                          {shouldShowXAxisLabel(
+                            index,
+                            visibleHistory.length,
+                            isDailyView,
+                          ) ? (
                             <Text style={styles.hourLabel}>{xAxisLabel}</Text>
                           ) : null}
                         </View>
@@ -467,9 +574,6 @@ export default function TemperatureHistoryScreen() {
                       <Text style={styles.dailyDetailLine}>
                         ▲ ala {point.bottomTempMax}° / ▼ ala{" "}
                         {point.bottomTempMin}°
-                      </Text>
-                      <Text style={styles.dailyDetailLine}>
-                        🚿 {point.showers}
                       </Text>
                       {point.heating ? (
                         <Text style={styles.dailyHeatingLine}>🔥 Lämmitys</Text>
@@ -605,12 +709,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 3,
   },
-  showerSummaryValue: {
-    color: "#f7fbff",
-    fontSize: 26,
-    fontWeight: "900",
-    marginTop: 7,
-  },
   legendRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -646,6 +744,14 @@ const styles = StyleSheet.create({
     left: 0,
     position: "absolute",
     right: 0,
+  },
+  chartLine: {
+    borderRadius: 999,
+    height: 2,
+    opacity: 0.78,
+    position: "absolute",
+    transformOrigin: "left center",
+    zIndex: 1,
   },
   historyColumns: { flexDirection: "row", height: chartHeight + 58 },
   historyColumn: {
@@ -696,30 +802,6 @@ const styles = StyleSheet.create({
     shadowColor: "#36f4d4",
     shadowOpacity: 0.7,
     shadowRadius: 8,
-  },
-  showerMarker: {
-    alignItems: "center",
-    bottom: -34,
-    justifyContent: "center",
-    left: "50%",
-    marginLeft: -13,
-    position: "absolute",
-    width: 26,
-    zIndex: 4,
-  },
-  showerIcon: {
-    color: "#f7fbff",
-    fontSize: 15,
-    fontWeight: "900",
-    lineHeight: 17,
-  },
-  showerCount: {
-    color: "#f7fbff",
-    fontSize: 9,
-    fontWeight: "900",
-    lineHeight: 9,
-    marginBottom: -1,
-    textAlign: "center",
   },
   hourLabel: {
     bottom: -52,
