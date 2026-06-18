@@ -1,15 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
-import {
-  getTemperatureHistory,
-  startTemperatureLogging,
-  subscribeToTemperatureHistory,
-  TemperatureHistoryPoint,
-} from "@/lib/temperatureHistory";
+import { supabase } from "@/lib/supabase";
 
 type HistoryTab = "24h" | "7d";
+
+type TemperatureHistoryPoint = {
+  timestamp: string;
+  topTemp: number;
+  bottomTemp: number;
+  heating: boolean;
+  showers: number;
+};
+
+type TankReadingRow = {
+  created_at?: string | null;
+  top_temp?: number | null;
+  bottom_temp?: number | null;
+  heating?: boolean | null;
+  showers?: number | null;
+};
 
 const chartHeight = 190;
 const chartMinTemp = 30;
@@ -25,26 +36,49 @@ function formatHour(timestamp: string) {
   return `${timeFormatter.format(new Date(timestamp)).replace(".", "")}:00`;
 }
 
+function getHistoryRangeStart(selectedTab: HistoryTab) {
+  const rangeMs =
+    selectedTab === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+
+  return new Date(Date.now() - rangeMs).toISOString();
+}
+
+function mapTankReadingToHistoryPoint(
+  reading: TankReadingRow,
+): TemperatureHistoryPoint | null {
+  if (
+    !reading.created_at ||
+    typeof reading.top_temp !== "number" ||
+    typeof reading.bottom_temp !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    bottomTemp: reading.bottom_temp,
+    heating: reading.heating ?? false,
+    showers: reading.showers ?? 0,
+    timestamp: reading.created_at,
+    topTemp: reading.top_temp,
+  };
+}
+
 function getVisibleHistory(
   history: TemperatureHistoryPoint[],
   selectedTab: HistoryTab,
 ) {
-  const now = Date.now();
-  const visibleRangeMs =
-    selectedTab === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  const bucketSizeMs =
-    selectedTab === "24h" ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000;
+  if (selectedTab === "24h") {
+    return history;
+  }
+
+  const bucketSizeMs = 6 * 60 * 60 * 1000;
   const latestPointByBucket = new Map<number, TemperatureHistoryPoint>();
 
-  history
-    .filter(
-      (point) => new Date(point.timestamp).getTime() >= now - visibleRangeMs,
-    )
-    .forEach((point) => {
-      const pointTime = new Date(point.timestamp).getTime();
-      const bucket = Math.floor(pointTime / bucketSizeMs);
-      latestPointByBucket.set(bucket, point);
-    });
+  history.forEach((point) => {
+    const pointTime = new Date(point.timestamp).getTime();
+    const bucket = Math.floor(pointTime / bucketSizeMs);
+    latestPointByBucket.set(bucket, point);
+  });
 
   return [...latestPointByBucket.values()].sort(
     (firstPoint, secondPoint) =>
@@ -67,28 +101,29 @@ export default function TemperatureHistoryScreen() {
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
   const [history, setHistory] = useState<TemperatureHistoryPoint[]>([]);
 
+  const fetchHistory = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("tank_readings")
+      .select("created_at, top_temp, bottom_temp, heating, showers")
+      .gte("created_at", getHistoryRangeStart(selectedTab))
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.warn("Lämpöhistorian haku epäonnistui", error.message);
+      setHistory([]);
+      return;
+    }
+
+    const points = ((data as TankReadingRow[] | null) ?? [])
+      .map(mapTankReadingToHistoryPoint)
+      .filter((point): point is TemperatureHistoryPoint => point !== null);
+
+    setHistory(points);
+  }, [selectedTab]);
+
   useEffect(() => {
-    let isActive = true;
-
-    startTemperatureLogging();
-
-    getTemperatureHistory().then((points) => {
-      if (isActive) {
-        setHistory(points);
-      }
-    });
-
-    const unsubscribe = subscribeToTemperatureHistory((points) => {
-      if (isActive) {
-        setHistory(points);
-      }
-    });
-
-    return () => {
-      isActive = false;
-      unsubscribe();
-    };
-  }, []);
+    void fetchHistory();
+  }, [fetchHistory]);
 
   const visibleHistory = useMemo(
     () => getVisibleHistory(history, selectedTab),
@@ -175,88 +210,94 @@ export default function TemperatureHistoryScreen() {
             <Text style={styles.legendHeating}>🔥 Lämmitys päällä</Text>
           </View>
 
-          <View style={styles.chartRow}>
-            <View style={styles.scaleColumn}>
-              {chartScale.map((value) => (
-                <Text key={value} style={styles.scaleText}>
-                  {value}°
-                </Text>
-              ))}
-            </View>
+          {visibleHistory.length === 0 ? (
+            <Text style={styles.emptyHistoryText}>
+              Ei vielä lämpöhistoriaa.
+            </Text>
+          ) : (
+            <View style={styles.chartRow}>
+              <View style={styles.scaleColumn}>
+                {chartScale.map((value) => (
+                  <Text key={value} style={styles.scaleText}>
+                    {value}°
+                  </Text>
+                ))}
+              </View>
 
-            <View style={styles.chartArea}>
-              {chartScale.map((value) => (
-                <View
-                  key={value}
-                  style={[styles.gridLine, { bottom: getPointBottom(value) }]}
-                />
-              ))}
+              <View style={styles.chartArea}>
+                {chartScale.map((value) => (
+                  <View
+                    key={value}
+                    style={[styles.gridLine, { bottom: getPointBottom(value) }]}
+                  />
+                ))}
 
-              <View style={styles.historyColumns}>
-                {visibleHistory.map((point, index) => {
-                  const hourLabel = formatHour(point.timestamp);
-                  const previousPoint = visibleHistory[index - 1];
-                  const visibleShowerCount = Math.max(
-                    point.showers - (previousPoint?.showers ?? 0),
-                    0,
-                  );
+                <View style={styles.historyColumns}>
+                  {visibleHistory.map((point, index) => {
+                    const hourLabel = formatHour(point.timestamp);
+                    const previousPoint = visibleHistory[index - 1];
+                    const visibleShowerCount = Math.max(
+                      point.showers - (previousPoint?.showers ?? 0),
+                      0,
+                    );
 
-                  return (
-                    <View
-                      accessibilityLabel={`${hourLabel}, yläanturi ${point.topTemp} astetta, ala-anturi ${point.bottomTemp} astetta${point.heating ? ", lämmitys päällä" : ""}${visibleShowerCount > 0 ? `, ${visibleShowerCount} suihkua` : ""}`}
-                      key={point.timestamp}
-                      style={styles.historyColumn}
-                    >
-                      {point.heating ? (
-                        <>
-                          <View style={styles.heatingShade} />
-                          <Text
+                    return (
+                      <View
+                        accessibilityLabel={`${hourLabel}, yläanturi ${point.topTemp} astetta, ala-anturi ${point.bottomTemp} astetta${point.heating ? ", lämmitys päällä" : ""}${visibleShowerCount > 0 ? `, ${visibleShowerCount} suihkua` : ""}`}
+                        key={point.timestamp}
+                        style={styles.historyColumn}
+                      >
+                        {point.heating ? (
+                          <>
+                            <View style={styles.heatingShade} />
+                            <Text
+                              accessibilityElementsHidden
+                              importantForAccessibility="no-hide-descendants"
+                              style={styles.heatingIcon}
+                            >
+                              🔥
+                            </Text>
+                          </>
+                        ) : null}
+                        <View
+                          style={[
+                            styles.tempDot,
+                            styles.topTempDot,
+                            { bottom: getPointBottom(point.topTemp) },
+                          ]}
+                        />
+                        <View
+                          style={[
+                            styles.tempDot,
+                            styles.bottomTempDot,
+                            { bottom: getPointBottom(point.bottomTemp) },
+                          ]}
+                        />
+                        {visibleShowerCount > 0 ? (
+                          <View
                             accessibilityElementsHidden
                             importantForAccessibility="no-hide-descendants"
-                            style={styles.heatingIcon}
+                            style={styles.showerMarker}
                           >
-                            🔥
-                          </Text>
-                        </>
-                      ) : null}
-                      <View
-                        style={[
-                          styles.tempDot,
-                          styles.topTempDot,
-                          { bottom: getPointBottom(point.topTemp) },
-                        ]}
-                      />
-                      <View
-                        style={[
-                          styles.tempDot,
-                          styles.bottomTempDot,
-                          { bottom: getPointBottom(point.bottomTemp) },
-                        ]}
-                      />
-                      {visibleShowerCount > 0 ? (
-                        <View
-                          accessibilityElementsHidden
-                          importantForAccessibility="no-hide-descendants"
-                          style={styles.showerMarker}
-                        >
-                          {visibleShowerCount > 1 ? (
-                            <Text style={styles.showerCount}>
-                              {visibleShowerCount}
-                            </Text>
-                          ) : null}
-                          <Text style={styles.showerIcon}>🚿</Text>
-                        </View>
-                      ) : null}
-                      {index % 6 === 0 ||
-                      index === visibleHistory.length - 1 ? (
-                        <Text style={styles.hourLabel}>{hourLabel}</Text>
-                      ) : null}
-                    </View>
-                  );
-                })}
+                            {visibleShowerCount > 1 ? (
+                              <Text style={styles.showerCount}>
+                                {visibleShowerCount}
+                              </Text>
+                            ) : null}
+                            <Text style={styles.showerIcon}>🚿</Text>
+                          </View>
+                        ) : null}
+                        {index % 6 === 0 ||
+                        index === visibleHistory.length - 1 ? (
+                          <Text style={styles.hourLabel}>{hourLabel}</Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </View>
               </View>
             </View>
-          </View>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -397,6 +438,13 @@ const styles = StyleSheet.create({
   legendTop: { color: "#ffad4d", fontSize: 12, fontWeight: "900" },
   legendBottom: { color: "#36f4d4", fontSize: 12, fontWeight: "900" },
   legendHeating: { color: "#ffe58f", fontSize: 12, fontWeight: "900" },
+  emptyHistoryText: {
+    color: "#cfe9ff",
+    fontSize: 15,
+    fontWeight: "900",
+    paddingVertical: 48,
+    textAlign: "center",
+  },
   chartRow: { flexDirection: "row", gap: 8 },
   scaleColumn: {
     height: chartHeight,
