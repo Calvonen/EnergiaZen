@@ -14,6 +14,20 @@ type TemperatureHistoryPoint = {
   showers: number;
 };
 
+type DailyTemperatureHistoryPoint = {
+  timestamp: string;
+  dayKey: string;
+  dayLabel: string;
+  topTempAvg: number;
+  bottomTempAvg: number;
+  topTempMax: number;
+  topTempMin: number;
+  bottomTempMax: number;
+  bottomTempMin: number;
+  heating: boolean;
+  showers: number;
+};
+
 type TankReadingRow = {
   created_at?: string | null;
   top_temp?: number | null;
@@ -32,8 +46,32 @@ const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   timeZone: "Europe/Helsinki",
 });
 
+const dayKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
+const weekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
+  timeZone: "Europe/Helsinki",
+  weekday: "short",
+});
+
 function formatHour(timestamp: string) {
   return `${timeFormatter.format(new Date(timestamp)).replace(".", "")}:00`;
+}
+
+function formatWeekday(timestamp: string) {
+  const weekday = weekdayFormatter
+    .format(new Date(timestamp))
+    .replace(".", "");
+
+  return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+}
+
+function roundTemperature(value: number) {
+  return Math.round(value * 10) / 10;
 }
 
 function getHistoryRangeStart(selectedTab: HistoryTab) {
@@ -68,10 +106,18 @@ function getVisibleHistory(
   selectedTab: HistoryTab,
 ) {
   if (selectedTab === "24h") {
-    return history;
+    return history.length > 144
+      ? sampleHistoryByLatestPoint(history, 10 * 60 * 1000)
+      : history;
   }
 
-  const bucketSizeMs = 6 * 60 * 60 * 1000;
+  return getDailyHistory(history);
+}
+
+function sampleHistoryByLatestPoint(
+  history: TemperatureHistoryPoint[],
+  bucketSizeMs: number,
+) {
   const latestPointByBucket = new Map<number, TemperatureHistoryPoint>();
 
   history.forEach((point) => {
@@ -85,6 +131,93 @@ function getVisibleHistory(
       new Date(firstPoint.timestamp).getTime() -
       new Date(secondPoint.timestamp).getTime(),
   );
+}
+
+function getDailyHistory(history: TemperatureHistoryPoint[]) {
+  const dailyBuckets = new Map<
+    string,
+    {
+      bottomTempMax: number;
+      bottomTempMin: number;
+      bottomTempSum: number;
+      count: number;
+      heating: boolean;
+      showers: number;
+      timestamp: string;
+      topTempMax: number;
+      topTempMin: number;
+      topTempSum: number;
+    }
+  >();
+
+  history.forEach((point) => {
+    const dayKey = dayKeyFormatter.format(new Date(point.timestamp));
+    const bucket = dailyBuckets.get(dayKey);
+
+    if (!bucket) {
+      dailyBuckets.set(dayKey, {
+        bottomTempMax: point.bottomTemp,
+        bottomTempMin: point.bottomTemp,
+        bottomTempSum: point.bottomTemp,
+        count: 1,
+        heating: point.heating,
+        showers: point.showers,
+        timestamp: point.timestamp,
+        topTempMax: point.topTemp,
+        topTempMin: point.topTemp,
+        topTempSum: point.topTemp,
+      });
+      return;
+    }
+
+    bucket.bottomTempMax = Math.max(bucket.bottomTempMax, point.bottomTemp);
+    bucket.bottomTempMin = Math.min(bucket.bottomTempMin, point.bottomTemp);
+    bucket.bottomTempSum += point.bottomTemp;
+    bucket.count += 1;
+    bucket.heating = bucket.heating || point.heating;
+    bucket.showers = Math.max(bucket.showers, point.showers);
+    bucket.topTempMax = Math.max(bucket.topTempMax, point.topTemp);
+    bucket.topTempMin = Math.min(bucket.topTempMin, point.topTemp);
+    bucket.topTempSum += point.topTemp;
+  });
+
+  return [...dailyBuckets.entries()]
+    .map(([dayKey, bucket]) => ({
+      bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
+      bottomTempMax: bucket.bottomTempMax,
+      bottomTempMin: bucket.bottomTempMin,
+      dayKey,
+      dayLabel: formatWeekday(bucket.timestamp),
+      heating: bucket.heating,
+      showers: bucket.showers,
+      timestamp: bucket.timestamp,
+      topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
+      topTempMax: bucket.topTempMax,
+      topTempMin: bucket.topTempMin,
+    }))
+    .sort(
+      (firstPoint, secondPoint) =>
+        new Date(firstPoint.timestamp).getTime() -
+        new Date(secondPoint.timestamp).getTime(),
+    );
+}
+
+function getTopTemperature(
+  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+) {
+  return "topTempAvg" in point ? point.topTempAvg : point.topTemp;
+}
+
+function getBottomTemperature(
+  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+) {
+  return "bottomTempAvg" in point ? point.bottomTempAvg : point.bottomTemp;
+}
+
+function isDailyHistoryPoint(
+  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+): point is DailyTemperatureHistoryPoint {
+  return "topTempAvg" in point;
 }
 
 function getPointBottom(temperature: number) {
@@ -132,6 +265,7 @@ export default function TemperatureHistoryScreen() {
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30], []);
   const showerTotal = latestPoint?.showers ?? 0;
+  const isDailyView = selectedTab === "7d";
 
   return (
     <View style={styles.screen}>
@@ -185,7 +319,7 @@ export default function TemperatureHistoryScreen() {
                 Ylä °C
               </Text>
               <Text style={styles.topSummaryValue}>
-                {latestPoint?.topTemp ?? "--"}
+                {latestPoint ? getTopTemperature(latestPoint) : "--"}
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -193,7 +327,7 @@ export default function TemperatureHistoryScreen() {
                 Ala °C
               </Text>
               <Text style={styles.bottomSummaryValue}>
-                {latestPoint?.bottomTemp ?? "--"}
+                {latestPoint ? getBottomTemperature(latestPoint) : "--"}
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -205,8 +339,12 @@ export default function TemperatureHistoryScreen() {
           </View>
 
           <View style={styles.legendRow}>
-            <Text style={styles.legendTop}>● Yläanturi</Text>
-            <Text style={styles.legendBottom}>● Ala-anturi</Text>
+            <Text style={styles.legendTop}>
+              ● Yläanturi {isDailyView ? "keskiarvo" : ""}
+            </Text>
+            <Text style={styles.legendBottom}>
+              ● Ala-anturi {isDailyView ? "keskiarvo" : ""}
+            </Text>
             <Text style={styles.legendHeating}>🔥 Lämmitys päällä</Text>
           </View>
 
@@ -215,88 +353,132 @@ export default function TemperatureHistoryScreen() {
               Ei vielä lämpöhistoriaa.
             </Text>
           ) : (
-            <View style={styles.chartRow}>
-              <View style={styles.scaleColumn}>
-                {chartScale.map((value) => (
-                  <Text key={value} style={styles.scaleText}>
-                    {value}°
-                  </Text>
-                ))}
-              </View>
+            <>
+              <View style={styles.chartRow}>
+                <View style={styles.scaleColumn}>
+                  {chartScale.map((value) => (
+                    <Text key={value} style={styles.scaleText}>
+                      {value}°
+                    </Text>
+                  ))}
+                </View>
 
-              <View style={styles.chartArea}>
-                {chartScale.map((value) => (
-                  <View
-                    key={value}
-                    style={[styles.gridLine, { bottom: getPointBottom(value) }]}
-                  />
-                ))}
+                <View style={styles.chartArea}>
+                  {chartScale.map((value) => (
+                    <View
+                      key={value}
+                      style={[
+                        styles.gridLine,
+                        { bottom: getPointBottom(value) },
+                      ]}
+                    />
+                  ))}
 
-                <View style={styles.historyColumns}>
-                  {visibleHistory.map((point, index) => {
-                    const hourLabel = formatHour(point.timestamp);
-                    const previousPoint = visibleHistory[index - 1];
-                    const visibleShowerCount = Math.max(
-                      point.showers - (previousPoint?.showers ?? 0),
-                      0,
-                    );
+                  <View style={styles.historyColumns}>
+                    {visibleHistory.map((point, index) => {
+                      const topTemperature = getTopTemperature(point);
+                      const bottomTemperature = getBottomTemperature(point);
+                      const xAxisLabel = isDailyHistoryPoint(point)
+                        ? point.dayLabel
+                        : formatHour(point.timestamp);
+                      const previousPoint = visibleHistory[index - 1];
+                      const visibleShowerCount = isDailyHistoryPoint(point)
+                        ? point.showers
+                        : Math.max(
+                            point.showers - (previousPoint?.showers ?? 0),
+                            0,
+                          );
 
-                    return (
-                      <View
-                        accessibilityLabel={`${hourLabel}, yläanturi ${point.topTemp} astetta, ala-anturi ${point.bottomTemp} astetta${point.heating ? ", lämmitys päällä" : ""}${visibleShowerCount > 0 ? `, ${visibleShowerCount} suihkua` : ""}`}
-                        key={point.timestamp}
-                        style={styles.historyColumn}
-                      >
-                        {point.heating ? (
-                          <>
-                            <View style={styles.heatingShade} />
-                            <Text
+                      return (
+                        <View
+                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}${visibleShowerCount > 0 ? `, ${visibleShowerCount} suihkua` : ""}`}
+                          key={
+                            isDailyHistoryPoint(point)
+                              ? point.dayKey
+                              : point.timestamp
+                          }
+                          style={styles.historyColumn}
+                        >
+                          {point.heating ? (
+                            <>
+                              <View style={styles.heatingShade} />
+                              <Text
+                                accessibilityElementsHidden
+                                importantForAccessibility="no-hide-descendants"
+                                style={styles.heatingIcon}
+                              >
+                                🔥
+                              </Text>
+                            </>
+                          ) : null}
+                          <View
+                            style={[
+                              styles.tempDot,
+                              styles.topTempDot,
+                              { bottom: getPointBottom(topTemperature) },
+                            ]}
+                          />
+                          <View
+                            style={[
+                              styles.tempDot,
+                              styles.bottomTempDot,
+                              { bottom: getPointBottom(bottomTemperature) },
+                            ]}
+                          />
+                          {visibleShowerCount > 0 ? (
+                            <View
                               accessibilityElementsHidden
                               importantForAccessibility="no-hide-descendants"
-                              style={styles.heatingIcon}
+                              style={styles.showerMarker}
                             >
-                              🔥
-                            </Text>
-                          </>
-                        ) : null}
-                        <View
-                          style={[
-                            styles.tempDot,
-                            styles.topTempDot,
-                            { bottom: getPointBottom(point.topTemp) },
-                          ]}
-                        />
-                        <View
-                          style={[
-                            styles.tempDot,
-                            styles.bottomTempDot,
-                            { bottom: getPointBottom(point.bottomTemp) },
-                          ]}
-                        />
-                        {visibleShowerCount > 0 ? (
-                          <View
-                            accessibilityElementsHidden
-                            importantForAccessibility="no-hide-descendants"
-                            style={styles.showerMarker}
-                          >
-                            {visibleShowerCount > 1 ? (
-                              <Text style={styles.showerCount}>
-                                {visibleShowerCount}
-                              </Text>
-                            ) : null}
-                            <Text style={styles.showerIcon}>🚿</Text>
-                          </View>
-                        ) : null}
-                        {index % 6 === 0 ||
-                        index === visibleHistory.length - 1 ? (
-                          <Text style={styles.hourLabel}>{hourLabel}</Text>
-                        ) : null}
-                      </View>
-                    );
-                  })}
+                              {visibleShowerCount > 1 ? (
+                                <Text style={styles.showerCount}>
+                                  {visibleShowerCount}
+                                </Text>
+                              ) : null}
+                              <Text style={styles.showerIcon}>🚿</Text>
+                            </View>
+                          ) : null}
+                          {isDailyView ||
+                          index % 6 === 0 ||
+                          index === visibleHistory.length - 1 ? (
+                            <Text style={styles.hourLabel}>{xAxisLabel}</Text>
+                          ) : null}
+                        </View>
+                      );
+                    })}
+                  </View>
                 </View>
               </View>
-            </View>
+
+              {isDailyView ? (
+                <View style={styles.dailyDetailsGrid}>
+                  {visibleHistory.filter(isDailyHistoryPoint).map((point) => (
+                    <View
+                      key={`${point.dayKey}-details`}
+                      style={styles.dailyDetailCard}
+                    >
+                      <Text style={styles.dailyDetailDay}>
+                        {point.dayLabel}
+                      </Text>
+                      <Text style={styles.dailyDetailLine}>
+                        ▲ ylä {point.topTempMax}° / ▼ ylä {point.topTempMin}°
+                      </Text>
+                      <Text style={styles.dailyDetailLine}>
+                        ▲ ala {point.bottomTempMax}° / ▼ ala{" "}
+                        {point.bottomTempMin}°
+                      </Text>
+                      <Text style={styles.dailyDetailLine}>
+                        🚿 {point.showers}
+                      </Text>
+                      {point.heating ? (
+                        <Text style={styles.dailyHeatingLine}>🔥 Lämmitys</Text>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </>
           )}
         </View>
       </ScrollView>
@@ -548,6 +730,39 @@ const styles = StyleSheet.create({
     position: "absolute",
     textAlign: "center",
     width: 36,
+  },
+  dailyDetailsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14,
+  },
+  dailyDetailCard: {
+    backgroundColor: "rgba(5,8,22,0.42)",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 14,
+    borderWidth: 1,
+    flexBasis: "31%",
+    flexGrow: 1,
+    padding: 9,
+  },
+  dailyDetailDay: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 5,
+  },
+  dailyDetailLine: {
+    color: "#cfe9ff",
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 14,
+  },
+  dailyHeatingLine: {
+    color: "#ffe58f",
+    fontSize: 10,
+    fontWeight: "900",
+    lineHeight: 14,
   },
   placeholderCard: {
     alignItems: "center",
