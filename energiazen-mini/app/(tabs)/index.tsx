@@ -36,6 +36,7 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -760,11 +761,13 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.cardsRow}>
-          <Animated.View
+          <AnimatedPressable
             accessibilityLabel={`Varaajan lämpötila ${displayedTopTemp} astetta${
               isTankHeating ? ", lämmitys käynnissä" : ""
             }${loading ? ", tietoja haetaan" : ""}`}
-            style={[
+            accessibilityRole="button"
+            onPress={() => router.push("/history")}
+            style={({ pressed }) => [
               styles.metricCard,
               styles.temperatureCard,
               {
@@ -773,6 +776,7 @@ export default function HomeScreen() {
                 shadowColor: temperatureCardTheme.shadowColor,
               },
               isTankHeating && heatingCardPulseStyle,
+              pressed && styles.pressedMetricCard,
             ]}
           >
             <View style={styles.cardLabelRow}>
@@ -829,11 +833,13 @@ export default function HomeScreen() {
                 )}
               </View>
             </View>
-          </Animated.View>
+          </AnimatedPressable>
 
-          <View
+          <Pressable
             accessibilityLabel={`Lämmintä vettä ${warmWaterShowersAccessibilityLabel}`}
-            style={[
+            accessibilityRole="button"
+            onPress={() => router.push("/settings")}
+            style={({ pressed }) => [
               styles.metricCard,
               styles.waterCard,
               {
@@ -841,6 +847,7 @@ export default function HomeScreen() {
                 borderColor: warmWaterCardTheme.borderColor,
                 shadowColor: warmWaterCardTheme.shadowColor,
               },
+              pressed && styles.pressedMetricCard,
             ]}
           >
             <View style={styles.cardLabelRow}>
@@ -872,7 +879,7 @@ export default function HomeScreen() {
               <View style={[styles.tankBubble, styles.tankBubbleThree]} />
             </View>
             <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
-          </View>
+          </Pressable>
         </View>
 
         <View style={styles.chartCard}>
@@ -1294,6 +1301,9 @@ const styles = StyleSheet.create({
   },
   waterCard: {
     shadowOpacity: 0.42,
+  },
+  pressedMetricCard: {
+    opacity: 0.82,
   },
   cardLabelRow: {
     alignItems: "center",
