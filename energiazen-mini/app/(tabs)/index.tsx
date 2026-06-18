@@ -772,27 +772,29 @@ export default function HomeScreen() {
               </View>
               <View style={styles.temperatureStack}>
                 <View style={styles.temperatureValues}>
-                  <View style={styles.temperatureTopSensor}>
-                    <Text style={styles.temperatureValue}>
-                      {displayedTopTemp}°
-                    </Text>
-                  </View>
-                  <View style={styles.temperatureBottomSensor}>
-                    <Text style={styles.temperatureLowValue}>
-                      {displayedBottomTemp}°
-                    </Text>
-                    {tankUpdatedStatus ? (
-                      <Text
-                        style={[
-                          styles.tankUpdatedText,
-                          tankUpdatedStatus.isWarning &&
-                            styles.tankUpdatedWarningText,
-                        ]}
-                      >
-                        {tankUpdatedStatus.text}
+                  <View style={styles.temperatureReadings}>
+                    <View style={styles.temperatureTopSensor}>
+                      <Text style={styles.temperatureValue}>
+                        {displayedTopTemp}°
                       </Text>
-                    ) : null}
+                    </View>
+                    <View style={styles.temperatureBottomSensor}>
+                      <Text style={styles.temperatureLowValue}>
+                        {displayedBottomTemp}°
+                      </Text>
+                    </View>
                   </View>
+                  {tankUpdatedStatus ? (
+                    <Text
+                      style={[
+                        styles.tankUpdatedText,
+                        tankUpdatedStatus.isWarning &&
+                          styles.tankUpdatedWarningText,
+                      ]}
+                    >
+                      {tankUpdatedStatus.text}
+                    </Text>
+                  ) : null}
                 </View>
                 <View style={styles.temperatureBar} accessible={false}>
                   {Array.from({ length: temperatureBarSegmentCount }).map(
@@ -1286,41 +1288,55 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   tankUpdatedText: {
+    alignSelf: "stretch",
     color: "rgba(247,251,255,0.62)",
     fontSize: 9,
     fontWeight: "800",
     lineHeight: 11,
-    marginTop: 7,
-    textAlign: "center",
+    marginBottom: 1,
+    textAlign: "left",
   },
   tankUpdatedWarningText: {
     color: "#ffcf7a",
   },
   temperatureStack: {
-    alignItems: "center",
-    bottom: 14,
+    alignItems: "stretch",
+    alignSelf: "stretch",
+    flex: 1,
     flexDirection: "row",
-    gap: 8,
-    position: "absolute",
-    right: 10,
-    top: 40,
+    gap: 10,
+    justifyContent: "space-between",
+    marginRight: -5,
+    marginTop: 8,
+    paddingRight: 2,
+    width: "100%",
   },
   temperatureValues: {
     alignSelf: "stretch",
-    position: "relative",
-    width: 76,
+    flex: 1,
+    justifyContent: "space-between",
+    minWidth: 0,
+    paddingBottom: 1,
+    paddingLeft: 4,
+    paddingRight: 4,
+  },
+  temperatureReadings: {
+    alignItems: "flex-start",
+    flex: 1,
+    justifyContent: "space-around",
+    paddingBottom: 14,
+    paddingTop: 2,
   },
   temperatureTopSensor: {
-    alignItems: "flex-end",
-    position: "absolute",
-    right: 4,
-    top: 0,
+    alignItems: "flex-start",
+    alignSelf: "center",
+    marginRight: 6,
   },
   temperatureBottomSensor: {
-    alignItems: "center",
-    bottom: 0,
-    position: "absolute",
-    right: 0,
+    alignItems: "flex-start",
+    alignSelf: "center",
+    marginLeft: 4,
+    marginTop: 12,
   },
   temperatureValue: {
     color: "#ffffff",
@@ -1338,6 +1354,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     gap: 4,
     justifyContent: "space-between",
+    marginRight: 0,
   },
   temperatureBarSegment: {
     borderRadius: 7,
