@@ -70,6 +70,13 @@ type SpotPriceResponse = {
   PriceWithTax?: number | null;
 };
 
+type StoredElectricityPrice = {
+  start_time?: string | null;
+  end_time?: string | null;
+  price_no_tax?: number | null;
+  price_with_tax?: number | null;
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -303,6 +310,31 @@ function getChartScaleValues(maxPrice: number) {
   );
 }
 
+function toHourlyPrice(
+  startDate: string,
+  price: number,
+  endDate?: string | null,
+) {
+  const date = new Date(startDate);
+  const parsedEndDate = endDate ? new Date(endDate) : null;
+
+  if (Number.isNaN(date.getTime()) || Number.isNaN(price)) {
+    return null;
+  }
+
+  return {
+    date,
+    startDate,
+    endDate:
+      parsedEndDate && !Number.isNaN(parsedEndDate.getTime())
+        ? parsedEndDate
+        : new Date(date.getTime() + 60 * 60 * 1000),
+    hourLabel: formatHourLabel(date),
+    id: startDate,
+    price: normalizePriceToCents(price),
+  } satisfies HourlyPrice;
+}
+
 function normalizeSpotPrices(data: SpotPriceResponse[]) {
   return data
     .map((item) => {
@@ -319,14 +351,22 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
         return null;
       }
 
-      return {
-        date,
-        startDate: startDate ?? date.toISOString(),
-        endDate: new Date(date.getTime() + 60 * 60 * 1000),
-        hourLabel: formatHourLabel(date),
-        id: startDate ?? date.toISOString(),
-        price: normalizePriceToCents(price),
-      } satisfies HourlyPrice;
+      return toHourlyPrice(startDate ?? date.toISOString(), price);
+    })
+    .filter((item): item is HourlyPrice => item !== null)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
+  return data
+    .map((item) => {
+      const price = item.price_with_tax ?? item.price_no_tax;
+
+      if (!item.start_time || typeof price !== "number") {
+        return null;
+      }
+
+      return toHourlyPrice(item.start_time, price, item.end_time);
     })
     .filter((item): item is HourlyPrice => item !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -563,40 +603,67 @@ export default function HomeScreen() {
 
   const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch(priceApiUrl, {
-        signal,
-      });
+      const yesterdayKey = getDateKeyOffset(-1);
+      const todayKey = getDateKeyOffset(0);
+      const tomorrowKey = getDateKeyOffset(1);
+
+      const [
+        { data: storedYesterdayData, error: storedYesterdayError },
+        response,
+      ] = await Promise.all([
+        supabase
+          .from("electricity_prices")
+          .select("start_time,end_time,price_no_tax,price_with_tax")
+          .eq("region", "FI")
+          .eq("price_date", yesterdayKey)
+          .order("start_time", { ascending: true }),
+        fetch(priceApiUrl, {
+          signal,
+        }),
+      ]);
 
       if (!response.ok) {
         throw new Error("Price fetch failed");
       }
 
+      if (storedYesterdayError) {
+        console.warn(
+          "Stored yesterday prices unavailable",
+          storedYesterdayError,
+        );
+      }
+
       const data = (await response.json()) as SpotPriceResponse[];
-      const prices = normalizeSpotPrices(data);
-      const yesterdayKey = getDateKeyOffset(-1);
-      const todayKey = getDateKeyOffset(0);
-      const tomorrowKey = getDateKeyOffset(1);
-      const yesterdayCount = prices.filter(
-        (item) => getFinnishDateKey(item.startDate) === yesterdayKey,
-      ).length;
-      const todayCount = prices.filter(
+      const apiPrices = normalizeSpotPrices(data);
+      const currentApiPrices = apiPrices.filter((item) => {
+        const dateKey = getFinnishDateKey(item.startDate);
+
+        return dateKey === todayKey || dateKey === tomorrowKey;
+      });
+      const storedYesterdayPrices = normalizeStoredElectricityPrices(
+        (storedYesterdayData ?? []) as StoredElectricityPrice[],
+      ).filter((item) => getFinnishDateKey(item.startDate) === yesterdayKey);
+      const prices = [...storedYesterdayPrices, ...currentApiPrices].sort(
+        (a, b) => a.date.getTime() - b.date.getTime(),
+      );
+      const todayCount = currentApiPrices.filter(
         (item) => getFinnishDateKey(item.startDate) === todayKey,
       ).length;
-      const tomorrowCount = prices.filter(
+      const tomorrowCount = currentApiPrices.filter(
         (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
       ).length;
 
       console.log("Spot prices debug", {
         totalPricesCount: prices.length,
-        yesterdayCount,
+        storedYesterdayCount: storedYesterdayPrices.length,
         todayCount,
         tomorrowCount,
         firstStartDate: prices[0]?.startDate ?? null,
         lastStartDate: prices[prices.length - 1]?.startDate ?? null,
       });
 
-      if (prices.length === 0) {
-        throw new Error("Hourly prices missing from response");
+      if (currentApiPrices.length === 0) {
+        throw new Error("Current hourly prices missing from response");
       }
 
       setHourlyPrices(prices);
@@ -946,7 +1013,7 @@ export default function HomeScreen() {
                   {selectedDay === "tomorrow"
                     ? "Huomisen hinnat eivät ole vielä saatavilla"
                     : selectedDay === "yesterday"
-                      ? "Ei hintatietoja eiliselle"
+                      ? "Ei tallennettua hintadataa eiliselle"
                       : "Hintakaaviota ei saatavilla"}
                 </Text>
               </View>
