@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
@@ -41,6 +41,7 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
+const emptyHistory: TemperatureHistoryPoint[] = [];
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -435,10 +436,19 @@ function getChartLineSegments(
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
-  const [history, setHistory] = useState<TemperatureHistoryPoint[]>([]);
+  const [historyState, setHistoryState] = useState<{
+    points: TemperatureHistoryPoint[];
+    tab: HistoryTab;
+  }>({ points: [], tab: "24h" });
   const [chartWidth, setChartWidth] = useState(0);
+  const fetchRequestIdRef = useRef(0);
 
   const fetchHistory = useCallback(async () => {
+    const fetchRequestId = fetchRequestIdRef.current + 1;
+    fetchRequestIdRef.current = fetchRequestId;
+
+    setHistoryState({ points: [], tab: selectedTab });
+
     const { data, error } = await supabase
       .from("tank_readings")
       .select("created_at, top_temp, bottom_temp, heating, showers")
@@ -447,7 +457,13 @@ export default function TemperatureHistoryScreen() {
 
     if (error) {
       console.warn("Lämpöhistorian haku epäonnistui", error.message);
-      setHistory([]);
+      if (fetchRequestId === fetchRequestIdRef.current) {
+        setHistoryState({ points: [], tab: selectedTab });
+      }
+      return;
+    }
+
+    if (fetchRequestId !== fetchRequestIdRef.current) {
       return;
     }
 
@@ -455,13 +471,17 @@ export default function TemperatureHistoryScreen() {
       .map(mapTankReadingToHistoryPoint)
       .filter((point): point is TemperatureHistoryPoint => point !== null);
 
-    setHistory(points);
+    setHistoryState({ points, tab: selectedTab });
   }, [selectedTab]);
 
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
 
+  const history = useMemo(
+    () => (historyState.tab === selectedTab ? historyState.points : emptyHistory),
+    [historyState, selectedTab],
+  );
   const visibleHistory = useMemo(
     () => getVisibleHistory(history, selectedTab),
     [history, selectedTab],
@@ -539,7 +559,11 @@ export default function TemperatureHistoryScreen() {
                 accessibilityLabel={`Näytä ${tab === "24h" ? "24 tunnin" : "7 vuorokauden"} lämpöhistoria`}
                 accessibilityRole="button"
                 key={tab}
-                onPress={() => setSelectedTab(tab)}
+                onPress={() => {
+                  fetchRequestIdRef.current += 1;
+                  setHistoryState({ points: [], tab });
+                  setSelectedTab(tab);
+                }}
                 style={[styles.tabButton, isActive && styles.activeTabButton]}
               >
                 <Text
