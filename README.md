@@ -1,4 +1,4 @@
-# EnergiaZen Mini
+# EnergyZen Mini
 
 Pörssisähkön ja lämminvesivaraajan ohjaussovellus.
 
@@ -38,7 +38,7 @@ sovellus on valmis käytettäväksi.
 1. Asenna Expo Go
 2. Käynnistä projekti Codespacesissa
 3. Avaa Expo Go
-4. Valitse EnergiaZen viimeisimmistä projekteista
+4. Valitse EnergyZen viimeisimmistä projekteista
 
 Jos sovellus ei yhdisty:
 

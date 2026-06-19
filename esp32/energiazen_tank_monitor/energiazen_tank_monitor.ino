@@ -6,7 +6,7 @@
 #include <HTTPClient.h>
 #include <U8g2lib.h>
 
-// EnergiaZen standalone ESP32 tank monitor
+// EnergyZen standalone ESP32 tank monitor
 // Hardware:
 // - ESP32 Dev Module
 // - 2 x DS18B20 on GPIO4
@@ -161,7 +161,7 @@ void updateDisplay() {
 
   display.setFont(u8g2_font_helvB14_tf);
   display.setCursor(0, 16);
-  display.print("EnergiaZen");
+  display.print("EnergyZen");
 
   display.setFont(u8g2_font_helvB18_tf);
   display.setCursor(0, 40);
