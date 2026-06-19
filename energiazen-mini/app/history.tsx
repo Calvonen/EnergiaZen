@@ -114,14 +114,14 @@ function getVisibleHistory(
 ) {
   if (selectedTab === "24h") {
     return history.length > 144
-      ? sampleHistoryByLatestPoint(history, 10 * 60 * 1000)
+      ? downsampleHistoryByLatestPoint(history, 10 * 60 * 1000)
       : history;
   }
 
   return getDailyHistory(history);
 }
 
-function sampleHistoryByLatestPoint(
+function downsampleHistoryByLatestPoint(
   history: TemperatureHistoryPoint[],
   bucketSizeMs: number,
 ) {
@@ -497,22 +497,6 @@ export default function TemperatureHistoryScreen() {
   );
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDailyView = selectedTab === "7d";
-  const groupedDayKeys = useMemo(() => {
-    const historyDataLength = history.length;
-    const selectedHistoryTab = selectedTab;
-
-    return isDailyView && historyDataLength >= 0 && selectedHistoryTab === "7d"
-      ? chartData.filter(isDailyHistoryPoint).map((point) => point.dayKey)
-      : [];
-  }, [chartData, history, isDailyView, selectedTab]);
-  const renderWeekdayLabels = useMemo(() => {
-    const historyDataLength = history.length;
-    const chartDataLength = chartData.length;
-
-    return historyDataLength >= 0 && chartDataLength >= 0
-      ? groupedDayKeys.map(formatWeekdayFromDayKey)
-      : [];
-  }, [chartData, groupedDayKeys, history]);
   const lineSegments = useMemo(
     () => getChartLineSegments(chartData, chartWidth, timeAxis),
     [chartData, chartWidth, timeAxis],
@@ -523,9 +507,8 @@ export default function TemperatureHistoryScreen() {
       return;
     }
 
-    console.log("Lämpöhistoria 7 vrk render groupedDayKeys", groupedDayKeys);
-    console.log("Lämpöhistoria 7 vrk render weekday labels", renderWeekdayLabels);
-  }, [groupedDayKeys, isDailyView, renderWeekdayLabels]);
+    console.log("7 vrk final render data", chartData);
+  }, [chartData, isDailyView]);
 
   return (
     <View style={styles.screen}>
@@ -608,7 +591,9 @@ export default function TemperatureHistoryScreen() {
 
           {chartData.length === 0 ? (
             <Text style={styles.emptyHistoryText}>
-              Ei vielä lämpöhistoriaa.
+              {isDailyView
+                ? "Ei vielä 7 vrk lämpöhistoriaa."
+                : "Ei vielä lämpöhistoriaa."}
             </Text>
           ) : (
             <>
