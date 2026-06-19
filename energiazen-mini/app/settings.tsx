@@ -7,7 +7,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,14 +24,18 @@ type SettingsRow = {
   key?: EditableSettingKey;
   label: string;
   value: string;
-  inputKey?: "tankVolumeLiters" | "maxTankTemperature";
-  unit?: string;
 };
 
-const editableSettings = {
+type EditableSettingOption = {
+  max?: number;
+  min?: number;
+  options?: readonly number[];
+  unit: string;
+};
+
+const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
   tankVolumeLiters: {
-    max: 1000,
-    min: 50,
+    options: [200, 250, 290, 300, 500],
     unit: "l",
   },
   heatingHoursPerDay: {
@@ -51,35 +54,24 @@ const editableSettings = {
     unit: "suihkua",
   },
   maxTankTemperature: {
-    max: 90,
-    min: 40,
+    options: [55, 60, 65, 70, 75, 80],
     unit: "°C",
   },
-} as const satisfies Record<
-  EditableSettingKey,
-  { max: number; min: number; unit: string }
->;
+};
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
-  const [tankVolumeInput, setTankVolumeInput] = useState(
-    String(defaultSettings.tankVolumeLiters),
-  );
-  const [maxTemperatureInput, setMaxTemperatureInput] = useState(
-    String(defaultSettings.maxTankTemperature),
-  );
 
   const settingsRows = useMemo(
     (): SettingsRow[] => [
       {
         accent: "#36f4d4",
-        inputKey: "tankVolumeLiters",
+        key: "tankVolumeLiters",
         label: "Varaajan koko",
-        unit: "l",
-        value: String(settings.tankVolumeLiters),
+        value: `${settings.tankVolumeLiters} l`,
       },
       {
         accent: "#54eaa0",
@@ -100,10 +92,9 @@ export default function SettingsScreen() {
       },
       {
         accent: "#ff5f6d",
-        inputKey: "maxTankTemperature",
+        key: "maxTankTemperature",
         label: "Maksimilämpö",
-        unit: "°C",
-        value: String(settings.maxTankTemperature),
+        value: `${settings.maxTankTemperature} °C`,
       },
       {
         accent: "#b889ff",
@@ -122,9 +113,10 @@ export default function SettingsScreen() {
     ? editableSettings[selectedSettingKey]
     : null;
   const selectedSettingOptions = selectedSetting
-    ? Array.from(
-        { length: selectedSetting.max - selectedSetting.min + 1 },
-        (_, index) => selectedSetting.min + index,
+    ? selectedSetting.options ??
+      Array.from(
+        { length: selectedSetting.max! - selectedSetting.min! + 1 },
+        (_, index) => selectedSetting.min! + index,
       )
     : [];
 
@@ -134,8 +126,6 @@ export default function SettingsScreen() {
     loadSettings().then((storedSettings) => {
       if (isMounted) {
         setSettings(storedSettings);
-        setTankVolumeInput(String(storedSettings.tankVolumeLiters));
-        setMaxTemperatureInput(String(storedSettings.maxTankTemperature));
       }
     });
 
@@ -155,28 +145,6 @@ export default function SettingsScreen() {
       [key]: value,
     });
     setSelectedSettingKey(null);
-  };
-
-  const updateNumericInputSetting = (
-    key: "tankVolumeLiters" | "maxTankTemperature",
-    value: string,
-  ) => {
-    const numericValue = Number(value);
-    const range = editableSettings[key];
-
-    if (
-      value.trim() === "" ||
-      !Number.isFinite(numericValue) ||
-      numericValue < range.min ||
-      numericValue > range.max
-    ) {
-      return;
-    }
-
-    saveUpdatedSettings({
-      ...settings,
-      [key]: Math.round(numericValue),
-    });
   };
 
   useFocusEffect(
@@ -235,15 +203,6 @@ export default function SettingsScreen() {
 
         <View style={styles.settingsCard}>
           {settingsRows.map((row) => {
-            const inputKey = row.inputKey;
-            const inputValue =
-              inputKey === "tankVolumeLiters"
-                ? tankVolumeInput
-                : maxTemperatureInput;
-            const setInputValue =
-              inputKey === "tankVolumeLiters"
-                ? setTankVolumeInput
-                : setMaxTemperatureInput;
             const rowContent = (
               <>
                 <View
@@ -253,24 +212,7 @@ export default function SettingsScreen() {
                   ]}
                 />
                 <Text style={styles.settingLabel}>{row.label}</Text>
-                {inputKey ? (
-                  <View style={styles.settingInputGroup}>
-                    <TextInput
-                      accessibilityLabel={row.label}
-                      keyboardType="number-pad"
-                      onBlur={() => updateNumericInputSetting(inputKey, inputValue)}
-                      onChangeText={(value) => {
-                        setInputValue(value);
-                        updateNumericInputSetting(inputKey, value);
-                      }}
-                      style={styles.settingInput}
-                      value={inputValue}
-                    />
-                    <Text style={styles.settingValue}>{row.unit}</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.settingValue}>{row.value}</Text>
-                )}
+                <Text style={styles.settingValue}>{row.value}</Text>
               </>
             );
 
