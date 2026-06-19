@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -24,9 +25,16 @@ type SettingsRow = {
   key?: EditableSettingKey;
   label: string;
   value: string;
+  inputKey?: "tankVolumeLiters" | "maxTankTemperature";
+  unit?: string;
 };
 
 const editableSettings = {
+  tankVolumeLiters: {
+    max: 1000,
+    min: 50,
+    unit: "l",
+  },
   heatingHoursPerDay: {
     max: 6,
     min: 1,
@@ -42,6 +50,11 @@ const editableSettings = {
     min: 3,
     unit: "suihkua",
   },
+  maxTankTemperature: {
+    max: 90,
+    min: 40,
+    unit: "°C",
+  },
 } as const satisfies Record<
   EditableSettingKey,
   { max: number; min: number; unit: string }
@@ -52,13 +65,21 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
+  const [tankVolumeInput, setTankVolumeInput] = useState(
+    String(defaultSettings.tankVolumeLiters),
+  );
+  const [maxTemperatureInput, setMaxTemperatureInput] = useState(
+    String(defaultSettings.maxTankTemperature),
+  );
 
   const settingsRows = useMemo(
     (): SettingsRow[] => [
       {
         accent: "#36f4d4",
+        inputKey: "tankVolumeLiters",
         label: "Varaajan koko",
-        value: `${settings.tankVolumeLiters} l`,
+        unit: "l",
+        value: String(settings.tankVolumeLiters),
       },
       {
         accent: "#54eaa0",
@@ -79,8 +100,10 @@ export default function SettingsScreen() {
       },
       {
         accent: "#ff5f6d",
+        inputKey: "maxTankTemperature",
         label: "Maksimilämpö",
-        value: `${settings.maxTankTemperature} °C`,
+        unit: "°C",
+        value: String(settings.maxTankTemperature),
       },
       {
         accent: "#b889ff",
@@ -111,6 +134,8 @@ export default function SettingsScreen() {
     loadSettings().then((storedSettings) => {
       if (isMounted) {
         setSettings(storedSettings);
+        setTankVolumeInput(String(storedSettings.tankVolumeLiters));
+        setMaxTemperatureInput(String(storedSettings.maxTankTemperature));
       }
     });
 
@@ -130,6 +155,28 @@ export default function SettingsScreen() {
       [key]: value,
     });
     setSelectedSettingKey(null);
+  };
+
+  const updateNumericInputSetting = (
+    key: "tankVolumeLiters" | "maxTankTemperature",
+    value: string,
+  ) => {
+    const numericValue = Number(value);
+    const range = editableSettings[key];
+
+    if (
+      value.trim() === "" ||
+      !Number.isFinite(numericValue) ||
+      numericValue < range.min ||
+      numericValue > range.max
+    ) {
+      return;
+    }
+
+    saveUpdatedSettings({
+      ...settings,
+      [key]: Math.round(numericValue),
+    });
   };
 
   useFocusEffect(
@@ -188,6 +235,15 @@ export default function SettingsScreen() {
 
         <View style={styles.settingsCard}>
           {settingsRows.map((row) => {
+            const inputKey = row.inputKey;
+            const inputValue =
+              inputKey === "tankVolumeLiters"
+                ? tankVolumeInput
+                : maxTemperatureInput;
+            const setInputValue =
+              inputKey === "tankVolumeLiters"
+                ? setTankVolumeInput
+                : setMaxTemperatureInput;
             const rowContent = (
               <>
                 <View
@@ -197,7 +253,24 @@ export default function SettingsScreen() {
                   ]}
                 />
                 <Text style={styles.settingLabel}>{row.label}</Text>
-                <Text style={styles.settingValue}>{row.value}</Text>
+                {inputKey ? (
+                  <View style={styles.settingInputGroup}>
+                    <TextInput
+                      accessibilityLabel={row.label}
+                      keyboardType="number-pad"
+                      onBlur={() => updateNumericInputSetting(inputKey, inputValue)}
+                      onChangeText={(value) => {
+                        setInputValue(value);
+                        updateNumericInputSetting(inputKey, value);
+                      }}
+                      style={styles.settingInput}
+                      value={inputValue}
+                    />
+                    <Text style={styles.settingValue}>{row.unit}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.settingValue}>{row.value}</Text>
+                )}
               </>
             );
 
@@ -421,6 +494,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     fontWeight: "800",
+  },
+  settingInputGroup: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    marginLeft: "auto",
+  },
+  settingInput: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "800",
+    minWidth: 44,
+    padding: 0,
+    textAlign: "right",
   },
   settingValue: {
     color: "#ffffff",
