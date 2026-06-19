@@ -32,7 +32,7 @@ export default function Login() {
       }}
     >
       <Text style={{ fontSize: 28, fontWeight: "bold" }}>
-        EnergiaZen
+        EnergyZen
       </Text>
 
       <TextInput

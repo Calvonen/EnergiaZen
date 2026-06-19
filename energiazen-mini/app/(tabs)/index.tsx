@@ -791,7 +791,7 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>⚡ EnergiaZen</Text>
+          <Text style={styles.title}>EnergyZen</Text>
           <Text style={styles.subtitle}>Älykäs varaajan ohjaus</Text>
           {userEmail ? (
             <Text style={styles.loggedInText}>Kirjautunut: {userEmail}</Text>
