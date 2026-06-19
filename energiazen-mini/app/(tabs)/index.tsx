@@ -37,6 +37,7 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
+const storedElectricityPriceColumns = "start_date,end_date,price_with_tax";
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -73,7 +74,6 @@ type SpotPriceResponse = {
 type StoredElectricityPrice = {
   start_date?: string | null;
   end_date?: string | null;
-  price_no_tax?: number | null;
   price_with_tax?: number | null;
 };
 
@@ -360,7 +360,7 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
 function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
   return data
     .map((item) => {
-      const price = item.price_with_tax ?? item.price_no_tax;
+      const price = item.price_with_tax;
 
       if (!item.start_date || typeof price !== "number") {
         return null;
@@ -613,7 +613,7 @@ export default function HomeScreen() {
       ] = await Promise.all([
         supabase
           .from("electricity_prices")
-          .select("start_date,end_date,price_no_tax,price_with_tax")
+          .select(storedElectricityPriceColumns)
           .eq("region", "FI")
           .eq("price_date", yesterdayKey)
           .order("start_date", { ascending: true }),
@@ -626,10 +626,16 @@ export default function HomeScreen() {
         throw new Error("Price fetch failed");
       }
 
+      const storedYesterdayFetchSucceeded = !storedYesterdayError;
+
       if (storedYesterdayError) {
         console.warn(
           "Stored yesterday prices unavailable",
-          storedYesterdayError,
+          {
+            columns: storedElectricityPriceColumns,
+            error: storedYesterdayError,
+            storedYesterdayFetchSucceeded,
+          },
         );
       }
 
@@ -656,6 +662,8 @@ export default function HomeScreen() {
       console.log("Spot prices debug", {
         totalPricesCount: prices.length,
         storedYesterdayCount: storedYesterdayPrices.length,
+        storedYesterdayColumns: storedElectricityPriceColumns,
+        storedYesterdayFetchSucceeded,
         todayCount,
         tomorrowCount,
         firstStartDate: prices[0]?.startDate ?? null,

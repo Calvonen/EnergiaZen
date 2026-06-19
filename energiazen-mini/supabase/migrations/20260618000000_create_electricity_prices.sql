@@ -4,7 +4,6 @@ create table if not exists public.electricity_prices (
   price_date date not null,
   start_date timestamptz not null,
   end_date timestamptz not null,
-  price_no_tax numeric(10, 4),
   price_with_tax numeric(10, 4) not null,
   source text not null default 'spot-hinta.fi',
   created_at timestamptz not null default now(),
