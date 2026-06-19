@@ -3,13 +3,13 @@ create table if not exists public.electricity_prices (
   region text not null default 'FI',
   price_date date not null,
   start_date timestamptz not null,
-  end_time timestamptz not null,
+  end_date timestamptz not null,
   price_no_tax numeric(10, 4),
   price_with_tax numeric(10, 4) not null,
   source text not null default 'spot-hinta.fi',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint electricity_prices_time_order check (end_time > start_date),
+  constraint electricity_prices_time_order check (end_date > start_date),
   constraint electricity_prices_one_price_per_hour unique (region, start_date)
 );
 
