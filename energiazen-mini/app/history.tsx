@@ -64,10 +64,10 @@ function formatHour(timestamp: string) {
   return `${timeFormatter.format(new Date(timestamp)).replace(".", "")}:00`;
 }
 
-function formatWeekday(timestamp: string) {
-  const weekday = weekdayFormatter
-    .format(new Date(timestamp))
-    .replace(".", "");
+function formatWeekdayFromDayKey(dayKey: string) {
+  const [day, month, year] = dayKey.split(".").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  const weekday = weekdayFormatter.format(date).replace(".", "");
 
   return weekday.charAt(0).toUpperCase() + weekday.slice(1);
 }
@@ -200,19 +200,28 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
   });
 
   return [...dailyBuckets.entries()]
-    .map(([dayKey, bucket]) => ({
-      bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
-      bottomTempMax: bucket.bottomTempMax,
-      bottomTempMin: bucket.bottomTempMin,
-      dayKey,
-      dayLabel: formatWeekday(bucket.timestamp),
-      heating: bucket.heating,
-      showers: bucket.showers,
-      timestamp: bucket.timestamp,
-      topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
-      topTempMax: bucket.topTempMax,
-      topTempMin: bucket.topTempMin,
-    }))
+    .map(([dayKey, bucket]) => {
+      const weekdayLabel = formatWeekdayFromDayKey(dayKey);
+
+      console.log("Lämpöhistoria 7 vrk päivä", {
+        dayKey,
+        weekdayLabel,
+      });
+
+      return {
+        bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
+        bottomTempMax: bucket.bottomTempMax,
+        bottomTempMin: bucket.bottomTempMin,
+        dayKey,
+        dayLabel: weekdayLabel,
+        heating: bucket.heating,
+        showers: bucket.showers,
+        timestamp: bucket.timestamp,
+        topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
+        topTempMax: bucket.topTempMax,
+        topTempMin: bucket.topTempMin,
+      };
+    })
     .sort(
       (firstPoint, secondPoint) =>
         new Date(firstPoint.timestamp).getTime() -
