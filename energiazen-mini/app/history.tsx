@@ -60,7 +60,7 @@ const weekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
   weekday: "short",
 });
 
-function formatHour(timestamp: string) {
+function formatHour(timestamp: string | number) {
   return `${timeFormatter.format(new Date(timestamp)).replace(".", "")}:00`;
 }
 
@@ -290,6 +290,65 @@ function shouldShowXAxisLabel(
   );
 }
 
+type TimeAxis = {
+  endTime: number;
+  labels: { label: string; timestamp: number }[];
+  startTime: number;
+};
+
+function getTimeAxis(history: TemperatureHistoryPoint[]): TimeAxis | null {
+  if (history.length === 0) {
+    return null;
+  }
+
+  const firstCreatedAt = new Date(history[0].timestamp).getTime();
+  const lastCreatedAt = new Date(history[history.length - 1].timestamp).getTime();
+  const now = Date.now();
+  const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+  const startTime =
+    firstCreatedAt > twentyFourHoursAgo ? firstCreatedAt : twentyFourHoursAgo;
+  const endTime = lastCreatedAt || now;
+  const labelCount = 5;
+  const duration = Math.max(endTime - startTime, 1);
+  const labels = Array.from({ length: labelCount }, (_, index) => {
+    const timestamp = startTime + (duration * index) / (labelCount - 1);
+
+    return {
+      label: formatHour(timestamp),
+      timestamp,
+    };
+  });
+
+  console.log("Lämpöhistoria 24 h debug", {
+    "24h first created_at": history[0].timestamp,
+    "24h last created_at": history[history.length - 1].timestamp,
+    "24h axis start": new Date(startTime).toISOString(),
+    "24h axis end": new Date(endTime).toISOString(),
+  });
+
+  return { endTime, labels, startTime };
+}
+
+function getTimeAxisX(
+  timestamp: string | number,
+  axis: TimeAxis,
+  chartWidth: number,
+) {
+  if (chartWidth <= 0) {
+    return 0;
+  }
+
+  const duration = Math.max(axis.endTime - axis.startTime, 1);
+  const pointTime =
+    typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
+  const ratio = Math.min(
+    Math.max((pointTime - axis.startTime) / duration, 0),
+    1,
+  );
+
+  return ratio * chartWidth;
+}
+
 type ChartLineSegment = {
   angle: string;
   color: string;
@@ -302,11 +361,13 @@ type ChartLineSegment = {
 function getChartLineSegments(
   history: (TemperatureHistoryPoint | DailyTemperatureHistoryPoint)[],
   chartWidth: number,
+  timeAxis: TimeAxis | null,
 ) {
   if (history.length < 2 || chartWidth <= 0) {
     return [];
   }
 
+  const isDailyView = history.some(isDailyHistoryPoint);
   const columnWidth = chartWidth / history.length;
   const segments: ChartLineSegment[] = [];
 
@@ -320,8 +381,14 @@ function getChartLineSegments(
       getTopTemperature(nextPoint),
       getBottomTemperature(nextPoint),
     );
-    const currentX = columnWidth * index + columnWidth / 2;
-    const nextX = columnWidth * (index + 1) + columnWidth / 2;
+    const currentX =
+      !isDailyView && timeAxis
+        ? getTimeAxisX(point.timestamp, timeAxis, chartWidth)
+        : columnWidth * index + columnWidth / 2;
+    const nextX =
+      !isDailyView && timeAxis
+        ? getTimeAxisX(nextPoint.timestamp, timeAxis, chartWidth)
+        : columnWidth * (index + 1) + columnWidth / 2;
 
     [
       {
@@ -393,11 +460,18 @@ export default function TemperatureHistoryScreen() {
     [history, selectedTab],
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
+  const timeAxis = useMemo(
+    () =>
+      selectedTab === "24h"
+        ? getTimeAxis(visibleHistory as TemperatureHistoryPoint[])
+        : null,
+    [selectedTab, visibleHistory],
+  );
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDailyView = selectedTab === "7d";
   const lineSegments = useMemo(
-    () => getChartLineSegments(visibleHistory, chartWidth),
-    [chartWidth, visibleHistory],
+    () => getChartLineSegments(visibleHistory, chartWidth, timeAxis),
+    [chartWidth, timeAxis, visibleHistory],
   );
 
   return (
@@ -526,9 +600,14 @@ export default function TemperatureHistoryScreen() {
                     {visibleHistory.map((point, index) => {
                       const topTemperature = getTopTemperature(point);
                       const bottomTemperature = getBottomTemperature(point);
-                      const xAxisLabel = isDailyHistoryPoint(point)
+                      const isDailyPoint = isDailyHistoryPoint(point);
+                      const xAxisLabel = isDailyPoint
                         ? point.dayLabel
                         : formatHour(point.timestamp);
+                      const pointLeft =
+                        !isDailyPoint && timeAxis
+                          ? getTimeAxisX(point.timestamp, timeAxis, chartWidth) - 12
+                          : undefined;
                       const { bottomBottom, topBottom } = getAdjustedPointBottoms(
                         topTemperature,
                         bottomTemperature,
@@ -538,11 +617,17 @@ export default function TemperatureHistoryScreen() {
                         <View
                           accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}`}
                           key={
-                            isDailyHistoryPoint(point)
-                              ? point.dayKey
-                              : point.timestamp
+                            isDailyPoint ? point.dayKey : point.timestamp
                           }
-                          style={styles.historyColumn}
+                          style={[
+                            styles.historyColumn,
+                            !isDailyPoint && {
+                              flex: 0,
+                              left: pointLeft,
+                              position: "absolute",
+                              width: 24,
+                            },
+                          ]}
                         >
                           {point.heating ? (
                             <>
@@ -570,7 +655,8 @@ export default function TemperatureHistoryScreen() {
                               { bottom: bottomBottom },
                             ]}
                           />
-                          {shouldShowXAxisLabel(
+                          {isDailyView &&
+                          shouldShowXAxisLabel(
                             index,
                             visibleHistory.length,
                             isDailyView,
@@ -581,6 +667,22 @@ export default function TemperatureHistoryScreen() {
                       );
                     })}
                   </View>
+
+                  {!isDailyView && timeAxis
+                    ? timeAxis.labels.map(({ label, timestamp }) => (
+                        <Text
+                          key={timestamp}
+                          style={[
+                            styles.hourLabel,
+                            {
+                              left: getTimeAxisX(timestamp, timeAxis, chartWidth) - 18,
+                            },
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      ))
+                    : null}
                 </View>
               </View>
 
