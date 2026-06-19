@@ -445,6 +445,7 @@ export default function TemperatureHistoryScreen() {
   const [chartWidth, setChartWidth] = useState(0);
   const [isFetchingHistory, setIsFetchingHistory] = useState(false);
   const fetchRequestIdRef = useRef(0);
+  const previousSelectedTabRef = useRef(selectedTab);
 
   const fetchHistory = useCallback(async () => {
     const fetchRequestId = fetchRequestIdRef.current + 1;
@@ -481,31 +482,61 @@ export default function TemperatureHistoryScreen() {
   }, [selectedTab]);
 
   useEffect(() => {
+    if (previousSelectedTabRef.current === selectedTab) {
+      return;
+    }
+
+    previousSelectedTabRef.current = selectedTab;
+    setHistoryState({ points: [], tab: selectedTab });
+    console.log("Lämpöhistoria tab vaihtui", {
+      chartDataLength: 0,
+      groupedDayKeys: [],
+      selectedTab,
+    });
+  }, [selectedTab]);
+
+  useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
 
-  const history = useMemo(() => {
+  const stateTab = historyState.tab;
+  const historyData = useMemo(() => {
     console.log("7 vrk source A", {
       points: historyState.points.length,
       source: "historyData",
-      stateTab: historyState.tab,
+      stateTab,
       selectedTab,
     });
 
-    return historyState.tab === selectedTab ? historyState.points : emptyHistory;
-  }, [historyState, selectedTab]);
-  const visibleHistory = useMemo(() => {
+    if (selectedTab !== stateTab) {
+      return emptyHistory;
+    }
+
+    return historyState.points;
+  }, [historyState.points, selectedTab, stateTab]);
+  const chartData = useMemo(() => {
     console.log("7 vrk source B", {
-      historyLength: history.length,
+      historyLength: historyData.length,
       source: "chartData",
+      stateTab,
       selectedTab,
     });
 
-    return getVisibleHistory(history, selectedTab);
-  }, [history, selectedTab]);
-  const hasEnoughDailyHistory =
-    selectedTab !== "7d" || visibleHistory.length >= minimumDailyHistoryDays;
-  const chartData = hasEnoughDailyHistory ? visibleHistory : emptyHistory;
+    if (selectedTab !== stateTab) {
+      console.log("7 vrk source B", {
+        groupedDayKeys: [],
+        reason: "tab mismatch",
+        source: "groupedDayKeys",
+      });
+      return emptyHistory;
+    }
+
+    const visibleHistory = getVisibleHistory(historyData, selectedTab);
+    const hasEnoughDailyHistory =
+      selectedTab !== "7d" || visibleHistory.length >= minimumDailyHistoryDays;
+
+    return hasEnoughDailyHistory ? visibleHistory : emptyHistory;
+  }, [historyData, selectedTab, stateTab]);
   const latestPoint = chartData[chartData.length - 1];
   const timeAxis = useMemo(
     () =>
@@ -522,6 +553,13 @@ export default function TemperatureHistoryScreen() {
   );
 
   useEffect(() => {
+    console.log("Lämpöhistoria debug", {
+      chartDataLength: chartData.length,
+      historyDataLength: historyData.length,
+      selectedTab,
+      stateTab,
+    });
+
     if (!isDailyView) {
       return;
     }
@@ -529,7 +567,7 @@ export default function TemperatureHistoryScreen() {
     if (!isFetchingHistory) {
       console.log("7 vrk final render data", chartData);
     }
-  }, [chartData, isDailyView, isFetchingHistory]);
+  }, [chartData, historyData, isDailyView, isFetchingHistory, selectedTab, stateTab]);
 
   return (
     <View style={styles.screen}>
