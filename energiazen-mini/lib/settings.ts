@@ -3,27 +3,31 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 export const defaultTankTemperature = 58;
 
 export const defaultSettings = {
-  tankVolumeLiters: 300,
+  tankVolumeLiters: 290,
   heatingHoursPerDay: 3,
   priceDifferenceThresholdCents: 2,
   minTankTemperature: 20,
-  maxTankTemperature: 80,
+  maxTankTemperature: 70,
   showersAtMaxTemperature: 6,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
 
 export type EditableSettingKey =
+  | "tankVolumeLiters"
   | "heatingHoursPerDay"
   | "priceDifferenceThresholdCents"
-  | "showersAtMaxTemperature";
+  | "showersAtMaxTemperature"
+  | "maxTankTemperature";
 
 export const settingsStorageKey = "energiazen:settings";
 
 const editableSettingRanges = {
+  tankVolumeLiters: { max: 1000, min: 50 },
   heatingHoursPerDay: { max: 6, min: 1 },
   priceDifferenceThresholdCents: { max: 10, min: 0 },
   showersAtMaxTemperature: { max: 10, min: 3 },
+  maxTankTemperature: { max: 90, min: 40 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
 
 function clampSettingValue(key: EditableSettingKey, value: number) {
@@ -39,6 +43,10 @@ export function normalizeSettings(
   return {
     ...defaultSettings,
     ...settings,
+    tankVolumeLiters:
+      typeof settings.tankVolumeLiters === "number"
+        ? clampSettingValue("tankVolumeLiters", settings.tankVolumeLiters)
+        : defaultSettings.tankVolumeLiters,
     heatingHoursPerDay:
       typeof settings.heatingHoursPerDay === "number"
         ? clampSettingValue("heatingHoursPerDay", settings.heatingHoursPerDay)
@@ -57,6 +65,10 @@ export function normalizeSettings(
             settings.showersAtMaxTemperature,
           )
         : defaultSettings.showersAtMaxTemperature,
+    maxTankTemperature:
+      typeof settings.maxTankTemperature === "number"
+        ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
+        : defaultSettings.maxTankTemperature,
   };
 }
 

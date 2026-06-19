@@ -109,18 +109,47 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
   });
 }
 
-function getTemperatureColor(temperature: number) {
-  const normalizedTemperature = clamp(temperature, 20, 80);
+function getTemperatureColor(
+  temperature: number,
+  settings = defaultSettings,
+) {
+  const normalizedTemperature = clamp(
+    temperature,
+    settings.minTankTemperature,
+    settings.maxTankTemperature,
+  );
 
-  if (normalizedTemperature <= 40) {
-    return mixColors("#188bff", "#26d9a2", (normalizedTemperature - 20) / 20);
+  const temperatureRange = Math.max(
+    settings.maxTankTemperature - settings.minTankTemperature,
+    1,
+  );
+  const greenThreshold = settings.minTankTemperature + temperatureRange / 3;
+  const orangeThreshold = settings.minTankTemperature + (temperatureRange * 2) / 3;
+
+  if (normalizedTemperature <= greenThreshold) {
+    return mixColors(
+      "#188bff",
+      "#26d9a2",
+      (normalizedTemperature - settings.minTankTemperature) /
+        (greenThreshold - settings.minTankTemperature),
+    );
   }
 
-  if (normalizedTemperature <= 60) {
-    return mixColors("#26d9a2", "#ff9b30", (normalizedTemperature - 40) / 20);
+  if (normalizedTemperature <= orangeThreshold) {
+    return mixColors(
+      "#26d9a2",
+      "#ff9b30",
+      (normalizedTemperature - greenThreshold) /
+        (orangeThreshold - greenThreshold),
+    );
   }
 
-  return mixColors("#ff9b30", "#ff3f46", (normalizedTemperature - 60) / 20);
+  return mixColors(
+    "#ff9b30",
+    "#ff3f46",
+    (normalizedTemperature - orangeThreshold) /
+      (settings.maxTankTemperature - orangeThreshold),
+  );
 }
 
 function getTemperatureBarSegmentColor(
@@ -128,13 +157,14 @@ function getTemperatureBarSegmentColor(
   segmentCount: number,
   topTemperature: number,
   bottomTemperature: number,
+  settings = defaultSettings,
 ) {
   const ratioFromTop =
     segmentCount <= 1 ? 0 : segmentIndex / (segmentCount - 1);
   const segmentTemperature =
     topTemperature + (bottomTemperature - topTemperature) * ratioFromTop;
 
-  return getTemperatureColor(segmentTemperature);
+  return getTemperatureColor(segmentTemperature, settings);
 }
 
 function getTemperatureCardTheme(
@@ -160,18 +190,22 @@ function getTemperatureCardTheme(
 
 function getWarmWaterEstimate(temperature: number, settings = defaultSettings) {
   // Tämä on alustava arvio. Myöhemmin malli kalibroidaan todellisen suihkukäyttäytymisen perusteella.
+  const tankVolumeRatio =
+    settings.tankVolumeLiters / defaultSettings.tankVolumeLiters;
+  const showersAtMaxTemperature =
+    settings.showersAtMaxTemperature * tankVolumeRatio;
   const showersLeft =
     ((temperature - settings.minTankTemperature) /
       (settings.maxTankTemperature - settings.minTankTemperature)) *
-    settings.showersAtMaxTemperature;
+    showersAtMaxTemperature;
   const clampedShowersLeft = clamp(
     showersLeft,
     0,
-    settings.showersAtMaxTemperature,
+    showersAtMaxTemperature,
   );
 
   return {
-    fillRatio: clampedShowersLeft / settings.showersAtMaxTemperature,
+    fillRatio: clampedShowersLeft / showersAtMaxTemperature,
     showersLeft: clampedShowersLeft,
   };
 }
@@ -903,6 +937,7 @@ export default function HomeScreen() {
                         temperatureBarSegmentCount,
                         tankTemperature,
                         bottomTemp ?? defaultTankTemperature,
+                        settings,
                       );
 
                       return (
