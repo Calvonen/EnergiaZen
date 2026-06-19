@@ -6,7 +6,7 @@ export const defaultSettings = {
   tankVolumeLiters: 290,
   heatingHoursPerDay: 3,
   priceDifferenceThresholdCents: 2,
-  minTankTemperature: 20,
+  minTankTemperature: 10,
   maxTankTemperature: 70,
   showersAtMaxTemperature: 6,
 };
@@ -43,6 +43,7 @@ export function normalizeSettings(
   return {
     ...defaultSettings,
     ...settings,
+    minTankTemperature: defaultSettings.minTankTemperature,
     tankVolumeLiters:
       typeof settings.tankVolumeLiters === "number"
         ? clampSettingValue("tankVolumeLiters", settings.tankVolumeLiters)
