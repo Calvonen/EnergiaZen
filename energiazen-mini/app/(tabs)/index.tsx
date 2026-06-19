@@ -37,7 +37,7 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
-const storedElectricityPriceColumns = "start_date,end_date,price_with_tax";
+const storedElectricityPriceColumns = "start_date,end_date,price";
 
 const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
   today: [],
@@ -74,7 +74,7 @@ type SpotPriceResponse = {
 type StoredElectricityPrice = {
   start_date?: string | null;
   end_date?: string | null;
-  price_with_tax?: number | null;
+  price?: number | null;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -394,7 +394,7 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
 function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
   return data
     .map((item) => {
-      const price = item.price_with_tax;
+      const price = item.price;
 
       if (!item.start_date || typeof price !== "number") {
         return null;
