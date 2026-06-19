@@ -42,6 +42,7 @@ const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
 const emptyHistory: TemperatureHistoryPoint[] = [];
+const minimumDailyHistoryDays = 2;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -141,6 +142,7 @@ function downsampleHistoryByLatestPoint(
 }
 
 function getDailyHistory(history: TemperatureHistoryPoint[]) {
+  console.log("7 vrk source B", { source: "groupedDayKeys", historyLength: history.length });
   const dailyBuckets = new Map<
     string,
     {
@@ -441,13 +443,15 @@ export default function TemperatureHistoryScreen() {
     tab: HistoryTab;
   }>({ points: [], tab: "24h" });
   const [chartWidth, setChartWidth] = useState(0);
+  const [isFetchingHistory, setIsFetchingHistory] = useState(false);
   const fetchRequestIdRef = useRef(0);
 
   const fetchHistory = useCallback(async () => {
     const fetchRequestId = fetchRequestIdRef.current + 1;
     fetchRequestIdRef.current = fetchRequestId;
 
-    setHistoryState({ points: [], tab: selectedTab });
+    setIsFetchingHistory(true);
+    console.log("7 vrk source A", { source: "tank_readings", tab: selectedTab });
 
     const { data, error } = await supabase
       .from("tank_readings")
@@ -459,6 +463,7 @@ export default function TemperatureHistoryScreen() {
       console.warn("Lämpöhistorian haku epäonnistui", error.message);
       if (fetchRequestId === fetchRequestIdRef.current) {
         setHistoryState({ points: [], tab: selectedTab });
+        setIsFetchingHistory(false);
       }
       return;
     }
@@ -472,21 +477,35 @@ export default function TemperatureHistoryScreen() {
       .filter((point): point is TemperatureHistoryPoint => point !== null);
 
     setHistoryState({ points, tab: selectedTab });
+    setIsFetchingHistory(false);
   }, [selectedTab]);
 
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
 
-  const history = useMemo(
-    () => (historyState.tab === selectedTab ? historyState.points : emptyHistory),
-    [historyState, selectedTab],
-  );
-  const visibleHistory = useMemo(
-    () => getVisibleHistory(history, selectedTab),
-    [history, selectedTab],
-  );
-  const chartData = visibleHistory;
+  const history = useMemo(() => {
+    console.log("7 vrk source A", {
+      points: historyState.points.length,
+      source: "historyData",
+      stateTab: historyState.tab,
+      selectedTab,
+    });
+
+    return historyState.tab === selectedTab ? historyState.points : emptyHistory;
+  }, [historyState, selectedTab]);
+  const visibleHistory = useMemo(() => {
+    console.log("7 vrk source B", {
+      historyLength: history.length,
+      source: "chartData",
+      selectedTab,
+    });
+
+    return getVisibleHistory(history, selectedTab);
+  }, [history, selectedTab]);
+  const hasEnoughDailyHistory =
+    selectedTab !== "7d" || visibleHistory.length >= minimumDailyHistoryDays;
+  const chartData = hasEnoughDailyHistory ? visibleHistory : emptyHistory;
   const latestPoint = chartData[chartData.length - 1];
   const timeAxis = useMemo(
     () =>
@@ -507,8 +526,10 @@ export default function TemperatureHistoryScreen() {
       return;
     }
 
-    console.log("7 vrk final render data", chartData);
-  }, [chartData, isDailyView]);
+    if (!isFetchingHistory) {
+      console.log("7 vrk final render data", chartData);
+    }
+  }, [chartData, isDailyView, isFetchingHistory]);
 
   return (
     <View style={styles.screen}>
@@ -544,7 +565,7 @@ export default function TemperatureHistoryScreen() {
                 key={tab}
                 onPress={() => {
                   fetchRequestIdRef.current += 1;
-                  setHistoryState({ points: [], tab });
+                  setIsFetchingHistory(true);
                   setSelectedTab(tab);
                 }}
                 style={[styles.tabButton, isActive && styles.activeTabButton]}
@@ -591,9 +612,11 @@ export default function TemperatureHistoryScreen() {
 
           {chartData.length === 0 ? (
             <Text style={styles.emptyHistoryText}>
-              {isDailyView
-                ? "Ei vielä 7 vrk lämpöhistoriaa."
-                : "Ei vielä lämpöhistoriaa."}
+              {isFetchingHistory
+                ? "Ladataan lämpöhistoriaa..."
+                : isDailyView
+                  ? "Ei vielä 7 vrk lämpöhistoriaa"
+                  : "Ei vielä lämpöhistoriaa."}
             </Text>
           ) : (
             <>
