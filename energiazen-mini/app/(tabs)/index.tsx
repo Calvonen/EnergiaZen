@@ -77,6 +77,12 @@ type StoredElectricityPrice = {
   price?: number | null;
 };
 
+type ElectricityPriceInsert = {
+  start_date: string;
+  end_date: string;
+  price: number;
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -391,6 +397,63 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
+async function saveElectricityPrices(prices: HourlyPrice[]) {
+  try {
+    const electricityPrices = prices.map((item) => ({
+      start_date: item.startDate,
+      end_date: item.endDate.toISOString(),
+      price: item.price,
+    })) satisfies ElectricityPriceInsert[];
+
+    if (electricityPrices.length === 0) {
+      console.log("Saved electricity prices: 0 rows");
+      console.log("Existing electricity prices: 0 rows");
+      return;
+    }
+
+    const startDates = electricityPrices.map((item) => item.start_date);
+    const { data: existingPrices, error: existingPricesError } = await supabase
+      .from("electricity_prices")
+      .select("start_date")
+      .in("start_date", startDates);
+
+    if (existingPricesError) {
+      console.warn(
+        "Electricity price duplicate check failed",
+        existingPricesError,
+      );
+      return;
+    }
+
+    const existingStartDates = new Set(
+      ((existingPrices ?? []) as Pick<StoredElectricityPrice, "start_date">[])
+        .map((item) =>
+          item.start_date ? new Date(item.start_date).toISOString() : null,
+        )
+        .filter((startDate): startDate is string => Boolean(startDate)),
+    );
+    const newElectricityPrices = electricityPrices.filter(
+      (item) => !existingStartDates.has(new Date(item.start_date).toISOString()),
+    );
+
+    if (newElectricityPrices.length > 0) {
+      const { error: insertError } = await supabase
+        .from("electricity_prices")
+        .insert(newElectricityPrices);
+
+      if (insertError) {
+        console.warn("Electricity price save failed", insertError);
+        return;
+      }
+    }
+
+    console.log(`Saved electricity prices: ${newElectricityPrices.length} rows`);
+    console.log(`Existing electricity prices: ${existingStartDates.size} rows`);
+  } catch (error) {
+    console.warn("Electricity price save failed", error);
+  }
+}
+
 function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
   return data
     .map((item) => {
@@ -678,6 +741,7 @@ export default function HomeScreen() {
 
         return dateKey === todayKey || dateKey === tomorrowKey;
       });
+      await saveElectricityPrices(currentApiPrices);
       const storedYesterdayPrices = normalizeStoredElectricityPrices(
         (storedYesterdayData ?? []) as StoredElectricityPrice[],
       ).filter((item) => getFinnishDateKey(item.startDate) === yesterdayKey);
