@@ -373,6 +373,13 @@ function getChartLineSegments(
 
   history.slice(0, -1).forEach((point, index) => {
     const nextPoint = history[index + 1];
+    const currentPointKey = isDailyHistoryPoint(point)
+      ? point.dayKey
+      : point.timestamp;
+    const nextPointKey = isDailyHistoryPoint(nextPoint)
+      ? nextPoint.dayKey
+      : nextPoint.timestamp;
+    const segmentKeySuffix = `${currentPointKey}-${nextPointKey}`;
     const currentTemps = getAdjustedPointBottoms(
       getTopTemperature(point),
       getBottomTemperature(point),
@@ -414,7 +421,7 @@ function getChartLineSegments(
       segments.push({
         angle,
         color,
-        key: `${keyPrefix}-${index}`,
+        key: `${keyPrefix}-${segmentKeySuffix}`,
         left: currentX,
         top: currentY,
         width,
@@ -459,20 +466,46 @@ export default function TemperatureHistoryScreen() {
     () => getVisibleHistory(history, selectedTab),
     [history, selectedTab],
   );
-  const latestPoint = visibleHistory[visibleHistory.length - 1];
+  const chartData = visibleHistory;
+  const latestPoint = chartData[chartData.length - 1];
   const timeAxis = useMemo(
     () =>
       selectedTab === "24h"
-        ? getTimeAxis(visibleHistory as TemperatureHistoryPoint[])
+        ? getTimeAxis(chartData as TemperatureHistoryPoint[])
         : null,
-    [selectedTab, visibleHistory],
+    [chartData, selectedTab],
   );
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDailyView = selectedTab === "7d";
+  const groupedDayKeys = useMemo(() => {
+    const historyDataLength = history.length;
+    const selectedHistoryTab = selectedTab;
+
+    return isDailyView && historyDataLength >= 0 && selectedHistoryTab === "7d"
+      ? chartData.filter(isDailyHistoryPoint).map((point) => point.dayKey)
+      : [];
+  }, [chartData, history, isDailyView, selectedTab]);
+  const renderWeekdayLabels = useMemo(() => {
+    const historyDataLength = history.length;
+    const chartDataLength = chartData.length;
+
+    return historyDataLength >= 0 && chartDataLength >= 0
+      ? groupedDayKeys.map(formatWeekdayFromDayKey)
+      : [];
+  }, [chartData, groupedDayKeys, history]);
   const lineSegments = useMemo(
-    () => getChartLineSegments(visibleHistory, chartWidth, timeAxis),
-    [chartWidth, timeAxis, visibleHistory],
+    () => getChartLineSegments(chartData, chartWidth, timeAxis),
+    [chartData, chartWidth, timeAxis],
   );
+
+  useEffect(() => {
+    if (!isDailyView) {
+      return;
+    }
+
+    console.log("Lämpöhistoria 7 vrk render groupedDayKeys", groupedDayKeys);
+    console.log("Lämpöhistoria 7 vrk render weekday labels", renderWeekdayLabels);
+  }, [groupedDayKeys, isDailyView, renderWeekdayLabels]);
 
   return (
     <View style={styles.screen}>
@@ -549,7 +582,7 @@ export default function TemperatureHistoryScreen() {
             <Text style={styles.legendHeating}>🔥 Lämmitys päällä</Text>
           </View>
 
-          {visibleHistory.length === 0 ? (
+          {chartData.length === 0 ? (
             <Text style={styles.emptyHistoryText}>
               Ei vielä lämpöhistoriaa.
             </Text>
@@ -597,7 +630,7 @@ export default function TemperatureHistoryScreen() {
                   ))}
 
                   <View style={styles.historyColumns}>
-                    {visibleHistory.map((point, index) => {
+                    {chartData.map((point, index) => {
                       const topTemperature = getTopTemperature(point);
                       const bottomTemperature = getBottomTemperature(point);
                       const isDailyPoint = isDailyHistoryPoint(point);
@@ -658,7 +691,7 @@ export default function TemperatureHistoryScreen() {
                           {isDailyView &&
                           shouldShowXAxisLabel(
                             index,
-                            visibleHistory.length,
+                            chartData.length,
                             isDailyView,
                           ) ? (
                             <Text style={styles.hourLabel}>{xAxisLabel}</Text>
@@ -688,7 +721,7 @@ export default function TemperatureHistoryScreen() {
 
               {isDailyView ? (
                 <View style={styles.dailyDetailsGrid}>
-                  {visibleHistory.filter(isDailyHistoryPoint).map((point) => (
+                  {chartData.filter(isDailyHistoryPoint).map((point) => (
                     <View
                       key={`${point.dayKey}-details`}
                       style={styles.dailyDetailCard}
