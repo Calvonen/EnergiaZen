@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
+import { defaultSettings } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 
 type HistoryTab = "24h" | "7d";
@@ -37,7 +38,7 @@ type TankReadingRow = {
 };
 
 const chartHeight = 190;
-const chartMinTemp = 30;
+const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
 
@@ -367,7 +368,7 @@ export default function TemperatureHistoryScreen() {
     [history, selectedTab],
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
-  const chartScale = useMemo(() => [70, 60, 50, 40, 30], []);
+  const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDailyView = selectedTab === "7d";
   const lineSegments = useMemo(
     () => getChartLineSegments(visibleHistory, chartWidth),
