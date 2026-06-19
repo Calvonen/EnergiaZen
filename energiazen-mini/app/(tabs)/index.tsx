@@ -71,7 +71,7 @@ type SpotPriceResponse = {
 };
 
 type StoredElectricityPrice = {
-  start_time?: string | null;
+  start_date?: string | null;
   end_time?: string | null;
   price_no_tax?: number | null;
   price_with_tax?: number | null;
@@ -362,11 +362,11 @@ function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
     .map((item) => {
       const price = item.price_with_tax ?? item.price_no_tax;
 
-      if (!item.start_time || typeof price !== "number") {
+      if (!item.start_date || typeof price !== "number") {
         return null;
       }
 
-      return toHourlyPrice(item.start_time, price, item.end_time);
+      return toHourlyPrice(item.start_date, price, item.end_time);
     })
     .filter((item): item is HourlyPrice => item !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -613,10 +613,10 @@ export default function HomeScreen() {
       ] = await Promise.all([
         supabase
           .from("electricity_prices")
-          .select("start_time,end_time,price_no_tax,price_with_tax")
+          .select("start_date,end_time,price_no_tax,price_with_tax")
           .eq("region", "FI")
           .eq("price_date", yesterdayKey)
-          .order("start_time", { ascending: true }),
+          .order("start_date", { ascending: true }),
         fetch(priceApiUrl, {
           signal,
         }),
