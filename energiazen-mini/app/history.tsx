@@ -48,11 +48,11 @@ const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   timeZone: "Europe/Helsinki",
 });
 
-const dayKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
-  day: "2-digit",
-  month: "2-digit",
+const finnishDayKeyFormatter = new Intl.DateTimeFormat("fi-FI", {
   timeZone: "Europe/Helsinki",
   year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
 });
 
 const weekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -70,6 +70,10 @@ function formatWeekday(timestamp: string) {
     .replace(".", "");
 
   return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+}
+
+function getFinnishDayKey(timestamp: string) {
+  return finnishDayKeyFormatter.format(new Date(timestamp));
 }
 
 function roundTemperature(value: number) {
@@ -153,7 +157,7 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
   >();
 
   history.forEach((point) => {
-    const dayKey = dayKeyFormatter.format(new Date(point.timestamp));
+    const dayKey = getFinnishDayKey(point.timestamp);
     const bucket = dailyBuckets.get(dayKey);
 
     if (!bucket) {
@@ -181,6 +185,18 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
     bucket.topTempMax = Math.max(bucket.topTempMax, point.topTemp);
     bucket.topTempMin = Math.min(bucket.topTempMin, point.topTemp);
     bucket.topTempSum += point.topTemp;
+  });
+
+  const latestPoint = history[history.length - 1];
+  const groupedDayKeys = [...dailyBuckets.keys()];
+
+  console.log("Lämpöhistoria 7 vrk debug", {
+    localNow: new Date().toString(),
+    latestCreatedAt: latestPoint?.timestamp ?? null,
+    latestFinnishDayKey: latestPoint
+      ? getFinnishDayKey(latestPoint.timestamp)
+      : null,
+    groupedDayKeys,
   });
 
   return [...dailyBuckets.entries()]
