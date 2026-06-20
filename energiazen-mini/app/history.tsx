@@ -11,8 +11,6 @@ type TemperatureHistoryPoint = {
   timestamp: string;
   topTemp: number;
   bottomTemp: number;
-  heating: boolean;
-  showers: number;
 };
 
 type DailyTemperatureHistoryPoint = {
@@ -25,16 +23,12 @@ type DailyTemperatureHistoryPoint = {
   topTempMin: number;
   bottomTempMax: number;
   bottomTempMin: number;
-  heating: boolean;
-  showers: number;
 };
 
 type TankReadingRow = {
   created_at?: string | null;
   top_temp?: number | null;
   bottom_temp?: number | null;
-  heating?: boolean | null;
-  showers?: number | null;
 };
 
 const chartHeight = 190;
@@ -103,8 +97,6 @@ function mapTankReadingToHistoryPoint(
 
   return {
     bottomTemp: reading.bottom_temp,
-    heating: reading.heating ?? false,
-    showers: reading.showers ?? 0,
     timestamp: reading.created_at,
     topTemp: reading.top_temp,
   };
@@ -150,8 +142,6 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
       bottomTempMin: number;
       bottomTempSum: number;
       count: number;
-      heating: boolean;
-      showers: number;
       timestamp: string;
       topTempMax: number;
       topTempMin: number;
@@ -169,8 +159,6 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
         bottomTempMin: point.bottomTemp,
         bottomTempSum: point.bottomTemp,
         count: 1,
-        heating: point.heating,
-        showers: point.showers,
         timestamp: point.timestamp,
         topTempMax: point.topTemp,
         topTempMin: point.topTemp,
@@ -183,8 +171,6 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
     bucket.bottomTempMin = Math.min(bucket.bottomTempMin, point.bottomTemp);
     bucket.bottomTempSum += point.bottomTemp;
     bucket.count += 1;
-    bucket.heating = bucket.heating || point.heating;
-    bucket.showers = Math.max(bucket.showers, point.showers);
     bucket.topTempMax = Math.max(bucket.topTempMax, point.topTemp);
     bucket.topTempMin = Math.min(bucket.topTempMin, point.topTemp);
     bucket.topTempSum += point.topTemp;
@@ -197,8 +183,6 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
       bottomTempMin: bucket.bottomTempMin,
       dayKey,
       dayLabel: formatWeekday(bucket.timestamp),
-      heating: bucket.heating,
-      showers: bucket.showers,
       timestamp: bucket.timestamp,
       topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
       topTempMax: bucket.topTempMax,
@@ -348,7 +332,7 @@ export default function TemperatureHistoryScreen() {
   const [chartWidth, setChartWidth] = useState(0);
 
   const loadHistory = useCallback(async () => {
-    const selectColumns = "created_at, top_temp, bottom_temp, heating, showers";
+    const selectColumns = "created_at, top_temp, bottom_temp";
     const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
     const d7Start = getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
 
@@ -364,7 +348,7 @@ export default function TemperatureHistoryScreen() {
         .select(selectColumns)
         .gte("created_at", d7Start)
         .order("created_at", { ascending: false })
-        .limit(3000),
+        .limit(10000),
     ]);
 
     if (h24Result.error || d7Result.error) {
@@ -496,7 +480,6 @@ export default function TemperatureHistoryScreen() {
             <Text style={styles.legendBottom}>
               ● Ala-anturi {isDailyView ? "keskiarvo" : ""}
             </Text>
-            <Text style={styles.legendHeating}>🔥 Lämmitys päällä</Text>
           </View>
 
           {visibleHistory.length === 0 ? (
@@ -560,7 +543,7 @@ export default function TemperatureHistoryScreen() {
 
                       return (
                         <View
-                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}`}
+                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta`}
                           key={
                             isDailyHistoryPoint(point)
                               ? point.dayKey
@@ -568,18 +551,6 @@ export default function TemperatureHistoryScreen() {
                           }
                           style={styles.historyColumn}
                         >
-                          {point.heating ? (
-                            <>
-                              <View style={styles.heatingShade} />
-                              <Text
-                                accessibilityElementsHidden
-                                importantForAccessibility="no-hide-descendants"
-                                style={styles.heatingIcon}
-                              >
-                                🔥
-                              </Text>
-                            </>
-                          ) : null}
                           <View
                             style={[
                               styles.tempDot,
@@ -625,9 +596,6 @@ export default function TemperatureHistoryScreen() {
                         ▲ ala {point.bottomTempMax}° / ▼ ala{" "}
                         {point.bottomTempMin}°
                       </Text>
-                      {point.heating ? (
-                        <Text style={styles.dailyHeatingLine}>🔥 Lämmitys</Text>
-                      ) : null}
                     </View>
                   ))}
                 </View>
@@ -767,7 +735,6 @@ const styles = StyleSheet.create({
   },
   legendTop: { color: "#ffad4d", fontSize: 12, fontWeight: "900" },
   legendBottom: { color: "#36f4d4", fontSize: 12, fontWeight: "900" },
-  legendHeating: { color: "#ffe58f", fontSize: 12, fontWeight: "900" },
   emptyHistoryText: {
     color: "#cfe9ff",
     fontSize: 15,
@@ -810,26 +777,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     overflow: "visible",
     position: "relative",
-  },
-  heatingShade: {
-    backgroundColor: "rgba(255,211,77,0.12)",
-    bottom: 0,
-    left: "28%",
-    position: "absolute",
-    right: "28%",
-    top: 0,
-    zIndex: 0,
-  },
-  heatingIcon: {
-    fontSize: 11,
-    left: "50%",
-    lineHeight: 13,
-    marginLeft: -6,
-    position: "absolute",
-    textAlign: "center",
-    top: 2,
-    width: 12,
-    zIndex: 3,
   },
   tempDot: {
     borderRadius: 999,
@@ -888,12 +835,6 @@ const styles = StyleSheet.create({
     color: "#cfe9ff",
     fontSize: 10,
     fontWeight: "800",
-    lineHeight: 14,
-  },
-  dailyHeatingLine: {
-    color: "#ffe58f",
-    fontSize: 10,
-    fontWeight: "900",
     lineHeight: 14,
   },
   placeholderCard: {
