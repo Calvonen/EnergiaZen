@@ -394,6 +394,7 @@ export default function TemperatureHistoryScreen() {
     const fetchRequestId = fetchRequestIdRef.current + 1;
     fetchRequestIdRef.current = fetchRequestId;
 
+    setReadings([]);
     setChartData([]);
     setIsFetchingHistory(true);
 
@@ -420,16 +421,13 @@ export default function TemperatureHistoryScreen() {
       .filter((point): point is TemperatureHistoryPoint => point !== null);
 
     setReadings(nextReadings);
+    setChartData(tab === "24h" ? nextReadings : getDailyHistory(nextReadings));
     setIsFetchingHistory(false);
   }, [selectedTab]);
 
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
-
-  useEffect(() => {
-    setChartData(selectedTab === "24h" ? readings : getDailyHistory(readings));
-  }, [readings, selectedTab]);
 
   console.log("history render", {
     selectedTab,
@@ -484,6 +482,10 @@ export default function TemperatureHistoryScreen() {
                 accessibilityRole="button"
                 key={tab}
                 onPress={() => {
+                  if (tab === selectedTab) {
+                    return;
+                  }
+
                   fetchRequestIdRef.current += 1;
                   setReadings([]);
                   setChartData([]);

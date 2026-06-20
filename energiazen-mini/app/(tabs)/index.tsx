@@ -673,6 +673,13 @@ export default function HomeScreen() {
 
           const reading = data as TankReading | null;
 
+          console.log(
+            "home latest tank_reading",
+            reading?.created_at ?? null,
+            reading?.top_temp ?? null,
+            reading?.bottom_temp ?? null,
+          );
+
           setTopTemp(reading?.top_temp ?? null);
           setBottomTemp(reading?.bottom_temp ?? null);
           setHeating(reading?.heating ?? false);
