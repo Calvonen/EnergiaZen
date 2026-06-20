@@ -80,6 +80,16 @@ function getHistoryRangeStart(rangeMs: number) {
   return new Date(Date.now() - rangeMs).toISOString();
 }
 
+function sortHistoryByCreatedAtAscending(
+  history: TemperatureHistoryPoint[],
+) {
+  return [...history].sort(
+    (firstPoint, secondPoint) =>
+      new Date(firstPoint.timestamp).getTime() -
+      new Date(secondPoint.timestamp).getTime(),
+  );
+}
+
 function mapTankReadingToHistoryPoint(
   reading: TankReadingRow,
 ): TemperatureHistoryPoint | null {
@@ -347,12 +357,14 @@ export default function TemperatureHistoryScreen() {
         .from("tank_readings")
         .select(selectColumns)
         .gte("created_at", h24Start)
-        .order("created_at", { ascending: true }),
+        .order("created_at", { ascending: false })
+        .limit(2000),
       supabase
         .from("tank_readings")
         .select(selectColumns)
         .gte("created_at", d7Start)
-        .order("created_at", { ascending: true }),
+        .order("created_at", { ascending: false })
+        .limit(3000),
     ]);
 
     if (h24Result.error || d7Result.error) {
@@ -366,9 +378,11 @@ export default function TemperatureHistoryScreen() {
     }
 
     const mapRows = (data: TankReadingRow[] | null) =>
-      (data ?? [])
-        .map(mapTankReadingToHistoryPoint)
-        .filter((point): point is TemperatureHistoryPoint => point !== null);
+      sortHistoryByCreatedAtAscending(
+        (data ?? [])
+          .map(mapTankReadingToHistoryPoint)
+          .filter((point): point is TemperatureHistoryPoint => point !== null),
+      );
 
     setHistory24h(mapRows(h24Result.data as TankReadingRow[] | null));
     setHistory7d(mapRows(d7Result.data as TankReadingRow[] | null));
@@ -388,7 +402,9 @@ export default function TemperatureHistoryScreen() {
     console.log("history loaded", {
       h24: history24h.length,
       d7: history7d.length,
+      first24h: history24h[0]?.timestamp,
       latest24h: history24h.at(-1)?.timestamp,
+      first7d: history7d[0]?.timestamp,
       latest7d: history7d.at(-1)?.timestamp,
     });
   }, [history24h, history7d]);
