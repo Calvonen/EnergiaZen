@@ -3,30 +3,30 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 export const defaultTankTemperature = 58;
 
 export const defaultSettings = {
-  tankVolumeLiters: 290,
+  tankSizeLiters: 290,
   heatingHoursPerDay: 3,
   priceDifferenceThresholdCents: 2,
   minTankTemperature: 10,
   maxTankTemperature: 70,
-  showersAtMaxTemperature: 6,
+  fullTankShowers: 6,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
 
 export type EditableSettingKey =
-  | "tankVolumeLiters"
+  | "tankSizeLiters"
   | "heatingHoursPerDay"
   | "priceDifferenceThresholdCents"
-  | "showersAtMaxTemperature"
+  | "fullTankShowers"
   | "maxTankTemperature";
 
 export const settingsStorageKey = "energiazen:settings";
 
 const editableSettingRanges = {
-  tankVolumeLiters: { max: 1000, min: 50 },
+  tankSizeLiters: { max: 1000, min: 50 },
   heatingHoursPerDay: { max: 6, min: 1 },
   priceDifferenceThresholdCents: { max: 10, min: 0 },
-  showersAtMaxTemperature: { max: 10, min: 3 },
+  fullTankShowers: { max: 10, min: 3 },
   maxTankTemperature: { max: 90, min: 40 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
 
@@ -37,17 +37,19 @@ function clampSettingValue(key: EditableSettingKey, value: number) {
   return Math.min(Math.max(roundedValue, range.min), range.max);
 }
 
+type LegacySettings = Partial<EnergiaZenSettings> & {
+  showersAtMaxTemperature?: number;
+  tankVolumeLiters?: number;
+};
+
 export function normalizeSettings(
-  settings: Partial<EnergiaZenSettings>,
+  settings: LegacySettings,
 ): EnergiaZenSettings {
+  const tankSizeLiters = settings.tankSizeLiters ?? settings.tankVolumeLiters;
+  const fullTankShowers =
+    settings.fullTankShowers ?? settings.showersAtMaxTemperature;
+
   return {
-    ...defaultSettings,
-    ...settings,
-    minTankTemperature: defaultSettings.minTankTemperature,
-    tankVolumeLiters:
-      typeof settings.tankVolumeLiters === "number"
-        ? clampSettingValue("tankVolumeLiters", settings.tankVolumeLiters)
-        : defaultSettings.tankVolumeLiters,
     heatingHoursPerDay:
       typeof settings.heatingHoursPerDay === "number"
         ? clampSettingValue("heatingHoursPerDay", settings.heatingHoursPerDay)
@@ -59,13 +61,15 @@ export function normalizeSettings(
             settings.priceDifferenceThresholdCents,
           )
         : defaultSettings.priceDifferenceThresholdCents,
-    showersAtMaxTemperature:
-      typeof settings.showersAtMaxTemperature === "number"
-        ? clampSettingValue(
-            "showersAtMaxTemperature",
-            settings.showersAtMaxTemperature,
-          )
-        : defaultSettings.showersAtMaxTemperature,
+    minTankTemperature: defaultSettings.minTankTemperature,
+    tankSizeLiters:
+      typeof tankSizeLiters === "number"
+        ? clampSettingValue("tankSizeLiters", tankSizeLiters)
+        : defaultSettings.tankSizeLiters,
+    fullTankShowers:
+      typeof fullTankShowers === "number"
+        ? clampSettingValue("fullTankShowers", fullTankShowers)
+        : defaultSettings.fullTankShowers,
     maxTankTemperature:
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)

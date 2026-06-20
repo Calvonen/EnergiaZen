@@ -34,7 +34,7 @@ type EditableSettingOption = {
 };
 
 const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
-  tankVolumeLiters: {
+  tankSizeLiters: {
     options: [200, 250, 290, 300, 500],
     unit: "l",
   },
@@ -48,7 +48,7 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     min: 0,
     unit: "c/kWh",
   },
-  showersAtMaxTemperature: {
+  fullTankShowers: {
     max: 10,
     min: 3,
     unit: "suihkua",
@@ -69,9 +69,9 @@ export default function SettingsScreen() {
     (): SettingsRow[] => [
       {
         accent: "#36f4d4",
-        key: "tankVolumeLiters",
+        key: "tankSizeLiters",
         label: "Varaajan koko",
-        value: `${settings.tankVolumeLiters} l`,
+        value: `${settings.tankSizeLiters} l`,
       },
       {
         accent: "#54eaa0",
@@ -98,9 +98,9 @@ export default function SettingsScreen() {
       },
       {
         accent: "#b889ff",
-        key: "showersAtMaxTemperature",
+        key: "fullTankShowers",
         label: "Täysi varaaja",
-        value: `${settings.showersAtMaxTemperature} suihkua`,
+        value: `${settings.fullTankShowers} suihkua`,
       },
     ],
     [settings],
