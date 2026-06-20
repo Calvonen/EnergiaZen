@@ -41,8 +41,6 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
-const emptyHistory: TemperatureHistoryPoint[] = [];
-const minimumDailyHistoryDays = 2;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -109,40 +107,7 @@ function mapTankReadingToHistoryPoint(
   };
 }
 
-function getVisibleHistory(
-  history: TemperatureHistoryPoint[],
-  selectedTab: HistoryTab,
-) {
-  if (selectedTab === "24h") {
-    return history.length > 144
-      ? downsampleHistoryByLatestPoint(history, 10 * 60 * 1000)
-      : history;
-  }
-
-  return getDailyHistory(history);
-}
-
-function downsampleHistoryByLatestPoint(
-  history: TemperatureHistoryPoint[],
-  bucketSizeMs: number,
-) {
-  const latestPointByBucket = new Map<number, TemperatureHistoryPoint>();
-
-  history.forEach((point) => {
-    const pointTime = new Date(point.timestamp).getTime();
-    const bucket = Math.floor(pointTime / bucketSizeMs);
-    latestPointByBucket.set(bucket, point);
-  });
-
-  return [...latestPointByBucket.values()].sort(
-    (firstPoint, secondPoint) =>
-      new Date(firstPoint.timestamp).getTime() -
-      new Date(secondPoint.timestamp).getTime(),
-  );
-}
-
 function getDailyHistory(history: TemperatureHistoryPoint[]) {
-  console.log("7 vrk source B", { source: "groupedDayKeys", historyLength: history.length });
   const dailyBuckets = new Map<
     string,
     {
@@ -190,26 +155,9 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
     bucket.topTempSum += point.topTemp;
   });
 
-  const latestPoint = history[history.length - 1];
-  const groupedDayKeys = [...dailyBuckets.keys()];
-
-  console.log("Lämpöhistoria 7 vrk debug", {
-    localNow: new Date().toString(),
-    latestCreatedAt: latestPoint?.timestamp ?? null,
-    latestFinnishDayKey: latestPoint
-      ? getFinnishDayKey(latestPoint.timestamp)
-      : null,
-    groupedDayKeys,
-  });
-
   return [...dailyBuckets.entries()]
     .map(([dayKey, bucket]) => {
       const weekdayLabel = formatWeekdayFromDayKey(dayKey);
-
-      console.log("Lämpöhistoria 7 vrk päivä", {
-        dayKey,
-        weekdayLabel,
-      });
 
       return {
         bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
@@ -305,7 +253,9 @@ function getTimeAxis(history: TemperatureHistoryPoint[]): TimeAxis | null {
   }
 
   const firstCreatedAt = new Date(history[0].timestamp).getTime();
-  const lastCreatedAt = new Date(history[history.length - 1].timestamp).getTime();
+  const lastCreatedAt = new Date(
+    history[history.length - 1].timestamp,
+  ).getTime();
   const now = Date.now();
   const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
   const startTime =
@@ -320,13 +270,6 @@ function getTimeAxis(history: TemperatureHistoryPoint[]): TimeAxis | null {
       label: formatHour(timestamp),
       timestamp,
     };
-  });
-
-  console.log("Lämpöhistoria 24 h debug", {
-    "24h first created_at": history[0].timestamp,
-    "24h last created_at": history[history.length - 1].timestamp,
-    "24h axis start": new Date(startTime).toISOString(),
-    "24h axis end": new Date(endTime).toISOString(),
   });
 
   return { endTime, labels, startTime };
@@ -438,105 +381,61 @@ function getChartLineSegments(
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
-  const [historyState, setHistoryState] = useState<{
-    points: TemperatureHistoryPoint[];
-    tab: HistoryTab;
-  }>({ points: [], tab: "24h" });
+  const [readings, setReadings] = useState<TemperatureHistoryPoint[]>([]);
+  const [chartData, setChartData] = useState<
+    (TemperatureHistoryPoint | DailyTemperatureHistoryPoint)[]
+  >([]);
   const [chartWidth, setChartWidth] = useState(0);
   const [isFetchingHistory, setIsFetchingHistory] = useState(false);
   const fetchRequestIdRef = useRef(0);
-  const previousSelectedTabRef = useRef(selectedTab);
 
   const fetchHistory = useCallback(async () => {
+    const tab = selectedTab;
     const fetchRequestId = fetchRequestIdRef.current + 1;
     fetchRequestIdRef.current = fetchRequestId;
 
+    setChartData([]);
     setIsFetchingHistory(true);
-    console.log("7 vrk source A", { source: "tank_readings", tab: selectedTab });
 
     const { data, error } = await supabase
       .from("tank_readings")
       .select("created_at, top_temp, bottom_temp, heating, showers")
-      .gte("created_at", getHistoryRangeStart(selectedTab))
+      .gte("created_at", getHistoryRangeStart(tab))
       .order("created_at", { ascending: true });
-
-    if (error) {
-      console.warn("Lämpöhistorian haku epäonnistui", error.message);
-      if (fetchRequestId === fetchRequestIdRef.current) {
-        setHistoryState({ points: [], tab: selectedTab });
-        setIsFetchingHistory(false);
-      }
-      return;
-    }
 
     if (fetchRequestId !== fetchRequestIdRef.current) {
       return;
     }
 
-    const points = ((data as TankReadingRow[] | null) ?? [])
-      .map(mapTankReadingToHistoryPoint)
-      .filter((point): point is TemperatureHistoryPoint => point !== null);
-
-    setHistoryState({ points, tab: selectedTab });
-    setIsFetchingHistory(false);
-  }, [selectedTab]);
-
-  useEffect(() => {
-    if (previousSelectedTabRef.current === selectedTab) {
+    if (error) {
+      console.warn("Lämpöhistorian haku epäonnistui", error.message);
+      setReadings([]);
+      setChartData([]);
+      setIsFetchingHistory(false);
       return;
     }
 
-    previousSelectedTabRef.current = selectedTab;
-    setHistoryState({ points: [], tab: selectedTab });
-    console.log("Lämpöhistoria tab vaihtui", {
-      chartDataLength: 0,
-      groupedDayKeys: [],
-      selectedTab,
-    });
+    const nextReadings = ((data as TankReadingRow[] | null) ?? [])
+      .map(mapTankReadingToHistoryPoint)
+      .filter((point): point is TemperatureHistoryPoint => point !== null);
+
+    setReadings(nextReadings);
+    setIsFetchingHistory(false);
   }, [selectedTab]);
 
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
 
-  const stateTab = historyState.tab;
-  const historyData = useMemo(() => {
-    console.log("7 vrk source A", {
-      points: historyState.points.length,
-      source: "historyData",
-      stateTab,
-      selectedTab,
-    });
+  useEffect(() => {
+    setChartData(selectedTab === "24h" ? readings : getDailyHistory(readings));
+  }, [readings, selectedTab]);
 
-    if (selectedTab !== stateTab) {
-      return emptyHistory;
-    }
-
-    return historyState.points;
-  }, [historyState.points, selectedTab, stateTab]);
-  const chartData = useMemo(() => {
-    console.log("7 vrk source B", {
-      historyLength: historyData.length,
-      source: "chartData",
-      stateTab,
-      selectedTab,
-    });
-
-    if (selectedTab !== stateTab) {
-      console.log("7 vrk source B", {
-        groupedDayKeys: [],
-        reason: "tab mismatch",
-        source: "groupedDayKeys",
-      });
-      return emptyHistory;
-    }
-
-    const visibleHistory = getVisibleHistory(historyData, selectedTab);
-    const hasEnoughDailyHistory =
-      selectedTab !== "7d" || visibleHistory.length >= minimumDailyHistoryDays;
-
-    return hasEnoughDailyHistory ? visibleHistory : emptyHistory;
-  }, [historyData, selectedTab, stateTab]);
+  console.log("history render", {
+    selectedTab,
+    readings: readings.length,
+    chartData: chartData.length,
+  });
   const latestPoint = chartData[chartData.length - 1];
   const timeAxis = useMemo(
     () =>
@@ -551,23 +450,6 @@ export default function TemperatureHistoryScreen() {
     () => getChartLineSegments(chartData, chartWidth, timeAxis),
     [chartData, chartWidth, timeAxis],
   );
-
-  useEffect(() => {
-    console.log("Lämpöhistoria debug", {
-      chartDataLength: chartData.length,
-      historyDataLength: historyData.length,
-      selectedTab,
-      stateTab,
-    });
-
-    if (!isDailyView) {
-      return;
-    }
-
-    if (!isFetchingHistory) {
-      console.log("7 vrk final render data", chartData);
-    }
-  }, [chartData, historyData, isDailyView, isFetchingHistory, selectedTab, stateTab]);
 
   return (
     <View style={styles.screen}>
@@ -603,6 +485,8 @@ export default function TemperatureHistoryScreen() {
                 key={tab}
                 onPress={() => {
                   fetchRequestIdRef.current += 1;
+                  setReadings([]);
+                  setChartData([]);
                   setIsFetchingHistory(true);
                   setSelectedTab(tab);
                 }}
@@ -709,19 +593,22 @@ export default function TemperatureHistoryScreen() {
                         : formatHour(point.timestamp);
                       const pointLeft =
                         !isDailyPoint && timeAxis
-                          ? getTimeAxisX(point.timestamp, timeAxis, chartWidth) - 12
+                          ? getTimeAxisX(
+                              point.timestamp,
+                              timeAxis,
+                              chartWidth,
+                            ) - 12
                           : undefined;
-                      const { bottomBottom, topBottom } = getAdjustedPointBottoms(
-                        topTemperature,
-                        bottomTemperature,
-                      );
+                      const { bottomBottom, topBottom } =
+                        getAdjustedPointBottoms(
+                          topTemperature,
+                          bottomTemperature,
+                        );
 
                       return (
                         <View
                           accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta${point.heating ? ", lämmitys päällä" : ""}`}
-                          key={
-                            isDailyPoint ? point.dayKey : point.timestamp
-                          }
+                          key={isDailyPoint ? point.dayKey : point.timestamp}
                           style={[
                             styles.historyColumn,
                             !isDailyPoint && {
@@ -778,7 +665,9 @@ export default function TemperatureHistoryScreen() {
                           style={[
                             styles.hourLabel,
                             {
-                              left: getTimeAxisX(timestamp, timeAxis, chartWidth) - 18,
+                              left:
+                                getTimeAxisX(timestamp, timeAxis, chartWidth) -
+                                18,
                             },
                           ]}
                         >
