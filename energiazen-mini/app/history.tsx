@@ -102,6 +102,40 @@ function mapTankReadingToHistoryPoint(
   };
 }
 
+async function fetchTankReadingsSince(startIso: string, maxRows: number) {
+  const pageSize = 1000;
+  const selectColumns = "created_at, top_temp, bottom_temp";
+  const rows: TankReadingRow[] = [];
+
+  while (rows.length < maxRows) {
+    const from = rows.length;
+    const to = Math.min(from + pageSize, maxRows) - 1;
+    const { data, error } = await supabase
+      .from("tank_readings")
+      .select(selectColumns)
+      .gte("created_at", startIso)
+      .order("created_at", { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      throw error;
+    }
+
+    const pageRows = (data ?? []) as TankReadingRow[];
+    rows.push(...pageRows);
+
+    if (pageRows.length < pageSize) {
+      break;
+    }
+  }
+
+  return sortHistoryByCreatedAtAscending(
+    rows
+      .map(mapTankReadingToHistoryPoint)
+      .filter((point): point is TemperatureHistoryPoint => point !== null),
+  );
+}
+
 function getVisibleHistory(
   history: TemperatureHistoryPoint[],
   selectedTab: HistoryTab,
@@ -332,44 +366,23 @@ export default function TemperatureHistoryScreen() {
   const [chartWidth, setChartWidth] = useState(0);
 
   const loadHistory = useCallback(async () => {
-    const selectColumns = "created_at, top_temp, bottom_temp";
     const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
     const d7Start = getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
 
-    const [h24Result, d7Result] = await Promise.all([
-      supabase
-        .from("tank_readings")
-        .select(selectColumns)
-        .gte("created_at", h24Start)
-        .order("created_at", { ascending: false })
-        .limit(2000),
-      supabase
-        .from("tank_readings")
-        .select(selectColumns)
-        .gte("created_at", d7Start)
-        .order("created_at", { ascending: false })
-        .limit(10000),
-    ]);
+    try {
+      const next24h = await fetchTankReadingsSince(h24Start, 2000);
+      const next7d = await fetchTankReadingsSince(d7Start, 10000);
 
-    if (h24Result.error || d7Result.error) {
+      setHistory24h(next24h);
+      setHistory7d(next7d);
+    } catch (error) {
       console.warn(
         "Lämpöhistorian haku epäonnistui",
-        h24Result.error?.message ?? d7Result.error?.message,
+        error instanceof Error ? error.message : error,
       );
       setHistory24h([]);
       setHistory7d([]);
-      return;
     }
-
-    const mapRows = (data: TankReadingRow[] | null) =>
-      sortHistoryByCreatedAtAscending(
-        (data ?? [])
-          .map(mapTankReadingToHistoryPoint)
-          .filter((point): point is TemperatureHistoryPoint => point !== null),
-      );
-
-    setHistory24h(mapRows(h24Result.data as TankReadingRow[] | null));
-    setHistory7d(mapRows(d7Result.data as TankReadingRow[] | null));
   }, []);
 
   useEffect(() => {
