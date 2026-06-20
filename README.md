@@ -8,6 +8,7 @@ Avaa terminaali ja siirry projektikansioon:
 
 ```bash
 cd /workspaces/EnergiaZen/energiazen-mini
+cd C:\Users\marko\EnergiaZen\energiazen-mini
 ```
 
 Asenna riippuvuudet tarvittaessa:
