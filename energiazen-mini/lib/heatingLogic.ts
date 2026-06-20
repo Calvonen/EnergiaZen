@@ -86,6 +86,13 @@ const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
 });
 
+const helsinkiDatePartsFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
 const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   hour12: false,
@@ -97,9 +104,22 @@ export function getFinnishDateKey(dateString: string): string {
 }
 
 export function getDateKeyOffset(offsetDays: number, date = new Date()): string {
-  return helsinkiDateKeyFormatter.format(
-    new Date(date.getTime() + offsetDays * 24 * 60 * 60 * 1000),
-  );
+  const parts = helsinkiDatePartsFormatter.formatToParts(date);
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+
+  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) {
+    return helsinkiDateKeyFormatter.format(date);
+  }
+
+  const offsetDate = new Date(Date.UTC(year, month - 1, day + offsetDays));
+
+  return [
+    String(offsetDate.getUTCFullYear()),
+    String(offsetDate.getUTCMonth() + 1).padStart(2, "0"),
+    String(offsetDate.getUTCDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 export function formatHelsinkiDateKey(date: Date) {

@@ -742,10 +742,13 @@ export default function HomeScreen() {
 
       const data = (await response.json()) as SpotPriceResponse[];
       const apiPrices = normalizeSpotPrices(data);
+      const apiPriceDateKeys = Array.from(
+        new Set(apiPrices.map((item) => getFinnishDateKey(item.startDate))),
+      ).sort();
       const currentApiPrices = apiPrices.filter((item) => {
-        const dateKey = getFinnishDateKey(item.startDate);
+        const helsinkiDateKey = getFinnishDateKey(item.startDate);
 
-        return dateKey === todayKey || dateKey === tomorrowKey;
+        return helsinkiDateKey === todayKey || helsinkiDateKey === tomorrowKey;
       });
       await saveElectricityPrices(currentApiPrices);
       const storedYesterdayPrices = normalizeStoredElectricityPrices(
@@ -762,14 +765,15 @@ export default function HomeScreen() {
       ).length;
 
       console.log("Spot prices debug", {
-        totalPricesCount: prices.length,
+        totalPricesCount: apiPrices.length,
+        todayCount,
+        tomorrowCount,
+        firstStartDate: apiPrices[0]?.startDate ?? null,
+        lastStartDate: apiPrices[apiPrices.length - 1]?.startDate ?? null,
+        dateKeys: apiPriceDateKeys,
         storedYesterdayCount: storedYesterdayPrices.length,
         storedYesterdayColumns: storedElectricityPriceColumns,
         storedYesterdayFetchSucceeded,
-        todayCount,
-        tomorrowCount,
-        firstStartDate: prices[0]?.startDate ?? null,
-        lastStartDate: prices[prices.length - 1]?.startDate ?? null,
       });
 
       if (currentApiPrices.length === 0) {
