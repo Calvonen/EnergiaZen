@@ -20,10 +20,6 @@ type DailyTemperatureHistoryPoint = {
   dayLabel: string;
   topTempAvg: number;
   bottomTempAvg: number;
-  topTempMax: number;
-  topTempMin: number;
-  bottomTempMax: number;
-  bottomTempMin: number;
 };
 
 type TankReadingRow = {
@@ -173,13 +169,9 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
   const dailyBuckets = new Map<
     string,
     {
-      bottomTempMax: number;
-      bottomTempMin: number;
       bottomTempSum: number;
       count: number;
       timestamp: string;
-      topTempMax: number;
-      topTempMin: number;
       topTempSum: number;
     }
   >();
@@ -190,38 +182,26 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
 
     if (!bucket) {
       dailyBuckets.set(dayKey, {
-        bottomTempMax: point.bottomTemp,
-        bottomTempMin: point.bottomTemp,
         bottomTempSum: point.bottomTemp,
         count: 1,
         timestamp: point.timestamp,
-        topTempMax: point.topTemp,
-        topTempMin: point.topTemp,
         topTempSum: point.topTemp,
       });
       return;
     }
 
-    bucket.bottomTempMax = Math.max(bucket.bottomTempMax, point.bottomTemp);
-    bucket.bottomTempMin = Math.min(bucket.bottomTempMin, point.bottomTemp);
     bucket.bottomTempSum += point.bottomTemp;
     bucket.count += 1;
-    bucket.topTempMax = Math.max(bucket.topTempMax, point.topTemp);
-    bucket.topTempMin = Math.min(bucket.topTempMin, point.topTemp);
     bucket.topTempSum += point.topTemp;
   });
 
   return [...dailyBuckets.entries()]
     .map(([dayKey, bucket]) => ({
       bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
-      bottomTempMax: bucket.bottomTempMax,
-      bottomTempMin: bucket.bottomTempMin,
       dayKey,
       dayLabel: formatWeekday(bucket.timestamp),
       timestamp: bucket.timestamp,
       topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
-      topTempMax: bucket.topTempMax,
-      topTempMin: bucket.topTempMin,
     }))
     .sort(
       (firstPoint, secondPoint) =>
@@ -593,27 +573,6 @@ export default function TemperatureHistoryScreen() {
                 </View>
               </View>
 
-              {isDailyView ? (
-                <View style={styles.dailyDetailsGrid}>
-                  {visibleHistory.filter(isDailyHistoryPoint).map((point) => (
-                    <View
-                      key={`${point.dayKey}-details`}
-                      style={styles.dailyDetailCard}
-                    >
-                      <Text style={styles.dailyDetailDay}>
-                        {point.dayLabel}
-                      </Text>
-                      <Text style={styles.dailyDetailLine}>
-                        ▲ ylä {point.topTempMax}° / ▼ ylä {point.topTempMin}°
-                      </Text>
-                      <Text style={styles.dailyDetailLine}>
-                        ▲ ala {point.bottomTempMax}° / ▼ ala{" "}
-                        {point.bottomTempMin}°
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
             </>
           )}
         </View>
@@ -823,33 +782,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     textAlign: "center",
     width: 36,
-  },
-  dailyDetailsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 14,
-  },
-  dailyDetailCard: {
-    backgroundColor: "rgba(5,8,22,0.42)",
-    borderColor: "rgba(255,255,255,0.1)",
-    borderRadius: 14,
-    borderWidth: 1,
-    flexBasis: "31%",
-    flexGrow: 1,
-    padding: 9,
-  },
-  dailyDetailDay: {
-    color: "#f7fbff",
-    fontSize: 12,
-    fontWeight: "900",
-    marginBottom: 5,
-  },
-  dailyDetailLine: {
-    color: "#cfe9ff",
-    fontSize: 10,
-    fontWeight: "800",
-    lineHeight: 14,
   },
   placeholderCard: {
     alignItems: "center",
