@@ -76,10 +76,7 @@ function roundTemperature(value: number) {
   return Math.round(value * 10) / 10;
 }
 
-function getHistoryRangeStart(selectedTab: HistoryTab) {
-  const rangeMs =
-    selectedTab === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-
+function getHistoryRangeStart(rangeMs: number) {
   return new Date(Date.now() - rangeMs).toISOString();
 }
 
@@ -336,36 +333,72 @@ function getChartLineSegments(
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
-  const [history, setHistory] = useState<TemperatureHistoryPoint[]>([]);
+  const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>([]);
+  const [history7d, setHistory7d] = useState<TemperatureHistoryPoint[]>([]);
   const [chartWidth, setChartWidth] = useState(0);
 
-  const fetchHistory = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("tank_readings")
-      .select("created_at, top_temp, bottom_temp, heating, showers")
-      .gte("created_at", getHistoryRangeStart(selectedTab))
-      .order("created_at", { ascending: true });
+  const loadHistory = useCallback(async () => {
+    const selectColumns = "created_at, top_temp, bottom_temp, heating, showers";
+    const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
+    const d7Start = getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
 
-    if (error) {
-      console.warn("Lämpöhistorian haku epäonnistui", error.message);
-      setHistory([]);
+    const [h24Result, d7Result] = await Promise.all([
+      supabase
+        .from("tank_readings")
+        .select(selectColumns)
+        .gte("created_at", h24Start)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("tank_readings")
+        .select(selectColumns)
+        .gte("created_at", d7Start)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (h24Result.error || d7Result.error) {
+      console.warn(
+        "Lämpöhistorian haku epäonnistui",
+        h24Result.error?.message ?? d7Result.error?.message,
+      );
+      setHistory24h([]);
+      setHistory7d([]);
       return;
     }
 
-    const points = ((data as TankReadingRow[] | null) ?? [])
-      .map(mapTankReadingToHistoryPoint)
-      .filter((point): point is TemperatureHistoryPoint => point !== null);
+    const mapRows = (data: TankReadingRow[] | null) =>
+      (data ?? [])
+        .map(mapTankReadingToHistoryPoint)
+        .filter((point): point is TemperatureHistoryPoint => point !== null);
 
-    setHistory(points);
-  }, [selectedTab]);
+    setHistory24h(mapRows(h24Result.data as TankReadingRow[] | null));
+    setHistory7d(mapRows(d7Result.data as TankReadingRow[] | null));
+  }, []);
 
   useEffect(() => {
-    void fetchHistory();
-  }, [fetchHistory]);
+    void loadHistory();
+
+    const intervalId = setInterval(() => {
+      void loadHistory();
+    }, 60 * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [loadHistory, selectedTab]);
+
+  useEffect(() => {
+    console.log("history loaded", {
+      h24: history24h.length,
+      d7: history7d.length,
+      latest24h: history24h.at(-1)?.timestamp,
+      latest7d: history7d.at(-1)?.timestamp,
+    });
+  }, [history24h, history7d]);
 
   const visibleHistory = useMemo(
-    () => getVisibleHistory(history, selectedTab),
-    [history, selectedTab],
+    () =>
+      selectedTab === "24h"
+        ? getVisibleHistory(history24h, selectedTab)
+        : getVisibleHistory(history7d, selectedTab),
+    [history24h, history7d, selectedTab],
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
