@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 
+import { debugLog } from "@/lib/debug";
 import {
   DaySelection,
   getCheapestHours,
@@ -413,8 +414,8 @@ async function saveElectricityPrices(prices: HourlyPrice[]) {
     })) satisfies ElectricityPriceInsert[];
 
     if (electricityPrices.length === 0) {
-      console.log("Saved electricity prices: 0 rows");
-      console.log("Existing electricity prices: 0 rows");
+      debugLog("Saved electricity prices: 0 rows");
+      debugLog("Existing electricity prices: 0 rows");
       return;
     }
 
@@ -454,8 +455,8 @@ async function saveElectricityPrices(prices: HourlyPrice[]) {
       }
     }
 
-    console.log(`Saved electricity prices: ${newElectricityPrices.length} rows`);
-    console.log(`Existing electricity prices: ${existingStartDates.size} rows`);
+    debugLog(`Saved electricity prices: ${newElectricityPrices.length} rows`);
+    debugLog(`Existing electricity prices: ${existingStartDates.size} rows`);
   } catch (error) {
     console.warn("Electricity price save failed", error);
   }
@@ -524,7 +525,7 @@ export default function HomeScreen() {
   useEffect(() => {
     const chartPrices = chartHourlyPrices.map((item) => item.price);
 
-    console.log("Electricity price chart debug", {
+    debugLog("Electricity price chart debug", {
       selectedPriceTab: getDayLabel(selectedDay),
       maxPrice: chartPrices.length > 0 ? Math.max(...chartPrices) : null,
       minPrice: chartPrices.length > 0 ? Math.min(...chartPrices) : null,
@@ -663,7 +664,7 @@ export default function HomeScreen() {
       });
 
       const refreshTankReadings = async () => {
-        console.log("tank_readings refreshed");
+        debugLog("tank_readings refreshed");
 
         try {
           const { data, error } = await supabase
@@ -778,7 +779,7 @@ export default function HomeScreen() {
         (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
       ).length;
 
-      console.log("Spot prices debug", {
+      debugLog("Spot prices debug", {
         totalPricesCount: apiPrices.length,
         todayCount,
         tomorrowCount,

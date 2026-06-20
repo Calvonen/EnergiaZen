@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
+import { debugLog } from "@/lib/debug";
 import { defaultSettings } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 
@@ -396,7 +397,7 @@ export default function TemperatureHistoryScreen() {
   }, [loadHistory, selectedTab]);
 
   useEffect(() => {
-    console.log("history loaded", {
+    debugLog("history loaded", {
       h24: history24h.length,
       d7: history7d.length,
       first24h: history24h[0]?.timestamp,
