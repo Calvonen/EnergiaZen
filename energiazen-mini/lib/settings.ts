@@ -22,6 +22,8 @@ export type EditableSettingKey =
 
 export const settingsStorageKey = "energiazen:settings";
 
+const settingsListeners = new Set<(settings: EnergiaZenSettings) => void>();
+
 const editableSettingRanges = {
   tankVolumeLiters: { max: 1000, min: 50 },
   heatingHoursPerDay: { max: 6, min: 1 },
@@ -88,8 +90,22 @@ export async function loadSettings() {
 }
 
 export async function saveSettings(settings: EnergiaZenSettings) {
+  const normalizedSettings = normalizeSettings(settings);
+
   await AsyncStorage.setItem(
     settingsStorageKey,
-    JSON.stringify(normalizeSettings(settings)),
+    JSON.stringify(normalizedSettings),
   );
+
+  settingsListeners.forEach((listener) => listener(normalizedSettings));
+}
+
+export function subscribeToSettings(
+  listener: (settings: EnergiaZenSettings) => void,
+) {
+  settingsListeners.add(listener);
+
+  return () => {
+    settingsListeners.delete(listener);
+  };
 }
