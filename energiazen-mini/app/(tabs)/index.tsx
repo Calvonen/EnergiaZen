@@ -360,6 +360,7 @@ function toHourlyPrice(
   startDate: string,
   price: number,
   endDate?: string | null,
+  shouldNormalizePriceToCents = true,
 ) {
   const date = new Date(startDate);
   const parsedEndDate = endDate ? new Date(endDate) : null;
@@ -377,7 +378,7 @@ function toHourlyPrice(
         : new Date(date.getTime() + 60 * 60 * 1000),
     hourLabel: formatHourLabel(date),
     id: startDate,
-    price: normalizePriceToCents(price),
+    price: shouldNormalizePriceToCents ? normalizePriceToCents(price) : price,
   } satisfies HourlyPrice;
 }
 
@@ -469,7 +470,7 @@ function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
         return null;
       }
 
-      return toHourlyPrice(item.start_date, price, item.end_date);
+      return toHourlyPrice(item.start_date, price, item.end_date, false);
     })
     .filter((item): item is HourlyPrice => item !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -520,6 +521,19 @@ export default function HomeScreen() {
     [maxChartPrice],
   );
   const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
+  useEffect(() => {
+    const chartPrices = chartHourlyPrices.map((item) => item.price);
+
+    console.log("Electricity price chart debug", {
+      selectedPriceTab: getDayLabel(selectedDay),
+      maxPrice: chartPrices.length > 0 ? Math.max(...chartPrices) : null,
+      minPrice: chartPrices.length > 0 ? Math.min(...chartPrices) : null,
+      prices: chartHourlyPrices.map((item) => ({
+        hour: item.hourLabel,
+        price: item.price,
+      })),
+    });
+  }, [chartHourlyPrices, selectedDay]);
   const todayActualHeatingHourNumbers = useMemo(
     () => new Set(actualHeatingHours.today ?? []),
     [],
