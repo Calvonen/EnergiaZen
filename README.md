@@ -15,12 +15,14 @@ Asenna riippuvuudet tarvittaessa:
 
 ```bash
 npm install
+npm.cmd install
 ```
 
 Käynnistä Expo Go -palvelin:
 
 ```bash
 npx expo start --host tunnel --clear
+npx.cmd expo start
 ```
 
 Odota että Metro Bundler käynnistyy.
