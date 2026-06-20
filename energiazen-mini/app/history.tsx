@@ -46,6 +46,7 @@ const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
 const tooltipWidth = 104;
+const tooltipBottomOffset = 28;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -81,9 +82,7 @@ function formatTooltipTime(timestamp: string) {
 }
 
 function formatWeekday(timestamp: string) {
-  const weekday = weekdayFormatter
-    .format(new Date(timestamp))
-    .replace(".", "");
+  const weekday = weekdayFormatter.format(new Date(timestamp)).replace(".", "");
 
   return weekday.charAt(0).toUpperCase() + weekday.slice(1);
 }
@@ -96,9 +95,7 @@ function getHistoryRangeStart(rangeMs: number) {
   return new Date(Date.now() - rangeMs).toISOString();
 }
 
-function sortHistoryByCreatedAtAscending(
-  history: TemperatureHistoryPoint[],
-) {
+function sortHistoryByCreatedAtAscending(history: TemperatureHistoryPoint[]) {
   return [...history].sort(
     (firstPoint, secondPoint) =>
       new Date(firstPoint.timestamp).getTime() -
@@ -604,23 +601,40 @@ export default function TemperatureHistoryScreen() {
                   ))}
 
                   {selectedTab === "24h" && selectedHistoryPoint ? (
-                    <View
-                      pointerEvents="none"
-                      style={[
-                        styles.historyTooltip,
-                        { left: selectedTooltipLeft },
-                      ]}
-                    >
-                      <Text style={styles.historyTooltipTime}>
-                        {formatTooltipTime(selectedHistoryPoint.point.timestamp)}
-                      </Text>
-                      <Text style={styles.historyTooltipTop}>
-                        Ylä {roundTemperature(selectedHistoryPoint.point.topTemp)} °C
-                      </Text>
-                      <Text style={styles.historyTooltipBottom}>
-                        Ala {roundTemperature(selectedHistoryPoint.point.bottomTemp)} °C
-                      </Text>
-                    </View>
+                    <>
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.selectedMarkerLine,
+                          { left: selectedHistoryPoint.x },
+                        ]}
+                      />
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.historyTooltip,
+                          { left: selectedTooltipLeft },
+                        ]}
+                      >
+                        <Text style={styles.historyTooltipTime}>
+                          {formatTooltipTime(
+                            selectedHistoryPoint.point.timestamp,
+                          )}
+                        </Text>
+                        <Text style={styles.historyTooltipTop}>
+                          Ylä{" "}
+                          {roundTemperature(selectedHistoryPoint.point.topTemp)}{" "}
+                          °C
+                        </Text>
+                        <Text style={styles.historyTooltipBottom}>
+                          Ala{" "}
+                          {roundTemperature(
+                            selectedHistoryPoint.point.bottomTemp,
+                          )}{" "}
+                          °C
+                        </Text>
+                      </View>
+                    </>
                   ) : null}
 
                   <View style={styles.historyColumns}>
@@ -630,10 +644,11 @@ export default function TemperatureHistoryScreen() {
                       const xAxisLabel = isDailyHistoryPoint(point)
                         ? point.dayLabel
                         : formatHour(point.timestamp);
-                      const { bottomBottom, topBottom } = getAdjustedPointBottoms(
-                        topTemperature,
-                        bottomTemperature,
-                      );
+                      const { bottomBottom, topBottom } =
+                        getAdjustedPointBottoms(
+                          topTemperature,
+                          bottomTemperature,
+                        );
 
                       return (
                         <View
@@ -672,7 +687,6 @@ export default function TemperatureHistoryScreen() {
                   </View>
                 </View>
               </View>
-
             </>
           )}
         </View>
@@ -873,6 +887,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
+  selectedMarkerLine: {
+    backgroundColor: "rgba(247,251,255,0.38)",
+    bottom: 58,
+    height: chartHeight,
+    position: "absolute",
+    width: 1,
+    zIndex: 4,
+  },
   historyTooltip: {
     backgroundColor: "rgba(5,8,22,0.92)",
     borderColor: "rgba(255,255,255,0.18)",
@@ -880,8 +902,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 8,
+    bottom: tooltipBottomOffset,
     position: "absolute",
-    top: 8,
     width: tooltipWidth,
     zIndex: 5,
   },
