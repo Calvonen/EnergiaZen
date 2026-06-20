@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  GestureResponderEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 
 import { debugLog } from "@/lib/debug";
@@ -12,6 +19,12 @@ type TemperatureHistoryPoint = {
   timestamp: string;
   topTemp: number;
   bottomTemp: number;
+};
+
+type SelectedHistoryPoint = {
+  index: number;
+  point: TemperatureHistoryPoint;
+  x: number;
 };
 
 type DailyTemperatureHistoryPoint = {
@@ -32,10 +45,18 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
+const tooltipWidth = 104;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
+  timeZone: "Europe/Helsinki",
+});
+
+const tooltipTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "2-digit",
+  hour12: false,
+  minute: "2-digit",
   timeZone: "Europe/Helsinki",
 });
 
@@ -53,6 +74,10 @@ const weekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
 
 function formatHour(timestamp: string) {
   return `${timeFormatter.format(new Date(timestamp)).replace(".", "")}:00`;
+}
+
+function formatTooltipTime(timestamp: string) {
+  return tooltipTimeFormatter.format(new Date(timestamp)).replace(".", ":");
 }
 
 function formatWeekday(timestamp: string) {
@@ -345,6 +370,8 @@ export default function TemperatureHistoryScreen() {
   const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>([]);
   const [history7d, setHistory7d] = useState<TemperatureHistoryPoint[]>([]);
   const [chartWidth, setChartWidth] = useState(0);
+  const [selectedHistoryPoint, setSelectedHistoryPoint] =
+    useState<SelectedHistoryPoint | null>(null);
 
   const loadHistory = useCallback(async () => {
     const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
@@ -377,6 +404,14 @@ export default function TemperatureHistoryScreen() {
   }, [loadHistory, selectedTab]);
 
   useEffect(() => {
+    if (selectedTab === "7d") {
+      setSelectedHistoryPoint(null);
+    }
+
+    return () => setSelectedHistoryPoint(null);
+  }, [selectedTab]);
+
+  useEffect(() => {
     debugLog("history loaded", {
       h24: history24h.length,
       d7: history7d.length,
@@ -397,9 +432,50 @@ export default function TemperatureHistoryScreen() {
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDailyView = selectedTab === "7d";
+  const selectedTooltipLeft = selectedHistoryPoint
+    ? Math.min(
+        Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
+        Math.max(chartWidth - tooltipWidth, 0),
+      )
+    : 0;
   const lineSegments = useMemo(
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
+  );
+
+  const updateSelectedHistoryPoint = useCallback(
+    (event: GestureResponderEvent) => {
+      if (selectedTab !== "24h" || chartWidth <= 0) {
+        return;
+      }
+
+      const chartData = visibleHistory.filter(
+        (point): point is TemperatureHistoryPoint =>
+          !isDailyHistoryPoint(point),
+      );
+
+      if (chartData.length === 0) {
+        setSelectedHistoryPoint(null);
+        return;
+      }
+
+      const touchX = Math.min(
+        Math.max(event.nativeEvent.locationX, 0),
+        chartWidth,
+      );
+      const columnWidth = chartWidth / chartData.length;
+      const nearestIndex = Math.min(
+        Math.max(Math.round((touchX - columnWidth / 2) / columnWidth), 0),
+        chartData.length - 1,
+      );
+
+      setSelectedHistoryPoint({
+        index: nearestIndex,
+        point: chartData[nearestIndex],
+        x: columnWidth * nearestIndex + columnWidth / 2,
+      });
+    },
+    [chartWidth, selectedTab, visibleHistory],
   );
 
   return (
@@ -495,6 +571,10 @@ export default function TemperatureHistoryScreen() {
                   onLayout={(event) =>
                     setChartWidth(event.nativeEvent.layout.width)
                   }
+                  onMoveShouldSetResponder={() => selectedTab === "24h"}
+                  onResponderGrant={updateSelectedHistoryPoint}
+                  onResponderMove={updateSelectedHistoryPoint}
+                  onStartShouldSetResponder={() => selectedTab === "24h"}
                   style={styles.chartArea}
                 >
                   {chartScale.map((value) => (
@@ -522,6 +602,26 @@ export default function TemperatureHistoryScreen() {
                       ]}
                     />
                   ))}
+
+                  {selectedTab === "24h" && selectedHistoryPoint ? (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.historyTooltip,
+                        { left: selectedTooltipLeft },
+                      ]}
+                    >
+                      <Text style={styles.historyTooltipTime}>
+                        {formatTooltipTime(selectedHistoryPoint.point.timestamp)}
+                      </Text>
+                      <Text style={styles.historyTooltipTop}>
+                        Ylä {roundTemperature(selectedHistoryPoint.point.topTemp)} °C
+                      </Text>
+                      <Text style={styles.historyTooltipBottom}>
+                        Ala {roundTemperature(selectedHistoryPoint.point.bottomTemp)} °C
+                      </Text>
+                    </View>
+                  ) : null}
 
                   <View style={styles.historyColumns}>
                     {visibleHistory.map((point, index) => {
@@ -772,6 +872,31 @@ const styles = StyleSheet.create({
     shadowColor: "#36f4d4",
     shadowOpacity: 0.7,
     shadowRadius: 8,
+  },
+  historyTooltip: {
+    backgroundColor: "rgba(5,8,22,0.92)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    position: "absolute",
+    top: 8,
+    width: tooltipWidth,
+    zIndex: 5,
+  },
+  historyTooltipTime: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  historyTooltipTop: { color: "#ffad4d", fontSize: 11, fontWeight: "900" },
+  historyTooltipBottom: {
+    color: "#36f4d4",
+    fontSize: 11,
+    fontWeight: "900",
+    marginTop: 2,
   },
   hourLabel: {
     bottom: -52,
