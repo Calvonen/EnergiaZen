@@ -26,6 +26,7 @@ import {
   defaultSettings,
   defaultTankTemperature,
   loadSettings,
+  subscribeToSettings,
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 
@@ -194,25 +195,29 @@ function getTemperatureCardTheme(
   };
 }
 
-function getWarmWaterEstimate(temperature: number, settings = defaultSettings) {
-  // Tämä on alustava arvio. Myöhemmin malli kalibroidaan todellisen suihkukäyttäytymisen perusteella.
-  const tankVolumeRatio =
-    settings.tankVolumeLiters / defaultSettings.tankVolumeLiters;
-  const showersAtMaxTemperature =
-    settings.showersAtMaxTemperature * tankVolumeRatio;
-  const showersLeft =
-    ((temperature - settings.minTankTemperature) /
-      (settings.maxTankTemperature - settings.minTankTemperature)) *
-    showersAtMaxTemperature;
-  const clampedShowersLeft = clamp(
-    showersLeft,
+function getWarmWaterEstimate(
+  topTemperature: number,
+  bottomTemperature: number,
+  settings = defaultSettings,
+) {
+  // Tämä on alustava arvio. Varaajan koko pidetään asetuksissa mukana tulevaa
+  // energialaskentaa varten, mutta suihkuarvio perustuu käyttäjän määrittämään
+  // täyden varaajan suihkumäärään.
+  const temperatureRange = Math.max(
+    settings.maxTankTemperature - settings.minTankTemperature,
+    1,
+  );
+  const averageTemp = (topTemperature + bottomTemperature) / 2;
+  const fillRatio = clamp(
+    (averageTemp - settings.minTankTemperature) / temperatureRange,
     0,
-    showersAtMaxTemperature,
+    1,
   );
 
   return {
-    fillRatio: clampedShowersLeft / showersAtMaxTemperature,
-    showersLeft: clampedShowersLeft,
+    averageTemp,
+    fillRatio,
+    showersLeft: fillRatio * settings.showersAtMaxTemperature,
   };
 }
 
@@ -483,7 +488,6 @@ export default function HomeScreen() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [topTemp, setTopTemp] = useState<number | null>(null);
   const [bottomTemp, setBottomTemp] = useState<number | null>(null);
-  const [showers, setShowers] = useState<number | null>(null);
   const [heating, setHeating] = useState(false);
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
@@ -594,11 +598,16 @@ export default function HomeScreen() {
     tankTemperature,
     settings,
   );
-  const warmWaterEstimate = getWarmWaterEstimate(tankTemperature, settings);
+  const warmWaterEstimate = getWarmWaterEstimate(
+    tankTemperature,
+    bottomTemp ?? tankTemperature,
+    settings,
+  );
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(warmWaterEstimate.fillRatio * 100);
-  const warmWaterShowersValue =
-    showers === null ? "--" : formatFinnishDecimal(showers);
+  const warmWaterShowersValue = formatFinnishDecimal(
+    warmWaterEstimate.showersLeft,
+  );
   const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
@@ -612,6 +621,8 @@ export default function HomeScreen() {
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
   );
+
+  useEffect(() => subscribeToSettings(setSettings), []);
 
   useFocusEffect(
     useCallback(() => {
@@ -664,7 +675,6 @@ export default function HomeScreen() {
 
           setTopTemp(reading?.top_temp ?? null);
           setBottomTemp(reading?.bottom_temp ?? null);
-          setShowers(reading?.showers ?? null);
           setHeating(reading?.heating ?? false);
           setTankUpdatedAt(reading?.created_at ?? null);
         } catch {
@@ -674,7 +684,6 @@ export default function HomeScreen() {
 
           setTopTemp(null);
           setBottomTemp(null);
-          setShowers(null);
           setHeating(false);
           setTankUpdatedAt(null);
         } finally {
