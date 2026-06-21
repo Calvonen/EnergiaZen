@@ -1580,6 +1580,11 @@ export default function HomeScreen() {
                     return `${item.type}-${index}`;
                   }}
                   keyboardShouldPersistTaps="handled"
+                  ListHeaderComponent={
+                    <Text style={styles.saunaDebugText}>
+                      FlatList käytössä
+                    </Text>
+                  }
                   numColumns={3}
                   renderItem={({ item }) => {
                     if (item.type === "tomorrow-toggle") {
@@ -2013,6 +2018,13 @@ const styles = StyleSheet.create({
   },
   saunaScheduledListItem: {
     flex: 1,
+  },
+  saunaDebugText: {
+    color: "#fff4e6",
+    fontSize: 14,
+    fontWeight: "900",
+    marginBottom: 12,
+    textAlign: "center",
   },
   saunaTomorrowListItem: {
     minWidth: 0,
