@@ -19,6 +19,7 @@ type TemperatureHistoryPoint = {
   timestamp: string;
   topTemp: number;
   bottomTemp: number;
+  averageTemp: number;
 };
 
 type SelectedHistoryPoint = {
@@ -33,6 +34,7 @@ type DailyTemperatureHistoryPoint = {
   dayLabel: string;
   topTempAvg: number;
   bottomTempAvg: number;
+  averageTempAvg: number;
 };
 
 type TankReadingRow = {
@@ -91,6 +93,10 @@ function roundTemperature(value: number) {
   return Math.round(value * 10) / 10;
 }
 
+function calculateAverageTemperature(topTemp: number, bottomTemp: number) {
+  return (topTemp + bottomTemp) / 2;
+}
+
 function getHistoryRangeStart(rangeMs: number) {
   return new Date(Date.now() - rangeMs).toISOString();
 }
@@ -115,6 +121,10 @@ function mapTankReadingToHistoryPoint(
   }
 
   return {
+    averageTemp: calculateAverageTemperature(
+      reading.top_temp,
+      reading.bottom_temp,
+    ),
     bottomTemp: reading.bottom_temp,
     timestamp: reading.created_at,
     topTemp: reading.top_temp,
@@ -191,6 +201,7 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
   const dailyBuckets = new Map<
     string,
     {
+      averageTempSum: number;
       bottomTempSum: number;
       count: number;
       timestamp: string;
@@ -204,6 +215,7 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
 
     if (!bucket) {
       dailyBuckets.set(dayKey, {
+        averageTempSum: point.averageTemp,
         bottomTempSum: point.bottomTemp,
         count: 1,
         timestamp: point.timestamp,
@@ -212,6 +224,7 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
       return;
     }
 
+    bucket.averageTempSum += point.averageTemp;
     bucket.bottomTempSum += point.bottomTemp;
     bucket.count += 1;
     bucket.topTempSum += point.topTemp;
@@ -219,6 +232,7 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
 
   return [...dailyBuckets.entries()]
     .map(([dayKey, bucket]) => ({
+      averageTempAvg: roundTemperature(bucket.averageTempSum / bucket.count),
       bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
       dayKey,
       dayLabel: formatWeekday(bucket.timestamp),
@@ -242,6 +256,12 @@ function getBottomTemperature(
   point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
 ) {
   return "bottomTempAvg" in point ? point.bottomTempAvg : point.bottomTemp;
+}
+
+function getAverageTemperature(
+  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+) {
+  return "averageTempAvg" in point ? point.averageTempAvg : point.averageTemp;
 }
 
 function isDailyHistoryPoint(
@@ -323,6 +343,8 @@ function getChartLineSegments(
       getTopTemperature(nextPoint),
       getBottomTemperature(nextPoint),
     );
+    const currentAverageBottom = getPointBottom(getAverageTemperature(point));
+    const nextAverageBottom = getPointBottom(getAverageTemperature(nextPoint));
     const currentX = columnWidth * index + columnWidth / 2;
     const nextX = columnWidth * (index + 1) + columnWidth / 2;
 
@@ -338,6 +360,12 @@ function getChartLineSegments(
         currentBottom: currentTemps.bottomBottom,
         keyPrefix: "bottom",
         nextBottom: nextTemps.bottomBottom,
+      },
+      {
+        color: "#f7fbff",
+        currentBottom: currentAverageBottom,
+        keyPrefix: "average",
+        nextBottom: nextAverageBottom,
       },
     ].forEach(({ color, currentBottom, keyPrefix, nextBottom }) => {
       const currentY = chartHeight - currentBottom;
@@ -547,6 +575,9 @@ export default function TemperatureHistoryScreen() {
             <Text style={styles.legendBottom}>
               ● Ala-anturi {isDailyView ? "keskiarvo" : ""}
             </Text>
+            <Text style={styles.legendAverage}>
+              ● Keskilämpö {isDailyView ? "keskiarvo" : ""}
+            </Text>
           </View>
 
           {visibleHistory.length === 0 ? (
@@ -633,6 +664,13 @@ export default function TemperatureHistoryScreen() {
                           )}{" "}
                           °C
                         </Text>
+                        <Text style={styles.historyTooltipAverage}>
+                          Keski{" "}
+                          {roundTemperature(
+                            selectedHistoryPoint.point.averageTemp,
+                          )}{" "}
+                          °C
+                        </Text>
                       </View>
                     </>
                   ) : null}
@@ -641,6 +679,7 @@ export default function TemperatureHistoryScreen() {
                     {visibleHistory.map((point, index) => {
                       const topTemperature = getTopTemperature(point);
                       const bottomTemperature = getBottomTemperature(point);
+                      const averageTemperature = getAverageTemperature(point);
                       const xAxisLabel = isDailyHistoryPoint(point)
                         ? point.dayLabel
                         : formatHour(point.timestamp);
@@ -652,7 +691,7 @@ export default function TemperatureHistoryScreen() {
 
                       return (
                         <View
-                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta`}
+                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, keskilämpö ${averageTemperature} astetta`}
                           key={
                             isDailyHistoryPoint(point)
                               ? point.dayKey
@@ -672,6 +711,13 @@ export default function TemperatureHistoryScreen() {
                               styles.tempDot,
                               styles.bottomTempDot,
                               { bottom: bottomBottom },
+                            ]}
+                          />
+                          <View
+                            style={[
+                              styles.tempDot,
+                              styles.averageTempDot,
+                              { bottom: getPointBottom(averageTemperature) },
                             ]}
                           />
                           {shouldShowXAxisLabel(
@@ -822,6 +868,7 @@ const styles = StyleSheet.create({
   },
   legendTop: { color: "#ffad4d", fontSize: 12, fontWeight: "900" },
   legendBottom: { color: "#36f4d4", fontSize: 12, fontWeight: "900" },
+  legendAverage: { color: "#f7fbff", fontSize: 12, fontWeight: "900" },
   emptyHistoryText: {
     color: "#cfe9ff",
     fontSize: 15,
@@ -887,6 +934,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
+  averageTempDot: {
+    backgroundColor: "#f7fbff",
+    shadowColor: "#f7fbff",
+    shadowOpacity: 0.7,
+    shadowRadius: 8,
+  },
   selectedMarkerLine: {
     backgroundColor: "rgba(247,251,255,0.38)",
     bottom: 58,
@@ -916,6 +969,12 @@ const styles = StyleSheet.create({
   historyTooltipTop: { color: "#ffad4d", fontSize: 11, fontWeight: "900" },
   historyTooltipBottom: {
     color: "#36f4d4",
+    fontSize: 11,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  historyTooltipAverage: {
+    color: "#f7fbff",
     fontSize: 11,
     fontWeight: "900",
     marginTop: 2,
