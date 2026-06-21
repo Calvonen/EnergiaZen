@@ -56,6 +56,10 @@ const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   minute: "2-digit",
   timeZone: "Europe/Helsinki",
 });
+const helsinkiWeekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
+  timeZone: "Europe/Helsinki",
+  weekday: "short",
+});
 
 type TankReading = {
   created_at?: string | null;
@@ -88,6 +92,16 @@ type ElectricityPriceInsert = {
 type SaunaMode = "scheduled" | "now";
 
 type SaunaScheduledDay = "today" | "tomorrow";
+
+const finnishWeekdayAbbreviations: Record<string, string> = {
+  ma: "Ma",
+  ti: "Ti",
+  ke: "Ke",
+  to: "To",
+  pe: "Pe",
+  la: "La",
+  su: "Su",
+};
 
 type SaunaSelection =
   | { mode: "scheduled"; day: SaunaScheduledDay; time: string }
@@ -338,6 +352,17 @@ function getChartDayKey(day: DaySelection) {
   }
 
   return getDateKeyOffset(1);
+}
+
+function getSaunaTomorrowWeekdayLabel(now = new Date()) {
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const weekdayKey = helsinkiWeekdayFormatter
+    .format(tomorrow)
+    .replace(".", "")
+    .slice(0, 2)
+    .toLowerCase();
+
+  return finnishWeekdayAbbreviations[weekdayKey] ?? "";
 }
 
 function getDayLabel(day: DaySelection) {
@@ -666,7 +691,7 @@ export default function HomeScreen() {
   const saunaStatusText = saunaSelection
     ? saunaSelection.mode === "scheduled"
       ? saunaSelection.day === "tomorrow"
-        ? `Huomenna\nKlo\n${saunaSelection.time}`
+        ? `${getSaunaTomorrowWeekdayLabel(currentTime)}\n${saunaSelection.time}`
         : `Klo\n${saunaSelection.time}`
       : saunaSelection.duration
     : null;
@@ -1488,7 +1513,7 @@ export default function HomeScreen() {
                 <View style={styles.saunaOptionGrid}>
                   {saunaScheduledTimes.map((option) => {
                     const optionHour = Number(option.slice(0, 2));
-                    const isDisabled = optionHour <= currentHelsinkiHour;
+                    const isDisabled = optionHour < currentHelsinkiHour;
                     const isActive =
                       selectedSaunaDay === "today" &&
                       selectedSaunaTime === option;
