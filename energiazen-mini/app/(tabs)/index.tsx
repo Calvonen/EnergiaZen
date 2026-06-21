@@ -3,8 +3,6 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
-  FlatList,
-  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -57,10 +55,6 @@ const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   minute: "2-digit",
   timeZone: "Europe/Helsinki",
 });
-const helsinkiWeekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
-  timeZone: "Europe/Helsinki",
-  weekday: "short",
-});
 
 type TankReading = {
   created_at?: string | null;
@@ -89,31 +83,6 @@ type ElectricityPriceInsert = {
   end_date: string;
   price: number;
 };
-
-type SaunaModalTab = "scheduled" | "now";
-
-type SaunaScheduledDay = "today" | "tomorrow";
-
-type SaunaScheduledListItem =
-  | { type: "hour"; day: SaunaScheduledDay; hour: number }
-  | { type: "tomorrow-toggle" }
-  | { type: "spacer" };
-
-const finnishWeekdayAbbreviations: Record<string, string> = {
-  ma: "Ma",
-  ti: "Ti",
-  ke: "Ke",
-  to: "To",
-  pe: "Pe",
-  la: "La",
-  su: "Su",
-};
-
-type SaunaSelection =
-  | { mode: "scheduled"; day: SaunaScheduledDay; hour: number }
-  | { mode: "now"; hours: number };
-
-const saunaNowDurations = [1, 2, 3, 4, 5];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -356,17 +325,6 @@ function getChartDayKey(day: DaySelection) {
   return getDateKeyOffset(1);
 }
 
-function getSaunaTomorrowWeekdayLabel(now = new Date()) {
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const weekdayKey = helsinkiWeekdayFormatter
-    .format(tomorrow)
-    .replace(".", "")
-    .slice(0, 2)
-    .toLowerCase();
-
-  return finnishWeekdayAbbreviations[weekdayKey] ?? "";
-}
-
 function getDayLabel(day: DaySelection) {
   if (day === "yesterday") {
     return "Eilen";
@@ -536,21 +494,6 @@ export default function HomeScreen() {
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
-  const [saunaModalVisible, setSaunaModalVisible] = useState(false);
-  const [saunaModalTab, setSaunaModalTab] =
-    useState<SaunaModalTab>("scheduled");
-  const [selectedSaunaDay, setSelectedSaunaDay] =
-    useState<SaunaScheduledDay>("today");
-  const [selectedSaunaHour, setSelectedSaunaHour] = useState<number | null>(
-    null,
-  );
-  const [saunaTomorrowOpen, setSaunaTomorrowOpen] = useState(false);
-  const [selectedHeatNowHours, setSelectedHeatNowHours] = useState<
-    number | null
-  >(null);
-  const [saunaSelection, setSaunaSelection] = useState<SaunaSelection | null>(
-    null,
-  );
   const currentHourStart = startOfCurrentHour();
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
@@ -694,77 +637,6 @@ export default function HomeScreen() {
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
   );
-  const currentHelsinkiHour = getHelsinkiHourNumber(currentTime);
-  const saunaScheduledListData = useMemo<SaunaScheduledListItem[]>(() => {
-    const todayHours = Array.from<unknown, SaunaScheduledListItem>(
-      { length: 24 },
-      (_, hour) => ({ type: "hour", day: "today", hour }),
-    );
-
-    if (!saunaTomorrowOpen) {
-      return [...todayHours, { type: "tomorrow-toggle" }];
-    }
-
-    const tomorrowHours = Array.from<unknown, SaunaScheduledListItem>(
-      { length: 24 },
-      (_, hour) => ({ type: "hour", day: "tomorrow", hour }),
-    );
-
-    return [
-      ...todayHours,
-      { type: "tomorrow-toggle" },
-      { type: "spacer" },
-      { type: "spacer" },
-      ...tomorrowHours,
-    ];
-  }, [saunaTomorrowOpen]);
-  const formatSaunaHour = useCallback(
-    (hour: number) => `${String(hour).padStart(2, "0")}:00`,
-    [],
-  );
-  const saunaStatusText = saunaSelection
-    ? saunaSelection.mode === "scheduled"
-      ? saunaSelection.day === "tomorrow"
-        ? `${getSaunaTomorrowWeekdayLabel(currentTime)}\n${formatSaunaHour(
-            saunaSelection.hour,
-          )}`
-        : `Klo\n${formatSaunaHour(saunaSelection.hour)}`
-      : `${saunaSelection.hours} h`
-    : null;
-  const isSaunaHeatingActive = saunaSelection?.mode === "now";
-
-  const handleActivateSaunaSelection = useCallback(() => {
-    if (saunaModalTab === "scheduled") {
-      if (selectedSaunaHour === null) {
-        return;
-      }
-
-      setSaunaSelection({
-        mode: "scheduled",
-        day: selectedSaunaDay,
-        hour: selectedSaunaHour,
-      });
-      setSaunaModalVisible(false);
-      return;
-    }
-
-    if (selectedHeatNowHours === null) {
-      return;
-    }
-
-    setSaunaSelection({ mode: "now", hours: selectedHeatNowHours });
-    setSaunaModalVisible(false);
-  }, [
-    saunaModalTab,
-    selectedHeatNowHours,
-    selectedSaunaDay,
-    selectedSaunaHour,
-  ]);
-
-  const handleCancelSaunaSelection = useCallback(() => {
-    setSaunaModalVisible(false);
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
@@ -1198,73 +1070,34 @@ export default function HomeScreen() {
                 <Text style={styles.cardLabel}>Lämmin vesi</Text>
               </View>
               <View style={styles.warmWaterContent}>
-                <View style={styles.warmWaterCardsRow}>
-                  <View style={styles.warmWaterTankCard}>
-                    <View style={styles.tankVisual}>
-                      <View
-                        style={[
-                          styles.tankFill,
-                          {
-                            backgroundColor: warmWaterCardTheme.fillColor,
-                            height: `${warmWaterFillPercent}%`,
-                            shadowColor: warmWaterCardTheme.shadowColor,
-                          },
-                        ]}
-                      />
-                      <View
-                        style={[
-                          styles.tankSurface,
-                          {
-                            backgroundColor: warmWaterCardTheme.surfaceColor,
-                            bottom: `${warmWaterFillPercent}%`,
-                          },
-                        ]}
-                      />
-                      <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-                      <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-                      <View
-                        style={[styles.tankBubble, styles.tankBubbleThree]}
-                      />
-                      <Text style={styles.tankAverageTemperature}>
-                        {warmWaterAverageTempLabel}
-                      </Text>
-                    </View>
-                  </View>
-                  <Pressable
-                    accessibilityLabel="Sauna"
-                    accessibilityRole="button"
-                    android_ripple={{ color: "rgba(255,149,0,0.16)" }}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      setSaunaModalVisible(true);
-                    }}
-                    style={({ pressed }) => [
-                      styles.saunaCard,
-                      isSaunaHeatingActive && styles.activeSaunaCard,
-                      pressed && styles.pressedMetricCard,
-                    ]}
-                  >
-                    <Text numberOfLines={1} style={styles.saunaLabel}>
-                      SAUNA
+                <View style={styles.warmWaterTankArea}>
+                  <View style={styles.tankVisual}>
+                    <View
+                      style={[
+                        styles.tankFill,
+                        {
+                          backgroundColor: warmWaterCardTheme.fillColor,
+                          height: `${warmWaterFillPercent}%`,
+                          shadowColor: warmWaterCardTheme.shadowColor,
+                        },
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.tankSurface,
+                        {
+                          backgroundColor: warmWaterCardTheme.surfaceColor,
+                          bottom: `${warmWaterFillPercent}%`,
+                        },
+                      ]}
+                    />
+                    <View style={[styles.tankBubble, styles.tankBubbleOne]} />
+                    <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
+                    <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                    <Text style={styles.tankAverageTemperature}>
+                      {warmWaterAverageTempLabel}
                     </Text>
-                    {isSaunaHeatingActive ? (
-                      <>
-                        <Text
-                          accessibilityLabel="Sauna lämmittää"
-                          style={styles.saunaFlameIcon}
-                        >
-                          🔥
-                        </Text>
-                        <Text style={styles.saunaStatusText}>
-                          {saunaStatusText}
-                        </Text>
-                      </>
-                    ) : saunaStatusText ? (
-                      <Text style={styles.saunaStatusText}>
-                        {saunaStatusText}
-                      </Text>
-                    ) : null}
-                  </Pressable>
+                  </View>
                 </View>
                 <View style={styles.waterShowersInfo}>
                   <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
@@ -1509,207 +1342,6 @@ export default function HomeScreen() {
           </View>
         </View>
       </ScrollView>
-
-      <Modal
-        animationType="slide"
-        onRequestClose={() => setSaunaModalVisible(false)}
-        transparent
-        visible={saunaModalVisible}
-      >
-        <Pressable
-          accessibilityLabel="Sulje saunan valinta"
-          onPress={() => setSaunaModalVisible(false)}
-          style={styles.saunaModalOverlay}
-        >
-          <Pressable
-            style={styles.saunaSheet}
-            onPress={(event) => event.stopPropagation()}
-          >
-            <View style={styles.saunaModalHeader}>
-              <View style={styles.saunaSheetHandle} />
-              <Text style={styles.saunaSheetTitle}>Sauna</Text>
-            </View>
-
-            <View style={styles.saunaTabs}>
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: saunaModalTab === "scheduled" }}
-                onPress={() => setSaunaModalTab("scheduled")}
-                style={[
-                  styles.saunaTabButton,
-                  saunaModalTab === "scheduled" && styles.activeSaunaTabButton,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.saunaTabText,
-                    saunaModalTab === "scheduled" && styles.activeSaunaTabText,
-                  ]}
-                >
-                  Ajastettu
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: saunaModalTab === "now" }}
-                onPress={() => setSaunaModalTab("now")}
-                style={[
-                  styles.saunaTabButton,
-                  saunaModalTab === "now" && styles.activeSaunaTabButton,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.saunaTabText,
-                    saunaModalTab === "now" && styles.activeSaunaTabText,
-                  ]}
-                >
-                  Lämmitä nyt
-                </Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.saunaContentArea}>
-              {saunaModalTab === "scheduled" ? (
-                <FlatList
-                  columnWrapperStyle={styles.saunaScheduledListRow}
-                  contentContainerStyle={{ paddingTop: 24, paddingBottom: 140 }}
-                  data={saunaScheduledListData}
-                  keyExtractor={(item, index) => {
-                    if (item.type === "hour") {
-                      return `${item.day}-${item.hour}`;
-                    }
-
-                    return `${item.type}-${index}`;
-                  }}
-                  keyboardShouldPersistTaps="handled"
-                  nestedScrollEnabled={true}
-                  numColumns={3}
-                  renderItem={({ item }) => {
-                    if (item.type === "tomorrow-toggle") {
-                      return (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityState={{ expanded: saunaTomorrowOpen }}
-                          onPress={() =>
-                            setSaunaTomorrowOpen((isOpen) => !isOpen)
-                          }
-                          style={[
-                            styles.saunaTomorrowToggle,
-                            styles.saunaScheduledListItem,
-                            styles.saunaTomorrowListItem,
-                          ]}
-                        >
-                          <Text style={styles.saunaTomorrowToggleText}>
-                            Huomenna
-                          </Text>
-                          <Text style={styles.saunaTomorrowToggleIcon}>
-                            {saunaTomorrowOpen ? "−" : "+"}
-                          </Text>
-                        </Pressable>
-                      );
-                    }
-
-                    if (item.type === "spacer") {
-                      return (
-                        <View
-                          pointerEvents="none"
-                          style={styles.saunaScheduledListItem}
-                        />
-                      );
-                    }
-
-                    const isDisabled =
-                      item.day === "today" && item.hour <= currentHelsinkiHour;
-                    const isActive =
-                      selectedSaunaDay === item.day &&
-                      selectedSaunaHour === item.hour;
-
-                    return (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{
-                          disabled: isDisabled,
-                          selected: isActive,
-                        }}
-                        disabled={isDisabled}
-                        onPress={() => {
-                          setSelectedSaunaDay(item.day);
-                          setSelectedSaunaHour(item.hour);
-                        }}
-                        style={[
-                          styles.saunaOptionButton,
-                          styles.saunaScheduledListItem,
-                          isActive && styles.activeSaunaOptionButton,
-                          isDisabled && styles.disabledSaunaOptionButton,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.saunaOptionText,
-                            isActive && styles.activeSaunaOptionText,
-                            isDisabled && styles.disabledSaunaOptionText,
-                          ]}
-                        >
-                          {formatSaunaHour(item.hour)}
-                        </Text>
-                      </Pressable>
-                    );
-                  }}
-                  scrollEnabled={true}
-                  showsVerticalScrollIndicator={false}
-                  style={{ flex: 1 }}
-                />
-              ) : (
-                <View style={styles.saunaOptionGrid}>
-                  {saunaNowDurations.map((hours) => {
-                    const isActive = selectedHeatNowHours === hours;
-
-                    return (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: isActive }}
-                        key={hours}
-                        onPress={() => setSelectedHeatNowHours(hours)}
-                        style={[
-                          styles.saunaOptionButton,
-                          isActive && styles.activeSaunaOptionButton,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.saunaOptionText,
-                            isActive && styles.activeSaunaOptionText,
-                          ]}
-                        >
-                          {hours} h
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-
-            <View style={styles.saunaModalActions}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={handleCancelSaunaSelection}
-                style={styles.saunaCancelButton}
-              >
-                <Text style={styles.saunaCancelButtonText}>Peruuta</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                onPress={handleActivateSaunaSelection}
-                style={styles.saunaActivateButton}
-              >
-                <Text style={styles.saunaActivateButtonText}>Aktivoi</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -1867,258 +1499,17 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     alignSelf: "stretch",
     flex: 1,
-    justifyContent: "flex-end",
-    marginTop: 12,
+    justifyContent: "center",
+    marginTop: 10,
     width: "100%",
   },
-  warmWaterCardsRow: {
-    alignItems: "stretch",
+  warmWaterTankArea: {
+    alignItems: "center",
     alignSelf: "stretch",
     flex: 1,
-    flexDirection: "row",
-    gap: 8,
-    minHeight: 74,
+    justifyContent: "center",
+    minHeight: 108,
     width: "100%",
-  },
-  warmWaterTankCard: {
-    alignItems: "flex-start",
-    flex: 3,
-    justifyContent: "center",
-    minWidth: 0,
-  },
-  saunaCard: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,130,35,0.14)",
-    borderColor: "rgba(255,166,77,0.72)",
-    borderRadius: 22,
-    borderWidth: 1.4,
-    flex: 2,
-    justifyContent: "flex-start",
-    minWidth: 0,
-    overflow: "hidden",
-    paddingHorizontal: 6,
-    paddingTop: 8,
-    shadowColor: "#ff9b30",
-    shadowOpacity: 0.24,
-    shadowRadius: 16,
-  },
-  activeSaunaCard: {
-    backgroundColor: "rgba(255,126,28,0.28)",
-    borderColor: "rgba(255,183,77,0.96)",
-    shadowColor: "#ff7a1a",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.74,
-    shadowRadius: 24,
-  },
-  saunaLabel: {
-    color: "#ffd4a3",
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 0.2,
-    lineHeight: 14,
-    textAlign: "center",
-  },
-  saunaFlameIcon: {
-    fontSize: 22,
-    lineHeight: 26,
-    marginTop: 5,
-    textAlign: "center",
-  },
-  saunaStatusText: {
-    color: "#ffffff",
-    fontSize: 13,
-    fontWeight: "900",
-    lineHeight: 17,
-    marginTop: 10,
-    textAlign: "center",
-  },
-  saunaModalOverlay: {
-    alignItems: "stretch",
-    backgroundColor: "rgba(2,6,18,0.62)",
-    flex: 1,
-    justifyContent: "flex-end",
-  },
-  saunaSheet: {
-    backgroundColor: "#0a1024",
-    borderColor: "rgba(255,255,255,0.14)",
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    borderWidth: 1,
-    height: "82%",
-    maxHeight: "86%",
-    paddingBottom: 30,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    shadowColor: "#ff9b30",
-    shadowOpacity: 0.28,
-    shadowRadius: 26,
-  },
-  saunaModalHeader: {
-    flexShrink: 0,
-  },
-  saunaSheetHandle: {
-    alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.28)",
-    borderRadius: 999,
-    height: 5,
-    marginBottom: 16,
-    width: 46,
-  },
-  saunaSheetTitle: {
-    color: "#f8fbff",
-    fontSize: 25,
-    fontWeight: "900",
-    letterSpacing: -0.4,
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  saunaTabs: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: "rgba(255,255,255,0.12)",
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 6,
-    marginBottom: 18,
-    padding: 5,
-  },
-  saunaTabButton: {
-    alignItems: "center",
-    borderColor: "transparent",
-    borderRadius: 999,
-    borderWidth: 1,
-    flex: 1,
-    paddingVertical: 11,
-  },
-  activeSaunaTabButton: {
-    backgroundColor: "rgba(255,155,48,0.2)",
-    borderColor: "rgba(255,212,163,0.44)",
-  },
-  saunaTabText: {
-    color: "#8ea4cf",
-    fontSize: 14,
-    fontWeight: "900",
-  },
-  activeSaunaTabText: {
-    color: "#fff4e6",
-  },
-  saunaModalTitle: {
-    color: "#ffffff",
-    fontSize: 20,
-    fontWeight: "900",
-    marginBottom: 14,
-    textAlign: "center",
-  },
-  saunaModalSection: {
-    marginBottom: 2,
-  },
-  saunaContentArea: {
-    flex: 1,
-    minHeight: 260,
-  },
-  saunaScheduledListRow: {
-    gap: 10,
-    marginBottom: 10,
-  },
-  saunaScheduledListItem: {
-    flex: 1,
-  },
-  saunaTomorrowListItem: {
-    minWidth: 0,
-  },
-  saunaOptionGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    justifyContent: "center",
-    marginBottom: 20,
-  },
-  saunaTomorrowToggle: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,155,48,0.12)",
-    borderColor: "rgba(255,212,163,0.36)",
-    borderRadius: 18,
-    borderWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-  },
-  saunaTomorrowToggleText: {
-    color: "#fff4e6",
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  saunaTomorrowToggleIcon: {
-    color: "#ffd4a3",
-    fontSize: 22,
-    fontWeight: "900",
-    lineHeight: 24,
-  },
-  saunaOptionButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderColor: "rgba(255,255,255,0.13)",
-    borderRadius: 18,
-    borderWidth: 1,
-    minWidth: 78,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-  },
-  activeSaunaOptionButton: {
-    backgroundColor: "rgba(255,155,48,0.22)",
-    borderColor: "#ffd4a3",
-  },
-  disabledSaunaOptionButton: {
-    backgroundColor: "rgba(255,255,255,0.035)",
-    borderColor: "rgba(255,255,255,0.08)",
-    opacity: 0.46,
-  },
-  saunaOptionText: {
-    color: "#d9e9ff",
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  activeSaunaOptionText: {
-    color: "#ffffff",
-  },
-  disabledSaunaOptionText: {
-    color: "#77849e",
-  },
-  saunaModalActions: {
-    flexDirection: "row",
-    gap: 12,
-    paddingTop: 14,
-  },
-  saunaCancelButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderColor: "rgba(255,255,255,0.14)",
-    borderRadius: 18,
-    borderWidth: 1,
-    flex: 1,
-    paddingVertical: 14,
-  },
-  saunaActivateButton: {
-    alignItems: "center",
-    backgroundColor: "#ff9b30",
-    borderRadius: 18,
-    flex: 1,
-    paddingVertical: 14,
-    shadowColor: "#ff9b30",
-    shadowOpacity: 0.36,
-    shadowRadius: 16,
-  },
-  saunaCancelButtonText: {
-    color: "#d9e9ff",
-    fontSize: 15,
-    fontWeight: "900",
-  },
-  saunaActivateButtonText: {
-    color: "#180d03",
-    fontSize: 15,
-    fontWeight: "900",
   },
   pressedMetricCard: {
     opacity: 0.82,
@@ -2234,12 +1625,12 @@ const styles = StyleSheet.create({
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
     borderColor: "rgba(221,247,255,0.72)",
-    borderRadius: 20,
+    borderRadius: 26,
     borderWidth: 2,
-    height: 74,
+    height: 112,
     overflow: "hidden",
     position: "relative",
-    width: 56,
+    width: 82,
   },
   tankFill: {
     backgroundColor: "#40d9ff",
@@ -2284,18 +1675,18 @@ const styles = StyleSheet.create({
   },
   tankAverageTemperature: {
     color: "#ffffff",
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: "900",
     left: 0,
     letterSpacing: -0.4,
-    lineHeight: 24,
+    lineHeight: 32,
     position: "absolute",
     right: 0,
     textAlign: "center",
     textShadowColor: "rgba(0,0,0,0.34)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
-    top: 23,
+    top: 39,
   },
   waterShowersInfo: {
     alignItems: "center",
