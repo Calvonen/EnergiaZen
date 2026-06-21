@@ -91,7 +91,10 @@ type SaunaSelection =
   | { mode: "scheduled"; time: string }
   | { mode: "now"; duration: string };
 
-const saunaScheduledTimes = ["18:00", "19:00", "20:00", "21:00"];
+const saunaScheduledTimes = Array.from(
+  { length: 24 },
+  (_, hour) => `${String(hour).padStart(2, "0")}:00`,
+);
 const saunaNowDurations = ["1 h", "2 h", "3 h", "4 h", "5 h"];
 
 function clamp(value: number, min: number, max: number) {
@@ -654,11 +657,13 @@ export default function HomeScreen() {
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
   );
+  const currentHelsinkiHour = getHelsinkiHourNumber(currentTime);
   const saunaStatusText = saunaSelection
     ? saunaSelection.mode === "scheduled"
-      ? `Klo ${saunaSelection.time.replace(":00", "")}`
-      : `Nyt ${saunaSelection.duration}`
+      ? `Klo ${saunaSelection.time}`
+      : saunaSelection.duration
     : null;
+  const isSaunaHeatingActive = saunaSelection?.mode === "now";
 
   const handleActivateSaunaSelection = useCallback(() => {
     setSaunaSelection(
@@ -1149,13 +1154,26 @@ export default function HomeScreen() {
                     }}
                     style={({ pressed }) => [
                       styles.saunaCard,
+                      isSaunaHeatingActive && styles.activeSaunaCard,
                       pressed && styles.pressedMetricCard,
                     ]}
                   >
                     <Text numberOfLines={1} style={styles.saunaLabel}>
                       SAUNA
                     </Text>
-                    {saunaStatusText ? (
+                    {isSaunaHeatingActive ? (
+                      <>
+                        <Text
+                          accessibilityLabel="Sauna lämmittää"
+                          style={styles.saunaFlameIcon}
+                        >
+                          🔥
+                        </Text>
+                        <Text numberOfLines={1} style={styles.saunaStatusText}>
+                          {saunaStatusText}
+                        </Text>
+                      </>
+                    ) : saunaStatusText ? (
                       <Text numberOfLines={1} style={styles.saunaStatusText}>
                         {saunaStatusText}
                       </Text>
@@ -1463,6 +1481,9 @@ export default function HomeScreen() {
                 ? saunaScheduledTimes
                 : saunaNowDurations
               ).map((option) => {
+                const optionHour = Number(option.slice(0, 2));
+                const isPastScheduledHour =
+                  saunaMode === "scheduled" && optionHour < currentHelsinkiHour;
                 const isActive =
                   saunaMode === "scheduled"
                     ? selectedSaunaTime === option
@@ -1471,8 +1492,13 @@ export default function HomeScreen() {
                 return (
                   <Pressable
                     accessibilityRole="button"
+                    disabled={isPastScheduledHour}
                     key={option}
                     onPress={() => {
+                      if (isPastScheduledHour) {
+                        return;
+                      }
+
                       if (saunaMode === "scheduled") {
                         setSelectedSaunaTime(option);
                       } else {
@@ -1482,12 +1508,14 @@ export default function HomeScreen() {
                     style={[
                       styles.saunaOptionButton,
                       isActive && styles.activeSaunaOptionButton,
+                      isPastScheduledHour && styles.disabledSaunaOptionButton,
                     ]}
                   >
                     <Text
                       style={[
                         styles.saunaOptionText,
                         isActive && styles.activeSaunaOptionText,
+                        isPastScheduledHour && styles.disabledSaunaOptionText,
                       ]}
                     >
                       {option}
@@ -1708,12 +1736,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.24,
     shadowRadius: 16,
   },
+  activeSaunaCard: {
+    backgroundColor: "rgba(255,126,28,0.28)",
+    borderColor: "rgba(255,183,77,0.96)",
+    shadowColor: "#ff7a1a",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.74,
+    shadowRadius: 24,
+  },
   saunaLabel: {
     color: "#ffd4a3",
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 0.2,
     lineHeight: 14,
+    textAlign: "center",
+  },
+  saunaFlameIcon: {
+    fontSize: 22,
+    lineHeight: 26,
+    marginTop: 5,
     textAlign: "center",
   },
   saunaStatusText: {
@@ -1817,6 +1859,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,155,48,0.22)",
     borderColor: "#ffd4a3",
   },
+  disabledSaunaOptionButton: {
+    backgroundColor: "rgba(255,255,255,0.035)",
+    borderColor: "rgba(255,255,255,0.08)",
+    opacity: 0.46,
+  },
   saunaOptionText: {
     color: "#d9e9ff",
     fontSize: 16,
@@ -1824,6 +1871,9 @@ const styles = StyleSheet.create({
   },
   activeSaunaOptionText: {
     color: "#ffffff",
+  },
+  disabledSaunaOptionText: {
+    color: "#77849e",
   },
   saunaModalActions: {
     flexDirection: "row",
