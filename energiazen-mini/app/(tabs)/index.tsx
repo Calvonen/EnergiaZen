@@ -1514,35 +1514,42 @@ export default function HomeScreen() {
             <View style={styles.saunaSheetHandle} />
             <Text style={styles.saunaSheetTitle}>Sauna</Text>
             <View style={styles.saunaTabs}>
-              {(
-                [
-                  ["scheduled", "Ajastettu"],
-                  ["now", "Lämmitä nyt"],
-                ] as const
-              ).map(([mode, label]) => {
-                const isActive = saunaModalTab === mode;
-
-                return (
-                  <Pressable
-                    accessibilityRole="tab"
-                    key={mode}
-                    onPress={() => setSaunaModalTab(mode)}
-                    style={[
-                      styles.saunaTabButton,
-                      isActive && styles.activeSaunaTabButton,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.saunaTabText,
-                        isActive && styles.activeSaunaTabText,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+              <Pressable
+                accessibilityRole="tab"
+                accessibilityState={{ selected: saunaModalTab === "scheduled" }}
+                onPress={() => setSaunaModalTab("scheduled")}
+                style={[
+                  styles.saunaTabButton,
+                  saunaModalTab === "scheduled" && styles.activeSaunaTabButton,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.saunaTabText,
+                    saunaModalTab === "scheduled" && styles.activeSaunaTabText,
+                  ]}
+                >
+                  Ajastettu
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="tab"
+                accessibilityState={{ selected: saunaModalTab === "now" }}
+                onPress={() => setSaunaModalTab("now")}
+                style={[
+                  styles.saunaTabButton,
+                  saunaModalTab === "now" && styles.activeSaunaTabButton,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.saunaTabText,
+                    saunaModalTab === "now" && styles.activeSaunaTabText,
+                  ]}
+                >
+                  Lämmitä nyt
+                </Text>
+              </Pressable>
             </View>
 
             <Text style={styles.saunaModalTitle}>
