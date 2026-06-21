@@ -623,6 +623,9 @@ export default function HomeScreen() {
     ? formatFinnishDecimal(warmWaterEstimate.showersLeft)
     : "--";
   const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
+  const warmWaterAverageTempLabel = warmWaterEstimate
+    ? `${Math.round(warmWaterEstimate.averageTemp)}°`
+    : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
@@ -1094,8 +1097,16 @@ export default function HomeScreen() {
                 <View style={[styles.tankBubble, styles.tankBubbleOne]} />
                 <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
                 <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                <Text style={styles.tankAverageTemperature}>
+                  {warmWaterAverageTempLabel}
+                </Text>
               </View>
-              <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
+              <View style={styles.waterShowersInfo}>
+                <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
+                <Text numberOfLines={1} style={styles.waterDescriptionText}>
+                  Lämmintä suihkua jäljellä
+                </Text>
+              </View>
             </Pressable>
           </View>
         </View>
@@ -1648,13 +1659,41 @@ const styles = StyleSheet.create({
     left: 25,
     opacity: 0.72,
   },
+  tankAverageTemperature: {
+    color: "#ffffff",
+    fontSize: 20,
+    fontWeight: "900",
+    left: 0,
+    letterSpacing: -0.4,
+    lineHeight: 24,
+    position: "absolute",
+    right: 0,
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.34)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 8,
+    top: 23,
+  },
+  waterShowersInfo: {
+    alignItems: "center",
+    alignSelf: "stretch",
+    marginTop: 6,
+  },
   waterValue: {
     color: "#f8fbff",
     fontSize: 16,
     fontWeight: "900",
     letterSpacing: -0.2,
     lineHeight: 20,
-    marginTop: 6,
+    textAlign: "center",
+  },
+  waterDescriptionText: {
+    alignSelf: "stretch",
+    color: "rgba(247,251,255,0.62)",
+    fontSize: 8,
+    fontWeight: "800",
+    lineHeight: 10,
+    marginTop: 1,
     textAlign: "center",
   },
   chartCard: {
