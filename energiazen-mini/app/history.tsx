@@ -24,7 +24,7 @@ type TemperatureHistoryPoint = {
 
 type SelectedHistoryPoint = {
   index: number;
-  point: TemperatureHistoryPoint;
+  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint;
   x: number;
 };
 
@@ -47,7 +47,8 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
-const tooltipWidth = 104;
+const tooltipWidth = 116;
+const warmWaterTurquoise = "#36f4d4";
 const tooltipBottomOffset = 28;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -316,6 +317,7 @@ function shouldShowXAxisLabel(
 type ChartLineSegment = {
   angle: string;
   color: string;
+  height: number;
   key: string;
   left: number;
   top: number;
@@ -356,34 +358,38 @@ function getChartLineSegments(
         nextBottom: nextTemps.topBottom,
       },
       {
-        color: "#36f4d4",
+        color: warmWaterTurquoise,
         currentBottom: currentTemps.bottomBottom,
         keyPrefix: "bottom",
         nextBottom: nextTemps.bottomBottom,
       },
       {
-        color: "#f7fbff",
+        color: warmWaterTurquoise,
         currentBottom: currentAverageBottom,
         keyPrefix: "average",
+        lineHeight: 1.5,
         nextBottom: nextAverageBottom,
       },
-    ].forEach(({ color, currentBottom, keyPrefix, nextBottom }) => {
-      const currentY = chartHeight - currentBottom;
-      const nextY = chartHeight - nextBottom;
-      const deltaX = nextX - currentX;
-      const deltaY = nextY - currentY;
-      const width = Math.hypot(deltaX, deltaY);
-      const angle = `${Math.atan2(deltaY, deltaX)}rad`;
+    ].forEach(
+      ({ color, currentBottom, keyPrefix, lineHeight = 2, nextBottom }) => {
+        const currentY = chartHeight - currentBottom;
+        const nextY = chartHeight - nextBottom;
+        const deltaX = nextX - currentX;
+        const deltaY = nextY - currentY;
+        const width = Math.hypot(deltaX, deltaY);
+        const angle = `${Math.atan2(deltaY, deltaX)}rad`;
 
-      segments.push({
-        angle,
-        color,
-        key: `${keyPrefix}-${index}`,
-        left: currentX,
-        top: currentY,
-        width,
-      });
-    });
+        segments.push({
+          angle,
+          color,
+          height: lineHeight,
+          key: `${keyPrefix}-${index}`,
+          left: currentX,
+          top: currentY,
+          width,
+        });
+      },
+    );
   });
 
   return segments;
@@ -470,14 +476,11 @@ export default function TemperatureHistoryScreen() {
 
   const updateSelectedHistoryPoint = useCallback(
     (event: GestureResponderEvent) => {
-      if (selectedTab !== "24h" || chartWidth <= 0) {
+      if (chartWidth <= 0) {
         return;
       }
 
-      const chartData = visibleHistory.filter(
-        (point): point is TemperatureHistoryPoint =>
-          !isDailyHistoryPoint(point),
-      );
+      const chartData = visibleHistory;
 
       if (chartData.length === 0) {
         setSelectedHistoryPoint(null);
@@ -500,7 +503,7 @@ export default function TemperatureHistoryScreen() {
         x: columnWidth * nearestIndex + columnWidth / 2,
       });
     },
-    [chartWidth, selectedTab, visibleHistory],
+    [chartWidth, visibleHistory],
   );
 
   return (
@@ -555,7 +558,24 @@ export default function TemperatureHistoryScreen() {
                 Ylä °C
               </Text>
               <Text style={styles.topSummaryValue}>
-                {latestPoint ? getTopTemperature(latestPoint) : "--"}
+                {latestPoint
+                  ? roundTemperature(getTopTemperature(latestPoint)).toFixed(1)
+                  : "--"}
+              </Text>
+            </View>
+            <View style={styles.summaryPill}>
+              <Text numberOfLines={1} style={styles.summaryLabel}>
+                Keski °C
+              </Text>
+              <Text style={styles.averageSummaryValue}>
+                {latestPoint
+                  ? roundTemperature(
+                      calculateAverageTemperature(
+                        getTopTemperature(latestPoint),
+                        getBottomTemperature(latestPoint),
+                      ),
+                    ).toFixed(1)
+                  : "--"}
               </Text>
             </View>
             <View style={styles.summaryPill}>
@@ -563,7 +583,11 @@ export default function TemperatureHistoryScreen() {
                 Ala °C
               </Text>
               <Text style={styles.bottomSummaryValue}>
-                {latestPoint ? getBottomTemperature(latestPoint) : "--"}
+                {latestPoint
+                  ? roundTemperature(getBottomTemperature(latestPoint)).toFixed(
+                      1,
+                    )
+                  : "--"}
               </Text>
             </View>
           </View>
@@ -599,10 +623,10 @@ export default function TemperatureHistoryScreen() {
                   onLayout={(event) =>
                     setChartWidth(event.nativeEvent.layout.width)
                   }
-                  onMoveShouldSetResponder={() => selectedTab === "24h"}
+                  onMoveShouldSetResponder={() => true}
                   onResponderGrant={updateSelectedHistoryPoint}
                   onResponderMove={updateSelectedHistoryPoint}
-                  onStartShouldSetResponder={() => selectedTab === "24h"}
+                  onStartShouldSetResponder={() => true}
                   style={styles.chartArea}
                 >
                   {chartScale.map((value) => (
@@ -622,6 +646,7 @@ export default function TemperatureHistoryScreen() {
                         styles.chartLine,
                         {
                           backgroundColor: segment.color,
+                          height: segment.height,
                           left: segment.left,
                           top: segment.top,
                           transform: [{ rotateZ: segment.angle }],
@@ -631,7 +656,7 @@ export default function TemperatureHistoryScreen() {
                     />
                   ))}
 
-                  {selectedTab === "24h" && selectedHistoryPoint ? (
+                  {selectedHistoryPoint ? (
                     <>
                       <View
                         pointerEvents="none"
@@ -654,21 +679,23 @@ export default function TemperatureHistoryScreen() {
                         </Text>
                         <Text style={styles.historyTooltipTop}>
                           Ylä{" "}
-                          {roundTemperature(selectedHistoryPoint.point.topTemp)}{" "}
+                          {roundTemperature(
+                            getTopTemperature(selectedHistoryPoint.point),
+                          ).toFixed(1)}{" "}
                           °C
                         </Text>
                         <Text style={styles.historyTooltipBottom}>
                           Ala{" "}
                           {roundTemperature(
-                            selectedHistoryPoint.point.bottomTemp,
-                          )}{" "}
+                            getBottomTemperature(selectedHistoryPoint.point),
+                          ).toFixed(1)}{" "}
                           °C
                         </Text>
                         <Text style={styles.historyTooltipAverage}>
                           Keski{" "}
                           {roundTemperature(
-                            selectedHistoryPoint.point.averageTemp,
-                          )}{" "}
+                            getAverageTemperature(selectedHistoryPoint.point),
+                          ).toFixed(1)}{" "}
                           °C
                         </Text>
                       </View>
@@ -854,8 +881,14 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 3,
   },
+  averageSummaryValue: {
+    color: warmWaterTurquoise,
+    fontSize: 29,
+    fontWeight: "900",
+    marginTop: 3,
+  },
   bottomSummaryValue: {
-    color: "#36f4d4",
+    color: warmWaterTurquoise,
     fontSize: 29,
     fontWeight: "900",
     marginTop: 3,
@@ -867,8 +900,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   legendTop: { color: "#ffad4d", fontSize: 12, fontWeight: "900" },
-  legendBottom: { color: "#36f4d4", fontSize: 12, fontWeight: "900" },
-  legendAverage: { color: "#f7fbff", fontSize: 12, fontWeight: "900" },
+  legendBottom: { color: warmWaterTurquoise, fontSize: 12, fontWeight: "900" },
+  legendAverage: { color: warmWaterTurquoise, fontSize: 12, fontWeight: "900" },
   emptyHistoryText: {
     color: "#cfe9ff",
     fontSize: 15,
@@ -898,7 +931,6 @@ const styles = StyleSheet.create({
   },
   chartLine: {
     borderRadius: 999,
-    height: 2,
     opacity: 0.78,
     position: "absolute",
     transformOrigin: "left center",
@@ -929,14 +961,14 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   bottomTempDot: {
-    backgroundColor: "#36f4d4",
-    shadowColor: "#36f4d4",
+    backgroundColor: warmWaterTurquoise,
+    shadowColor: warmWaterTurquoise,
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
   averageTempDot: {
-    backgroundColor: "#f7fbff",
-    shadowColor: "#f7fbff",
+    backgroundColor: warmWaterTurquoise,
+    shadowColor: warmWaterTurquoise,
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
@@ -968,13 +1000,13 @@ const styles = StyleSheet.create({
   },
   historyTooltipTop: { color: "#ffad4d", fontSize: 11, fontWeight: "900" },
   historyTooltipBottom: {
-    color: "#36f4d4",
+    color: warmWaterTurquoise,
     fontSize: 11,
     fontWeight: "900",
     marginTop: 2,
   },
   historyTooltipAverage: {
-    color: "#f7fbff",
+    color: warmWaterTurquoise,
     fontSize: 11,
     fontWeight: "900",
     marginTop: 2,
