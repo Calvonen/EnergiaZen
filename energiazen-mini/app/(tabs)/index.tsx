@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -84,6 +85,15 @@ type ElectricityPriceInsert = {
   price: number;
 };
 
+type SaunaMode = "scheduled" | "now";
+
+type SaunaSelection =
+  | { mode: "scheduled"; time: string }
+  | { mode: "now"; duration: string };
+
+const saunaScheduledTimes = ["18:00", "19:00", "20:00", "21:00"];
+const saunaNowDurations = ["1 h", "2 h", "3 h", "4 h", "5 h"];
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -116,10 +126,7 @@ function mixColors(startColor: string, endColor: string, ratio: number) {
   });
 }
 
-function getTemperatureColor(
-  temperature: number,
-  settings = defaultSettings,
-) {
+function getTemperatureColor(temperature: number, settings = defaultSettings) {
   const normalizedTemperature = clamp(
     temperature,
     settings.minTankTemperature,
@@ -131,7 +138,8 @@ function getTemperatureColor(
     1,
   );
   const greenThreshold = settings.minTankTemperature + temperatureRange / 3;
-  const orangeThreshold = settings.minTankTemperature + (temperatureRange * 2) / 3;
+  const orangeThreshold =
+    settings.minTankTemperature + (temperatureRange * 2) / 3;
 
   if (normalizedTemperature <= greenThreshold) {
     return mixColors(
@@ -441,7 +449,8 @@ async function saveElectricityPrices(prices: HourlyPrice[]) {
         .filter((startDate): startDate is string => Boolean(startDate)),
     );
     const newElectricityPrices = electricityPrices.filter(
-      (item) => !existingStartDates.has(new Date(item.start_date).toISOString()),
+      (item) =>
+        !existingStartDates.has(new Date(item.start_date).toISOString()),
     );
 
     if (newElectricityPrices.length > 0) {
@@ -495,6 +504,13 @@ export default function HomeScreen() {
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
+  const [isSaunaModalVisible, setIsSaunaModalVisible] = useState(false);
+  const [saunaMode, setSaunaMode] = useState<SaunaMode>("scheduled");
+  const [selectedSaunaTime, setSelectedSaunaTime] = useState("19:00");
+  const [selectedSaunaDuration, setSelectedSaunaDuration] = useState("2 h");
+  const [saunaSelection, setSaunaSelection] = useState<SaunaSelection | null>(
+    null,
+  );
   const currentHourStart = startOfCurrentHour();
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
@@ -638,6 +654,25 @@ export default function HomeScreen() {
       !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
     null,
   );
+  const saunaStatusText = saunaSelection
+    ? saunaSelection.mode === "scheduled"
+      ? `Klo ${saunaSelection.time.replace(":00", "")}`
+      : `Nyt ${saunaSelection.duration}`
+    : null;
+
+  const handleActivateSaunaSelection = useCallback(() => {
+    setSaunaSelection(
+      saunaMode === "scheduled"
+        ? { mode: "scheduled", time: selectedSaunaTime }
+        : { mode: "now", duration: selectedSaunaDuration },
+    );
+    setIsSaunaModalVisible(false);
+  }, [saunaMode, selectedSaunaDuration, selectedSaunaTime]);
+
+  const handleCancelSaunaSelection = useCallback(() => {
+    setSaunaSelection(null);
+    setIsSaunaModalVisible(false);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -748,14 +783,11 @@ export default function HomeScreen() {
       const storedYesterdayFetchSucceeded = !storedYesterdayError;
 
       if (storedYesterdayError) {
-        console.warn(
-          "Stored yesterday prices unavailable",
-          {
-            columns: storedElectricityPriceColumns,
-            error: storedYesterdayError,
-            storedYesterdayFetchSucceeded,
-          },
-        );
+        console.warn("Stored yesterday prices unavailable", {
+          columns: storedElectricityPriceColumns,
+          error: storedYesterdayError,
+          storedYesterdayFetchSucceeded,
+        });
       }
 
       const data = (await response.json()) as SpotPriceResponse[];
@@ -1099,7 +1131,9 @@ export default function HomeScreen() {
                       />
                       <View style={[styles.tankBubble, styles.tankBubbleOne]} />
                       <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-                      <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                      <View
+                        style={[styles.tankBubble, styles.tankBubbleThree]}
+                      />
                       <Text style={styles.tankAverageTemperature}>
                         {warmWaterAverageTempLabel}
                       </Text>
@@ -1109,13 +1143,23 @@ export default function HomeScreen() {
                     accessibilityLabel="Sauna"
                     accessibilityRole="button"
                     android_ripple={{ color: "rgba(255,149,0,0.16)" }}
-                    onPress={(event) => event.stopPropagation()}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      setIsSaunaModalVisible(true);
+                    }}
                     style={({ pressed }) => [
                       styles.saunaCard,
                       pressed && styles.pressedMetricCard,
                     ]}
                   >
-                    <Text numberOfLines={1} style={styles.saunaLabel}>SAUNA</Text>
+                    <Text numberOfLines={1} style={styles.saunaLabel}>
+                      SAUNA
+                    </Text>
+                    {saunaStatusText ? (
+                      <Text numberOfLines={1} style={styles.saunaStatusText}>
+                        {saunaStatusText}
+                      </Text>
+                    ) : null}
                   </Pressable>
                 </View>
                 <View style={styles.waterShowersInfo}>
@@ -1361,6 +1405,117 @@ export default function HomeScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsSaunaModalVisible(false)}
+        transparent
+        visible={isSaunaModalVisible}
+      >
+        <Pressable
+          accessibilityLabel="Sulje saunan valinta"
+          onPress={() => setIsSaunaModalVisible(false)}
+          style={styles.saunaModalOverlay}
+        >
+          <Pressable
+            style={styles.saunaSheet}
+            onPress={(event) => event.stopPropagation()}
+          >
+            <View style={styles.saunaSheetHandle} />
+            <Text style={styles.saunaSheetTitle}>Sauna</Text>
+            <View style={styles.saunaTabs}>
+              {(
+                [
+                  ["scheduled", "Ajastettu"],
+                  ["now", "Lämmitä nyt"],
+                ] as const
+              ).map(([mode, label]) => {
+                const isActive = saunaMode === mode;
+
+                return (
+                  <Pressable
+                    accessibilityRole="tab"
+                    key={mode}
+                    onPress={() => setSaunaMode(mode)}
+                    style={[
+                      styles.saunaTabButton,
+                      isActive && styles.activeSaunaTabButton,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.saunaTabText,
+                        isActive && styles.activeSaunaTabText,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.saunaModalTitle}>
+              {saunaMode === "scheduled" ? "Ajastettu" : "Lämmitä nyt"}
+            </Text>
+            <View style={styles.saunaOptionGrid}>
+              {(saunaMode === "scheduled"
+                ? saunaScheduledTimes
+                : saunaNowDurations
+              ).map((option) => {
+                const isActive =
+                  saunaMode === "scheduled"
+                    ? selectedSaunaTime === option
+                    : selectedSaunaDuration === option;
+
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    key={option}
+                    onPress={() => {
+                      if (saunaMode === "scheduled") {
+                        setSelectedSaunaTime(option);
+                      } else {
+                        setSelectedSaunaDuration(option);
+                      }
+                    }}
+                    style={[
+                      styles.saunaOptionButton,
+                      isActive && styles.activeSaunaOptionButton,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.saunaOptionText,
+                        isActive && styles.activeSaunaOptionText,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.saunaModalActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleCancelSaunaSelection}
+                style={styles.saunaCancelButton}
+              >
+                <Text style={styles.saunaCancelButtonText}>Peruuta</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleActivateSaunaSelection}
+                style={styles.saunaActivateButton}
+              >
+                <Text style={styles.saunaActivateButtonText}>Aktivoi</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1560,6 +1715,148 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     lineHeight: 14,
     textAlign: "center",
+  },
+  saunaStatusText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
+    lineHeight: 17,
+    marginTop: 10,
+    textAlign: "center",
+  },
+  saunaModalOverlay: {
+    alignItems: "stretch",
+    backgroundColor: "rgba(2,6,18,0.62)",
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  saunaSheet: {
+    backgroundColor: "#0a1024",
+    borderColor: "rgba(255,255,255,0.14)",
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    borderWidth: 1,
+    paddingBottom: 30,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    shadowColor: "#ff9b30",
+    shadowOpacity: 0.28,
+    shadowRadius: 26,
+  },
+  saunaSheetHandle: {
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.28)",
+    borderRadius: 999,
+    height: 5,
+    marginBottom: 16,
+    width: 46,
+  },
+  saunaSheetTitle: {
+    color: "#f8fbff",
+    fontSize: 25,
+    fontWeight: "900",
+    letterSpacing: -0.4,
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  saunaTabs: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 18,
+    padding: 5,
+  },
+  saunaTabButton: {
+    alignItems: "center",
+    borderColor: "transparent",
+    borderRadius: 999,
+    borderWidth: 1,
+    flex: 1,
+    paddingVertical: 11,
+  },
+  activeSaunaTabButton: {
+    backgroundColor: "rgba(255,155,48,0.2)",
+    borderColor: "rgba(255,212,163,0.44)",
+  },
+  saunaTabText: {
+    color: "#8ea4cf",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  activeSaunaTabText: {
+    color: "#fff4e6",
+  },
+  saunaModalTitle: {
+    color: "#ffffff",
+    fontSize: 20,
+    fontWeight: "900",
+    marginBottom: 14,
+    textAlign: "center",
+  },
+  saunaOptionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  saunaOptionButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.13)",
+    borderRadius: 18,
+    borderWidth: 1,
+    minWidth: 78,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+  },
+  activeSaunaOptionButton: {
+    backgroundColor: "rgba(255,155,48,0.22)",
+    borderColor: "#ffd4a3",
+  },
+  saunaOptionText: {
+    color: "#d9e9ff",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  activeSaunaOptionText: {
+    color: "#ffffff",
+  },
+  saunaModalActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  saunaCancelButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.14)",
+    borderRadius: 18,
+    borderWidth: 1,
+    flex: 1,
+    paddingVertical: 14,
+  },
+  saunaActivateButton: {
+    alignItems: "center",
+    backgroundColor: "#ff9b30",
+    borderRadius: 18,
+    flex: 1,
+    paddingVertical: 14,
+    shadowColor: "#ff9b30",
+    shadowOpacity: 0.36,
+    shadowRadius: 16,
+  },
+  saunaCancelButtonText: {
+    color: "#d9e9ff",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  saunaActivateButtonText: {
+    color: "#180d03",
+    fontSize: 15,
+    fontWeight: "900",
   },
   pressedMetricCard: {
     opacity: 0.82,
