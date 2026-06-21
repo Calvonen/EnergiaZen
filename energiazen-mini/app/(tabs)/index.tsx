@@ -89,7 +89,7 @@ type ElectricityPriceInsert = {
   price: number;
 };
 
-type SaunaMode = "scheduled" | "now";
+type SaunaModalTab = "scheduled" | "now";
 
 type SaunaScheduledDay = "today" | "tomorrow";
 
@@ -535,7 +535,7 @@ export default function HomeScreen() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const [isSaunaModalVisible, setIsSaunaModalVisible] = useState(false);
-  const [saunaModalTab, setSaunaModalTab] = useState<SaunaMode>("scheduled");
+  const [saunaModalTab, setSaunaModalTab] = useState<SaunaModalTab>("scheduled");
   const [selectedSaunaTime, setSelectedSaunaTime] = useState("19:00");
   const [selectedSaunaDay, setSelectedSaunaDay] =
     useState<SaunaScheduledDay>("today");
@@ -703,9 +703,6 @@ export default function HomeScreen() {
     : null;
   const isSaunaHeatingActive = saunaSelection?.mode === "now";
 
-  useEffect(() => {
-    console.log("sauna tab", saunaModalTab);
-  }, [saunaModalTab]);
 
   useEffect(() => {
     if (!isSelectedTodaySaunaTimeDisabled) {
