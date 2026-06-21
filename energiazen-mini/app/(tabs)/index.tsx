@@ -535,7 +535,7 @@ export default function HomeScreen() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const [isSaunaModalVisible, setIsSaunaModalVisible] = useState(false);
-  const [saunaMode, setSaunaMode] = useState<SaunaMode>("scheduled");
+  const [saunaModalTab, setSaunaModalTab] = useState<SaunaMode>("scheduled");
   const [selectedSaunaTime, setSelectedSaunaTime] = useState("19:00");
   const [selectedSaunaDay, setSelectedSaunaDay] =
     useState<SaunaScheduledDay>("today");
@@ -704,6 +704,10 @@ export default function HomeScreen() {
   const isSaunaHeatingActive = saunaSelection?.mode === "now";
 
   useEffect(() => {
+    console.log("sauna tab", saunaModalTab);
+  }, [saunaModalTab]);
+
+  useEffect(() => {
     if (!isSelectedTodaySaunaTimeDisabled) {
       return;
     }
@@ -719,7 +723,7 @@ export default function HomeScreen() {
 
   const handleActivateSaunaSelection = useCallback(() => {
     const scheduledSaunaSelection: SaunaSelection =
-      saunaMode === "scheduled" && isSelectedTodaySaunaTimeDisabled
+      saunaModalTab === "scheduled" && isSelectedTodaySaunaTimeDisabled
         ? {
             mode: "scheduled",
             day: nextAvailableSaunaTime ? "today" : "tomorrow",
@@ -728,7 +732,7 @@ export default function HomeScreen() {
         : { mode: "scheduled", day: selectedSaunaDay, time: selectedSaunaTime };
 
     setSaunaSelection(
-      saunaMode === "scheduled"
+      saunaModalTab === "scheduled"
         ? scheduledSaunaSelection
         : { mode: "now", duration: selectedSaunaDuration },
     );
@@ -736,7 +740,7 @@ export default function HomeScreen() {
   }, [
     isSelectedTodaySaunaTimeDisabled,
     nextAvailableSaunaTime,
-    saunaMode,
+    saunaModalTab,
     selectedSaunaDay,
     selectedSaunaDuration,
     selectedSaunaTime,
@@ -1516,13 +1520,13 @@ export default function HomeScreen() {
                   ["now", "Lämmitä nyt"],
                 ] as const
               ).map(([mode, label]) => {
-                const isActive = saunaMode === mode;
+                const isActive = saunaModalTab === mode;
 
                 return (
                   <Pressable
                     accessibilityRole="tab"
                     key={mode}
-                    onPress={() => setSaunaMode(mode)}
+                    onPress={() => setSaunaModalTab(mode)}
                     style={[
                       styles.saunaTabButton,
                       isActive && styles.activeSaunaTabButton,
@@ -1542,9 +1546,9 @@ export default function HomeScreen() {
             </View>
 
             <Text style={styles.saunaModalTitle}>
-              {saunaMode === "scheduled" ? "Ajastettu" : "Lämmitä nyt"}
+              {saunaModalTab === "scheduled" ? "Ajastettu" : "Lämmitä nyt"}
             </Text>
-            {saunaMode === "scheduled" ? (
+            {saunaModalTab === "scheduled" ? (
               <>
                 <View style={styles.saunaOptionGrid}>
                   {saunaScheduledTimes.map((option) => {
