@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
+  FlatList,
   Modal,
   Pressable,
   RefreshControl,
@@ -93,6 +94,11 @@ type SaunaModalTab = "scheduled" | "now";
 
 type SaunaScheduledDay = "today" | "tomorrow";
 
+type SaunaScheduledListItem =
+  | { type: "hour"; day: SaunaScheduledDay; hour: number }
+  | { type: "tomorrow-toggle" }
+  | { type: "spacer" };
+
 const finnishWeekdayAbbreviations: Record<string, string> = {
   ma: "Ma",
   ti: "Ti",
@@ -107,10 +113,6 @@ type SaunaSelection =
   | { mode: "scheduled"; day: SaunaScheduledDay; hour: number }
   | { mode: "now"; hours: number };
 
-const saunaScheduledTimes = Array.from(
-  { length: 24 },
-  (_, hour) => `${String(hour).padStart(2, "0")}:00`,
-);
 const saunaNowDurations = [1, 2, 3, 4, 5];
 
 function clamp(value: number, min: number, max: number) {
@@ -535,10 +537,13 @@ export default function HomeScreen() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const [saunaModalVisible, setSaunaModalVisible] = useState(false);
-  const [saunaModalTab, setSaunaModalTab] = useState<SaunaModalTab>("scheduled");
+  const [saunaModalTab, setSaunaModalTab] =
+    useState<SaunaModalTab>("scheduled");
   const [selectedSaunaDay, setSelectedSaunaDay] =
     useState<SaunaScheduledDay>("today");
-  const [selectedSaunaHour, setSelectedSaunaHour] = useState<number | null>(null);
+  const [selectedSaunaHour, setSelectedSaunaHour] = useState<number | null>(
+    null,
+  );
   const [saunaTomorrowOpen, setSaunaTomorrowOpen] = useState(false);
   const [selectedHeatNowHours, setSelectedHeatNowHours] = useState<
     number | null
@@ -690,6 +695,29 @@ export default function HomeScreen() {
     null,
   );
   const currentHelsinkiHour = getHelsinkiHourNumber(currentTime);
+  const saunaScheduledListData = useMemo<SaunaScheduledListItem[]>(() => {
+    const todayHours = Array.from<unknown, SaunaScheduledListItem>(
+      { length: 24 },
+      (_, hour) => ({ type: "hour", day: "today", hour }),
+    );
+
+    if (!saunaTomorrowOpen) {
+      return [...todayHours, { type: "tomorrow-toggle" }];
+    }
+
+    const tomorrowHours = Array.from<unknown, SaunaScheduledListItem>(
+      { length: 24 },
+      (_, hour) => ({ type: "hour", day: "tomorrow", hour }),
+    );
+
+    return [
+      ...todayHours,
+      { type: "tomorrow-toggle" },
+      { type: "spacer" },
+      { type: "spacer" },
+      ...tomorrowHours,
+    ];
+  }, [saunaTomorrowOpen]);
   const formatSaunaHour = useCallback(
     (hour: number) => `${String(hour).padStart(2, "0")}:00`,
     [],
@@ -1540,104 +1568,93 @@ export default function HomeScreen() {
 
             <View style={styles.saunaModalContent}>
               {saunaModalTab === "scheduled" ? (
-                <ScrollView
-                  style={styles.saunaScheduledScroll}
-                  contentContainerStyle={styles.saunaScheduledScrollContent}
+                <FlatList
+                  columnWrapperStyle={styles.saunaScheduledListRow}
+                  contentContainerStyle={{ paddingTop: 32, paddingBottom: 32 }}
+                  data={saunaScheduledListData}
+                  keyExtractor={(item, index) => {
+                    if (item.type === "hour") {
+                      return `${item.day}-${item.hour}`;
+                    }
+
+                    return `${item.type}-${index}`;
+                  }}
+                  keyboardShouldPersistTaps="handled"
+                  numColumns={3}
+                  renderItem={({ item }) => {
+                    if (item.type === "tomorrow-toggle") {
+                      return (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: saunaTomorrowOpen }}
+                          onPress={() =>
+                            setSaunaTomorrowOpen((isOpen) => !isOpen)
+                          }
+                          style={[
+                            styles.saunaTomorrowToggle,
+                            styles.saunaScheduledListItem,
+                            styles.saunaTomorrowListItem,
+                          ]}
+                        >
+                          <Text style={styles.saunaTomorrowToggleText}>
+                            Huomenna
+                          </Text>
+                          <Text style={styles.saunaTomorrowToggleIcon}>
+                            {saunaTomorrowOpen ? "−" : "+"}
+                          </Text>
+                        </Pressable>
+                      );
+                    }
+
+                    if (item.type === "spacer") {
+                      return (
+                        <View
+                          pointerEvents="none"
+                          style={styles.saunaScheduledListItem}
+                        />
+                      );
+                    }
+
+                    const isDisabled =
+                      item.day === "today" && item.hour <= currentHelsinkiHour;
+                    const isActive =
+                      selectedSaunaDay === item.day &&
+                      selectedSaunaHour === item.hour;
+
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          disabled: isDisabled,
+                          selected: isActive,
+                        }}
+                        disabled={isDisabled}
+                        onPress={() => {
+                          setSelectedSaunaDay(item.day);
+                          setSelectedSaunaHour(item.hour);
+                        }}
+                        style={[
+                          styles.saunaOptionButton,
+                          styles.saunaScheduledListItem,
+                          isActive && styles.activeSaunaOptionButton,
+                          isDisabled && styles.disabledSaunaOptionButton,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.saunaOptionText,
+                            isActive && styles.activeSaunaOptionText,
+                            isDisabled && styles.disabledSaunaOptionText,
+                          ]}
+                        >
+                          {formatSaunaHour(item.hour)}
+                        </Text>
+                      </Pressable>
+                    );
+                  }}
                   showsVerticalScrollIndicator={false}
-                >
-                  <View style={styles.saunaModalSection}>
-                    <View style={styles.saunaOptionGrid}>
-                      {saunaScheduledTimes.map((option) => {
-                        const hour = Number(option.slice(0, 2));
-                        const isDisabled = hour <= currentHelsinkiHour;
-                        const isActive =
-                          selectedSaunaDay === "today" &&
-                          selectedSaunaHour === hour;
-
-                        return (
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityState={{
-                              disabled: isDisabled,
-                              selected: isActive,
-                            }}
-                            disabled={isDisabled}
-                            key={`today-${option}`}
-                            onPress={() => {
-                              setSelectedSaunaDay("today");
-                              setSelectedSaunaHour(hour);
-                            }}
-                            style={[
-                              styles.saunaOptionButton,
-                              isActive && styles.activeSaunaOptionButton,
-                              isDisabled && styles.disabledSaunaOptionButton,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.saunaOptionText,
-                                isActive && styles.activeSaunaOptionText,
-                                isDisabled && styles.disabledSaunaOptionText,
-                              ]}
-                            >
-                              {option}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityState={{ expanded: saunaTomorrowOpen }}
-                      onPress={() => setSaunaTomorrowOpen((isOpen) => !isOpen)}
-                      style={styles.saunaTomorrowToggle}
-                    >
-                      <Text style={styles.saunaTomorrowToggleText}>
-                        Huomenna
-                      </Text>
-                      <Text style={styles.saunaTomorrowToggleIcon}>
-                        {saunaTomorrowOpen ? "−" : "+"}
-                      </Text>
-                    </Pressable>
-
-                    {saunaTomorrowOpen ? (
-                      <View style={styles.saunaOptionGrid}>
-                        {saunaScheduledTimes.map((option) => {
-                          const hour = Number(option.slice(0, 2));
-                          const isActive =
-                            selectedSaunaDay === "tomorrow" &&
-                            selectedSaunaHour === hour;
-
-                          return (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityState={{ selected: isActive }}
-                              key={`tomorrow-${option}`}
-                              onPress={() => {
-                                setSelectedSaunaDay("tomorrow");
-                                setSelectedSaunaHour(hour);
-                              }}
-                              style={[
-                                styles.saunaOptionButton,
-                                isActive && styles.activeSaunaOptionButton,
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.saunaOptionText,
-                                  isActive && styles.activeSaunaOptionText,
-                                ]}
-                              >
-                                {option}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                    ) : null}
-                  </View>
-                </ScrollView>
+                  style={{ flex: 1 }}
+                />
               ) : (
                 <View style={styles.saunaOptionGrid}>
                   {saunaNowDurations.map((hours) => {
@@ -1990,12 +2007,15 @@ const styles = StyleSheet.create({
   saunaModalContent: {
     flex: 1,
   },
-  saunaScheduledScroll: {
+  saunaScheduledListRow: {
+    gap: 10,
+    marginBottom: 10,
+  },
+  saunaScheduledListItem: {
     flex: 1,
   },
-  saunaScheduledScrollContent: {
-    paddingBottom: 24,
-    paddingTop: 22,
+  saunaTomorrowListItem: {
+    minWidth: 0,
   },
   saunaOptionGrid: {
     flexDirection: "row",
