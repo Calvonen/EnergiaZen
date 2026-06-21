@@ -1115,7 +1115,7 @@ export default function HomeScreen() {
                       pressed && styles.pressedMetricCard,
                     ]}
                   >
-                    <Text style={styles.saunaLabel}>SAUNA</Text>
+                    <Text numberOfLines={1} style={styles.saunaLabel}>SAUNA</Text>
                   </Pressable>
                 </View>
                 <View style={styles.waterShowersInfo}>
@@ -1544,20 +1544,21 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1.4,
     flex: 2,
-    justifyContent: "center",
+    justifyContent: "flex-start",
     minWidth: 0,
     overflow: "hidden",
     paddingHorizontal: 6,
+    paddingTop: 8,
     shadowColor: "#ff9b30",
     shadowOpacity: 0.24,
     shadowRadius: 16,
   },
   saunaLabel: {
     color: "#ffd4a3",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "900",
-    letterSpacing: 0.7,
-    lineHeight: 15,
+    letterSpacing: 0.2,
+    lineHeight: 14,
     textAlign: "center",
   },
   pressedMetricCard: {
