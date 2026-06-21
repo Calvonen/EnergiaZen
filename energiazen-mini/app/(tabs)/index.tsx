@@ -1074,38 +1074,55 @@ export default function HomeScreen() {
                 <Text style={styles.cardIcon}>💧</Text>
                 <Text style={styles.cardLabel}>Lämmin vesi</Text>
               </View>
-              <View style={styles.tankVisual}>
-                <View
-                  style={[
-                    styles.tankFill,
-                    {
-                      backgroundColor: warmWaterCardTheme.fillColor,
-                      height: `${warmWaterFillPercent}%`,
-                      shadowColor: warmWaterCardTheme.shadowColor,
-                    },
+              <View style={styles.warmWaterCardsRow}>
+                <View style={styles.warmWaterTankCard}>
+                  <View style={styles.tankVisual}>
+                    <View
+                      style={[
+                        styles.tankFill,
+                        {
+                          backgroundColor: warmWaterCardTheme.fillColor,
+                          height: `${warmWaterFillPercent}%`,
+                          shadowColor: warmWaterCardTheme.shadowColor,
+                        },
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.tankSurface,
+                        {
+                          backgroundColor: warmWaterCardTheme.surfaceColor,
+                          bottom: `${warmWaterFillPercent}%`,
+                        },
+                      ]}
+                    />
+                    <View style={[styles.tankBubble, styles.tankBubbleOne]} />
+                    <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
+                    <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                    <Text style={styles.tankAverageTemperature}>
+                      {warmWaterAverageTempLabel}
+                    </Text>
+                  </View>
+                  <View style={styles.waterShowersInfo}>
+                    <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
+                    <Text numberOfLines={2} style={styles.waterDescriptionText}>
+                      Lämmintä suihkua jäljellä
+                    </Text>
+                  </View>
+                </View>
+                <Pressable
+                  accessibilityLabel="Sauna"
+                  accessibilityRole="button"
+                  android_ripple={{ color: "rgba(255,255,255,0.1)" }}
+                  onPress={(event) => event.stopPropagation()}
+                  style={({ pressed }) => [
+                    styles.saunaCard,
+                    pressed && styles.pressedMetricCard,
                   ]}
-                />
-                <View
-                  style={[
-                    styles.tankSurface,
-                    {
-                      backgroundColor: warmWaterCardTheme.surfaceColor,
-                      bottom: `${warmWaterFillPercent}%`,
-                    },
-                  ]}
-                />
-                <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-                <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-                <View style={[styles.tankBubble, styles.tankBubbleThree]} />
-                <Text style={styles.tankAverageTemperature}>
-                  {warmWaterAverageTempLabel}
-                </Text>
-              </View>
-              <View style={styles.waterShowersInfo}>
-                <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
-                <Text numberOfLines={1} style={styles.waterDescriptionText}>
-                  Lämmintä suihkua jäljellä
-                </Text>
+                >
+                  <Text style={styles.saunaIcon}>🧖</Text>
+                  <Text style={styles.saunaLabel}>SAUNA</Text>
+                </Pressable>
               </View>
             </Pressable>
           </View>
@@ -1495,6 +1512,50 @@ const styles = StyleSheet.create({
   },
   waterCard: {
     shadowOpacity: 0.42,
+  },
+  warmWaterCardsRow: {
+    alignItems: "stretch",
+    alignSelf: "stretch",
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+    width: "100%",
+  },
+  warmWaterTankCard: {
+    alignItems: "center",
+    flex: 3,
+    justifyContent: "space-between",
+    minWidth: 0,
+  },
+  saunaCard: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.13)",
+    borderRadius: 22,
+    borderWidth: 1,
+    flex: 2,
+    justifyContent: "center",
+    minWidth: 0,
+    overflow: "hidden",
+    paddingHorizontal: 6,
+    shadowColor: "#26d9d2",
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+  },
+  saunaIcon: {
+    fontSize: 28,
+    lineHeight: 32,
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  saunaLabel: {
+    color: "rgba(247,251,255,0.86)",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    lineHeight: 12,
+    textAlign: "center",
   },
   pressedMetricCard: {
     opacity: 0.82,
