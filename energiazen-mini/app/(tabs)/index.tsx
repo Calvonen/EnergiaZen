@@ -1539,85 +1539,44 @@ export default function HomeScreen() {
             </View>
 
             {saunaModalTab === "scheduled" ? (
-              <View style={styles.saunaModalSection}>
-                <View style={styles.saunaOptionGrid}>
-                  {saunaScheduledTimes.map((option) => {
-                    const hour = Number(option.slice(0, 2));
-                    const isDisabled = hour <= currentHelsinkiHour;
-                    const isActive =
-                      selectedSaunaDay === "today" && selectedSaunaHour === hour;
-
-                    return (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{
-                          disabled: isDisabled,
-                          selected: isActive,
-                        }}
-                        disabled={isDisabled}
-                        key={`today-${option}`}
-                        onPress={() => {
-                          setSelectedSaunaDay("today");
-                          setSelectedSaunaHour(hour);
-                        }}
-                        style={[
-                          styles.saunaOptionButton,
-                          isActive && styles.activeSaunaOptionButton,
-                          isDisabled && styles.disabledSaunaOptionButton,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.saunaOptionText,
-                            isActive && styles.activeSaunaOptionText,
-                            isDisabled && styles.disabledSaunaOptionText,
-                          ]}
-                        >
-                          {option}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: saunaTomorrowOpen }}
-                  onPress={() => setSaunaTomorrowOpen((isOpen) => !isOpen)}
-                  style={styles.saunaTomorrowToggle}
-                >
-                  <Text style={styles.saunaTomorrowToggleText}>Huomenna</Text>
-                  <Text style={styles.saunaTomorrowToggleIcon}>
-                    {saunaTomorrowOpen ? "−" : "+"}
-                  </Text>
-                </Pressable>
-
-                {saunaTomorrowOpen ? (
+              <ScrollView
+                style={styles.saunaScheduledScroll}
+                contentContainerStyle={styles.saunaScheduledScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.saunaModalSection}>
                   <View style={styles.saunaOptionGrid}>
                     {saunaScheduledTimes.map((option) => {
                       const hour = Number(option.slice(0, 2));
+                      const isDisabled = hour <= currentHelsinkiHour;
                       const isActive =
-                        selectedSaunaDay === "tomorrow" &&
+                        selectedSaunaDay === "today" &&
                         selectedSaunaHour === hour;
 
                       return (
                         <Pressable
                           accessibilityRole="button"
-                          accessibilityState={{ selected: isActive }}
-                          key={`tomorrow-${option}`}
+                          accessibilityState={{
+                            disabled: isDisabled,
+                            selected: isActive,
+                          }}
+                          disabled={isDisabled}
+                          key={`today-${option}`}
                           onPress={() => {
-                            setSelectedSaunaDay("tomorrow");
+                            setSelectedSaunaDay("today");
                             setSelectedSaunaHour(hour);
                           }}
                           style={[
                             styles.saunaOptionButton,
                             isActive && styles.activeSaunaOptionButton,
+                            isDisabled && styles.disabledSaunaOptionButton,
                           ]}
                         >
                           <Text
                             style={[
                               styles.saunaOptionText,
                               isActive && styles.activeSaunaOptionText,
+                              isDisabled && styles.disabledSaunaOptionText,
                             ]}
                           >
                             {option}
@@ -1626,8 +1585,56 @@ export default function HomeScreen() {
                       );
                     })}
                   </View>
-                ) : null}
-              </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: saunaTomorrowOpen }}
+                    onPress={() => setSaunaTomorrowOpen((isOpen) => !isOpen)}
+                    style={styles.saunaTomorrowToggle}
+                  >
+                    <Text style={styles.saunaTomorrowToggleText}>Huomenna</Text>
+                    <Text style={styles.saunaTomorrowToggleIcon}>
+                      {saunaTomorrowOpen ? "−" : "+"}
+                    </Text>
+                  </Pressable>
+
+                  {saunaTomorrowOpen ? (
+                    <View style={styles.saunaOptionGrid}>
+                      {saunaScheduledTimes.map((option) => {
+                        const hour = Number(option.slice(0, 2));
+                        const isActive =
+                          selectedSaunaDay === "tomorrow" &&
+                          selectedSaunaHour === hour;
+
+                        return (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isActive }}
+                            key={`tomorrow-${option}`}
+                            onPress={() => {
+                              setSelectedSaunaDay("tomorrow");
+                              setSelectedSaunaHour(hour);
+                            }}
+                            style={[
+                              styles.saunaOptionButton,
+                              isActive && styles.activeSaunaOptionButton,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.saunaOptionText,
+                                isActive && styles.activeSaunaOptionText,
+                              ]}
+                            >
+                              {option}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              </ScrollView>
             ) : (
               <View style={styles.saunaOptionGrid}>
                 {saunaNowDurations.map((hours) => {
@@ -1911,6 +1918,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     borderWidth: 1,
+    maxHeight: "86%",
     paddingBottom: 30,
     paddingHorizontal: 20,
     paddingTop: 10,
@@ -1973,6 +1981,14 @@ const styles = StyleSheet.create({
   },
   saunaModalSection: {
     marginBottom: 2,
+  },
+  saunaScheduledScroll: {
+    flexShrink: 1,
+    marginBottom: 14,
+  },
+  saunaScheduledScrollContent: {
+    paddingBottom: 4,
+    paddingTop: 22,
   },
   saunaOptionGrid: {
     flexDirection: "row",
