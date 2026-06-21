@@ -688,6 +688,12 @@ export default function HomeScreen() {
     null,
   );
   const currentHelsinkiHour = getHelsinkiHourNumber(currentTime);
+  const nextAvailableSaunaTime = saunaScheduledTimes.find(
+    (option) => Number(option.slice(0, 2)) > currentHelsinkiHour,
+  );
+  const isSelectedTodaySaunaTimeDisabled =
+    selectedSaunaDay === "today" &&
+    Number(selectedSaunaTime.slice(0, 2)) <= currentHelsinkiHour;
   const saunaStatusText = saunaSelection
     ? saunaSelection.mode === "scheduled"
       ? saunaSelection.day === "tomorrow"
@@ -697,14 +703,44 @@ export default function HomeScreen() {
     : null;
   const isSaunaHeatingActive = saunaSelection?.mode === "now";
 
+  useEffect(() => {
+    if (!isSelectedTodaySaunaTimeDisabled) {
+      return;
+    }
+
+    if (nextAvailableSaunaTime) {
+      setSelectedSaunaTime(nextAvailableSaunaTime);
+      return;
+    }
+
+    setSelectedSaunaDay("tomorrow");
+    setSelectedSaunaTime(saunaScheduledTimes[0]);
+  }, [isSelectedTodaySaunaTimeDisabled, nextAvailableSaunaTime]);
+
   const handleActivateSaunaSelection = useCallback(() => {
+    const scheduledSaunaSelection: SaunaSelection =
+      saunaMode === "scheduled" && isSelectedTodaySaunaTimeDisabled
+        ? {
+            mode: "scheduled",
+            day: nextAvailableSaunaTime ? "today" : "tomorrow",
+            time: nextAvailableSaunaTime ?? saunaScheduledTimes[0],
+          }
+        : { mode: "scheduled", day: selectedSaunaDay, time: selectedSaunaTime };
+
     setSaunaSelection(
       saunaMode === "scheduled"
-        ? { mode: "scheduled", day: selectedSaunaDay, time: selectedSaunaTime }
+        ? scheduledSaunaSelection
         : { mode: "now", duration: selectedSaunaDuration },
     );
     setIsSaunaModalVisible(false);
-  }, [saunaMode, selectedSaunaDay, selectedSaunaDuration, selectedSaunaTime]);
+  }, [
+    isSelectedTodaySaunaTimeDisabled,
+    nextAvailableSaunaTime,
+    saunaMode,
+    selectedSaunaDay,
+    selectedSaunaDuration,
+    selectedSaunaTime,
+  ]);
 
   const handleCancelSaunaSelection = useCallback(() => {
     setSaunaSelection(null);
@@ -1513,8 +1549,9 @@ export default function HomeScreen() {
                 <View style={styles.saunaOptionGrid}>
                   {saunaScheduledTimes.map((option) => {
                     const optionHour = Number(option.slice(0, 2));
-                    const isDisabled = optionHour < currentHelsinkiHour;
+                    const isDisabled = optionHour <= currentHelsinkiHour;
                     const isActive =
+                      !isDisabled &&
                       selectedSaunaDay === "today" &&
                       selectedSaunaTime === option;
 
