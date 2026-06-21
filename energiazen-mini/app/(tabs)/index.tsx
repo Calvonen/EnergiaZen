@@ -1525,8 +1525,11 @@ export default function HomeScreen() {
             style={styles.saunaSheet}
             onPress={(event) => event.stopPropagation()}
           >
-            <View style={styles.saunaSheetHandle} />
-            <Text style={styles.saunaSheetTitle}>Sauna</Text>
+            <View style={styles.saunaModalHeader}>
+              <View style={styles.saunaSheetHandle} />
+              <Text style={styles.saunaSheetTitle}>Sauna</Text>
+            </View>
+
             <View style={styles.saunaTabs}>
               <Pressable
                 accessibilityRole="tab"
@@ -1566,11 +1569,11 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.saunaModalContent}>
+            <View style={styles.saunaContentArea}>
               {saunaModalTab === "scheduled" ? (
                 <FlatList
                   columnWrapperStyle={styles.saunaScheduledListRow}
-                  contentContainerStyle={{ paddingTop: 32, paddingBottom: 32 }}
+                  contentContainerStyle={{ paddingTop: 24, paddingBottom: 140 }}
                   data={saunaScheduledListData}
                   keyExtractor={(item, index) => {
                     if (item.type === "hour") {
@@ -1580,11 +1583,7 @@ export default function HomeScreen() {
                     return `${item.type}-${index}`;
                   }}
                   keyboardShouldPersistTaps="handled"
-                  ListHeaderComponent={
-                    <Text style={styles.saunaDebugText}>
-                      FlatList käytössä
-                    </Text>
-                  }
+                  nestedScrollEnabled={true}
                   numColumns={3}
                   renderItem={({ item }) => {
                     if (item.type === "tomorrow-toggle") {
@@ -1657,6 +1656,7 @@ export default function HomeScreen() {
                       </Pressable>
                     );
                   }}
+                  scrollEnabled={true}
                   showsVerticalScrollIndicator={false}
                   style={{ flex: 1 }}
                 />
@@ -1953,6 +1953,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 26,
   },
+  saunaModalHeader: {
+    flexShrink: 0,
+  },
   saunaSheetHandle: {
     alignSelf: "center",
     backgroundColor: "rgba(255,255,255,0.28)",
@@ -2009,8 +2012,9 @@ const styles = StyleSheet.create({
   saunaModalSection: {
     marginBottom: 2,
   },
-  saunaModalContent: {
+  saunaContentArea: {
     flex: 1,
+    minHeight: 260,
   },
   saunaScheduledListRow: {
     gap: 10,
@@ -2018,13 +2022,6 @@ const styles = StyleSheet.create({
   },
   saunaScheduledListItem: {
     flex: 1,
-  },
-  saunaDebugText: {
-    color: "#fff4e6",
-    fontSize: 14,
-    fontWeight: "900",
-    marginBottom: 12,
-    textAlign: "center",
   },
   saunaTomorrowListItem: {
     minWidth: 0,
