@@ -48,7 +48,9 @@ const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
 const tooltipWidth = 116;
-const warmWaterTurquoise = "#36f4d4";
+const topTemperatureColor = "#FF8A4C";
+const averageTemperatureColor = "#2DD4BF";
+const bottomTemperatureColor = "#60A5FA";
 const tooltipBottomOffset = 28;
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -352,19 +354,19 @@ function getChartLineSegments(
 
     [
       {
-        color: "#ffad4d",
+        color: topTemperatureColor,
         currentBottom: currentTemps.topBottom,
         keyPrefix: "top",
         nextBottom: nextTemps.topBottom,
       },
       {
-        color: warmWaterTurquoise,
+        color: bottomTemperatureColor,
         currentBottom: currentTemps.bottomBottom,
         keyPrefix: "bottom",
         nextBottom: nextTemps.bottomBottom,
       },
       {
-        color: warmWaterTurquoise,
+        color: averageTemperatureColor,
         currentBottom: currentAverageBottom,
         keyPrefix: "average",
         lineHeight: 1.5,
@@ -876,19 +878,19 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   topSummaryValue: {
-    color: "#ffad4d",
+    color: topTemperatureColor,
     fontSize: 29,
     fontWeight: "900",
     marginTop: 3,
   },
   averageSummaryValue: {
-    color: warmWaterTurquoise,
+    color: averageTemperatureColor,
     fontSize: 29,
     fontWeight: "900",
     marginTop: 3,
   },
   bottomSummaryValue: {
-    color: warmWaterTurquoise,
+    color: bottomTemperatureColor,
     fontSize: 29,
     fontWeight: "900",
     marginTop: 3,
@@ -899,9 +901,9 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 16,
   },
-  legendTop: { color: "#ffad4d", fontSize: 12, fontWeight: "900" },
-  legendBottom: { color: warmWaterTurquoise, fontSize: 12, fontWeight: "900" },
-  legendAverage: { color: warmWaterTurquoise, fontSize: 12, fontWeight: "900" },
+  legendTop: { color: topTemperatureColor, fontSize: 12, fontWeight: "900" },
+  legendBottom: { color: bottomTemperatureColor, fontSize: 12, fontWeight: "900" },
+  legendAverage: { color: averageTemperatureColor, fontSize: 12, fontWeight: "900" },
   emptyHistoryText: {
     color: "#cfe9ff",
     fontSize: 15,
@@ -955,20 +957,20 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   topTempDot: {
-    backgroundColor: "#ffad4d",
-    shadowColor: "#ffad4d",
+    backgroundColor: topTemperatureColor,
+    shadowColor: topTemperatureColor,
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
   bottomTempDot: {
-    backgroundColor: warmWaterTurquoise,
-    shadowColor: warmWaterTurquoise,
+    backgroundColor: bottomTemperatureColor,
+    shadowColor: bottomTemperatureColor,
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
   averageTempDot: {
-    backgroundColor: warmWaterTurquoise,
-    shadowColor: warmWaterTurquoise,
+    backgroundColor: averageTemperatureColor,
+    shadowColor: averageTemperatureColor,
     shadowOpacity: 0.7,
     shadowRadius: 8,
   },
@@ -998,15 +1000,15 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginBottom: 4,
   },
-  historyTooltipTop: { color: "#ffad4d", fontSize: 11, fontWeight: "900" },
+  historyTooltipTop: { color: topTemperatureColor, fontSize: 11, fontWeight: "900" },
   historyTooltipBottom: {
-    color: warmWaterTurquoise,
+    color: bottomTemperatureColor,
     fontSize: 11,
     fontWeight: "900",
     marginTop: 2,
   },
   historyTooltipAverage: {
-    color: warmWaterTurquoise,
+    color: averageTemperatureColor,
     fontSize: 11,
     fontWeight: "900",
     marginTop: 2,
