@@ -201,15 +201,31 @@ export default function SettingsScreen() {
 
   const confirmFullTankCalibration = (candidate: CalibrationCandidate) => {
     const roundedAverageTemp = Math.round(candidate.averageTemp);
+    const currentAverageTemp = settings.fullTankAverageTemperature;
+    const calibrationDetails = [
+      `Löytyi korkein keskilämpö: ${roundedAverageTemp} °C`,
+      `Nykyinen asetus: ${currentAverageTemp} °C`,
+      `Ylä: ${Math.round(candidate.topTemp)} °C`,
+      `Ala: ${Math.round(candidate.bottomTemp)} °C`,
+      `Ajankohta: ${formatCalibrationTime(candidate.createdAt)}`,
+    ];
+
+    if (Math.abs(roundedAverageTemp - currentAverageTemp) < 1) {
+      Alert.alert(
+        "Kalibroi täysi varaaja",
+        [
+          "Nykyinen kalibrointi on jo ajan tasalla.",
+          "",
+          ...calibrationDetails,
+        ].join("\n"),
+        [{ text: "OK" }],
+      );
+      return;
+    }
 
     Alert.alert(
       "Kalibroi täysi varaaja",
-      [
-        `Löytyi korkein keskilämpö: ${roundedAverageTemp} °C`,
-        `Ylä: ${Math.round(candidate.topTemp)} °C`,
-        `Ala: ${Math.round(candidate.bottomTemp)} °C`,
-        `Ajankohta: ${formatCalibrationTime(candidate.createdAt)}`,
-      ].join("\n"),
+      calibrationDetails.join("\n"),
       [
         { text: "Peruuta", style: "cancel" },
         {
