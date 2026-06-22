@@ -578,6 +578,33 @@ export default function HomeScreen() {
       ),
     );
   }, [effectiveHeatingHours, hourlyPrices]);
+  const selectedHeatingHoursCount = useMemo(() => {
+    if (selectedDay === "yesterday") {
+      return settings.heatingHoursPerDay;
+    }
+
+    return selectedDay === "today"
+      ? recommendedHeatingHours.length
+      : tomorrowPlannedHeatingHours.length;
+  }, [
+    recommendedHeatingHours.length,
+    selectedDay,
+    settings.heatingHoursPerDay,
+    tomorrowPlannedHeatingHours.length,
+  ]);
+  const explanationVisible =
+    selectedHeatingHoursCount !== settings.heatingHoursPerDay;
+  useEffect(() => {
+    console.log("heating plan explanation debug:", {
+      heatingHoursPerDay: settings.heatingHoursPerDay,
+      selectedHeatingHoursCount,
+      explanationVisible,
+    });
+  }, [
+    explanationVisible,
+    selectedHeatingHoursCount,
+    settings.heatingHoursPerDay,
+  ]);
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
@@ -1339,6 +1366,23 @@ export default function HomeScreen() {
                       : "--"}
                   </Text>
                 </View>
+
+                {explanationVisible ? (
+                  <View style={styles.heatingPlanInfo}>
+                    <Text style={styles.heatingPlanInfoTitle}>
+                      Lämmityssuunnitelma muuttui
+                    </Text>
+                    <Text style={styles.heatingPlanInfoText}>
+                      Asetettu lämmitystarve on {settings.heatingHoursPerDay} h
+                      / vrk, mutta suunnitelmaan valittiin {selectedHeatingHoursCount}
+                      h.
+                    </Text>
+                    <Text style={styles.heatingPlanInfoReason}>
+                      Syynä on hintavertailu / huomisen hinta / saatavilla
+                      olevat tunnit.
+                    </Text>
+                  </View>
+                ) : null}
               </>
             )}
           </View>
@@ -1416,6 +1460,34 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 6,
     textAlign: "center",
+  },
+  heatingPlanInfo: {
+    alignSelf: "stretch",
+    backgroundColor: "rgba(54,244,212,0.12)",
+    borderColor: "rgba(54,244,212,0.36)",
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 6,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  heatingPlanInfoTitle: {
+    color: "#f7fbff",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  heatingPlanInfoText: {
+    color: "#cfe9ff",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  heatingPlanInfoReason: {
+    color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
   },
   ringStage: {
     alignItems: "center",
