@@ -232,17 +232,32 @@ export default function SettingsScreen() {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
 
-      const { data, error } = await supabase
-        .from("tank_readings")
-        .select("created_at, top_temp, bottom_temp")
-        .gte("created_at", weekAgo.toISOString())
-        .order("created_at", { ascending: false });
+      const pageSize = 1000;
+      let from = 0;
+      let readings: TankReadingCalibrationRow[] = [];
 
-      if (error) {
-        throw error;
+      while (true) {
+        const { data, error } = await supabase
+          .from("tank_readings")
+          .select("created_at, top_temp, bottom_temp")
+          .gte("created_at", weekAgo.toISOString())
+          .order("created_at", { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          throw error;
+        }
+
+        const page = (data ?? []) as TankReadingCalibrationRow[];
+        readings = readings.concat(page);
+
+        if (page.length < pageSize) {
+          break;
+        }
+
+        from += pageSize;
       }
 
-      const readings = (data ?? []) as TankReadingCalibrationRow[];
       const bestCandidate = readings.reduce<CalibrationCandidate | null>(
         (best, reading) => {
           if (
@@ -267,6 +282,15 @@ export default function SettingsScreen() {
         },
         null,
       );
+
+      console.log("Weekly calibration data", {
+        rowCount: readings.length,
+        oldestCreatedAt: readings.at(0)?.created_at ?? null,
+        newestCreatedAt: readings.at(-1)?.created_at ?? null,
+        maxAverageTemp: bestCandidate?.averageTemp ?? null,
+        maxRowBottomTemp: bestCandidate?.bottomTemp ?? null,
+        maxRowTopTemp: bestCandidate?.topTemp ?? null,
+      });
 
       if (!bestCandidate) {
         Alert.alert(
