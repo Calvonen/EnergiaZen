@@ -57,6 +57,11 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     options: [55, 60, 65, 70, 75, 80],
     unit: "°C",
   },
+  fullTankAverageTemperature: {
+    max: 90,
+    min: 20,
+    unit: "°C",
+  },
 };
 
 export default function SettingsScreen() {
@@ -95,6 +100,12 @@ export default function SettingsScreen() {
         key: "maxTankTemperature",
         label: "Maksimilämpö",
         value: `${settings.maxTankTemperature} °C`,
+      },
+      {
+        accent: "#ff9b30",
+        key: "fullTankAverageTemperature",
+        label: "Täyden varaajan keskilämpö",
+        value: `${settings.fullTankAverageTemperature} °C`,
       },
       {
         accent: "#b889ff",
