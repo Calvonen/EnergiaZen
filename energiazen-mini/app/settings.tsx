@@ -299,14 +299,6 @@ export default function SettingsScreen() {
         null,
       );
 
-      console.log("Weekly calibration data", {
-        rowCount: readings.length,
-        oldestCreatedAt: readings.at(0)?.created_at ?? null,
-        newestCreatedAt: readings.at(-1)?.created_at ?? null,
-        maxAverageTemp: bestCandidate?.averageTemp ?? null,
-        maxRowBottomTemp: bestCandidate?.bottomTemp ?? null,
-        maxRowTopTemp: bestCandidate?.topTemp ?? null,
-      });
 
       if (!bestCandidate) {
         Alert.alert(
