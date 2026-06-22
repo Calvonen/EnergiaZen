@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -24,6 +25,19 @@ type SettingsRow = {
   key?: EditableSettingKey;
   label: string;
   value: string;
+};
+
+type TankReadingCalibrationRow = {
+  bottom_temp: number | null;
+  created_at: string;
+  top_temp: number | null;
+};
+
+type CalibrationCandidate = {
+  averageTemp: number;
+  bottomTemp: number;
+  createdAt: string;
+  topTemp: number;
 };
 
 type EditableSettingOption = {
@@ -69,6 +83,7 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
+  const [isCalibratingFullTank, setIsCalibratingFullTank] = useState(false);
 
   const settingsRows = useMemo(
     (): SettingsRow[] => [
@@ -174,6 +189,104 @@ export default function SettingsScreen() {
     }, [router]),
   );
 
+  const formatCalibrationTime = (createdAt: string) => {
+    const calibrationDate = new Date(createdAt);
+    const day = String(calibrationDate.getDate()).padStart(2, "0");
+    const month = String(calibrationDate.getMonth() + 1).padStart(2, "0");
+    const hours = String(calibrationDate.getHours()).padStart(2, "0");
+    const minutes = String(calibrationDate.getMinutes()).padStart(2, "0");
+
+    return `${day}.${month}. klo ${hours}:${minutes}`;
+  };
+
+  const confirmFullTankCalibration = (candidate: CalibrationCandidate) => {
+    const roundedAverageTemp = Math.round(candidate.averageTemp);
+
+    Alert.alert(
+      "Kalibroi täysi varaaja",
+      [
+        `Löytyi korkein keskilämpö: ${roundedAverageTemp} °C`,
+        `Ylä: ${Math.round(candidate.topTemp)} °C`,
+        `Ala: ${Math.round(candidate.bottomTemp)} °C`,
+        `Ajankohta: ${formatCalibrationTime(candidate.createdAt)}`,
+      ].join("\n"),
+      [
+        { text: "Peruuta", style: "cancel" },
+        {
+          text: "Käytä tätä",
+          onPress: () =>
+            updateSetting("fullTankAverageTemperature", roundedAverageTemp),
+        },
+      ],
+    );
+  };
+
+  const calibrateFullTankFromWeek = async () => {
+    if (isCalibratingFullTank) {
+      return;
+    }
+
+    setIsCalibratingFullTank(true);
+
+    try {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+
+      const { data, error } = await supabase
+        .from("tank_readings")
+        .select("created_at, top_temp, bottom_temp")
+        .gte("created_at", weekAgo.toISOString())
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      const readings = (data ?? []) as TankReadingCalibrationRow[];
+      const bestCandidate = readings.reduce<CalibrationCandidate | null>(
+        (best, reading) => {
+          if (
+            typeof reading.top_temp !== "number" ||
+            typeof reading.bottom_temp !== "number"
+          ) {
+            return best;
+          }
+
+          const averageTemp = (reading.top_temp + reading.bottom_temp) / 2;
+
+          if (!best || averageTemp > best.averageTemp) {
+            return {
+              averageTemp,
+              bottomTemp: reading.bottom_temp,
+              createdAt: reading.created_at,
+              topTemp: reading.top_temp,
+            };
+          }
+
+          return best;
+        },
+        null,
+      );
+
+      if (!bestCandidate) {
+        Alert.alert(
+          "Kalibrointia ei voitu tehdä",
+          "Viimeiseltä 7 päivältä ei löytynyt kelvollisia lämpötilarivejä.",
+        );
+        return;
+      }
+
+      confirmFullTankCalibration(bestCandidate);
+    } catch {
+      Alert.alert(
+        "Kalibrointi epäonnistui",
+        "Viikon lämpötiladataa ei voitu hakea. Yritä hetken kuluttua uudelleen.",
+      );
+    } finally {
+      setIsCalibratingFullTank(false);
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     router.replace("/login");
@@ -229,6 +342,36 @@ export default function SettingsScreen() {
 
             if (row.key) {
               const rowKey = row.key;
+
+              if (rowKey === "fullTankAverageTemperature") {
+                return (
+                  <View key={row.label} style={styles.settingRowWithAction}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => setSelectedSettingKey(rowKey)}
+                      style={styles.settingRowMainAction}
+                    >
+                      {rowContent}
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isCalibratingFullTank}
+                      onPress={calibrateFullTankFromWeek}
+                      style={({ pressed }) => [
+                        styles.calibrateButton,
+                        (pressed || isCalibratingFullTank) &&
+                          styles.calibrateButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.calibrateButtonText}>
+                        {isCalibratingFullTank
+                          ? "Kalibroidaan..."
+                          : "Kalibroi viikon datasta"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                );
+              }
 
               return (
                 <Pressable
@@ -462,12 +605,42 @@ const styles = StyleSheet.create({
     padding: 0,
     textAlign: "right",
   },
+  settingRowWithAction: {
+    borderBottomColor: "rgba(255,255,255,0.09)",
+    borderBottomWidth: 1,
+    paddingVertical: 14,
+  },
+  settingRowMainAction: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 38,
+  },
   settingValue: {
     color: "#ffffff",
     fontSize: 16,
     fontWeight: "900",
     letterSpacing: -0.2,
     textAlign: "right",
+  },
+  calibrateButton: {
+    alignItems: "center",
+    alignSelf: "flex-end",
+    backgroundColor: "rgba(54,244,212,0.14)",
+    borderColor: "rgba(54,244,212,0.34)",
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  calibrateButtonPressed: {
+    opacity: 0.62,
+  },
+  calibrateButtonText: {
+    color: "#dffefa",
+    fontSize: 13,
+    fontWeight: "900",
   },
   signOutButton: {
     alignItems: "center",
