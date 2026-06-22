@@ -202,8 +202,10 @@ function getWarmWaterEstimate(
     return null;
   }
 
+  const fullTankTemp =
+    settings.fullTankAverageTemperature ?? settings.maxTankTemperature;
   const temperatureRange = Math.max(
-    settings.maxTankTemperature - settings.minTankTemperature,
+    fullTankTemp - settings.minTankTemperature,
     1,
   );
   const averageTemp = (topTemperature + bottomTemperature) / 2;
