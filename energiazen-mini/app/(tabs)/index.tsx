@@ -612,17 +612,6 @@ export default function HomeScreen() {
   ]);
   const explanationVisible =
     selectedHeatingHoursCount !== settings.heatingHoursPerDay;
-  useEffect(() => {
-    console.log("heating plan explanation debug:", {
-      heatingHoursPerDay: settings.heatingHoursPerDay,
-      selectedHeatingHoursCount,
-      explanationVisible,
-    });
-  }, [
-    explanationVisible,
-    selectedHeatingHoursCount,
-    settings.heatingHoursPerDay,
-  ]);
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
