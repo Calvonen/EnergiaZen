@@ -271,6 +271,24 @@ function normalizePriceToCents(value: number) {
   return value < 1 ? value * 100 : value;
 }
 
+function getAveragePrice(prices: HourlyPrice[]) {
+  if (prices.length === 0) {
+    return null;
+  }
+
+  return prices.reduce((sum, item) => sum + item.price, 0) / prices.length;
+}
+
+function haveSameHourIds(first: HourlyPrice[], second: HourlyPrice[]) {
+  if (first.length !== second.length) {
+    return false;
+  }
+
+  const secondIds = new Set(second.map((item) => item.id));
+
+  return first.every((item) => secondIds.has(item.id));
+}
+
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
@@ -628,6 +646,77 @@ export default function HomeScreen() {
     ? `${Math.round(warmWaterEstimate.averageTemp)}°`
     : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
+  const heatingPlanExplanation = useMemo(() => {
+    const todayKey = getChartDayKey("today");
+    const tomorrowKey = getChartDayKey("tomorrow");
+    const remainingTodayPrices = hourlyPrices.filter(
+      (item) =>
+        getFinnishDateKey(item.startDate) === todayKey &&
+        item.endDate.getTime() > currentHourStart.getTime(),
+    );
+    const tomorrowPrices = hourlyPrices.filter(
+      (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
+    );
+    const normalHeatingHours = sortHoursChronologically(
+      getCheapestHours(remainingTodayPrices, settings.heatingHoursPerDay),
+    );
+    const plannedFutureHours = sortHoursChronologically(
+      recommendedHeatingHours.filter((item) => item.status === "planned"),
+    );
+
+    if (
+      plannedFutureHours.length === 0 ||
+      haveSameHourIds(plannedFutureHours, normalHeatingHours)
+    ) {
+      return null;
+    }
+
+    const normalHourIds = new Set(normalHeatingHours.map((item) => item.id));
+    const additionalHours = plannedFutureHours.filter(
+      (item) => !normalHourIds.has(item.id),
+    );
+    const averageTodayPrice = getAveragePrice(
+      getCheapestHours(remainingTodayPrices, settings.heatingHoursPerDay),
+    );
+    const averageTomorrowPrice = getAveragePrice(
+      getCheapestHours(tomorrowPrices, settings.heatingHoursPerDay),
+    );
+    const firstCheapTomorrowHour = sortHoursChronologically(
+      getCheapestHours(tomorrowPrices, settings.heatingHoursPerDay),
+    )[0];
+    const minimumReserveHours = firstCheapTomorrowHour
+      ? Math.max(
+          0,
+          Math.ceil(
+            (firstCheapTomorrowHour.date.getTime() -
+              currentHourStart.getTime()) /
+              (60 * 60 * 1000),
+          ),
+        )
+      : null;
+    const tomorrowIsMoreExpensive =
+      averageTodayPrice !== null &&
+      averageTomorrowPrice !== null &&
+      averageTomorrowPrice - averageTodayPrice >
+        settings.priceDifferenceThresholdCents;
+
+    return {
+      additionalHoursCount: additionalHours.length,
+      minimumReserveHours,
+      description: tomorrowIsMoreExpensive
+        ? "Huomenna on kalliimpaa ja lämmintä vettä on alle vähimmäisvarauksen. Lisätään lämmitystä tänään halvimmille tunneille."
+        : "Suunnitelma poikkeaa tavallisesta halvimpien tuntien valinnasta tämänhetkisen varaaja- ja hintatilanteen takia.",
+      title: tomorrowIsMoreExpensive
+        ? "Ennakoiva lämmitys"
+        : "Lämmityssuunnitelman poikkeama",
+    };
+  }, [
+    currentHourStart,
+    hourlyPrices,
+    recommendedHeatingHours,
+    settings.heatingHoursPerDay,
+    settings.priceDifferenceThresholdCents,
+  ]);
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
@@ -1111,6 +1200,51 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         </View>
+
+        {heatingPlanExplanation ? (
+          <View style={styles.heatingPlanInfoCard}>
+            <View style={styles.heatingPlanHeaderRow}>
+              <Text style={styles.heatingPlanIcon}>💡</Text>
+              <Text style={styles.heatingPlanTitle}>
+                {heatingPlanExplanation.title}
+              </Text>
+            </View>
+            <Text style={styles.heatingPlanDescription}>
+              {heatingPlanExplanation.description}
+            </Text>
+            <View style={styles.heatingPlanDetailsGrid}>
+              <View style={styles.heatingPlanDetailItem}>
+                <Text style={styles.heatingPlanDetailLabel}>Suihkuarvio</Text>
+                <Text style={styles.heatingPlanDetailValue}>
+                  {warmWaterShowersLabel}
+                </Text>
+              </View>
+              <View style={styles.heatingPlanDetailItem}>
+                <Text style={styles.heatingPlanDetailLabel}>
+                  Vähimmäisvaraus
+                </Text>
+                <Text style={styles.heatingPlanDetailValue}>
+                  {heatingPlanExplanation.minimumReserveHours === null
+                    ? "-- h"
+                    : `${heatingPlanExplanation.minimumReserveHours} h`}
+                </Text>
+              </View>
+              <View style={styles.heatingPlanDetailItem}>
+                <Text style={styles.heatingPlanDetailLabel}>Hintaeron raja</Text>
+                <Text style={styles.heatingPlanDetailValue}>
+                  {formatFinnishDecimal(settings.priceDifferenceThresholdCents)}
+                  c
+                </Text>
+              </View>
+              <View style={styles.heatingPlanDetailItem}>
+                <Text style={styles.heatingPlanDetailLabel}>Lisätunnit</Text>
+                <Text style={styles.heatingPlanDetailValue}>
+                  {heatingPlanExplanation.additionalHoursCount} h
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.chartCard}>
           <View style={styles.daySelector}>
@@ -1713,6 +1847,68 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     marginTop: 1,
     textAlign: "center",
+  },
+  heatingPlanInfoCard: {
+    backgroundColor: "rgba(54,244,212,0.11)",
+    borderColor: "rgba(191,255,238,0.24)",
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 12,
+    marginBottom: 14,
+    padding: 16,
+    shadowColor: "#36f4d4",
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    width: "100%",
+  },
+  heatingPlanHeaderRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  heatingPlanIcon: {
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  heatingPlanTitle: {
+    color: "#f8fbff",
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  heatingPlanDescription: {
+    color: "#d9e9ff",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+  },
+  heatingPlanDetailsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  heatingPlanDetailItem: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.11)",
+    borderRadius: 14,
+    borderWidth: 1,
+    flexBasis: "48%",
+    flexGrow: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  heatingPlanDetailLabel: {
+    color: "rgba(207,233,255,0.68)",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+    textTransform: "uppercase",
+  },
+  heatingPlanDetailValue: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 3,
   },
   chartCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
