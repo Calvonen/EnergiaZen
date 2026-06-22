@@ -95,10 +95,13 @@ function formatTemperature(value: number) {
 }
 
 function formatTimestamp(timestamp: string) {
-  return new Intl.DateTimeFormat("fi-FI", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
+  const date = new Date(timestamp);
+  const day = date.getDate().toString().padStart(2, "0");
+  const month = (date.getMonth() + 1).toString().padStart(2, "0");
+  const hours = date.getHours().toString().padStart(2, "0");
+  const minutes = date.getMinutes().toString().padStart(2, "0");
+
+  return `${day}.${month}. klo ${hours}:${minutes}`;
 }
 
 export default function SettingsScreen() {
@@ -406,32 +409,36 @@ export default function SettingsScreen() {
           })}
         </View>
 
-        {calibrationSuggestion ? (
-          <View style={styles.suggestionCard}>
-            <Text style={styles.suggestionTitle}>Kalibrointiehdotus</Text>
-            <Text style={styles.suggestionMessage}>
-              {calibrationSuggestion.message}
+        <View style={styles.suggestionCard}>
+          <Text style={styles.suggestionTitle}>Täyden varaajan kalibrointi</Text>
+          <View style={styles.suggestionDetails}>
+            <Text style={styles.suggestionDetail}>
+              Nykyinen täyden varaajan keskilämpö:{" "}
+              {settings.fullTankAverageTemperature} °C
             </Text>
-            <View style={styles.suggestionDetails}>
+            {calibrationSuggestion ? (
+              <>
+                <Text style={styles.suggestionDetail}>
+                  Ehdotus:{" "}
+                  {formatTemperature(calibrationSuggestion.suggestedTemperature)} °C
+                </Text>
+                <Text style={styles.suggestionDetail}>
+                  Ylä: {formatTemperature(calibrationSuggestion.topTemp)} °C
+                </Text>
+                <Text style={styles.suggestionDetail}>
+                  Ala: {formatTemperature(calibrationSuggestion.bottomTemp)} °C
+                </Text>
+                <Text style={styles.suggestionDetail}>
+                  Ajankohta: {formatTimestamp(calibrationSuggestion.timestamp)}
+                </Text>
+              </>
+            ) : (
               <Text style={styles.suggestionDetail}>
-                Ylä: {formatTemperature(calibrationSuggestion.topTemp)} °C
+                Ei uutta kalibrointiehdotusta.
               </Text>
-              <Text style={styles.suggestionDetail}>
-                Ala: {formatTemperature(calibrationSuggestion.bottomTemp)} °C
-              </Text>
-              <Text style={styles.suggestionDetail}>
-                Keski: {formatTemperature(calibrationSuggestion.averageTemp)} °C
-              </Text>
-              <Text style={styles.suggestionDetail}>
-                Ajankohta: {formatTimestamp(calibrationSuggestion.timestamp)}
-              </Text>
-              <Text style={styles.suggestionDetail}>
-                Nykyinen kalibrointi: {settings.fullTankAverageTemperature} °C
-              </Text>
-              <Text style={styles.suggestionDetail}>
-                Uusi ehdotus: {calibrationSuggestion.suggestedTemperature} °C
-              </Text>
-            </View>
+            )}
+          </View>
+          {calibrationSuggestion ? (
             <View style={styles.suggestionActions}>
               <Pressable
                 accessibilityRole="button"
@@ -448,8 +455,8 @@ export default function SettingsScreen() {
                 <Text style={styles.updateButtonText}>Päivitä</Text>
               </Pressable>
             </View>
-          </View>
-        ) : null}
+          ) : null}
+        </View>
 
         <Pressable
           accessibilityRole="button"
