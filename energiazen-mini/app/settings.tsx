@@ -19,6 +19,21 @@ import {
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 
+type CalibrationSuggestion = {
+  averageTemp: number;
+  bottomTemp: number;
+  message: string;
+  suggestedTemperature: number;
+  timestamp: string;
+  topTemp: number;
+};
+
+type TankReadingCalibrationRow = {
+  bottom_temp?: number | null;
+  created_at?: string | null;
+  top_temp?: number | null;
+};
+
 type SettingsRow = {
   accent: string;
   key?: EditableSettingKey;
@@ -57,13 +72,42 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     options: [55, 60, 65, 70, 75, 80],
     unit: "°C",
   },
+  fullTankAverageTemperature: {
+    max: 85,
+    min: 20,
+    unit: "°C",
+  },
 };
+
+function getAverageTemp(reading: TankReadingCalibrationRow) {
+  if (
+    typeof reading.top_temp !== "number" ||
+    typeof reading.bottom_temp !== "number"
+  ) {
+    return null;
+  }
+
+  return (reading.top_temp + reading.bottom_temp) / 2;
+}
+
+function formatTemperature(value: number) {
+  return value.toFixed(1).replace(".0", "");
+}
+
+function formatTimestamp(timestamp: string) {
+  return new Intl.DateTimeFormat("fi-FI", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+}
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
+  const [calibrationSuggestion, setCalibrationSuggestion] =
+    useState<CalibrationSuggestion | null>(null);
 
   const settingsRows = useMemo(
     (): SettingsRow[] => [
@@ -101,6 +145,12 @@ export default function SettingsScreen() {
         key: "fullTankShowers",
         label: "Täysi varaaja",
         value: `${settings.fullTankShowers} suihkua`,
+      },
+      {
+        accent: "#36f4d4",
+        key: "fullTankAverageTemperature",
+        label: "Täyden varaajan keskilämpö",
+        value: `${settings.fullTankAverageTemperature} °C`,
       },
     ],
     [settings],
@@ -145,7 +195,124 @@ export default function SettingsScreen() {
       [key]: value,
     });
     setSelectedSettingKey(null);
+    if (key === "fullTankAverageTemperature") {
+      setCalibrationSuggestion(null);
+    }
   };
+
+  const applyCalibrationSuggestion = () => {
+    if (!calibrationSuggestion) {
+      return;
+    }
+
+    saveUpdatedSettings({
+      ...settings,
+      fullTankAverageTemperature: calibrationSuggestion.suggestedTemperature,
+    });
+    setCalibrationSuggestion(null);
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const refreshCalibrationSuggestion = async () => {
+      const retentionStart30d = new Date(
+        Date.now() - 30 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const retentionStart7d = new Date(
+        Date.now() - 7 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+
+      const { data, error } = await supabase
+        .from("tank_readings")
+        .select("created_at, top_temp, bottom_temp")
+        .gte("created_at", retentionStart30d)
+        .order("created_at", { ascending: false });
+
+      if (!isMounted || error) {
+        return;
+      }
+
+      const readings = ((data as TankReadingCalibrationRow[] | null) ?? [])
+        .map((reading) => {
+          const averageTemp = getAverageTemp(reading);
+
+          if (!reading.created_at || averageTemp === null) {
+            return null;
+          }
+
+          return {
+            averageTemp,
+            bottomTemp: reading.bottom_temp as number,
+            timestamp: reading.created_at,
+            topTemp: reading.top_temp as number,
+          };
+        })
+        .filter(
+          (reading): reading is Omit<
+            CalibrationSuggestion,
+            "message" | "suggestedTemperature"
+          > => reading !== null,
+        );
+
+      const maxAverage30d = readings.reduce<(typeof readings)[number] | null>(
+        (maxReading, reading) =>
+          !maxReading || reading.averageTemp > maxReading.averageTemp
+            ? reading
+            : maxReading,
+        null,
+      );
+      const maxAverage7d = readings
+        .filter(
+          (reading) =>
+            new Date(reading.timestamp).getTime() >=
+            new Date(retentionStart7d).getTime(),
+        )
+        .reduce<(typeof readings)[number] | null>(
+          (maxReading, reading) =>
+            !maxReading || reading.averageTemp > maxReading.averageTemp
+              ? reading
+              : maxReading,
+          null,
+        );
+
+      if (
+        maxAverage7d &&
+        maxAverage7d.averageTemp >= settings.fullTankAverageTemperature + 1
+      ) {
+        setCalibrationSuggestion({
+          ...maxAverage7d,
+          message: `Löytyi uusi korkeampi täyden varaajan keskilämpö: ${formatTemperature(
+            maxAverage7d.averageTemp,
+          )} °C. Päivitetäänkö kalibrointi?`,
+          suggestedTemperature: Math.round(maxAverage7d.averageTemp),
+        });
+        return;
+      }
+
+      if (
+        maxAverage30d &&
+        maxAverage30d.averageTemp <= settings.fullTankAverageTemperature - 1
+      ) {
+        setCalibrationSuggestion({
+          ...maxAverage30d,
+          message: `Viimeisen 30 päivän aikana varaaja ei ole saavuttanut nykyistä täyden varaajan kalibrointia. Uusi ehdotus: ${formatTemperature(
+            maxAverage30d.averageTemp,
+          )} °C.`,
+          suggestedTemperature: Math.round(maxAverage30d.averageTemp),
+        });
+        return;
+      }
+
+      setCalibrationSuggestion(null);
+    };
+
+    void refreshCalibrationSuggestion();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [settings.fullTankAverageTemperature]);
 
   useFocusEffect(
     useCallback(() => {
@@ -239,6 +406,51 @@ export default function SettingsScreen() {
           })}
         </View>
 
+        {calibrationSuggestion ? (
+          <View style={styles.suggestionCard}>
+            <Text style={styles.suggestionTitle}>Kalibrointiehdotus</Text>
+            <Text style={styles.suggestionMessage}>
+              {calibrationSuggestion.message}
+            </Text>
+            <View style={styles.suggestionDetails}>
+              <Text style={styles.suggestionDetail}>
+                Ylä: {formatTemperature(calibrationSuggestion.topTemp)} °C
+              </Text>
+              <Text style={styles.suggestionDetail}>
+                Ala: {formatTemperature(calibrationSuggestion.bottomTemp)} °C
+              </Text>
+              <Text style={styles.suggestionDetail}>
+                Keski: {formatTemperature(calibrationSuggestion.averageTemp)} °C
+              </Text>
+              <Text style={styles.suggestionDetail}>
+                Ajankohta: {formatTimestamp(calibrationSuggestion.timestamp)}
+              </Text>
+              <Text style={styles.suggestionDetail}>
+                Nykyinen kalibrointi: {settings.fullTankAverageTemperature} °C
+              </Text>
+              <Text style={styles.suggestionDetail}>
+                Uusi ehdotus: {calibrationSuggestion.suggestedTemperature} °C
+              </Text>
+            </View>
+            <View style={styles.suggestionActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCalibrationSuggestion(null)}
+                style={[styles.suggestionButton, styles.dismissButton]}
+              >
+                <Text style={styles.dismissButtonText}>Ei nyt</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={applyCalibrationSuggestion}
+                style={[styles.suggestionButton, styles.updateButton]}
+              >
+                <Text style={styles.updateButtonText}>Päivitä</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <Pressable
           accessibilityRole="button"
           onPress={handleSignOut}
@@ -299,6 +511,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
   },
+  dismissButton: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.18)",
+  },
+  dismissButtonText: {
+    color: "#d9e9ff",
+    fontSize: 15,
+    fontWeight: "900",
+  },
   glow: {
     borderRadius: 999,
     height: 280,
@@ -357,6 +578,48 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: 1.1,
     textTransform: "uppercase",
+  },
+  suggestionActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  suggestionButton: {
+    alignItems: "center",
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    paddingVertical: 12,
+  },
+  suggestionCard: {
+    backgroundColor: "rgba(54,244,212,0.11)",
+    borderColor: "rgba(54,244,212,0.34)",
+    borderRadius: 24,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 18,
+  },
+  suggestionDetail: {
+    color: "#d9e9ff",
+    fontSize: 14,
+    fontWeight: "800",
+    lineHeight: 21,
+  },
+  suggestionDetails: {
+    gap: 3,
+    marginTop: 12,
+  },
+  suggestionMessage: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "800",
+    lineHeight: 22,
+    marginTop: 8,
+  },
+  suggestionTitle: {
+    color: "#36f4d4",
+    fontSize: 17,
+    fontWeight: "900",
   },
   title: {
     color: "#f7fbff",
@@ -470,6 +733,15 @@ const styles = StyleSheet.create({
   signOutButtonText: {
     color: "#ffffff",
     fontSize: 16,
+    fontWeight: "900",
+  },
+  updateButton: {
+    backgroundColor: "#36f4d4",
+    borderColor: "rgba(54,244,212,0.75)",
+  },
+  updateButtonText: {
+    color: "#06111f",
+    fontSize: 15,
     fontWeight: "900",
   },
   selectorCard: {

@@ -9,6 +9,7 @@ export const defaultSettings = {
   minTankTemperature: 10,
   maxTankTemperature: 70,
   fullTankShowers: 6,
+  fullTankAverageTemperature: defaultTankTemperature,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
@@ -18,7 +19,8 @@ export type EditableSettingKey =
   | "heatingHoursPerDay"
   | "priceDifferenceThresholdCents"
   | "fullTankShowers"
-  | "maxTankTemperature";
+  | "maxTankTemperature"
+  | "fullTankAverageTemperature";
 
 export const settingsStorageKey = "energiazen:settings";
 
@@ -28,6 +30,7 @@ const editableSettingRanges = {
   priceDifferenceThresholdCents: { max: 10, min: 0 },
   fullTankShowers: { max: 10, min: 3 },
   maxTankTemperature: { max: 90, min: 40 },
+  fullTankAverageTemperature: { max: 90, min: 20 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
 
 function clampSettingValue(key: EditableSettingKey, value: number) {
@@ -74,6 +77,13 @@ export function normalizeSettings(
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
         : defaultSettings.maxTankTemperature,
+    fullTankAverageTemperature:
+      typeof settings.fullTankAverageTemperature === "number"
+        ? clampSettingValue(
+            "fullTankAverageTemperature",
+            settings.fullTankAverageTemperature,
+          )
+        : defaultSettings.fullTankAverageTemperature,
   };
 }
 
