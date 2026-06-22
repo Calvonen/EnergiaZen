@@ -10,6 +10,7 @@ export const defaultSettings = {
   maxTankTemperature: 70,
   fullTankAverageTemperature: 70,
   fullTankShowers: 6,
+  minimumShowersBeforeExpensiveTomorrow: 3,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
@@ -19,6 +20,7 @@ export type EditableSettingKey =
   | "heatingHoursPerDay"
   | "priceDifferenceThresholdCents"
   | "fullTankShowers"
+  | "minimumShowersBeforeExpensiveTomorrow"
   | "maxTankTemperature"
   | "fullTankAverageTemperature";
 
@@ -29,6 +31,7 @@ const editableSettingRanges = {
   heatingHoursPerDay: { max: 6, min: 1 },
   priceDifferenceThresholdCents: { max: 10, min: 0 },
   fullTankShowers: { max: 10, min: 3 },
+  minimumShowersBeforeExpensiveTomorrow: { max: 8, min: 1 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
@@ -73,6 +76,13 @@ export function normalizeSettings(
       typeof fullTankShowers === "number"
         ? clampSettingValue("fullTankShowers", fullTankShowers)
         : defaultSettings.fullTankShowers,
+    minimumShowersBeforeExpensiveTomorrow:
+      typeof settings.minimumShowersBeforeExpensiveTomorrow === "number"
+        ? clampSettingValue(
+            "minimumShowersBeforeExpensiveTomorrow",
+            settings.minimumShowersBeforeExpensiveTomorrow,
+          )
+        : defaultSettings.minimumShowersBeforeExpensiveTomorrow,
     maxTankTemperature:
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)

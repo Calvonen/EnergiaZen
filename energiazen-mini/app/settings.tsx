@@ -67,6 +67,11 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     min: 3,
     unit: "suihkua",
   },
+  minimumShowersBeforeExpensiveTomorrow: {
+    max: 8,
+    min: 1,
+    unit: "suihkua",
+  },
   maxTankTemperature: {
     options: [55, 60, 65, 70, 75, 80],
     unit: "°C",
@@ -127,6 +132,12 @@ export default function SettingsScreen() {
         key: "fullTankShowers",
         label: "Täysi varaaja",
         value: `${settings.fullTankShowers} suihkua`,
+      },
+      {
+        accent: "#36f4d4",
+        key: "minimumShowersBeforeExpensiveTomorrow",
+        label: "Vähimmäisvaraus",
+        value: `${settings.minimumShowersBeforeExpensiveTomorrow} suihkua`,
       },
     ],
     [settings],
