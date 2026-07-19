@@ -24,14 +24,14 @@ type TemperatureHistoryPoint = {
 
 type SelectedHistoryPoint = {
   index: number;
-  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint;
+  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint;
   x: number;
 };
 
-type DailyTemperatureHistoryPoint = {
+type HourlyTemperatureHistoryPoint = {
   timestamp: string;
-  dayKey: string;
-  dayLabel: string;
+  hourKey: string;
+  hourLabel: string;
   topTempAvg: number;
   bottomTempAvg: number;
   averageTempAvg: number;
@@ -43,11 +43,16 @@ type TankReadingRow = {
   bottom_temp?: number | null;
 };
 
+type XAxisLabel = {
+  align: "left" | "center" | "right";
+  text: string;
+};
+
 const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
-const tooltipWidth = 116;
+const tooltipWidth = 144;
 const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
 const bottomTemperatureColor = "#60A5FA";
@@ -66,8 +71,37 @@ const tooltipTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   timeZone: "Europe/Helsinki",
 });
 
+const tooltipDateFormatter = new Intl.DateTimeFormat("fi-FI", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  weekday: "short",
+});
+
+const axisDateFormatter = new Intl.DateTimeFormat("fi-FI", {
+  day: "numeric",
+  month: "numeric",
+  timeZone: "Europe/Helsinki",
+});
+
+const tooltipClockFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "numeric",
+  hour12: false,
+  minute: "2-digit",
+  timeZone: "Europe/Helsinki",
+});
+
 const dayKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
   day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
+const hourKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
+  day: "2-digit",
+  hour: "2-digit",
+  hour12: false,
   month: "2-digit",
   timeZone: "Europe/Helsinki",
   year: "numeric",
@@ -86,18 +120,47 @@ function formatTooltipTime(timestamp: string) {
   return tooltipTimeFormatter.format(new Date(timestamp)).replace(".", ":");
 }
 
+function formatTooltipDateTime(timestamp: string) {
+  const dateParts = tooltipDateFormatter.formatToParts(new Date(timestamp));
+  const weekday = getDatePart(dateParts, "weekday").replace(".", "");
+  const day = getDatePart(dateParts, "day");
+  const month = getDatePart(dateParts, "month");
+  const time = tooltipClockFormatter
+    .format(new Date(timestamp))
+    .replace(":", ".");
+
+  return `${weekday} ${day}.${month}. klo ${time}`;
+}
+
 function formatWeekday(timestamp: string) {
   const weekday = weekdayFormatter.format(new Date(timestamp)).replace(".", "");
 
   return weekday.charAt(0).toUpperCase() + weekday.slice(1);
 }
 
+function formatAxisDay(timestamp: string) {
+  const date = axisDateFormatter.format(new Date(timestamp));
+
+  return `${formatWeekday(timestamp)} ${date}`;
+}
+
+function getDatePart(
+  parts: Intl.DateTimeFormatPart[],
+  type: Intl.DateTimeFormatPartTypes,
+) {
+  return parts.find((part) => part.type === type)?.value ?? "";
+}
+
+function getHourKey(timestamp: string) {
+  return hourKeyFormatter.format(new Date(timestamp));
+}
+
 function roundTemperature(value: number) {
   return Math.round(value * 10) / 10;
 }
 
-function calculateAverageTemperature(topTemp: number, bottomTemp: number) {
-  return (topTemp + bottomTemp) / 2;
+function calculateWeightedTemperature(topTemp: number, bottomTemp: number) {
+  return topTemp * 0.7 + bottomTemp * 0.3;
 }
 
 function getHistoryRangeStart(rangeMs: number) {
@@ -124,7 +187,7 @@ function mapTankReadingToHistoryPoint(
   }
 
   return {
-    averageTemp: calculateAverageTemperature(
+    averageTemp: calculateWeightedTemperature(
       reading.top_temp,
       reading.bottom_temp,
     ),
@@ -178,7 +241,7 @@ function getVisibleHistory(
       : history;
   }
 
-  return getDailyHistory(history);
+  return getHourlyHistory(history);
 }
 
 function sampleHistoryByLatestPoint(
@@ -200,11 +263,10 @@ function sampleHistoryByLatestPoint(
   );
 }
 
-function getDailyHistory(history: TemperatureHistoryPoint[]) {
-  const dailyBuckets = new Map<
+function getHourlyHistory(history: TemperatureHistoryPoint[]) {
+  const hourlyBuckets = new Map<
     string,
     {
-      averageTempSum: number;
       bottomTempSum: number;
       count: number;
       timestamp: string;
@@ -213,12 +275,11 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
   >();
 
   history.forEach((point) => {
-    const dayKey = dayKeyFormatter.format(new Date(point.timestamp));
-    const bucket = dailyBuckets.get(dayKey);
+    const hourKey = getHourKey(point.timestamp);
+    const bucket = hourlyBuckets.get(hourKey);
 
     if (!bucket) {
-      dailyBuckets.set(dayKey, {
-        averageTempSum: point.averageTemp,
+      hourlyBuckets.set(hourKey, {
         bottomTempSum: point.bottomTemp,
         count: 1,
         timestamp: point.timestamp,
@@ -227,21 +288,31 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
       return;
     }
 
-    bucket.averageTempSum += point.averageTemp;
     bucket.bottomTempSum += point.bottomTemp;
     bucket.count += 1;
     bucket.topTempSum += point.topTemp;
   });
 
-  return [...dailyBuckets.entries()]
-    .map(([dayKey, bucket]) => ({
-      averageTempAvg: roundTemperature(bucket.averageTempSum / bucket.count),
-      bottomTempAvg: roundTemperature(bucket.bottomTempSum / bucket.count),
-      dayKey,
-      dayLabel: formatWeekday(bucket.timestamp),
-      timestamp: bucket.timestamp,
-      topTempAvg: roundTemperature(bucket.topTempSum / bucket.count),
-    }))
+  return [...hourlyBuckets.entries()]
+    .map(([hourKey, bucket]) => {
+      const topTempAvg = roundTemperature(bucket.topTempSum / bucket.count);
+      const bottomTempAvg = roundTemperature(
+        bucket.bottomTempSum / bucket.count,
+      );
+
+      return {
+        averageTempAvg: roundTemperature(
+          calculateWeightedTemperature(topTempAvg, bottomTempAvg),
+        ),
+        bottomTempAvg,
+        hourKey,
+        hourLabel: `${formatWeekday(bucket.timestamp)} ${formatHour(
+          bucket.timestamp,
+        )}`,
+        timestamp: bucket.timestamp,
+        topTempAvg,
+      };
+    })
     .sort(
       (firstPoint, secondPoint) =>
         new Date(firstPoint.timestamp).getTime() -
@@ -250,26 +321,26 @@ function getDailyHistory(history: TemperatureHistoryPoint[]) {
 }
 
 function getTopTemperature(
-  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
 ) {
   return "topTempAvg" in point ? point.topTempAvg : point.topTemp;
 }
 
 function getBottomTemperature(
-  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
 ) {
   return "bottomTempAvg" in point ? point.bottomTempAvg : point.bottomTemp;
 }
 
 function getAverageTemperature(
-  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
+  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
 ) {
   return "averageTempAvg" in point ? point.averageTempAvg : point.averageTemp;
 }
 
-function isDailyHistoryPoint(
-  point: TemperatureHistoryPoint | DailyTemperatureHistoryPoint,
-): point is DailyTemperatureHistoryPoint {
+function isHourlyHistoryPoint(
+  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
+): point is HourlyTemperatureHistoryPoint {
   return "topTempAvg" in point;
 }
 
@@ -302,9 +373,8 @@ function getAdjustedPointBottoms(
 function shouldShowXAxisLabel(
   index: number,
   historyLength: number,
-  isDailyView: boolean,
 ) {
-  if (isDailyView || historyLength <= 5) {
+  if (historyLength <= 5) {
     return true;
   }
 
@@ -314,6 +384,60 @@ function shouldShowXAxisLabel(
   return Array.from({ length: labelCount }).some(
     (_, labelIndex) => index === Math.round(labelIndex * interval),
   );
+}
+
+function getSevenDayXAxisLabels(
+  history: (TemperatureHistoryPoint | HourlyTemperatureHistoryPoint)[],
+) {
+  const dayBuckets: {
+    firstIndex: number;
+    lastIndex: number;
+    timestamp: string;
+  }[] = [];
+  const dayBucketByKey = new Map<string, (typeof dayBuckets)[number]>();
+
+  history.forEach((point, index) => {
+    const dayKey = dayKeyFormatter.format(new Date(point.timestamp));
+    const bucket = dayBucketByKey.get(dayKey);
+
+    if (!bucket) {
+      const nextBucket = {
+        firstIndex: index,
+        lastIndex: index,
+        timestamp: point.timestamp,
+      };
+      dayBucketByKey.set(dayKey, nextBucket);
+      dayBuckets.push(nextBucket);
+      return;
+    }
+
+    bucket.lastIndex = index;
+  });
+
+  const labels = new Map<number, XAxisLabel>();
+  const labelCount = Math.min(dayBuckets.length, 4);
+
+  Array.from({ length: labelCount }).forEach((_, labelIndex) => {
+    const dayIndex =
+      labelCount === 1
+        ? 0
+        : Math.round((labelIndex * (dayBuckets.length - 1)) / (labelCount - 1));
+    const bucket = dayBuckets[dayIndex];
+    const isFirstLabel = labelIndex === 0;
+    const isLastLabel = labelIndex === labelCount - 1;
+    const pointIndex = isFirstLabel
+      ? bucket.firstIndex
+      : isLastLabel
+        ? bucket.lastIndex
+        : Math.round((bucket.firstIndex + bucket.lastIndex) / 2);
+
+    labels.set(pointIndex, {
+      align: isFirstLabel ? "left" : isLastLabel ? "right" : "center",
+      text: formatAxisDay(bucket.timestamp),
+    });
+  });
+
+  return labels;
 }
 
 type ChartLineSegment = {
@@ -327,7 +451,7 @@ type ChartLineSegment = {
 };
 
 function getChartLineSegments(
-  history: (TemperatureHistoryPoint | DailyTemperatureHistoryPoint)[],
+  history: (TemperatureHistoryPoint | HourlyTemperatureHistoryPoint)[],
   chartWidth: number,
 ) {
   if (history.length < 2 || chartWidth <= 0) {
@@ -412,7 +536,7 @@ export default function TemperatureHistoryScreen() {
 
     try {
       const next24h = await fetchTankReadingsSince(h24Start, 2000);
-      const next7d = await fetchTankReadingsSince(d7Start, 10000);
+      const next7d = await fetchTankReadingsSince(d7Start, 12000);
 
       setHistory24h(next24h);
       setHistory7d(next7d);
@@ -464,7 +588,7 @@ export default function TemperatureHistoryScreen() {
   );
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
-  const isDailyView = selectedTab === "7d";
+  const isSevenDayView = selectedTab === "7d";
   const selectedTooltipLeft = selectedHistoryPoint
     ? Math.min(
         Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
@@ -474,6 +598,10 @@ export default function TemperatureHistoryScreen() {
   const lineSegments = useMemo(
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
+  );
+  const sevenDayXAxisLabels = useMemo(
+    () => (isSevenDayView ? getSevenDayXAxisLabels(visibleHistory) : null),
+    [isSevenDayView, visibleHistory],
   );
 
   const updateSelectedHistoryPoint = useCallback(
@@ -567,12 +695,12 @@ export default function TemperatureHistoryScreen() {
             </View>
             <View style={styles.summaryPill}>
               <Text numberOfLines={1} style={styles.summaryLabel}>
-                Keski °C
+                70/30 °C
               </Text>
               <Text style={styles.averageSummaryValue}>
                 {latestPoint
                   ? roundTemperature(
-                      calculateAverageTemperature(
+                      calculateWeightedTemperature(
                         getTopTemperature(latestPoint),
                         getBottomTemperature(latestPoint),
                       ),
@@ -596,13 +724,13 @@ export default function TemperatureHistoryScreen() {
 
           <View style={styles.legendRow}>
             <Text style={styles.legendTop}>
-              ● Yläanturi {isDailyView ? "keskiarvo" : ""}
-            </Text>
-            <Text style={styles.legendBottom}>
-              ● Ala-anturi {isDailyView ? "keskiarvo" : ""}
+              Ylä
             </Text>
             <Text style={styles.legendAverage}>
-              ● Keskilämpö {isDailyView ? "keskiarvo" : ""}
+              70/30
+            </Text>
+            <Text style={styles.legendBottom}>
+              Ala
             </Text>
           </View>
 
@@ -675,9 +803,13 @@ export default function TemperatureHistoryScreen() {
                         ]}
                       >
                         <Text style={styles.historyTooltipTime}>
-                          {formatTooltipTime(
-                            selectedHistoryPoint.point.timestamp,
-                          )}
+                          {isSevenDayView
+                            ? formatTooltipDateTime(
+                                selectedHistoryPoint.point.timestamp,
+                              )
+                            : formatTooltipTime(
+                                selectedHistoryPoint.point.timestamp,
+                              )}
                         </Text>
                         <Text style={styles.historyTooltipTop}>
                           Ylä{" "}
@@ -694,7 +826,7 @@ export default function TemperatureHistoryScreen() {
                           °C
                         </Text>
                         <Text style={styles.historyTooltipAverage}>
-                          Keski{" "}
+                          70/30{" "}
                           {roundTemperature(
                             getAverageTemperature(selectedHistoryPoint.point),
                           ).toFixed(1)}{" "}
@@ -709,9 +841,13 @@ export default function TemperatureHistoryScreen() {
                       const topTemperature = getTopTemperature(point);
                       const bottomTemperature = getBottomTemperature(point);
                       const averageTemperature = getAverageTemperature(point);
-                      const xAxisLabel = isDailyHistoryPoint(point)
-                        ? point.dayLabel
+                      const defaultXAxisLabel = isHourlyHistoryPoint(point)
+                        ? point.hourLabel
                         : formatHour(point.timestamp);
+                      const sevenDayXAxisLabel =
+                        sevenDayXAxisLabels?.get(index);
+                      const xAxisLabel =
+                        sevenDayXAxisLabel?.text ?? defaultXAxisLabel;
                       const { bottomBottom, topBottom } =
                         getAdjustedPointBottoms(
                           topTemperature,
@@ -720,10 +856,10 @@ export default function TemperatureHistoryScreen() {
 
                       return (
                         <View
-                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, keskilämpö ${averageTemperature} astetta`}
+                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, painotettu lämpö ${averageTemperature} astetta`}
                           key={
-                            isDailyHistoryPoint(point)
-                              ? point.dayKey
+                            isHourlyHistoryPoint(point)
+                              ? point.hourKey
                               : point.timestamp
                           }
                           style={styles.historyColumn}
@@ -749,12 +885,23 @@ export default function TemperatureHistoryScreen() {
                               { bottom: getPointBottom(averageTemperature) },
                             ]}
                           />
-                          {shouldShowXAxisLabel(
-                            index,
-                            visibleHistory.length,
-                            isDailyView,
-                          ) ? (
-                            <Text style={styles.hourLabel}>{xAxisLabel}</Text>
+                          {(isSevenDayView
+                            ? sevenDayXAxisLabel
+                            : shouldShowXAxisLabel(
+                                index,
+                                visibleHistory.length,
+                              )) ? (
+                            <Text
+                              style={[
+                                styles.hourLabel,
+                                sevenDayXAxisLabel?.align === "left" &&
+                                  styles.hourLabelLeft,
+                                sevenDayXAxisLabel?.align === "right" &&
+                                  styles.hourLabelRight,
+                              ]}
+                            >
+                              {xAxisLabel}
+                            </Text>
                           ) : null}
                         </View>
                       );
@@ -1018,10 +1165,18 @@ const styles = StyleSheet.create({
     color: "#8190b5",
     fontSize: 9,
     fontWeight: "800",
-    left: -14,
+    left: -32,
     position: "absolute",
     textAlign: "center",
-    width: 36,
+    width: 64,
+  },
+  hourLabelLeft: {
+    left: 0,
+    textAlign: "left",
+  },
+  hourLabelRight: {
+    left: -64,
+    textAlign: "right",
   },
   placeholderCard: {
     alignItems: "center",
