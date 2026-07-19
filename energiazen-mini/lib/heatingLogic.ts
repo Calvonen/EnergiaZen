@@ -59,6 +59,44 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+export function getHeatingNeedFromShowers(
+  showersLeft: number,
+  settings: EnergiaZenSettings = defaultSettings,
+) {
+  const fullTankShowers = Math.max(settings.fullTankShowers, 1);
+  const fillRatio = clamp(showersLeft / fullTankShowers, 0, 1);
+
+  if (fillRatio < 0.35) {
+    return {
+      fillRatio,
+      hours: settings.heatingHoursPerDay,
+      reason: "Varaus alle 35 % → täysi lämmitystarve",
+    };
+  }
+
+  if (fillRatio < 0.6) {
+    return {
+      fillRatio,
+      hours: Math.min(2, settings.heatingHoursPerDay),
+      reason: "Varaus 35–59 % → 2 h lämmitys",
+    };
+  }
+
+  if (fillRatio < 0.85) {
+    return {
+      fillRatio,
+      hours: Math.min(1, settings.heatingHoursPerDay),
+      reason: "Varaus 60–84 % → 1 h lämmitys",
+    };
+  }
+
+  return {
+    fillRatio,
+    hours: 0,
+    reason: "Varaus vähintään 85 % → ei lämmitystarvetta",
+  };
+}
+
 function getWarmWaterHoursForPlanning(
   tankTemperature: number,
   settings: EnergiaZenSettings,

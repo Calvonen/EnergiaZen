@@ -22,8 +22,10 @@ import { supabase } from "@/lib/supabase";
 
 type SettingsRow = {
   accent: string;
+  description?: string;
   key?: EditableSettingKey;
   label: string;
+  subheadingBefore?: string;
   value: string;
 };
 
@@ -147,12 +149,17 @@ export default function SettingsScreen() {
           },
           {
             accent: "#ffcf5a",
+            description:
+              "Kuinka paljon huomisen halvimpien tuntien pitää olla tämän päivän tunteja halvempia, jotta lämmitystä siirretään.",
             key: "priceDifferenceThresholdCents",
-            label: "Hintaeron raja",
+            label: "Hintarajaero",
+            subheadingBefore: "Lämmityksen siirto huomiselle",
             value: `${settings.priceDifferenceThresholdCents} c/kWh`,
           },
           {
             accent: "#36f4d4",
+            description:
+              "Lämmitystä voidaan siirtää huomiseen vain, jos suihkuja on vähintään tämä määrä.",
             key: "minimumShowersBeforeExpensiveTomorrow",
             label: "Vähimmäisvaraus suihkuina",
             value: `${settings.minimumShowersBeforeExpensiveTomorrow} suihkua`,
@@ -395,59 +402,82 @@ export default function SettingsScreen() {
                         { backgroundColor: row.accent },
                       ]}
                     />
-                    <Text style={styles.settingLabel}>{row.label}</Text>
+                    <View style={styles.settingTextGroup}>
+                      <Text style={styles.settingLabel}>{row.label}</Text>
+                      {row.description ? (
+                        <Text style={styles.settingDescription}>
+                          {row.description}
+                        </Text>
+                      ) : null}
+                    </View>
                     <Text style={styles.settingValue}>{row.value}</Text>
                   </>
                 );
 
-                if (row.key) {
-                  const rowKey = row.key;
+                const renderedRow = (() => {
+                  if (row.key) {
+                    const rowKey = row.key;
 
-                  if (rowKey === "fullTankAverageTemperature") {
+                    if (rowKey === "fullTankAverageTemperature") {
+                      return (
+                        <View
+                          key={row.label}
+                          style={styles.settingRowWithAction}
+                        >
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => setSelectedSettingKey(rowKey)}
+                            style={styles.settingRowMainAction}
+                          >
+                            {rowContent}
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isCalibratingFullTank}
+                            onPress={calibrateFullTankFromWeek}
+                            style={({ pressed }) => [
+                              styles.calibrateButton,
+                              (pressed || isCalibratingFullTank) &&
+                                styles.calibrateButtonPressed,
+                            ]}
+                          >
+                            <Text style={styles.calibrateButtonText}>
+                              {isCalibratingFullTank
+                                ? "Kalibroidaan..."
+                                : "Kalibroi viikon datasta"}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      );
+                    }
+
                     return (
-                      <View key={row.label} style={styles.settingRowWithAction}>
-                        <Pressable
-                          accessibilityRole="button"
-                          onPress={() => setSelectedSettingKey(rowKey)}
-                          style={styles.settingRowMainAction}
-                        >
-                          {rowContent}
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
-                          disabled={isCalibratingFullTank}
-                          onPress={calibrateFullTankFromWeek}
-                          style={({ pressed }) => [
-                            styles.calibrateButton,
-                            (pressed || isCalibratingFullTank) &&
-                              styles.calibrateButtonPressed,
-                          ]}
-                        >
-                          <Text style={styles.calibrateButtonText}>
-                            {isCalibratingFullTank
-                              ? "Kalibroidaan..."
-                              : "Kalibroi viikon datasta"}
-                          </Text>
-                        </Pressable>
-                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        key={row.label}
+                        onPress={() => setSelectedSettingKey(rowKey)}
+                        style={styles.settingRow}
+                      >
+                        {rowContent}
+                      </Pressable>
                     );
                   }
 
                   return (
-                    <Pressable
-                      accessibilityRole="button"
-                      key={row.label}
-                      onPress={() => setSelectedSettingKey(rowKey)}
-                      style={styles.settingRow}
-                    >
+                    <View key={row.label} style={styles.settingRow}>
                       {rowContent}
-                    </Pressable>
+                    </View>
                   );
-                }
+                })();
 
                 return (
-                  <View key={row.label} style={styles.settingRow}>
-                    {rowContent}
+                  <View key={row.label}>
+                    {row.subheadingBefore ? (
+                      <Text style={styles.settingSubsectionLabel}>
+                        {row.subheadingBefore}
+                      </Text>
+                    ) : null}
+                    {renderedRow}
                   </View>
                 );
               })}
@@ -630,9 +660,26 @@ const styles = StyleSheet.create({
   },
   settingLabel: {
     color: "#d9e9ff",
-    flex: 1,
     fontSize: 15,
     fontWeight: "800",
+  },
+  settingTextGroup: {
+    flex: 1,
+    gap: 4,
+  },
+  settingDescription: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  settingSubsectionLabel: {
+    color: "#9aaaca",
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    marginTop: 14,
+    paddingBottom: 4,
   },
   settingInputGroup: {
     alignItems: "center",
