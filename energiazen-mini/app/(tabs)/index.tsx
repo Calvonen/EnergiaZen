@@ -223,6 +223,54 @@ function getWarmWaterEstimate(
   };
 }
 
+// Rinnakkainen kerrostumismalli testausta varten.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function getStratifiedWarmWaterEstimate(
+  topTemperature: number | null,
+  bottomTemperature: number | null,
+  settings = defaultSettings,
+) {
+  if (topTemperature === null || bottomTemperature === null) {
+    return null;
+  }
+
+  const weightedTemperature = topTemperature * 0.7 + bottomTemperature * 0.3;
+  const fullTankTemp =
+    settings.fullTankAverageTemperature ?? settings.maxTankTemperature;
+  const energyTemperatureRange = Math.max(
+    fullTankTemp - settings.minTankTemperature,
+    1,
+  );
+  const energyRatio = clamp(
+    (weightedTemperature - settings.minTankTemperature) /
+      energyTemperatureRange,
+    0,
+    1,
+  );
+  const minimumUsableTopTemperature = 42;
+  const topUsabilityTemperatureRange = Math.max(
+    fullTankTemp - minimumUsableTopTemperature,
+    1,
+  );
+  const topUsability = clamp(
+    (topTemperature - minimumUsableTopTemperature) /
+      topUsabilityTemperatureRange,
+    0,
+    1,
+  );
+  const fillRatio = energyRatio * topUsability;
+  const showersLeft = fillRatio * settings.fullTankShowers;
+
+  return {
+    weightedTemperature,
+    energyRatio,
+    topUsability,
+    fillRatio,
+    showersLeft,
+    tankSizeLiters: settings.tankSizeLiters,
+  };
+}
+
 function getWarmWaterCardTheme() {
   const accent = "#26d9d2";
 
