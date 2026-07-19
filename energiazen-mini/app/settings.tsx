@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   defaultSettings,
   EditableSettingKey,
+  HeatingNeedMode,
   loadSettings,
   saveSettings,
 } from "@/lib/settings";
@@ -89,6 +90,14 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     unit: "°C",
   },
 };
+
+const heatingNeedModeOptions: {
+  label: string;
+  value: HeatingNeedMode;
+}[] = [
+  { label: "Automaattinen", value: "automatic" },
+  { label: "Kiinteä tuntimäärä", value: "fixed" },
+];
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -210,6 +219,13 @@ export default function SettingsScreen() {
       [key]: value,
     });
     setSelectedSettingKey(null);
+  };
+
+  const updateHeatingNeedMode = (heatingNeedMode: HeatingNeedMode) => {
+    saveUpdatedSettings({
+      ...settings,
+      heatingNeedMode,
+    });
   };
 
   useFocusEffect(
@@ -393,6 +409,48 @@ export default function SettingsScreen() {
           {settingsSections.map((section) => (
             <View key={section.title} style={styles.settingsSection}>
               <Text style={styles.sectionLabel}>{section.title}</Text>
+              {section.title === "Pörssisähkön ohjausasetukset" ? (
+                <View style={styles.modeSettingGroup}>
+                  <View style={styles.modeSettingHeader}>
+                    <Text style={styles.settingLabel}>
+                      Lämmitystarpeen määritys
+                    </Text>
+                    <Text style={styles.settingDescription}>
+                      Automaattinen säätää lämmitystunteja varaajan
+                      suihkuvarauksen perusteella. Kiinteä käyttää aina
+                      asetettua tuntimäärää.
+                    </Text>
+                  </View>
+                  <View style={styles.modeSelector}>
+                    {heatingNeedModeOptions.map((option) => {
+                      const isActive =
+                        settings.heatingNeedMode === option.value;
+
+                      return (
+                        <Pressable
+                          accessibilityRole="button"
+                          key={option.value}
+                          onPress={() => updateHeatingNeedMode(option.value)}
+                          style={({ pressed }) => [
+                            styles.modeOption,
+                            isActive && styles.modeOptionActive,
+                            pressed && styles.modeOptionPressed,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.modeOptionText,
+                              isActive && styles.modeOptionTextActive,
+                            ]}
+                          >
+                            {option.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
               {section.rows.map((row) => {
                 const rowContent = (
                   <>
@@ -680,6 +738,48 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     marginTop: 14,
     paddingBottom: 4,
+  },
+  modeSettingGroup: {
+    borderBottomColor: "rgba(255,255,255,0.09)",
+    borderBottomWidth: 1,
+    gap: 10,
+    paddingVertical: 14,
+  },
+  modeSettingHeader: {
+    gap: 4,
+  },
+  modeSelector: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 4,
+    padding: 4,
+  },
+  modeOption: {
+    alignItems: "center",
+    borderRadius: 10,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+  },
+  modeOptionActive: {
+    backgroundColor: "rgba(54,244,212,0.18)",
+  },
+  modeOptionPressed: {
+    opacity: 0.72,
+  },
+  modeOptionText: {
+    color: "#9fb0d2",
+    fontSize: 13,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  modeOptionTextActive: {
+    color: "#dffefa",
   },
   settingInputGroup: {
     alignItems: "center",

@@ -2,8 +2,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const defaultTankTemperature = 58;
 
+export type HeatingNeedMode = "automatic" | "fixed";
+
 export const defaultSettings = {
   tankSizeLiters: 290,
+  heatingNeedMode: "automatic" as HeatingNeedMode,
   heatingHoursPerDay: 3,
   priceDifferenceThresholdCents: 2,
   minTankTemperature: 10,
@@ -56,6 +59,10 @@ export function normalizeSettings(
     settings.fullTankShowers ?? settings.showersAtMaxTemperature;
 
   return {
+    heatingNeedMode:
+      settings.heatingNeedMode === "fixed"
+        ? "fixed"
+        : defaultSettings.heatingNeedMode,
     heatingHoursPerDay:
       typeof settings.heatingHoursPerDay === "number"
         ? clampSettingValue("heatingHoursPerDay", settings.heatingHoursPerDay)
