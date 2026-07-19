@@ -1555,8 +1555,7 @@ export default function HomeScreen() {
                       h.
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      Syynä on hintavertailu / huomisen hinta / saatavilla
-                      olevat tunnit.
+                      {heatingRecommendation.reason}
                     </Text>
                   </View>
                 ) : null}

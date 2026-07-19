@@ -173,6 +173,52 @@ function getAveragePrice(prices: HourlyPrice[]) {
   return prices.reduce((sum, item) => sum + item.price, 0) / prices.length;
 }
 
+function formatFinnishDecimal(value: number) {
+  return value.toLocaleString("fi-FI", {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 1,
+  });
+}
+
+function getAutomaticHeatingReasonPrefix(
+  showerHeatingNeed: ReturnType<typeof getHeatingNeedFromShowers> | null,
+  temperatureBasedHeatingNeed: ReturnType<typeof getTemperatureBasedHeatingNeed>,
+) {
+  if (!showerHeatingNeed) {
+    return temperatureBasedHeatingNeed.reason;
+  }
+
+  const fillPercent = Math.round(showerHeatingNeed.fillRatio * 100);
+
+  if (showerHeatingNeed.hours === 0) {
+    return `Varaus ${fillPercent} % → ei lämmitystarvetta`;
+  }
+
+  return `Varaus ${fillPercent} % → ${showerHeatingNeed.hours} h lämmitys`;
+}
+
+function getTodayHeatingReason(
+  heatingReason: string,
+  tomorrowPriceDifference: number,
+  warmWaterCanWait: boolean,
+  minimumShowersBeforeExpensiveTomorrow: number,
+) {
+  const priceDifferenceReason =
+    tomorrowPriceDifference >= 0
+      ? `Huominen on ${formatFinnishDecimal(
+          tomorrowPriceDifference,
+        )} snt/kWh halvempi`
+      : `Huominen on ${formatFinnishDecimal(
+          Math.abs(tomorrowPriceDifference),
+        )} snt/kWh kalliimpi`;
+  const reserveReason = warmWaterCanWait
+    ? "varausta on riittävästi"
+    : `varausta on alle ${minimumShowersBeforeExpensiveTomorrow} suihkua`;
+  const conjunction = warmWaterCanWait ? "ja" : "mutta";
+
+  return `${heatingReason}. ${priceDifferenceReason} ${conjunction} ${reserveReason}, joten lämmitys tehdään tänään.`;
+}
+
 export function selectHeatingRecommendation(
   prices: HourlyPrice[],
   currentHourStart: Date,
@@ -187,15 +233,27 @@ export function selectHeatingRecommendation(
     showersLeft !== null && Number.isFinite(showersLeft)
       ? getHeatingNeedFromShowers(showersLeft, settings)
       : null;
-  const effectiveHeatingHours =
-    showerHeatingNeed?.hours ??
-    getEffectiveHeatingHours(settings, tankTemperature);
-  const heatingReason =
-    showerHeatingNeed?.reason ?? temperatureBasedHeatingNeed.reason;
-  const todayKey = formatHelsinkiDateKey(currentHourStart);
-  const tomorrowKey = formatHelsinkiDateKey(
-    new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
+  const temperatureBasedEffectiveHeatingHours = getEffectiveHeatingHours(
+    settings,
+    tankTemperature,
   );
+  const isFixedHeatingNeed = settings.heatingNeedMode === "fixed";
+  const { effectiveHeatingHours, heatingReason } =
+    isFixedHeatingNeed
+      ? {
+          effectiveHeatingHours: settings.heatingHoursPerDay,
+          heatingReason: `Kiinteä lämmitystarve → ${settings.heatingHoursPerDay} h päivän halvimmilla tunneilla`,
+        }
+      : {
+          effectiveHeatingHours:
+            showerHeatingNeed?.hours ?? temperatureBasedEffectiveHeatingHours,
+          heatingReason:
+            getAutomaticHeatingReasonPrefix(
+              showerHeatingNeed,
+              temperatureBasedHeatingNeed,
+            ),
+        };
+  const todayKey = formatHelsinkiDateKey(currentHourStart);
   const todayPrices = prices.filter(
     (item) => formatHelsinkiDateKey(item.date) === todayKey,
   );
@@ -212,7 +270,7 @@ export function selectHeatingRecommendation(
         heatedHourNumbers.has(getHelsinkiHourNumber(item.date)) &&
         item.date.getTime() <= currentHourStart.getTime(),
     ),
-  ).slice(0, effectiveHeatingHours);
+  );
   const completedHourIds = new Set(completedTodayHours.map((item) => item.id));
   const completedHourNumbers = new Set(
     completedTodayHours.map((item) => getHelsinkiHourNumber(item.date)),
@@ -228,22 +286,6 @@ export function selectHeatingRecommendation(
       missedPlannedTodayHours.length,
     0,
   );
-  const tomorrowPrices = prices.filter(
-    (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
-  );
-  const cheapestTodayHours = getCheapestHours(
-    remainingTodayPrices,
-    effectiveHeatingHours,
-  );
-  const cheapestTomorrowHours = getCheapestHours(
-    tomorrowPrices,
-    effectiveHeatingHours,
-  );
-  const averageTodayPrice = getAveragePrice(cheapestTodayHours);
-  const averageTomorrowPrice =
-    cheapestTomorrowHours.length === effectiveHeatingHours
-      ? getAveragePrice(cheapestTomorrowHours)
-      : null;
   const toPlanHours = (selectedHours: HourlyPrice[]) => {
     const plannedById = new Map<string, HourlyPrice>();
 
@@ -288,7 +330,7 @@ export function selectHeatingRecommendation(
     };
   }
 
-  if (averageTomorrowPrice === null || averageTodayPrice === null) {
+  if (isFixedHeatingNeed) {
     return {
       hours: toPlanHours(
         getCheapestHours(
@@ -301,6 +343,39 @@ export function selectHeatingRecommendation(
     };
   }
 
+  const tomorrowKey = formatHelsinkiDateKey(
+    new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
+  );
+  const tomorrowPrices = prices.filter(
+    (item) => formatHelsinkiDateKey(item.date) === tomorrowKey,
+  );
+  const cheapestTodayHours = getCheapestHours(
+    remainingTodayPrices,
+    effectiveHeatingHours,
+  );
+  const cheapestTomorrowHours = getCheapestHours(
+    tomorrowPrices,
+    effectiveHeatingHours,
+  );
+  const averageTodayPrice = getAveragePrice(cheapestTodayHours);
+  const averageTomorrowPrice =
+    cheapestTomorrowHours.length === effectiveHeatingHours
+      ? getAveragePrice(cheapestTomorrowHours)
+      : null;
+
+  if (averageTomorrowPrice === null || averageTodayPrice === null) {
+    return {
+      hours: toPlanHours(
+        getCheapestHours(
+          futureCandidates(remainingTodayPrices),
+          remainingHeatingNeed,
+        ),
+      ),
+      realizedHours: completedTodayHours.length,
+      reason: `${heatingReason}. Tämän ja huomisen halvimpien tuntien keskihintaeroa ei voitu laskea, joten lämmitys tehdään tänään.`,
+    };
+  }
+
   const warmWaterCanWait =
     showersLeft !== null &&
     Number.isFinite(showersLeft) &&
@@ -308,6 +383,7 @@ export function selectHeatingRecommendation(
   const tomorrowIsClearlyCheaper =
     averageTodayPrice - averageTomorrowPrice >
     settings.priceDifferenceThresholdCents;
+  const tomorrowPriceDifference = averageTodayPrice - averageTomorrowPrice;
 
   if (tomorrowIsClearlyCheaper && warmWaterCanWait) {
     return {
@@ -318,7 +394,9 @@ export function selectHeatingRecommendation(
         ),
       ),
       realizedHours: completedTodayHours.length,
-      reason: heatingReason,
+      reason: `${heatingReason}. Huominen on ${formatFinnishDecimal(
+        tomorrowPriceDifference,
+      )} snt/kWh halvempi ja varausta on riittävästi, joten lämmitys siirrettiin huomiseen.`,
     };
   }
 
@@ -338,6 +416,11 @@ export function selectHeatingRecommendation(
   return {
     hours: toPlanHours(selectedHours),
     realizedHours: completedTodayHours.length,
-    reason: heatingReason,
+    reason: getTodayHeatingReason(
+      heatingReason,
+      tomorrowPriceDifference,
+      warmWaterCanWait,
+      settings.minimumShowersBeforeExpensiveTomorrow,
+    ),
   };
 }
