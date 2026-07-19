@@ -27,6 +27,11 @@ type SettingsRow = {
   value: string;
 };
 
+type SettingsSection = {
+  rows: SettingsRow[];
+  title: string;
+};
+
 type TankReadingCalibrationRow = {
   bottom_temp: number | null;
   created_at: string;
@@ -34,10 +39,10 @@ type TankReadingCalibrationRow = {
 };
 
 type CalibrationCandidate = {
-  averageTemp: number;
   bottomTemp: number;
   createdAt: string;
   topTemp: number;
+  weightedTemp: number;
 };
 
 type EditableSettingOption = {
@@ -90,58 +95,74 @@ export default function SettingsScreen() {
     useState<EditableSettingKey | null>(null);
   const [isCalibratingFullTank, setIsCalibratingFullTank] = useState(false);
 
-  const settingsRows = useMemo(
-    (): SettingsRow[] => [
+  const settingsSections = useMemo(
+    (): SettingsSection[] => [
       {
-        accent: "#36f4d4",
-        key: "tankSizeLiters",
-        label: "Varaajan koko",
-        value: `${settings.tankSizeLiters} l`,
+        title: "Varaajan perusasetukset",
+        rows: [
+          {
+            accent: "#36f4d4",
+            key: "tankSizeLiters",
+            label: "Varaajan koko",
+            value: `${settings.tankSizeLiters} l`,
+          },
+          {
+            accent: "#5aa7ff",
+            label: "Minimilämpö",
+            value: `${settings.minTankTemperature} °C`,
+          },
+          {
+            accent: "#ff5f6d",
+            key: "maxTankTemperature",
+            label: "Maksimilämpö",
+            value: `${settings.maxTankTemperature} °C`,
+          },
+        ],
       },
       {
-        accent: "#54eaa0",
-        key: "heatingHoursPerDay",
-        label: "Lämmitystarve",
-        value: `${settings.heatingHoursPerDay} h / vrk`,
+        title: "Suihkulaskennan asetukset",
+        rows: [
+          {
+            accent: "#ff9b30",
+            key: "fullTankAverageTemperature",
+            label: "Täyden varaajan vertailulämpö",
+            value: `${settings.fullTankAverageTemperature} °C`,
+          },
+          {
+            accent: "#b889ff",
+            key: "fullTankShowers",
+            label: "Täysi varaaja suihkuina",
+            value: `${settings.fullTankShowers} suihkua`,
+          },
+        ],
       },
       {
-        accent: "#ffcf5a",
-        key: "priceDifferenceThresholdCents",
-        label: "Hintaeron raja",
-        value: `${settings.priceDifferenceThresholdCents} c/kWh`,
-      },
-      {
-        accent: "#5aa7ff",
-        label: "Minimilämpö",
-        value: `${settings.minTankTemperature} °C`,
-      },
-      {
-        accent: "#ff5f6d",
-        key: "maxTankTemperature",
-        label: "Maksimilämpö",
-        value: `${settings.maxTankTemperature} °C`,
-      },
-      {
-        accent: "#ff9b30",
-        key: "fullTankAverageTemperature",
-        label: "Täyden varaajan keskilämpö",
-        value: `${settings.fullTankAverageTemperature} °C`,
-      },
-      {
-        accent: "#b889ff",
-        key: "fullTankShowers",
-        label: "Täysi varaaja",
-        value: `${settings.fullTankShowers} suihkua`,
-      },
-      {
-        accent: "#36f4d4",
-        key: "minimumShowersBeforeExpensiveTomorrow",
-        label: "Vähimmäisvaraus",
-        value: `${settings.minimumShowersBeforeExpensiveTomorrow} suihkua`,
+        title: "Pörssisähkön ohjausasetukset",
+        rows: [
+          {
+            accent: "#54eaa0",
+            key: "heatingHoursPerDay",
+            label: "Lämmitystarve h/vrk",
+            value: `${settings.heatingHoursPerDay} h / vrk`,
+          },
+          {
+            accent: "#ffcf5a",
+            key: "priceDifferenceThresholdCents",
+            label: "Hintaeron raja",
+            value: `${settings.priceDifferenceThresholdCents} c/kWh`,
+          },
+          {
+            accent: "#36f4d4",
+            key: "minimumShowersBeforeExpensiveTomorrow",
+            label: "Vähimmäisvaraus suihkuina",
+            value: `${settings.minimumShowersBeforeExpensiveTomorrow} suihkua`,
+          },
+        ],
       },
     ],
     [settings],
   );
+  const settingsRows = settingsSections.flatMap((section) => section.rows);
 
   const selectedRow = settingsRows.find(
     (row) => row.key === selectedSettingKey,
@@ -211,10 +232,10 @@ export default function SettingsScreen() {
   };
 
   const confirmFullTankCalibration = (candidate: CalibrationCandidate) => {
-    const roundedAverageTemp = Math.round(candidate.averageTemp);
+    const roundedAverageTemp = Math.round(candidate.weightedTemp);
     const currentAverageTemp = settings.fullTankAverageTemperature;
     const calibrationDetails = [
-      `Löytyi korkein keskilämpö: ${roundedAverageTemp} °C`,
+      `Löytyi korkein 70/30-lämpö: ${roundedAverageTemp} °C`,
       `Nykyinen asetus: ${currentAverageTemp} °C`,
       `Ylä: ${Math.round(candidate.topTemp)} °C`,
       `Ala: ${Math.round(candidate.bottomTemp)} °C`,
@@ -294,14 +315,15 @@ export default function SettingsScreen() {
             return best;
           }
 
-          const averageTemp = (reading.top_temp + reading.bottom_temp) / 2;
+          const weightedTemp =
+            reading.top_temp * 0.7 + reading.bottom_temp * 0.3;
 
-          if (!best || averageTemp > best.averageTemp) {
+          if (!best || weightedTemp > best.weightedTemp) {
             return {
-              averageTemp,
               bottomTemp: reading.bottom_temp,
               createdAt: reading.created_at,
               topTemp: reading.top_temp,
+              weightedTemp,
             };
           }
 
@@ -353,87 +375,84 @@ export default function SettingsScreen() {
           >
             <Text style={styles.backButtonText}>‹</Text>
           </Pressable>
-          <View style={styles.headerTextGroup}>
-            <Text style={styles.eyebrow}>Lämmityslogiikka</Text>
-            <Text style={styles.title}>Asetukset</Text>
-          </View>
         </View>
 
         <View style={styles.heroCard}>
           <Text style={styles.heroIcon}>⚙️</Text>
-          <Text style={styles.heroTitle}>Perusarvot</Text>
-          <Text style={styles.heroDescription}>
-            Näitä arvoja käytetään varaajan ohjauksen ja lämpimän veden arvion
-            perustana.
-          </Text>
+          <Text style={styles.heroTitle}>OHJAUKSEN ASETUKSET</Text>
         </View>
 
         <View style={styles.settingsCard}>
-          {settingsRows.map((row) => {
-            const rowContent = (
-              <>
-                <View
-                  style={[
-                    styles.settingAccent,
-                    { backgroundColor: row.accent },
-                  ]}
-                />
-                <Text style={styles.settingLabel}>{row.label}</Text>
-                <Text style={styles.settingValue}>{row.value}</Text>
-              </>
-            );
+          {settingsSections.map((section) => (
+            <View key={section.title} style={styles.settingsSection}>
+              <Text style={styles.sectionLabel}>{section.title}</Text>
+              {section.rows.map((row) => {
+                const rowContent = (
+                  <>
+                    <View
+                      style={[
+                        styles.settingAccent,
+                        { backgroundColor: row.accent },
+                      ]}
+                    />
+                    <Text style={styles.settingLabel}>{row.label}</Text>
+                    <Text style={styles.settingValue}>{row.value}</Text>
+                  </>
+                );
 
-            if (row.key) {
-              const rowKey = row.key;
+                if (row.key) {
+                  const rowKey = row.key;
 
-              if (rowKey === "fullTankAverageTemperature") {
-                return (
-                  <View key={row.label} style={styles.settingRowWithAction}>
+                  if (rowKey === "fullTankAverageTemperature") {
+                    return (
+                      <View key={row.label} style={styles.settingRowWithAction}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => setSelectedSettingKey(rowKey)}
+                          style={styles.settingRowMainAction}
+                        >
+                          {rowContent}
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={isCalibratingFullTank}
+                          onPress={calibrateFullTankFromWeek}
+                          style={({ pressed }) => [
+                            styles.calibrateButton,
+                            (pressed || isCalibratingFullTank) &&
+                              styles.calibrateButtonPressed,
+                          ]}
+                        >
+                          <Text style={styles.calibrateButtonText}>
+                            {isCalibratingFullTank
+                              ? "Kalibroidaan..."
+                              : "Kalibroi viikon datasta"}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    );
+                  }
+
+                  return (
                     <Pressable
                       accessibilityRole="button"
+                      key={row.label}
                       onPress={() => setSelectedSettingKey(rowKey)}
-                      style={styles.settingRowMainAction}
+                      style={styles.settingRow}
                     >
                       {rowContent}
                     </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={isCalibratingFullTank}
-                      onPress={calibrateFullTankFromWeek}
-                      style={({ pressed }) => [
-                        styles.calibrateButton,
-                        (pressed || isCalibratingFullTank) &&
-                          styles.calibrateButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.calibrateButtonText}>
-                        {isCalibratingFullTank
-                          ? "Kalibroidaan..."
-                          : "Kalibroi viikon datasta"}
-                      </Text>
-                    </Pressable>
+                  );
+                }
+
+                return (
+                  <View key={row.label} style={styles.settingRow}>
+                    {rowContent}
                   </View>
                 );
-              }
-
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  key={row.label}
-                  onPress={() => setSelectedSettingKey(rowKey)}
-                  style={styles.settingRow}
-                >
-                  {rowContent}
-                </Pressable>
-              );
-            }
-
-            return (
-              <View key={row.label} style={styles.settingRow}>
-                {rowContent}
-              </View>
-            );
-          })}
+              })}
+            </View>
+          ))}
         </View>
 
         <Pressable
@@ -494,7 +513,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 34,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 8,
   },
   glow: {
     borderRadius: 999,
@@ -523,7 +542,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 14,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   backButton: {
     alignItems: "center",
@@ -545,53 +564,30 @@ const styles = StyleSheet.create({
     lineHeight: 36,
     marginTop: -3,
   },
-  headerTextGroup: {
-    flex: 1,
-  },
-  eyebrow: {
-    color: "#36f4d4",
-    fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 1.1,
-    textTransform: "uppercase",
-  },
-  title: {
-    color: "#f7fbff",
-    fontSize: 32,
-    fontWeight: "900",
-    letterSpacing: -0.8,
-    marginTop: 3,
-  },
   heroCard: {
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.07)",
     borderColor: "rgba(255,255,255,0.14)",
     borderRadius: 28,
     borderWidth: 1,
-    marginBottom: 16,
+    marginBottom: 14,
     paddingHorizontal: 22,
-    paddingVertical: 24,
+    paddingVertical: 14,
     shadowColor: "#36f4d4",
     shadowOpacity: 0.18,
     shadowRadius: 24,
   },
   heroIcon: {
-    fontSize: 34,
-    lineHeight: 40,
-    marginBottom: 8,
+    fontSize: 30,
+    lineHeight: 34,
+    marginBottom: 5,
+    textAlign: "center",
   },
   heroTitle: {
     color: "#ffffff",
-    fontSize: 23,
+    fontSize: 18,
     fontWeight: "900",
-    letterSpacing: -0.3,
-  },
-  heroDescription: {
-    color: "#b9d7ff",
-    fontSize: 14,
-    fontWeight: "700",
-    lineHeight: 20,
-    marginTop: 9,
+    letterSpacing: 0.8,
     textAlign: "center",
   },
   settingsCard: {
@@ -602,6 +598,10 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     paddingHorizontal: 16,
     paddingVertical: 8,
+  },
+  settingsSection: {
+    marginBottom: 10,
+    paddingBottom: 8,
   },
   sectionLabel: {
     color: "#8ea4cf",
