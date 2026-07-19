@@ -4,7 +4,6 @@ import {
   EnergiaZenSettings,
 } from "@/lib/settings";
 
-const warmWaterHoursForPlanningAtDefaultTemperature = 17;
 const maintenanceHeatingHours = 1;
 
 function getTemperatureBasedHeatingNeed(tankTemperature: number) {
@@ -97,26 +96,6 @@ export function getHeatingNeedFromShowers(
   };
 }
 
-function getWarmWaterHoursForPlanning(
-  tankTemperature: number,
-  settings: EnergiaZenSettings,
-) {
-  const defaultTemperatureRange = Math.max(
-    defaultTankTemperature - settings.minTankTemperature,
-    1,
-  );
-  const currentTemperatureRange = clamp(
-    tankTemperature - settings.minTankTemperature,
-    0,
-    defaultTemperatureRange,
-  );
-
-  return Math.round(
-    (currentTemperatureRange / defaultTemperatureRange) *
-      warmWaterHoursForPlanningAtDefaultTemperature,
-  );
-}
-
 const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
   month: "2-digit",
@@ -200,14 +179,19 @@ export function selectHeatingRecommendation(
   heatedHourNumbers: Set<number>,
   settings: EnergiaZenSettings = defaultSettings,
   tankTemperature = defaultTankTemperature,
+  showersLeft: number | null = null,
 ) {
   const temperatureBasedHeatingNeed =
     getTemperatureBasedHeatingNeed(tankTemperature);
-  const effectiveHeatingHours = getEffectiveHeatingHours(
-    settings,
-    tankTemperature,
-  );
-  const heatingReason = temperatureBasedHeatingNeed.reason;
+  const showerHeatingNeed =
+    showersLeft !== null && Number.isFinite(showersLeft)
+      ? getHeatingNeedFromShowers(showersLeft, settings)
+      : null;
+  const effectiveHeatingHours =
+    showerHeatingNeed?.hours ??
+    getEffectiveHeatingHours(settings, tankTemperature);
+  const heatingReason =
+    showerHeatingNeed?.reason ?? temperatureBasedHeatingNeed.reason;
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const tomorrowKey = formatHelsinkiDateKey(
     new Date(currentHourStart.getTime() + 24 * 60 * 60 * 1000),
@@ -317,22 +301,10 @@ export function selectHeatingRecommendation(
     };
   }
 
-  const firstCheapTomorrowHour = sortHoursChronologically(
-    cheapestTomorrowHours,
-  )[0];
-  const hoursUntilFirstCheapTomorrow = Math.max(
-    0,
-    Math.ceil(
-      (firstCheapTomorrowHour.date.getTime() - currentHourStart.getTime()) /
-        (60 * 60 * 1000),
-    ),
-  );
-  const warmWaterHoursForPlanning = getWarmWaterHoursForPlanning(
-    tankTemperature,
-    settings,
-  );
   const warmWaterCanWait =
-    warmWaterHoursForPlanning >= hoursUntilFirstCheapTomorrow;
+    showersLeft !== null &&
+    Number.isFinite(showersLeft) &&
+    showersLeft >= settings.minimumShowersBeforeExpensiveTomorrow;
   const tomorrowIsClearlyCheaper =
     averageTodayPrice - averageTomorrowPrice >
     settings.priceDifferenceThresholdCents;

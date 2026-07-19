@@ -610,6 +610,11 @@ export default function HomeScreen() {
   const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
   const displayedBottomTemp =
     bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
+  const warmWaterEstimate = getStratifiedWarmWaterEstimate(
+    topTemp,
+    bottomTemp,
+    settings,
+  );
   const heatingRecommendation = useMemo(
     () =>
       selectHeatingRecommendation(
@@ -618,6 +623,7 @@ export default function HomeScreen() {
         todayActualHeatingHourNumbers,
         settings,
         tankTemperature,
+        warmWaterEstimate?.showersLeft ?? null,
       ),
     [
       currentHourStart,
@@ -625,6 +631,7 @@ export default function HomeScreen() {
       settings,
       tankTemperature,
       todayActualHeatingHourNumbers,
+      warmWaterEstimate?.showersLeft,
     ],
   );
   const recommendedHeatingHours = heatingRecommendation.hours;
@@ -695,11 +702,6 @@ export default function HomeScreen() {
   const isTankHeating = heating || isHeatingNow;
   const temperatureCardTheme = getTemperatureCardTheme(
     tankTemperature,
-    settings,
-  );
-  const warmWaterEstimate = getStratifiedWarmWaterEstimate(
-    topTemp,
-    bottomTemp,
     settings,
   );
   const warmWaterCardTheme = getWarmWaterCardTheme();
