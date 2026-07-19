@@ -193,6 +193,7 @@ function getTemperatureCardTheme(
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getWarmWaterEstimate(
   topTemperature: number | null,
   bottomTemperature: number | null,
@@ -224,7 +225,6 @@ function getWarmWaterEstimate(
 }
 
 // Rinnakkainen kerrostumismalli testausta varten.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getStratifiedWarmWaterEstimate(
   topTemperature: number | null,
   bottomTemperature: number | null,
@@ -697,7 +697,11 @@ export default function HomeScreen() {
     tankTemperature,
     settings,
   );
-  const warmWaterEstimate = getWarmWaterEstimate(topTemp, bottomTemp, settings);
+  const warmWaterEstimate = getStratifiedWarmWaterEstimate(
+    topTemp,
+    bottomTemp,
+    settings,
+  );
   const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(
     (warmWaterEstimate?.fillRatio ?? 0) * 100,
@@ -707,7 +711,7 @@ export default function HomeScreen() {
     : "--";
   const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
   const warmWaterAverageTempLabel = warmWaterEstimate
-    ? `${Math.round(warmWaterEstimate.averageTemp)}°`
+    ? `${Math.round(warmWaterEstimate.weightedTemperature)}°`
     : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const heatingPlanExplanation = useMemo(() => {
