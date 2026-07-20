@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <U8g2lib.h>
 
 // EnergyZen standalone ESP32 tank monitor
@@ -15,6 +16,7 @@
 // Required Arduino libraries:
 // - OneWire
 // - DallasTemperature
+// - ArduinoJson
 // - U8g2
 //
 // Configure these before flashing:
@@ -37,6 +39,8 @@ const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char *SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const char *SUPABASE_ENDPOINT =
     "https://amyvzelzbvjvrevikvrp.supabase.co/rest/v1/tank_readings";
+const char *SHELLY_STATUS_ENDPOINT =
+    "http://192.168.68.52/rpc/Switch.GetStatus?id=1";
 
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
@@ -114,8 +118,49 @@ String jsonTemperatureValue(float temperatureC) {
   return String(temperatureC, 1);
 }
 
+bool readShellyHeatingStatus() {
+  bool heating = false;
+
+  WiFiClient client;
+  HTTPClient http;
+  if (!http.begin(client, SHELLY_STATUS_ENDPOINT)) {
+    Serial.println("Warning: Shelly HTTP begin failed");
+    Serial.println("Shelly test channel: OFF");
+    return false;
+  }
+
+  const int responseCode = http.GET();
+  if (responseCode <= 0) {
+    Serial.print("Warning: Shelly HTTP GET failed: ");
+    Serial.println(responseCode);
+  } else if (responseCode != HTTP_CODE_OK) {
+    Serial.print("Warning: Shelly HTTP response: ");
+    Serial.println(responseCode);
+  } else {
+    const String response = http.getString();
+    JsonDocument doc;
+    const DeserializationError error = deserializeJson(doc, response);
+
+    if (error) {
+      Serial.print("Warning: Shelly JSON parse failed: ");
+      Serial.println(error.c_str());
+    } else if (!doc["output"].is<bool>()) {
+      Serial.println("Warning: Shelly JSON missing boolean output field");
+    } else {
+      heating = doc["output"].as<bool>();
+    }
+  }
+
+  http.end();
+
+  Serial.print("Shelly test channel: ");
+  Serial.println(heating ? "ON" : "OFF");
+  return heating;
+}
+
 void sendSupabaseReading() {
   connectWiFi();
+  const bool heating = readShellyHeatingStatus();
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -135,7 +180,7 @@ void sendSupabaseReading() {
       String("{\"top_temp\":") + jsonTemperatureValue(topTemperatureC) +
       ",\"bottom_temp\":" + jsonTemperatureValue(bottomTemperatureC) +
       ",\"showers\":" + String(showersLeft, 1) +
-      ",\"heating\":false}";
+      ",\"heating\":" + (heating ? "true" : "false") + "}";
 
   const int responseCode = http.POST(payload);
   Serial.print("Supabase POST response: ");
