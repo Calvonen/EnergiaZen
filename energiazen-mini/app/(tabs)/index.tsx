@@ -39,10 +39,6 @@ const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 
-const actualHeatingHours: Partial<Record<DaySelection, number[]>> = {
-  today: [],
-  yesterday: [],
-};
 const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -53,6 +49,16 @@ const helsinkiTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour12: false,
   minute: "2-digit",
   timeZone: "Europe/Helsinki",
+});
+const helsinkiDateTimePartsFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  hour: "2-digit",
+  hourCycle: "h23",
+  minute: "2-digit",
+  month: "2-digit",
+  second: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
 });
 
 type TankReading = {
@@ -392,6 +398,32 @@ function getChartDayKey(day: DaySelection) {
   return getDateKeyOffset(1);
 }
 
+function getHelsinkiDateStartIso(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const targetTimestamp = Date.UTC(year, month - 1, day);
+  let utcTimestamp = targetTimestamp;
+
+  for (let index = 0; index < 2; index += 1) {
+    const parts = helsinkiDateTimePartsFormatter.formatToParts(
+      new Date(utcTimestamp),
+    );
+    const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const localTimestamp = Date.UTC(
+      getPart("year"),
+      getPart("month") - 1,
+      getPart("day"),
+      getPart("hour"),
+      getPart("minute"),
+      getPart("second"),
+    );
+
+    utcTimestamp += targetTimestamp - localTimestamp;
+  }
+
+  return new Date(utcTimestamp).toISOString();
+}
+
 function getDayLabel(day: DaySelection) {
   if (day === "yesterday") {
     return "Eilen";
@@ -558,6 +590,12 @@ export default function HomeScreen() {
   const [topTemp, setTopTemp] = useState<number | null>(null);
   const [bottomTemp, setBottomTemp] = useState<number | null>(null);
   const [heating, setHeating] = useState(false);
+  const [actualHeatingHours, setActualHeatingHours] = useState<
+    Partial<Record<DaySelection, number[]>>
+  >({
+    today: [],
+    yesterday: [],
+  });
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
@@ -603,7 +641,7 @@ export default function HomeScreen() {
   }, [chartHourlyPrices, selectedDay]);
   const todayActualHeatingHourNumbers = useMemo(
     () => new Set(actualHeatingHours.today ?? []),
-    [],
+    [actualHeatingHours.today],
   );
   const tankTemperature = topTemp ?? defaultTankTemperature;
   const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
@@ -687,7 +725,7 @@ export default function HomeScreen() {
   }, [recommendedHeatingHours, selectedDay]);
   const heatedHourNumbers = useMemo(
     () => new Set(actualHeatingHours[selectedDay] ?? []),
-    [selectedDay],
+    [actualHeatingHours, selectedDay],
   );
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
@@ -824,28 +862,77 @@ export default function HomeScreen() {
         debugLog("tank_readings refreshed");
 
         try {
-          const { data, error } = await supabase
-            .from("tank_readings")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single();
+          const startOfYesterdayIso = getHelsinkiDateStartIso(
+            getDateKeyOffset(-1),
+          );
+          const [latestReadingResult, heatingHistoryResult] =
+            await Promise.all([
+              supabase
+                .from("tank_readings")
+                .select("*")
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .single(),
+              supabase
+                .from("tank_readings")
+                .select("created_at,heating")
+                .gte("created_at", startOfYesterdayIso)
+                .order("created_at", { ascending: true }),
+            ]);
 
           if (!isActive) {
             return;
           }
 
-          if (error) {
-            console.error(error);
-            return;
+          if (latestReadingResult.error) {
+            console.error(latestReadingResult.error);
+          } else {
+            const reading = latestReadingResult.data as TankReading | null;
+
+            setTopTemp(reading?.top_temp ?? null);
+            setBottomTemp(reading?.bottom_temp ?? null);
+            setHeating(reading?.heating ?? false);
+            setTankUpdatedAt(reading?.created_at ?? null);
           }
 
-          const reading = data as TankReading | null;
+          if (heatingHistoryResult.error) {
+            console.error(heatingHistoryResult.error);
+          } else {
+            const todayKey = getDateKeyOffset(0);
+            const yesterdayKey = getDateKeyOffset(-1);
+            const heatingHours = {
+              today: new Set<number>(),
+              yesterday: new Set<number>(),
+            };
 
-          setTopTemp(reading?.top_temp ?? null);
-          setBottomTemp(reading?.bottom_temp ?? null);
-          setHeating(reading?.heating ?? false);
-          setTankUpdatedAt(reading?.created_at ?? null);
+            for (const reading of (heatingHistoryResult.data ?? []) as Pick<
+              TankReading,
+              "created_at" | "heating"
+            >[]) {
+              if (!reading.created_at || reading.heating !== true) {
+                continue;
+              }
+
+              const dateKey = getFinnishDateKey(reading.created_at);
+              const day =
+                dateKey === todayKey
+                  ? "today"
+                  : dateKey === yesterdayKey
+                    ? "yesterday"
+                    : null;
+
+              if (day) {
+                heatingHours[day].add(
+                  getHelsinkiHourNumber(new Date(reading.created_at)),
+                );
+              }
+            }
+
+            setActualHeatingHours({
+              today: [...heatingHours.today].sort((a, b) => a - b),
+              yesterday: [...heatingHours.yesterday].sort((a, b) => a - b),
+            });
+          }
         } catch {
           if (!isActive) {
             return;
