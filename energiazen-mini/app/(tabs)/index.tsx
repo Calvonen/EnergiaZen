@@ -1505,10 +1505,7 @@ export default function HomeScreen() {
                           const isHeatedHour =
                             heatedHourNumbers.has(
                               getHelsinkiHourNumber(item.date),
-                            ) &&
-                            (selectedDay !== "today" ||
-                              item.endDate.getTime() <=
-                                currentHourStart.getTime());
+                            );
                           const heatingMarker = isHeatedHour
                             ? "🔥"
                             : missedHeatingHourIds.has(item.id)
