@@ -332,6 +332,11 @@ function getAveragePrice(prices: HourlyPrice[]) {
   return prices.reduce((sum, item) => sum + item.price, 0) / prices.length;
 }
 
+function getSortedUniqueHelsinkiHourNumbers(prices: HourlyPrice[]) {
+  return [...new Set(prices.map((item) => getHelsinkiHourNumber(item.date)))]
+    .sort((a, b) => a - b);
+}
+
 function haveSameHourIds(first: HourlyPrice[], second: HourlyPrice[]) {
   if (first.length !== second.length) {
     return false;
@@ -684,6 +689,56 @@ export default function HomeScreen() {
       ),
     );
   }, [heatingRecommendation.targetHours, hourlyPrices]);
+  const todayPlanDate = getChartDayKey("today");
+  const tomorrowPlanDate = getChartDayKey("tomorrow");
+  const todayPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
+    recommendedHeatingHours.filter((item) => item.status === "planned"),
+  ).join(",");
+  const tomorrowPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
+    tomorrowPlannedHeatingHours,
+  ).join(",");
+
+  useEffect(() => {
+    const getHourNumbersFromKey = (key: string) =>
+      key.length === 0 ? [] : key.split(",").map(Number);
+    const updatedAt = new Date().toISOString();
+    const todayPlan = {
+      mode: settings.heatingNeedMode,
+      plan_date: todayPlanDate,
+      planned_hours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
+      reason: heatingRecommendation.reason,
+      target_hours: heatingRecommendation.targetHours,
+      updated_at: updatedAt,
+    };
+    const tomorrowPlan = {
+      mode: settings.heatingNeedMode,
+      plan_date: tomorrowPlanDate,
+      planned_hours: getHourNumbersFromKey(tomorrowPlannedHourNumbersKey),
+      reason: "Huomisen alustava lämmityssuunnitelma",
+      target_hours: heatingRecommendation.targetHours,
+      updated_at: updatedAt,
+    };
+
+    supabase
+      .from("heating_plans")
+      .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" })
+      .then(({ error }) => {
+        if (error) {
+          console.warn("Failed to save heating plans", error);
+        }
+      })
+      .catch((error) => {
+        console.warn("Failed to save heating plans", error);
+      });
+  }, [
+    heatingRecommendation.reason,
+    heatingRecommendation.targetHours,
+    settings.heatingNeedMode,
+    todayPlanDate,
+    todayPlannedHourNumbersKey,
+    tomorrowPlanDate,
+    tomorrowPlannedHourNumbersKey,
+  ]);
   const selectedHeatingHoursCount = useMemo(() => {
     if (selectedDay === "yesterday") {
       return settings.heatingHoursPerDay;
