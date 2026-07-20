@@ -327,6 +327,7 @@ export function selectHeatingRecommendation(
       hours: toPlanHours([]),
       realizedHours: completedTodayHours.length,
       reason: heatingReason,
+      targetHours: effectiveHeatingHours,
     };
   }
 
@@ -340,6 +341,7 @@ export function selectHeatingRecommendation(
       ),
       realizedHours: completedTodayHours.length,
       reason: heatingReason,
+      targetHours: effectiveHeatingHours,
     };
   }
 
@@ -373,6 +375,7 @@ export function selectHeatingRecommendation(
       ),
       realizedHours: completedTodayHours.length,
       reason: `${heatingReason}. Tämän ja huomisen halvimpien tuntien keskihintaeroa ei voitu laskea, joten lämmitys tehdään tänään.`,
+      targetHours: effectiveHeatingHours,
     };
   }
 
@@ -397,6 +400,7 @@ export function selectHeatingRecommendation(
       reason: `${heatingReason}. Huominen on ${formatFinnishDecimal(
         tomorrowPriceDifference,
       )} snt/kWh halvempi ja varausta on riittävästi, joten lämmitys siirrettiin huomiseen.`,
+      targetHours: effectiveHeatingHours,
     };
   }
 
@@ -422,5 +426,6 @@ export function selectHeatingRecommendation(
       warmWaterCanWait,
       settings.minimumShowersBeforeExpensiveTomorrow,
     ),
+    targetHours: effectiveHeatingHours,
   };
 }
