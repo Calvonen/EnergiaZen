@@ -877,6 +877,7 @@ export default function HomeScreen() {
                 .from("tank_readings")
                 .select("created_at,heating")
                 .gte("created_at", startOfYesterdayIso)
+                .eq("heating", true)
                 .order("created_at", { ascending: true }),
             ]);
 
