@@ -972,9 +972,9 @@ export default function HomeScreen() {
           } else {
             const todayKey = getDateKeyOffset(0);
             const yesterdayKey = getDateKeyOffset(-1);
-            const heatingHours = {
-              today: new Set<number>(),
-              yesterday: new Set<number>(),
+            const heatingHourCounts = {
+              today: new Map<number, number>(),
+              yesterday: new Map<number, number>(),
             };
 
             for (const reading of (heatingHistoryResult.data ?? []) as Pick<
@@ -994,15 +994,25 @@ export default function HomeScreen() {
                     : null;
 
               if (day) {
-                heatingHours[day].add(
-                  getHelsinkiHourNumber(new Date(reading.created_at)),
+                const hour = getHelsinkiHourNumber(
+                  new Date(reading.created_at),
+                );
+                heatingHourCounts[day].set(
+                  hour,
+                  (heatingHourCounts[day].get(hour) ?? 0) + 1,
                 );
               }
             }
 
             setActualHeatingHours({
-              today: [...heatingHours.today].sort((a, b) => a - b),
-              yesterday: [...heatingHours.yesterday].sort((a, b) => a - b),
+              today: [...heatingHourCounts.today]
+                .filter(([, count]) => count >= 5)
+                .map(([hour]) => hour)
+                .sort((a, b) => a - b),
+              yesterday: [...heatingHourCounts.yesterday]
+                .filter(([, count]) => count >= 5)
+                .map(([hour]) => hour)
+                .sort((a, b) => a - b),
             });
           }
         } catch {
