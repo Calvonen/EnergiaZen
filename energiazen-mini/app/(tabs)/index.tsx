@@ -32,7 +32,6 @@ import { supabase } from "@/lib/supabase";
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const chartPriceStep = 5;
-const chartMinimumScaleMax = 10;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
@@ -447,16 +446,39 @@ function startOfCurrentHour(date = new Date()) {
   return currentHour;
 }
 
-function getChartScaleValues(maxPrice: number) {
-  const roundedMax = Math.max(
-    Math.ceil(maxPrice / chartPriceStep) * chartPriceStep,
-    chartMinimumScaleMax,
-  );
+function getChartScale(prices: HourlyPrice[]) {
+  if (prices.length === 0) {
+    return {
+      max: chartPriceStep,
+      min: 0,
+      range: chartPriceStep,
+      values: [0, chartPriceStep],
+    };
+  }
 
-  return Array.from(
-    { length: roundedMax / chartPriceStep + 1 },
-    (_, index) => index * chartPriceStep,
-  );
+  const priceValues = prices.map((item) => item.price);
+  const minPrice = Math.min(...priceValues);
+  const maxPrice = Math.max(...priceValues);
+  const min =
+    minPrice >= 0 ? 0 : Math.floor(minPrice / chartPriceStep) * chartPriceStep;
+  let max =
+    maxPrice <= 0 ? 0 : Math.ceil(maxPrice / chartPriceStep) * chartPriceStep;
+
+  if (max === min) {
+    max += chartPriceStep;
+  }
+
+  const range = max - min;
+
+  return {
+    max,
+    min,
+    range,
+    values: Array.from(
+      { length: range / chartPriceStep + 1 },
+      (_, index) => min + index * chartPriceStep,
+    ),
+  };
 }
 
 function toHourlyPrice(
@@ -622,15 +644,10 @@ export default function HomeScreen() {
     currentPrice === null
       ? { ringColor: "#36f4d4" }
       : getPriceTheme(currentPrice);
-  const maxChartPrice = Math.max(
-    ...chartHourlyPrices.map((item) => Math.max(item.price, 0)),
-    0,
+  const chartScale = useMemo(
+    () => getChartScale(hourlyPrices),
+    [hourlyPrices],
   );
-  const chartScaleValues = useMemo(
-    () => getChartScaleValues(maxChartPrice),
-    [maxChartPrice],
-  );
-  const chartScaleMax = chartScaleValues[chartScaleValues.length - 1];
   useEffect(() => {
     const chartPrices = chartHourlyPrices.map((item) => item.price);
 
@@ -719,17 +736,21 @@ export default function HomeScreen() {
       updated_at: updatedAt,
     };
 
-    supabase
-      .from("heating_plans")
-      .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" })
-      .then(({ error }) => {
+    async function saveHeatingPlans() {
+      try {
+        const { error } = await supabase
+          .from("heating_plans")
+          .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" });
+
         if (error) {
           console.warn("Failed to save heating plans", error);
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         console.warn("Failed to save heating plans", error);
-      });
+      }
+    }
+
+    saveHeatingPlans();
   }, [
     heatingRecommendation.reason,
     heatingRecommendation.targetHours,
@@ -1510,14 +1531,15 @@ export default function HomeScreen() {
                 >
                   <View style={styles.chartPlotRow}>
                     <View pointerEvents="none" style={styles.chartScale}>
-                      {chartScaleValues.map((value) => (
+                      {chartScale.values.map((value) => (
                         <Text
                           key={value}
                           style={[
                             styles.chartScaleLabel,
                             {
                               bottom:
-                                (value / chartScaleMax) * chartGridMaxPosition,
+                                ((value - chartScale.min) / chartScale.range) *
+                                chartGridMaxPosition,
                             },
                           ]}
                         >
@@ -1531,14 +1553,15 @@ export default function HomeScreen() {
                         c/kWh
                       </Text>
                       <View pointerEvents="none" style={styles.chartGrid}>
-                        {chartScaleValues.map((value) => (
+                        {chartScale.values.map((value) => (
                           <View
                             key={value}
                             style={[
                               styles.chartGridLine,
                               {
                                 bottom:
-                                  (value / chartScaleMax) *
+                                  ((value - chartScale.min) /
+                                    chartScale.range) *
                                   chartGridMaxPosition,
                               },
                             ]}
@@ -1571,10 +1594,27 @@ export default function HomeScreen() {
                                 : null;
                           const heatingMarkerLabel =
                             getHeatingMarkerLabel(heatingMarker);
+                          const zeroBottom =
+                            ((0 - chartScale.min) / chartScale.range) *
+                            chartPlotHeight;
+                          const barBottom =
+                            item.price >= 0
+                              ? zeroBottom
+                              : ((item.price - chartScale.min) /
+                                  chartScale.range) *
+                                chartPlotHeight;
+                          const availableBarHeight =
+                            item.price >= 0
+                              ? chartPlotHeight - zeroBottom
+                              : zeroBottom;
                           const barHeight = Math.max(
-                            (Math.max(item.price, 0) / chartScaleMax) *
+                            (Math.abs(item.price) / chartScale.range) *
                               chartPlotHeight,
                             chartMinimumBarHeight,
+                          );
+                          const cappedBarHeight = Math.min(
+                            barHeight,
+                            availableBarHeight,
                           );
                           const barColor = isCheapest
                             ? "#72ff9d"
@@ -1597,7 +1637,12 @@ export default function HomeScreen() {
                                   pointerEvents="none"
                                   style={[
                                     styles.chartTooltip,
-                                    { bottom: barHeight + 12 },
+                                    {
+                                      bottom:
+                                        item.price >= 0
+                                          ? barBottom + cappedBarHeight + 12
+                                          : zeroBottom + 12,
+                                    },
                                   ]}
                                 >
                                   <Text style={styles.chartTooltipTime}>
@@ -1618,7 +1663,15 @@ export default function HomeScreen() {
                               {heatingMarker ? (
                                 <Text
                                   pointerEvents="none"
-                                  style={styles.chartHourMarker}
+                                  style={[
+                                    styles.chartHourMarker,
+                                    {
+                                      bottom:
+                                        item.price >= 0
+                                          ? barBottom + cappedBarHeight + 2
+                                          : zeroBottom + 2,
+                                    },
+                                  ]}
                                 >
                                   {heatingMarker}
                                 </Text>
@@ -1634,7 +1687,8 @@ export default function HomeScreen() {
                                       : isCurrentHour
                                         ? "rgba(255,255,255,0.74)"
                                         : "transparent",
-                                    height: barHeight,
+                                    bottom: barBottom,
+                                    height: cappedBarHeight,
                                     shadowColor: barColor,
                                   },
                                   isPastHour && styles.pastChartBar,
@@ -2277,17 +2331,20 @@ const styles = StyleSheet.create({
     height: chartPlotHeight,
     justifyContent: "flex-end",
     overflow: "visible",
+    position: "relative",
   },
   chartHourMarker: {
     fontSize: 11,
     lineHeight: 13,
     marginBottom: 2,
+    position: "absolute",
     textAlign: "center",
   },
   chartBar: {
     borderRadius: 8,
     borderWidth: 1.5,
     opacity: 0.9,
+    position: "absolute",
     shadowOpacity: 0.25,
     shadowRadius: 8,
     width: "100%",
