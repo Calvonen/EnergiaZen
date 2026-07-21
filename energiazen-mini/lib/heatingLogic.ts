@@ -229,6 +229,7 @@ export function selectHeatingRecommendation(
   settings: EnergiaZenSettings = defaultSettings,
   tankTemperature = defaultTankTemperature,
   showersLeft: number | null = null,
+  minimumAutomaticHeatingHours = 0,
 ) {
   const temperatureBasedHeatingNeed =
     getTemperatureBasedHeatingNeed(tankTemperature);
@@ -241,6 +242,12 @@ export function selectHeatingRecommendation(
     tankTemperature,
   );
   const isFixedHeatingNeed = settings.heatingNeedMode === "fixed";
+  const automaticBaseHeatingHours =
+    showerHeatingNeed?.hours ?? temperatureBasedEffectiveHeatingHours;
+  const automaticEffectiveHeatingHours = Math.max(
+    automaticBaseHeatingHours,
+    minimumAutomaticHeatingHours,
+  );
   const { effectiveHeatingHours, heatingReason } =
     isFixedHeatingNeed
       ? {
@@ -248,13 +255,14 @@ export function selectHeatingRecommendation(
           heatingReason: `Kiinteä lämmitystarve → ${settings.heatingHoursPerDay} h päivän halvimmilla tunneilla`,
         }
       : {
-          effectiveHeatingHours:
-            showerHeatingNeed?.hours ?? temperatureBasedEffectiveHeatingHours,
+          effectiveHeatingHours: automaticEffectiveHeatingHours,
           heatingReason:
-            getAutomaticHeatingReasonPrefix(
-              showerHeatingNeed,
-              temperatureBasedHeatingNeed,
-            ),
+            automaticEffectiveHeatingHours > automaticBaseHeatingHours
+              ? `Ennuste seuraavan lämmityksen alkuun → ${automaticEffectiveHeatingHours} h lämmitys`
+              : getAutomaticHeatingReasonPrefix(
+                  showerHeatingNeed,
+                  temperatureBasedHeatingNeed,
+                ),
         };
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const todayPrices = prices.filter(

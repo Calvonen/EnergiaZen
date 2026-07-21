@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": ".tmp-forecast-tests",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "strict": true,
+    "target": "es2020"
+  },
+  "include": [
+    "lib/tankTemperatureForecast.ts",
+    "lib/tankTemperatureForecast.test.ts",
+    "scripts/run-tank-temperature-forecast-tests.ts"
+  ]
+}

@@ -28,6 +28,15 @@ import {
   loadSettings,
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
+import {
+  buildHourlyTemperatureDropProfile,
+  getCurrentWeightedTemperature,
+  getForecastTargetHeatingStart,
+  getForecastHeatingHours,
+  isHeatingShiftedToTomorrow,
+  predictWeightedTemperature,
+  TankTemperatureReading,
+} from "@/lib/tankTemperatureForecast";
 
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
@@ -60,12 +69,8 @@ const helsinkiDateTimePartsFormatter = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
 });
 
-type TankReading = {
-  created_at?: string | null;
-  top_temp?: number | null;
-  bottom_temp?: number | null;
+type TankReading = TankTemperatureReading & {
   showers?: number | null;
-  heating?: boolean | null;
 };
 
 type SpotPriceResponse = {
@@ -616,6 +621,9 @@ export default function HomeScreen() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [topTemp, setTopTemp] = useState<number | null>(null);
   const [bottomTemp, setBottomTemp] = useState<number | null>(null);
+  const [tankTemperatureHistory, setTankTemperatureHistory] = useState<
+    TankTemperatureReading[]
+  >([]);
   const [heating, setHeating] = useState(false);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
@@ -626,7 +634,7 @@ export default function HomeScreen() {
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
-  const currentHourStart = startOfCurrentHour();
+  const currentHourStart = startOfCurrentHour(currentTime);
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
     () =>
@@ -665,6 +673,8 @@ export default function HomeScreen() {
     () => new Set(actualHeatingHours.today ?? []),
     [actualHeatingHours.today],
   );
+  const currentWeightedTemperature =
+    getCurrentWeightedTemperature(topTemp, bottomTemp);
   const tankTemperature = topTemp ?? defaultTankTemperature;
   const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
   const displayedBottomTemp =
@@ -674,25 +684,113 @@ export default function HomeScreen() {
     bottomTemp,
     settings,
   );
-  const heatingRecommendation = useMemo(
-    () =>
-      selectHeatingRecommendation(
-        hourlyPrices,
-        currentHourStart,
-        todayActualHeatingHourNumbers,
-        settings,
-        tankTemperature,
-        warmWaterEstimate?.showersLeft ?? null,
-      ),
-    [
-      currentHourStart,
+  const hourlyTemperatureDropProfile = useMemo(
+    () => buildHourlyTemperatureDropProfile(tankTemperatureHistory),
+    [tankTemperatureHistory],
+  );
+  const heatingRecommendationForecast = useMemo(() => {
+    const heatingHoursBeforeForecast = selectHeatingRecommendation(
       hourlyPrices,
+      currentHourStart,
+      todayActualHeatingHourNumbers,
       settings,
       tankTemperature,
+      warmWaterEstimate?.showersLeft ?? null,
+    );
+    const preliminaryTomorrowHeatingHours = sortHoursChronologically(
+      getCheapestHours(
+        hourlyPrices.filter(
+          (item) =>
+            getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
+        ),
+        heatingHoursBeforeForecast.targetHours,
+      ),
+    );
+    const nextHeatingStart = getForecastTargetHeatingStart({
+      currentTime,
+      isShiftedToTomorrow: isHeatingShiftedToTomorrow(
+        heatingHoursBeforeForecast.reason,
+      ),
+      preliminaryTodayHeatingHours: heatingHoursBeforeForecast.hours,
+      tomorrowHeatingHours: preliminaryTomorrowHeatingHours,
+    });
+
+    if (
+      settings.heatingNeedMode === "fixed" ||
+      !nextHeatingStart ||
+      currentWeightedTemperature === null
+    ) {
+      return {
+        heatingHoursBeforeForecast:
+          heatingHoursBeforeForecast.targetHours,
+        heatingHoursAfterForecast: heatingHoursBeforeForecast.targetHours,
+        nextHeatingStart,
+        predictedWeightedTemperature: currentWeightedTemperature,
+        recommendation: heatingHoursBeforeForecast,
+      };
+    }
+
+    const predictedWeightedTemperature = predictWeightedTemperature({
+      currentTemperature: currentWeightedTemperature,
+      from: currentTime,
+      hourlyDropProfile: hourlyTemperatureDropProfile,
+      to: nextHeatingStart,
+    });
+    const heatingHoursAfterForecast = getForecastHeatingHours({
+      currentHeatingHours: heatingHoursBeforeForecast.targetHours,
+      predictedTemperature: predictedWeightedTemperature,
+      settingsHeatingHoursPerDay: settings.heatingHoursPerDay,
+    });
+    const recommendation = selectHeatingRecommendation(
+      hourlyPrices,
+      currentHourStart,
       todayActualHeatingHourNumbers,
-      warmWaterEstimate?.showersLeft,
-    ],
-  );
+      settings,
+      predictedWeightedTemperature,
+      warmWaterEstimate?.showersLeft ?? null,
+      heatingHoursAfterForecast,
+    );
+
+    return {
+      heatingHoursBeforeForecast: heatingHoursBeforeForecast.targetHours,
+      heatingHoursAfterForecast: recommendation.targetHours,
+      nextHeatingStart,
+      predictedWeightedTemperature,
+      recommendation,
+    };
+  }, [
+    currentHourStart,
+    currentTime,
+    currentWeightedTemperature,
+    hourlyPrices,
+    hourlyTemperatureDropProfile,
+    settings,
+    tankTemperature,
+    todayActualHeatingHourNumbers,
+    warmWaterEstimate?.showersLeft,
+  ]);
+  const heatingRecommendation = heatingRecommendationForecast.recommendation;
+  useEffect(() => {
+    debugLog("Tank temperature forecast debug", {
+      currentWeightedTemperature,
+      heatingHoursAfterForecast:
+        heatingRecommendationForecast.heatingHoursAfterForecast,
+      heatingHoursBeforeForecast:
+        heatingRecommendationForecast.heatingHoursBeforeForecast,
+      hourlyTemperatureDropProfile,
+      nextHeatingStart:
+        heatingRecommendationForecast.nextHeatingStart?.toISOString() ?? null,
+      predictedWeightedTemperature:
+        heatingRecommendationForecast.predictedWeightedTemperature,
+    });
+  }, [
+    currentWeightedTemperature,
+    heatingRecommendationForecast.heatingHoursAfterForecast,
+    heatingRecommendationForecast.heatingHoursBeforeForecast,
+    heatingRecommendationForecast.nextHeatingStart,
+    heatingRecommendationForecast.predictedWeightedTemperature,
+    hourlyTemperatureDropProfile,
+  ]);
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
     const tomorrowKey = getChartDayKey("tomorrow");
@@ -955,7 +1053,14 @@ export default function HomeScreen() {
           const startOfYesterdayIso = getHelsinkiDateStartIso(
             getDateKeyOffset(-1),
           );
-          const [latestReadingResult, heatingHistoryResult] =
+          const sevenDaysAgoIso = new Date(
+            Date.now() - 7 * 24 * 60 * 60 * 1000,
+          ).toISOString();
+          const [
+            latestReadingResult,
+            heatingHistoryResult,
+            temperatureHistoryResult,
+          ] =
             await Promise.all([
               supabase
                 .from("tank_readings")
@@ -968,6 +1073,11 @@ export default function HomeScreen() {
                 .select("created_at,heating")
                 .gte("created_at", startOfYesterdayIso)
                 .eq("heating", true)
+                .order("created_at", { ascending: true }),
+              supabase
+                .from("tank_readings")
+                .select("created_at,top_temp,bottom_temp,heating")
+                .gte("created_at", sevenDaysAgoIso)
                 .order("created_at", { ascending: true }),
             ]);
 
@@ -1034,6 +1144,15 @@ export default function HomeScreen() {
                 .sort((a, b) => a - b),
             });
           }
+
+          if (temperatureHistoryResult.error) {
+            console.error(temperatureHistoryResult.error);
+            setTankTemperatureHistory([]);
+          } else {
+            setTankTemperatureHistory(
+              (temperatureHistoryResult.data ?? []) as TankTemperatureReading[],
+            );
+          }
         } catch {
           if (!isActive) {
             return;
@@ -1041,6 +1160,7 @@ export default function HomeScreen() {
 
           setTopTemp(null);
           setBottomTemp(null);
+          setTankTemperatureHistory([]);
           setHeating(false);
           setTankUpdatedAt(null);
         } finally {
