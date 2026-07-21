@@ -7,6 +7,8 @@ export type HeatingNeedMode = "automatic" | "fixed";
 export const defaultSettings = {
   tankSizeLiters: 290,
   heatingNeedMode: "automatic" as HeatingNeedMode,
+  fallbackEnabled: true,
+  backupHours: [2, 3, 4],
   heatingHoursPerDay: 3,
   priceDifferenceThresholdCents: 2,
   minTankTemperature: 10,
@@ -57,12 +59,28 @@ export function normalizeSettings(
   const tankSizeLiters = settings.tankSizeLiters ?? settings.tankVolumeLiters;
   const fullTankShowers =
     settings.fullTankShowers ?? settings.showersAtMaxTemperature;
+  const backupHours = Array.isArray(settings.backupHours)
+    ? [
+        ...new Set(
+          settings.backupHours.filter(
+            (hour): hour is number =>
+              Number.isInteger(hour) && hour >= 0 && hour <= 23,
+          ),
+        ),
+      ].sort((a, b) => a - b)
+    : defaultSettings.backupHours;
 
   return {
     heatingNeedMode:
       settings.heatingNeedMode === "fixed"
         ? "fixed"
         : defaultSettings.heatingNeedMode,
+    fallbackEnabled:
+      typeof settings.fallbackEnabled === "boolean"
+        ? settings.fallbackEnabled
+        : defaultSettings.fallbackEnabled,
+    backupHours:
+      backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
     heatingHoursPerDay:
       typeof settings.heatingHoursPerDay === "number"
         ? clampSettingValue("heatingHoursPerDay", settings.heatingHoursPerDay)

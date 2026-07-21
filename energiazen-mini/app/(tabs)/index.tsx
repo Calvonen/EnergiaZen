@@ -719,17 +719,19 @@ export default function HomeScreen() {
       updated_at: updatedAt,
     };
 
-    supabase
-      .from("heating_plans")
-      .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" })
-      .then(({ error }) => {
+    void (async () => {
+      try {
+        const { error } = await supabase
+          .from("heating_plans")
+          .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" });
+
         if (error) {
           console.warn("Failed to save heating plans", error);
         }
-      })
-      .catch((error) => {
+      } catch (error: unknown) {
         console.warn("Failed to save heating plans", error);
-      });
+      }
+    })();
   }, [
     heatingRecommendation.reason,
     heatingRecommendation.targetHours,
@@ -753,6 +755,20 @@ export default function HomeScreen() {
     settings.heatingHoursPerDay,
     tomorrowPlannedHeatingHours.length,
   ]);
+  const todayActualHeatingHoursCount = actualHeatingHours.today?.length ?? 0;
+  const remainingPlannedHeatingHoursCount = recommendedHeatingHours.filter(
+    (item) => item.status === "planned",
+  ).length;
+  const showSeparatedTodayHeatingHours =
+    selectedDay === "today" &&
+    settings.heatingNeedMode === "automatic" &&
+    todayActualHeatingHoursCount > 0;
+  const separatedHeatingReason = heatingRecommendation.reason.replace(
+    /→ (?:ei lämmitystarvetta|\d+ h lämmitys)/,
+    remainingPlannedHeatingHoursCount > 0
+      ? `→ vielä ${remainingPlannedHeatingHoursCount} h lämmitystä`
+      : "→ ei enää lämmitystä",
+  );
   const explanationVisible =
     selectedHeatingHoursCount !== settings.heatingHoursPerDay;
   const plannedHeatingHourIds = useMemo(() => {
@@ -1685,12 +1701,25 @@ export default function HomeScreen() {
                       Lämmityssuunnitelma muuttui
                     </Text>
                     <Text style={styles.heatingPlanInfoText}>
-                      Asetettu lämmitystarve on {settings.heatingHoursPerDay} h
-                      / vrk, mutta suunnitelmaan valittiin {selectedHeatingHoursCount}
-                      h.
+                      {showSeparatedTodayHeatingHours ? (
+                        <>
+                          Asetettu lämmitystarve on {settings.heatingHoursPerDay}{" "}
+                          h / vrk.{"\n"}
+                          Toteutunut {todayActualHeatingHoursCount} h, jäljellä{" "}
+                          {remainingPlannedHeatingHoursCount} h.
+                        </>
+                      ) : (
+                        <>
+                          Asetettu lämmitystarve on {settings.heatingHoursPerDay}{" "}
+                          h / vrk, mutta suunnitelmaan valittiin{" "}
+                          {selectedHeatingHoursCount} h.
+                        </>
+                      )}
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      {heatingRecommendation.reason}
+                      {showSeparatedTodayHeatingHours
+                        ? separatedHeatingReason
+                        : heatingRecommendation.reason}
                     </Text>
                   </View>
                 ) : null}

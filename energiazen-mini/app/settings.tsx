@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
@@ -211,6 +212,28 @@ export default function SettingsScreen() {
   const saveUpdatedSettings = (updatedSettings: typeof settings) => {
     setSettings(updatedSettings);
     saveSettings(updatedSettings).catch(() => undefined);
+    void (async () => {
+      try {
+        const { error } = await supabase
+          .from("heating_control_settings")
+          .upsert(
+            {
+              id: 1,
+              backup_hours: updatedSettings.backupHours,
+              fallback_enabled: updatedSettings.fallbackEnabled,
+              timezone: "Europe/Helsinki",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" },
+          );
+
+        if (error) {
+          console.warn("Failed to save heating control settings", error);
+        }
+      } catch (error: unknown) {
+        console.warn("Failed to save heating control settings", error);
+      }
+    })();
   };
 
   const updateSetting = (key: EditableSettingKey, value: number) => {
@@ -225,6 +248,25 @@ export default function SettingsScreen() {
     saveUpdatedSettings({
       ...settings,
       heatingNeedMode,
+    });
+  };
+
+  const toggleBackupHour = (hour: number) => {
+    const isSelected = settings.backupHours.includes(hour);
+
+    if (
+      isSelected &&
+      settings.fallbackEnabled &&
+      settings.backupHours.length === 1
+    ) {
+      return;
+    }
+
+    saveUpdatedSettings({
+      ...settings,
+      backupHours: isSelected
+        ? settings.backupHours.filter((backupHour) => backupHour !== hour)
+        : [...settings.backupHours, hour].sort((a, b) => a - b),
     });
   };
 
@@ -541,6 +583,65 @@ export default function SettingsScreen() {
               })}
             </View>
           ))}
+          <View style={styles.settingsSection}>
+            <Text style={styles.sectionLabel}>Varakäyttö</Text>
+            <View style={styles.fallbackHeader}>
+              <View style={styles.settingTextGroup}>
+                <Text style={styles.settingLabel}>
+                  Käytä varatunteja yhteyskatkossa
+                </Text>
+                <Text style={styles.settingDescription}>
+                  Shelly käyttää näitä tunteja, jos päivän EnergyZen-suunnitelmaa
+                  ei saada haettua.
+                </Text>
+              </View>
+              <Switch
+                accessibilityLabel="Käytä varatunteja yhteyskatkossa"
+                onValueChange={(fallbackEnabled) => {
+                  saveUpdatedSettings({
+                    ...settings,
+                    backupHours:
+                      fallbackEnabled && settings.backupHours.length === 0
+                        ? defaultSettings.backupHours
+                        : settings.backupHours,
+                    fallbackEnabled,
+                  });
+                }}
+                trackColor={{ false: "#39445d", true: "#238b7c" }}
+                thumbColor={settings.fallbackEnabled ? "#36f4d4" : "#9aaaca"}
+                value={settings.fallbackEnabled}
+              />
+            </View>
+            <View style={styles.backupHourGrid}>
+              {Array.from({ length: 24 }, (_, hour) => {
+                const isActive = settings.backupHours.includes(hour);
+                const nextHour = String((hour + 1) % 24).padStart(2, "0");
+
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isActive }}
+                    key={hour}
+                    onPress={() => toggleBackupHour(hour)}
+                    style={({ pressed }) => [
+                      styles.backupHourButton,
+                      isActive && styles.backupHourButtonActive,
+                      pressed && styles.modeOptionPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.backupHourText,
+                        isActive && styles.backupHourTextActive,
+                      ]}
+                    >
+                      {String(hour).padStart(2, "0")}–{nextHour}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
         </View>
 
         <Pressable
@@ -779,6 +880,42 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   modeOptionTextActive: {
+    color: "#dffefa",
+  },
+  fallbackHeader: {
+    alignItems: "center",
+    borderBottomColor: "rgba(255,255,255,0.09)",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    paddingVertical: 14,
+  },
+  backupHourGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingTop: 14,
+  },
+  backupHourButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 10,
+    borderWidth: 1,
+    minWidth: 64,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  backupHourButtonActive: {
+    backgroundColor: "rgba(54,244,212,0.18)",
+    borderColor: "rgba(54,244,212,0.5)",
+  },
+  backupHourText: {
+    color: "#9fb0d2",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  backupHourTextActive: {
     color: "#dffefa",
   },
   settingInputGroup: {
