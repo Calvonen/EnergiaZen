@@ -65,34 +65,37 @@ export function getHeatingNeedFromShowers(
   const fullTankShowers = Math.max(settings.fullTankShowers, 1);
   const fillRatio = clamp(showersLeft / fullTankShowers, 0, 1);
 
-  if (fillRatio < 0.35) {
-    return {
-      fillRatio,
-      hours: settings.heatingHoursPerDay,
-      reason: "Varaus alle 35 % → täysi lämmitystarve",
-    };
-  }
-
   if (fillRatio < 0.6) {
     return {
       fillRatio,
-      hours: Math.min(2, settings.heatingHoursPerDay),
-      reason: "Varaus 35–59 % → 2 h lämmitys",
+      hours: Math.min(
+        settings.heatingHoursPerDay,
+        settings.heatingHoursPerDay,
+      ),
+      reason: "Varaus alle 60 % → täysi lämmitystarve",
     };
   }
 
   if (fillRatio < 0.85) {
     return {
       fillRatio,
-      hours: Math.min(1, settings.heatingHoursPerDay),
-      reason: "Varaus 60–84 % → 1 h lämmitys",
+      hours: Math.min(settings.heatingHoursPerDay, 2),
+      reason: "Varaus 60–84 % → enintään 2 h lämmitys",
+    };
+  }
+
+  if (fillRatio < 0.95) {
+    return {
+      fillRatio,
+      hours: Math.min(settings.heatingHoursPerDay, 1),
+      reason: "Varaus 85–94 % → enintään 1 h lämmitys",
     };
   }
 
   return {
     fillRatio,
     hours: 0,
-    reason: "Varaus vähintään 85 % → ei lämmitystarvetta",
+    reason: "Varaus vähintään 95 % → ei lämmitystarvetta",
   };
 }
 
