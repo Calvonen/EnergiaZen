@@ -256,4 +256,31 @@ export function runTankTemperatureForecastUnitTests() {
       "huomiseen siirretty ennuste kasvattaa tarpeen 1 tunnista 2 tuntiin",
     );
   }
+
+  {
+    const currentTime = new Date("2026-07-01T20:00:00.000Z");
+    const pastTodayHeatingHour = new Date("2026-07-01T10:00:00.000Z");
+    const firstTomorrowHeatingHour = new Date("2026-07-02T02:00:00.000Z");
+    const target = getForecastTargetHeatingStart({
+      currentTime,
+      isShiftedToTomorrow: false,
+      preliminaryTodayHeatingHours: [
+        {
+          date: pastTodayHeatingHour,
+          status: "planned",
+        },
+      ],
+      tomorrowHeatingHours: [
+        {
+          date: firstTomorrowHeatingHour,
+        },
+      ],
+    });
+
+    assertEqual(
+      target?.toISOString(),
+      firstTomorrowHeatingHour.toISOString(),
+      "huomisen ensimmainen tunti valitaan kun tanaan ei ole tulevaa tuntia",
+    );
+  }
 }

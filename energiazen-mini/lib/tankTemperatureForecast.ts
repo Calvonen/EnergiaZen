@@ -265,11 +265,20 @@ export function getForecastTargetHeatingStart({
   preliminaryTodayHeatingHours: ForecastHeatingStartCandidate[];
   tomorrowHeatingHours: ForecastHeatingStartCandidate[];
 }) {
+  const firstFutureTodayHeatingStart = getFirstFutureHeatingStart(
+    preliminaryTodayHeatingHours,
+    currentTime,
+  );
+  const firstFutureTomorrowHeatingStart = getFirstFutureHeatingStart(
+    tomorrowHeatingHours,
+    currentTime,
+  );
+
   if (isShiftedToTomorrow) {
-    return getFirstFutureHeatingStart(tomorrowHeatingHours, currentTime);
+    return firstFutureTomorrowHeatingStart;
   }
 
-  return getFirstFutureHeatingStart(preliminaryTodayHeatingHours, currentTime);
+  return firstFutureTodayHeatingStart ?? firstFutureTomorrowHeatingStart;
 }
 
 export function getFallbackTemperatureDropProfile() {
