@@ -1572,9 +1572,10 @@ export default function HomeScreen() {
                             item.date.getTime() <= currentHourStart.getTime() &&
                             item.endDate.getTime() > currentHourStart.getTime();
                           const isPastHour =
-                            selectedDay === "today" &&
-                            item.endDate.getTime() <=
-                              currentHourStart.getTime();
+                            selectedDay === "yesterday" ||
+                            (selectedDay === "today" &&
+                              item.endDate.getTime() <=
+                                currentHourStart.getTime());
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
