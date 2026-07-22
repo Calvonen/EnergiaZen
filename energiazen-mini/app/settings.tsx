@@ -21,6 +21,12 @@ import {
   saveSettings,
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
+import {
+  fetchLatestTemperatureDropProfile,
+  getTemperatureDropProfileHours,
+  isTemperatureDropProfileFresh,
+  TemperatureDropProfile,
+} from "@/lib/temperatureDropProfile";
 
 type SettingsRow = {
   accent: string;
@@ -100,12 +106,56 @@ const heatingNeedModeOptions: {
   { label: "Kiinteä tuntimäärä", value: "fixed" },
 ];
 
+const helsinkiProfileDateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  day: "2-digit",
+  hour: "2-digit",
+  hour12: false,
+  minute: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
+function formatProfileDateTime(value: string | null) {
+  const date = value ? new Date(value) : null;
+
+  return date && !Number.isNaN(date.getTime())
+    ? helsinkiProfileDateTimeFormatter.format(date)
+    : "--";
+}
+
+function formatProfileDrop(value: number | null) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(2).replace(".", ",")
+    : "--";
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const [settings, setSettings] = useState(defaultSettings);
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
   const [isCalibratingFullTank, setIsCalibratingFullTank] = useState(false);
+  const [temperatureDropProfile, setTemperatureDropProfile] =
+    useState<TemperatureDropProfile | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const loadTemperatureDropProfile = useCallback(async () => {
+    setIsProfileLoading(true);
+    setProfileError(null);
+
+    try {
+      setTemperatureDropProfile(
+        await fetchLatestTemperatureDropProfile(supabase),
+      );
+    } catch (error) {
+      console.warn("Failed to load temperature drop profile", error);
+      setProfileError("Lämpöhäviöprofiilia ei voitu hakea.");
+    } finally {
+      setIsProfileLoading(false);
+    }
+  }, []);
 
   const settingsSections = useMemo(
     (): SettingsSection[] => [
@@ -285,6 +335,27 @@ export default function SettingsScreen() {
       };
     }, [router]),
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadTemperatureDropProfile();
+    }, [loadTemperatureDropProfile]),
+  );
+
+  const isProfileFresh = temperatureDropProfile
+    ? isTemperatureDropProfileFresh(temperatureDropProfile)
+    : false;
+  const profileStatus = temperatureDropProfile
+    ? isProfileFresh
+      ? "Ajantasainen"
+      : "Vanhentunut"
+    : "Ei saatavilla";
+  const activeProfileSource = isProfileFresh
+    ? "30 päivän viikkoprofiili"
+    : "Paikallinen 7 päivän profiili";
+  const profileHours = temperatureDropProfile
+    ? getTemperatureDropProfileHours(temperatureDropProfile)
+    : [];
 
   const formatCalibrationTime = (createdAt: string) => {
     const calibrationDate = new Date(createdAt);
@@ -644,6 +715,111 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <View style={styles.profileCard}>
+          <View style={styles.profileHeader}>
+            <View style={styles.profileHeaderText}>
+              <Text style={styles.profileTitle}>Lämpöhäviöprofiili</Text>
+              <Text
+                style={[
+                  styles.profileStatus,
+                  isProfileFresh && styles.profileStatusFresh,
+                ]}
+              >
+                {profileStatus}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isProfileLoading}
+              onPress={loadTemperatureDropProfile}
+              style={({ pressed }) => [
+                styles.profileRefreshButton,
+                (pressed || isProfileLoading) &&
+                  styles.profileRefreshButtonPressed,
+              ]}
+            >
+              <Text style={styles.profileRefreshButtonText}>
+                {isProfileLoading ? "Päivitetään..." : "Päivitä tiedot"}
+              </Text>
+            </Pressable>
+          </View>
+
+          {profileError ? (
+            <Text style={styles.profileError}>{profileError}</Text>
+          ) : null}
+
+          <View style={styles.profileMetadata}>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Käytössä</Text>
+              <Text style={styles.profileMetadataValue}>
+                {activeProfileSource}
+              </Text>
+            </View>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Viimeisin päivitys</Text>
+              <Text style={styles.profileMetadataValue}>
+                {formatProfileDateTime(
+                  temperatureDropProfile?.created_at ?? null,
+                )}
+              </Text>
+            </View>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Lähdejakso</Text>
+              <Text style={styles.profileMetadataValue}>
+                {formatProfileDateTime(
+                  temperatureDropProfile?.source_start ?? null,
+                )}
+                {" – "}
+                {formatProfileDateTime(
+                  temperatureDropProfile?.source_end ?? null,
+                )}
+              </Text>
+            </View>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Lähdepäiviä</Text>
+              <Text style={styles.profileMetadataValue}>
+                {temperatureDropProfile?.source_days ?? "--"}
+              </Text>
+            </View>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Yleinen lämpöhäviö</Text>
+              <Text style={styles.profileMetadataValue}>
+                {formatProfileDrop(
+                  temperatureDropProfile?.general_fallback ?? null,
+                )}{" "}
+                °C/h
+              </Text>
+            </View>
+            <View style={styles.profileMetadataRow}>
+              <Text style={styles.profileMetadataLabel}>Algoritmi</Text>
+              <Text style={styles.profileMetadataValue}>
+                {temperatureDropProfile?.algorithm_version ?? "--"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.profileHourGrid}>
+            {profileHours.map(({ drop, hour, observationDays }) => {
+              const nextHour = (hour + 1) % 24;
+
+              return (
+                <View key={hour} style={styles.profileHourItem}>
+                  <Text style={styles.profileHourLabel}>
+                    {String(hour).padStart(2, "0")}–
+                    {String(nextHour).padStart(2, "0")}
+                  </Text>
+                  <Text style={styles.profileHourDrop}>
+                    {formatProfileDrop(drop)} °C/h
+                  </Text>
+                  <Text style={styles.profileHourObservations}>
+                    {observationDays} havaintopäivää
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
         <Pressable
           accessibilityRole="button"
           onPress={handleSignOut}
@@ -977,6 +1153,112 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginTop: 16,
     paddingVertical: 14,
+  },
+  profileCard: {
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 24,
+    borderWidth: 1,
+    marginTop: 14,
+    padding: 16,
+  },
+  profileError: {
+    color: "#ff9aa4",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 10,
+  },
+  profileHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
+  },
+  profileHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  profileHourDrop: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  profileHourGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14,
+  },
+  profileHourItem: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 12,
+    borderWidth: 1,
+    flexBasis: "47%",
+    flexGrow: 1,
+    gap: 3,
+    padding: 10,
+  },
+  profileHourLabel: {
+    color: "#8ea4cf",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  profileHourObservations: {
+    color: "#8ea4cf",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  profileMetadata: {
+    gap: 8,
+    marginTop: 14,
+  },
+  profileMetadataLabel: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  profileMetadataRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
+  },
+  profileMetadataValue: {
+    color: "#d9e9ff",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "right",
+  },
+  profileRefreshButton: {
+    backgroundColor: "rgba(54,244,212,0.14)",
+    borderColor: "rgba(54,244,212,0.34)",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  profileRefreshButtonPressed: {
+    opacity: 0.6,
+  },
+  profileRefreshButtonText: {
+    color: "#dffefa",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  profileStatus: {
+    color: "#ffcf5a",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  profileStatusFresh: {
+    color: "#54eaa0",
+  },
+  profileTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "900",
   },
   signOutButtonText: {
     color: "#ffffff",

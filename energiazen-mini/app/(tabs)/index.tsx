@@ -33,7 +33,7 @@ import {
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 import {
-  buildHourlyTemperatureDropProfile,
+  buildHourlyTemperatureDropProfileResult,
   getCurrentWeightedTemperature,
   getForecastTargetHeatingStart,
   getForecastHeatingHours,
@@ -41,6 +41,11 @@ import {
   predictWeightedTemperature,
   TankTemperatureReading,
 } from "@/lib/tankTemperatureForecast";
+import {
+  fetchLatestTemperatureDropProfile,
+  selectTemperatureDropProfile,
+  TemperatureDropProfile,
+} from "@/lib/temperatureDropProfile";
 
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
@@ -610,6 +615,8 @@ export default function HomeScreen() {
   const [tankTemperatureHistory, setTankTemperatureHistory] = useState<
     TankTemperatureReading[]
   >([]);
+  const [storedTemperatureDropProfile, setStoredTemperatureDropProfile] =
+    useState<TemperatureDropProfile | null>(null);
   const [heating, setHeating] = useState(false);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
@@ -670,10 +677,22 @@ export default function HomeScreen() {
     bottomTemp,
     settings,
   );
-  const hourlyTemperatureDropProfile = useMemo(
-    () => buildHourlyTemperatureDropProfile(tankTemperatureHistory),
+  const localTemperatureDropProfile = useMemo(
+    () => buildHourlyTemperatureDropProfileResult(tankTemperatureHistory),
     [tankTemperatureHistory],
   );
+  const selectedTemperatureDropProfile = useMemo(
+    () =>
+      selectTemperatureDropProfile({
+        localGeneralFallback: localTemperatureDropProfile.generalFallback,
+        localProfile: localTemperatureDropProfile.hourlyDrops,
+        now: currentTime,
+        supabaseProfile: storedTemperatureDropProfile,
+      }),
+    [currentTime, localTemperatureDropProfile, storedTemperatureDropProfile],
+  );
+  const hourlyTemperatureDropProfile =
+    selectedTemperatureDropProfile.hourlyTemperatureDropProfile;
   const heatingRecommendationForecast = useMemo(() => {
     const heatingHoursBeforeForecast = selectHeatingRecommendation(
       hourlyPrices,
@@ -759,11 +778,15 @@ export default function HomeScreen() {
   useEffect(() => {
     debugLog("Tank temperature forecast debug", {
       currentWeightedTemperature,
+      generalFallback: selectedTemperatureDropProfile.generalFallback,
       heatingHoursAfterForecast:
         heatingRecommendationForecast.heatingHoursAfterForecast,
       heatingHoursBeforeForecast:
         heatingRecommendationForecast.heatingHoursBeforeForecast,
       hourlyTemperatureDropProfile,
+      profileAgeDays: selectedTemperatureDropProfile.profileAgeDays,
+      profileDate: selectedTemperatureDropProfile.profileDate,
+      profileSource: selectedTemperatureDropProfile.profileSource,
       nextHeatingStart:
         heatingRecommendationForecast.nextHeatingStart?.toISOString() ?? null,
       predictedWeightedTemperature:
@@ -776,6 +799,10 @@ export default function HomeScreen() {
     heatingRecommendationForecast.nextHeatingStart,
     heatingRecommendationForecast.predictedWeightedTemperature,
     hourlyTemperatureDropProfile,
+    selectedTemperatureDropProfile.generalFallback,
+    selectedTemperatureDropProfile.profileAgeDays,
+    selectedTemperatureDropProfile.profileDate,
+    selectedTemperatureDropProfile.profileSource,
   ]);
   const recommendedHeatingHours = heatingRecommendation.hours;
   const tomorrowPlannedHeatingHours = useMemo(() => {
@@ -980,6 +1007,7 @@ export default function HomeScreen() {
             latestReadingResult,
             heatingHistoryResult,
             temperatureHistoryResult,
+            temperatureDropProfileResult,
           ] =
             await Promise.all([
               supabase
@@ -1005,6 +1033,10 @@ export default function HomeScreen() {
                 .select("created_at,top_temp,bottom_temp,heating")
                 .gte("created_at", sevenDaysAgoIso)
                 .order("created_at", { ascending: true }),
+              fetchLatestTemperatureDropProfile(supabase).catch((error) => {
+                console.warn("Failed to load temperature drop profile", error);
+                return null;
+              }),
             ]);
 
           if (!isActive) {
@@ -1042,6 +1074,7 @@ export default function HomeScreen() {
             rowCount: heatingHistoryResult.readings.length,
           });
           setActualHeatingHours(realizedHeatingHours);
+          setStoredTemperatureDropProfile(temperatureDropProfileResult);
 
           if (temperatureHistoryResult.error) {
             console.error(temperatureHistoryResult.error);
@@ -1059,6 +1092,7 @@ export default function HomeScreen() {
           setTopTemp(null);
           setBottomTemp(null);
           setTankTemperatureHistory([]);
+          setStoredTemperatureDropProfile(null);
           setHeating(false);
           setTankUpdatedAt(null);
         } finally {

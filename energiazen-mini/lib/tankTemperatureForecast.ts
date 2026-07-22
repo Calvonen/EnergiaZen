@@ -92,6 +92,12 @@ export function getCurrentWeightedTemperature(
 export function buildHourlyTemperatureDropProfile(
   readings: TankTemperatureReading[],
 ) {
+  return buildHourlyTemperatureDropProfileResult(readings).hourlyDrops;
+}
+
+export function buildHourlyTemperatureDropProfileResult(
+  readings: TankTemperatureReading[],
+) {
   const dayHourDrops = new Map<string, { drop: number; hour: number }>();
   const sortedReadings = [...readings].sort((a, b) => {
     const firstTime = a.created_at ? new Date(a.created_at).getTime() : NaN;
@@ -156,12 +162,14 @@ export function buildHourlyTemperatureDropProfile(
       .map((item) => item.drop),
   );
 
-  return Object.fromEntries(
+  const hourlyDrops = Object.fromEntries(
     dropsByHour.map((drops, hour) => [
       hour,
       getMedian(drops) ?? generalMedian,
     ]),
   ) as HourlyTemperatureDropProfile;
+
+  return { generalFallback: generalMedian, hourlyDrops };
 }
 
 export function predictWeightedTemperature({

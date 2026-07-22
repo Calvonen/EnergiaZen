@@ -17,6 +17,8 @@
     "lib/tankTemperatureForecast.test.ts",
     "lib/heatingHistory.ts",
     "lib/heatingHistory.test.ts",
+    "lib/temperatureDropProfile.ts",
+    "lib/temperatureDropProfile.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }
