@@ -39,8 +39,10 @@ const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char *SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const char *SUPABASE_ENDPOINT =
     "https://amyvzelzbvjvrevikvrp.supabase.co/rest/v1/tank_readings";
+// Shelly RPC channels: id=0 is the actual water-heater channel; id=1 is the
+// test channel.
 const char *SHELLY_STATUS_ENDPOINT =
-    "http://192.168.68.52/rpc/Switch.GetStatus?id=1";
+    "http://192.168.68.52/rpc/Switch.GetStatus?id=0";
 
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
@@ -125,16 +127,19 @@ bool readShellyHeatingStatus() {
   HTTPClient http;
   if (!http.begin(client, SHELLY_STATUS_ENDPOINT)) {
     Serial.println("Warning: Shelly HTTP begin failed");
-    Serial.println("Shelly test channel: OFF");
+    Serial.println("Shelly heating channel: OFF");
     return false;
   }
 
   const int responseCode = http.GET();
+  Serial.print("Shelly HTTP response code: ");
+  Serial.println(responseCode);
+
   if (responseCode <= 0) {
     Serial.print("Warning: Shelly HTTP GET failed: ");
     Serial.println(responseCode);
   } else if (responseCode != HTTP_CODE_OK) {
-    Serial.print("Warning: Shelly HTTP response: ");
+    Serial.print("Warning: Shelly unexpected HTTP response: ");
     Serial.println(responseCode);
   } else {
     const String response = http.getString();
@@ -153,7 +158,7 @@ bool readShellyHeatingStatus() {
 
   http.end();
 
-  Serial.print("Shelly test channel: ");
+  Serial.print("Shelly heating channel: ");
   Serial.println(heating ? "ON" : "OFF");
   return heating;
 }
