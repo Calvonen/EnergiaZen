@@ -13,6 +13,10 @@ import {
 
 import { debugLog } from "@/lib/debug";
 import {
+  calculateRealizedHeatingHours,
+  fetchAllHeatingHistory,
+} from "@/lib/heatingHistory";
+import {
   DaySelection,
   getCheapestHours,
   getDateKeyOffset,
@@ -862,14 +866,18 @@ export default function HomeScreen() {
     selectedDay === "today" &&
     settings.heatingNeedMode === "automatic" &&
     todayActualHeatingHoursCount > 0;
-  const separatedHeatingReason = heatingRecommendation.reason.replace(
-    /→ (?:ei lämmitystarvetta|\d+ h lämmitys)/,
-    remainingPlannedHeatingHoursCount > 0
-      ? `→ vielä ${remainingPlannedHeatingHoursCount} h lämmitystä`
-      : "→ ei enää lämmitystä",
-  );
   const explanationVisible =
     selectedHeatingHoursCount !== settings.heatingHoursPerDay;
+  const forecastHeatingHours =
+    heatingRecommendationForecast.heatingHoursAfterForecast;
+  const forecastHeatingDuration =
+    forecastHeatingHours === 1
+      ? "1 tunnin"
+      : `${forecastHeatingHours} tuntia`;
+  const tomorrowPricesAvailable = hourlyPrices.some(
+    (item) =>
+      getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
+  );
   const plannedHeatingHourIds = useMemo(() => {
     if (selectedDay === "yesterday") {
       return new Set<string>();
@@ -964,6 +972,7 @@ export default function HomeScreen() {
           const startOfYesterdayIso = getHelsinkiDateStartIso(
             getDateKeyOffset(-1),
           );
+          const historyEndIso = new Date().toISOString();
           const sevenDaysAgoIso = new Date(
             Date.now() - 7 * 24 * 60 * 60 * 1000,
           ).toISOString();
@@ -979,12 +988,18 @@ export default function HomeScreen() {
                 .order("created_at", { ascending: false })
                 .limit(1)
                 .single(),
-              supabase
-                .from("tank_readings")
-                .select("created_at,heating")
-                .gte("created_at", startOfYesterdayIso)
-                .eq("heating", true)
-                .order("created_at", { ascending: true }),
+              fetchAllHeatingHistory(async (from, to) => {
+                const { data, error } = await supabase
+                  .from("tank_readings")
+                  .select("created_at,heating")
+                  .gte("created_at", startOfYesterdayIso)
+                  .lte("created_at", historyEndIso)
+                  .eq("heating", true)
+                  .order("created_at", { ascending: true })
+                  .range(from, to);
+
+                return { data, error };
+              }),
               supabase
                 .from("tank_readings")
                 .select("created_at,top_temp,bottom_temp,heating")
@@ -1007,54 +1022,26 @@ export default function HomeScreen() {
             setTankUpdatedAt(reading?.created_at ?? null);
           }
 
-          if (heatingHistoryResult.error) {
-            console.error(heatingHistoryResult.error);
-          } else {
-            const todayKey = getDateKeyOffset(0);
-            const yesterdayKey = getDateKeyOffset(-1);
-            const heatingHourCounts = {
-              today: new Map<number, number>(),
-              yesterday: new Map<number, number>(),
-            };
+          const todayKey = getDateKeyOffset(0);
+          const yesterdayKey = getDateKeyOffset(-1);
+          const realizedHeatingHours = calculateRealizedHeatingHours(
+            heatingHistoryResult.readings,
+            todayKey,
+            yesterdayKey,
+            getFinnishDateKey,
+            (createdAt) => getHelsinkiHourNumber(new Date(createdAt)),
+          );
 
-            for (const reading of (heatingHistoryResult.data ?? []) as Pick<
-              TankReading,
-              "created_at" | "heating"
-            >[]) {
-              if (!reading.created_at || reading.heating !== true) {
-                continue;
-              }
-
-              const dateKey = getFinnishDateKey(reading.created_at);
-              const day =
-                dateKey === todayKey
-                  ? "today"
-                  : dateKey === yesterdayKey
-                    ? "yesterday"
-                    : null;
-
-              if (day) {
-                const hour = getHelsinkiHourNumber(
-                  new Date(reading.created_at),
-                );
-                heatingHourCounts[day].set(
-                  hour,
-                  (heatingHourCounts[day].get(hour) ?? 0) + 1,
-                );
-              }
-            }
-
-            setActualHeatingHours({
-              today: [...heatingHourCounts.today]
-                .filter(([, count]) => count >= 5)
-                .map(([hour]) => hour)
-                .sort((a, b) => a - b),
-              yesterday: [...heatingHourCounts.yesterday]
-                .filter(([, count]) => count >= 5)
-                .map(([hour]) => hour)
-                .sort((a, b) => a - b),
-            });
-          }
+          debugLog("Heating history pagination debug", {
+            actualHeatingHours: realizedHeatingHours,
+            fetchedPages: heatingHistoryResult.pageCount,
+            firstCreatedAt:
+              heatingHistoryResult.readings[0]?.created_at ?? null,
+            lastCreatedAt:
+              heatingHistoryResult.readings.at(-1)?.created_at ?? null,
+            rowCount: heatingHistoryResult.readings.length,
+          });
+          setActualHeatingHours(realizedHeatingHours);
 
           if (temperatureHistoryResult.error) {
             console.error(temperatureHistoryResult.error);
@@ -1765,9 +1752,11 @@ export default function HomeScreen() {
                       )}
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      {showSeparatedTodayHeatingHours
-                        ? separatedHeatingReason
-                        : heatingRecommendation.reason}
+                      Lämpötilaennusteen perusteella varaaja tarvitsee{" "}
+                      {forecastHeatingDuration} lämmitystä ennen seuraavaa{" "}
+                      lämmityskertaa. {tomorrowPricesAvailable
+                        ? "Tunnit valittiin tämän ja huomisen halvimpien hintojen perusteella."
+                        : "Huomisen hintoja ei ole vielä saatavilla, joten tunnit valittiin tältä päivältä."}
                     </Text>
                   </View>
                 ) : null}
