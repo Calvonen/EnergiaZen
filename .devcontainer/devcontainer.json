@@ -1,0 +1,4 @@
+{
+  "name": "EnergiaZen Codespace",
+  "postCreateCommand": "npm install --global @openai/codex@latest"
+}
