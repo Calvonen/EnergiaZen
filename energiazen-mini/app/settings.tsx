@@ -130,6 +130,47 @@ function formatProfileDrop(value: number | null) {
     : "--";
 }
 
+function getHighestProfileHour(
+  hours: { drop: number; hour: number; observationDays: number }[],
+) {
+  return hours.reduce<(typeof hours)[number] | null>(
+    (highest, item) => (!highest || item.drop > highest.drop ? item : highest),
+    null,
+  );
+}
+
+const profileDropColorStops = [
+  { color: [38, 217, 210], position: 0 },
+  { color: [84, 234, 160], position: 0.5 },
+  { color: [255, 155, 48], position: 0.8 },
+  { color: [255, 95, 109], position: 1 },
+] as const;
+
+function getProfileDropColor(value: number, minimum: number, maximum: number) {
+  const normalizedValue =
+    maximum > minimum
+      ? Math.min(1, Math.max(0, (value - minimum) / (maximum - minimum)))
+      : 0;
+  const upperStopIndex = profileDropColorStops.findIndex(
+    ({ position }) => normalizedValue <= position,
+  );
+  const upperStop =
+    profileDropColorStops[
+      upperStopIndex === -1
+        ? profileDropColorStops.length - 1
+        : upperStopIndex
+    ];
+  const lowerStop =
+    profileDropColorStops[Math.max(0, upperStopIndex - 1)] ?? upperStop;
+  const stopRange = upperStop.position - lowerStop.position;
+  const mix = stopRange > 0 ? (normalizedValue - lowerStop.position) / stopRange : 0;
+  const [red, green, blue] = lowerStop.color.map((channel, index) =>
+    Math.round(channel + (upperStop.color[index] - channel) * mix),
+  );
+
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const [settings, setSettings] = useState(defaultSettings);
@@ -140,6 +181,7 @@ export default function SettingsScreen() {
     useState<TemperatureDropProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [showHourlyDetails, setShowHourlyDetails] = useState(false);
 
   const loadTemperatureDropProfile = useCallback(async () => {
     setIsProfileLoading(true);
@@ -356,6 +398,12 @@ export default function SettingsScreen() {
   const profileHours = temperatureDropProfile
     ? getTemperatureDropProfileHours(temperatureDropProfile)
     : [];
+  const highestProfileHour = getHighestProfileHour(profileHours);
+  const highestProfileDrop = highestProfileHour?.drop ?? 0;
+  const lowestProfileDrop =
+    profileHours.length > 0
+      ? Math.min(...profileHours.map(({ drop }) => drop))
+      : 0;
 
   const formatCalibrationTime = (createdAt: string) => {
     const calibrationDate = new Date(createdAt);
@@ -798,26 +846,108 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <View style={styles.profileHourGrid}>
-            {profileHours.map(({ drop, hour, observationDays }) => {
-              const nextHour = (hour + 1) % 24;
+          {highestProfileHour ? (
+            <>
+              <Text style={styles.profileHighestText}>
+                Korkein lämpöhäviö:{" "}
+                {String(highestProfileHour.hour).padStart(2, "0")}–
+                {String((highestProfileHour.hour + 1) % 24).padStart(2, "0")}{" "}
+                • {formatProfileDrop(highestProfileHour.drop)} °C/h
+              </Text>
+              <Pressable
+                accessibilityHint="Näyttää tai piilottaa tarkat tuntikohtaiset tiedot."
+                accessibilityLabel="Lämpöhäviöprofiilin 24 tunnin pylväskaavio"
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showHourlyDetails }}
+                onPress={() => setShowHourlyDetails((visible) => !visible)}
+                style={({ pressed }) => [
+                  styles.profileChartButton,
+                  pressed && styles.profileChartButtonPressed,
+                ]}
+              >
+                <View style={styles.profileChart}>
+                  {profileHours.map(({ drop, hour }) => {
+                    const isHighest = hour === highestProfileHour.hour;
+                    const barColor = getProfileDropColor(
+                      drop,
+                      lowestProfileDrop,
+                      highestProfileDrop,
+                    );
+                    const barHeight =
+                      highestProfileDrop > 0
+                        ? Math.max(4, (drop / highestProfileDrop) * 64)
+                        : 4;
 
-              return (
-                <View key={hour} style={styles.profileHourItem}>
-                  <Text style={styles.profileHourLabel}>
-                    {String(hour).padStart(2, "0")}–
-                    {String(nextHour).padStart(2, "0")}
-                  </Text>
-                  <Text style={styles.profileHourDrop}>
-                    {formatProfileDrop(drop)} °C/h
-                  </Text>
-                  <Text style={styles.profileHourObservations}>
-                    {observationDays} havaintopäivää
-                  </Text>
+                    return (
+                      <View key={hour} style={styles.profileChartColumn}>
+                        <View style={styles.profileChartBarArea}>
+                          <View
+                            style={[
+                              styles.profileChartBar,
+                              { backgroundColor: barColor, height: barHeight },
+                              isHighest && styles.profileChartBarHighest,
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.profileChartHourLabel}>
+                          {String(hour).padStart(2, "0")}
+                        </Text>
+                      </View>
+                    );
+                  })}
                 </View>
-              );
-            })}
-          </View>
+                <Text style={styles.profileChartToggleText}>
+                  {showHourlyDetails
+                    ? "Piilota tuntikohtaiset tiedot"
+                    : "Näytä tuntikohtaiset tiedot"}
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <Text style={styles.profileEmptyText}>
+              Tuntikohtaisia profiilitietoja ei ole saatavilla.
+            </Text>
+          )}
+
+          {showHourlyDetails && highestProfileHour ? (
+            <View style={styles.profileHourList}>
+              {profileHours.map(({ drop, hour, observationDays }) => {
+                const isHighest = hour === highestProfileHour.hour;
+                const nextHour = (hour + 1) % 24;
+
+                return (
+                  <View
+                    key={hour}
+                    style={[
+                      styles.profileHourRow,
+                      isHighest && styles.profileHourRowHighest,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.profileHourLabel,
+                        isHighest && styles.profileHourTextHighest,
+                      ]}
+                    >
+                      {String(hour).padStart(2, "0")}–
+                      {String(nextHour).padStart(2, "0")}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.profileHourDrop,
+                        isHighest && styles.profileHourTextHighest,
+                      ]}
+                    >
+                      {formatProfileDrop(drop)} °C/h
+                    </Text>
+                    <Text style={styles.profileHourObservations}>
+                      {observationDays} pv
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
         </View>
 
         <Pressable
@@ -1178,36 +1308,115 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  profileChart: {
+    alignItems: "flex-end",
+    flexDirection: "row",
+    height: 84,
+  },
+  profileChartBar: {
+    borderRadius: 3,
+    minHeight: 4,
+    opacity: 0.84,
+    width: "72%",
+  },
+  profileChartBarArea: {
+    alignItems: "center",
+    height: 66,
+    justifyContent: "flex-end",
+    width: "100%",
+  },
+  profileChartBarHighest: {
+    backgroundColor: "#ff5f6d",
+    opacity: 1,
+    shadowColor: "#ff5f6d",
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+  },
+  profileChartButton: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 10,
+    paddingHorizontal: 8,
+    paddingTop: 10,
+  },
+  profileChartButtonPressed: {
+    opacity: 0.72,
+  },
+  profileChartColumn: {
+    alignItems: "center",
+    flex: 1,
+    minWidth: 0,
+  },
+  profileChartHourLabel: {
+    color: "rgba(207,233,255,0.55)",
+    fontSize: 7,
+    fontWeight: "800",
+    lineHeight: 12,
+    textAlign: "center",
+  },
+  profileChartToggleText: {
+    color: "#9fb0d2",
+    fontSize: 11,
+    fontWeight: "900",
+    paddingBottom: 9,
+    textAlign: "center",
+  },
+  profileEmptyText: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 14,
+    textAlign: "center",
+  },
+  profileHighestText: {
+    color: "#d9e9ff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 14,
+  },
   profileHourDrop: {
     color: "#ffffff",
     fontSize: 13,
     fontWeight: "900",
   },
-  profileHourGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 14,
-  },
-  profileHourItem: {
-    backgroundColor: "rgba(255,255,255,0.06)",
+  profileHourList: {
     borderColor: "rgba(255,255,255,0.1)",
     borderRadius: 12,
     borderWidth: 1,
-    flexBasis: "47%",
-    flexGrow: 1,
-    gap: 3,
-    padding: 10,
+    marginTop: 14,
+    overflow: "hidden",
+  },
+  profileHourRow: {
+    alignItems: "center",
+    borderBottomColor: "rgba(255,255,255,0.07)",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "space-between",
+    minHeight: 34,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  profileHourRowHighest: {
+    backgroundColor: "rgba(255,95,109,0.12)",
   },
   profileHourLabel: {
     color: "#8ea4cf",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "900",
+    width: 54,
   },
   profileHourObservations: {
     color: "#8ea4cf",
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "700",
+    textAlign: "right",
+    width: 42,
+  },
+  profileHourTextHighest: {
+    color: "#ff8d98",
   },
   profileMetadata: {
     gap: 8,
