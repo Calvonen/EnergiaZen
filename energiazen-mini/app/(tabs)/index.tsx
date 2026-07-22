@@ -55,6 +55,13 @@ const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
+const storedHeatingPlanColumns =
+  "plan_date,planned_hours,target_hours,reason,mode,updated_at";
+const heatingMarkers = {
+  actual: "\u{1F525}",
+  missed: "\u26A0\uFE0F",
+  planned: "\u2B50",
+} as const;
 
 const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -94,6 +101,15 @@ type StoredElectricityPrice = {
   start_date?: string | null;
   end_date?: string | null;
   price?: number | null;
+};
+
+type StoredHeatingPlan = {
+  mode?: string | null;
+  plan_date?: string | null;
+  planned_hours?: unknown;
+  reason?: string | null;
+  target_hours?: number | null;
+  updated_at?: string | null;
 };
 
 type ElectricityPriceInsert = {
@@ -302,15 +318,15 @@ function getWarmWaterCardTheme() {
 }
 
 function getHeatingMarkerLabel(marker: string | null) {
-  if (marker === "⭐") {
+  if (marker === heatingMarkers.planned) {
     return "Valittu lämmitykseen";
   }
 
-  if (marker === "🔥") {
+  if (marker === heatingMarkers.actual) {
     return "Lämmitys toteutui";
   }
 
-  if (marker === "⚠️") {
+  if (marker === heatingMarkers.missed) {
     return "Suunniteltu, ei toteutunut";
   }
 
@@ -396,6 +412,36 @@ function getChartDayKey(day: DaySelection) {
   }
 
   return getDateKeyOffset(1);
+}
+
+function getDateHourKey(dateKey: string, hour: number) {
+  return `${dateKey}:${String(hour).padStart(2, "0")}`;
+}
+
+function getHourlyPriceDateHourKey(item: HourlyPrice) {
+  return getDateHourKey(
+    getFinnishDateKey(item.startDate),
+    getHelsinkiHourNumber(item.date),
+  );
+}
+
+function formatHelsinkiDateHour(item: HourlyPrice) {
+  return `${getFinnishDateKey(item.startDate)} ${String(
+    getHelsinkiHourNumber(item.date),
+  ).padStart(2, "0")}:00`;
+}
+
+function normalizeStoredHeatingPlanHours(plannedHours: unknown) {
+  if (!Array.isArray(plannedHours)) {
+    return [];
+  }
+
+  return [...new Set(
+    plannedHours.filter(
+      (hour): hour is number =>
+        Number.isInteger(hour) && hour >= 0 && hour <= 23,
+    ),
+  )].sort((first, second) => first - second);
 }
 
 function getHelsinkiDateStartIso(dateKey: string) {
@@ -617,6 +663,9 @@ export default function HomeScreen() {
   >([]);
   const [storedTemperatureDropProfile, setStoredTemperatureDropProfile] =
     useState<TemperatureDropProfile | null>(null);
+  const [storedHeatingPlans, setStoredHeatingPlans] = useState<
+    Record<string, StoredHeatingPlan>
+  >({});
   const [heating, setHeating] = useState(false);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
@@ -805,6 +854,10 @@ export default function HomeScreen() {
     selectedTemperatureDropProfile.profileSource,
   ]);
   const recommendedHeatingHours = heatingRecommendation.hours;
+  const tomorrowTargetHours =
+    settings.heatingNeedMode === "automatic"
+      ? heatingRecommendationForecast.heatingHoursAfterForecast
+      : settings.heatingHoursPerDay;
   const tomorrowPlannedHeatingHours = useMemo(() => {
     const tomorrowKey = getChartDayKey("tomorrow");
 
@@ -813,18 +866,70 @@ export default function HomeScreen() {
         hourlyPrices.filter(
           (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
         ),
-        heatingRecommendation.targetHours,
+        tomorrowTargetHours,
       ),
     );
-  }, [heatingRecommendation.targetHours, hourlyPrices]);
+  }, [hourlyPrices, tomorrowTargetHours]);
   const todayPlanDate = getChartDayKey("today");
   const tomorrowPlanDate = getChartDayKey("tomorrow");
+  const visiblePlanDatesKey = [
+    getChartDayKey("yesterday"),
+    todayPlanDate,
+    tomorrowPlanDate,
+  ].join(",");
   const todayPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
     recommendedHeatingHours.filter((item) => item.status === "planned"),
   ).join(",");
   const tomorrowPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
     tomorrowPlannedHeatingHours,
   ).join(",");
+
+  useEffect(() => {
+    const planDates = visiblePlanDatesKey.split(",");
+    let isActive = true;
+
+    async function loadHeatingPlans() {
+      try {
+        const { data, error } = await supabase
+          .from("heating_plans")
+          .select(storedHeatingPlanColumns)
+          .in("plan_date", planDates);
+
+        if (error) {
+          console.warn("Failed to load heating plans", error);
+          return;
+        }
+
+        if (!isActive) {
+          return;
+        }
+
+        setStoredHeatingPlans((currentPlans) => {
+          const nextPlans = { ...currentPlans };
+
+          for (const planDate of planDates) {
+            delete nextPlans[planDate];
+          }
+
+          for (const plan of (data ?? []) as StoredHeatingPlan[]) {
+            if (plan.plan_date) {
+              nextPlans[plan.plan_date] = plan;
+            }
+          }
+
+          return nextPlans;
+        });
+      } catch (error) {
+        console.warn("Failed to load heating plans", error);
+      }
+    }
+
+    void loadHeatingPlans();
+
+    return () => {
+      isActive = false;
+    };
+  }, [visiblePlanDatesKey]);
 
   useEffect(() => {
     const getHourNumbersFromKey = (key: string) =>
@@ -842,8 +947,11 @@ export default function HomeScreen() {
       mode: settings.heatingNeedMode,
       plan_date: tomorrowPlanDate,
       planned_hours: getHourNumbersFromKey(tomorrowPlannedHourNumbersKey),
-      reason: "Huomisen alustava lämmityssuunnitelma",
-      target_hours: heatingRecommendation.targetHours,
+      reason:
+        settings.heatingNeedMode === "automatic"
+          ? `Lämpötilaennusteen mukainen alustava lämmityssuunnitelma → ${tomorrowTargetHours} h`
+          : `Käytössä kiinteä tuntimäärä ${settings.heatingHoursPerDay} h/vrk.`,
+      target_hours: tomorrowTargetHours,
       updated_at: updatedAt,
     };
 
@@ -855,7 +963,14 @@ export default function HomeScreen() {
 
         if (error) {
           console.warn("Failed to save heating plans", error);
+          return;
         }
+
+        setStoredHeatingPlans((currentPlans) => ({
+          ...currentPlans,
+          [todayPlanDate]: todayPlan,
+          [tomorrowPlanDate]: tomorrowPlan,
+        }));
       } catch (error) {
         console.warn("Failed to save heating plans", error);
       }
@@ -866,10 +981,12 @@ export default function HomeScreen() {
     heatingRecommendation.reason,
     heatingRecommendation.targetHours,
     settings.heatingNeedMode,
+    settings.heatingHoursPerDay,
     todayPlanDate,
     todayPlannedHourNumbersKey,
     tomorrowPlanDate,
     tomorrowPlannedHourNumbersKey,
+    tomorrowTargetHours,
   ]);
   const selectedHeatingHoursCount = useMemo(() => {
     if (selectedDay === "yesterday") {
@@ -905,33 +1022,137 @@ export default function HomeScreen() {
     (item) =>
       getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
   );
+  useEffect(() => {
+    debugLog("Heating mode debug", {
+      activeHeatingMode:
+        settings.heatingNeedMode === "fixed"
+          ? "fixed/manual"
+          : "temperature-based/forecast",
+      heatingNeedMode: settings.heatingNeedMode,
+      settingsHeatingHoursPerDay: settings.heatingHoursPerDay,
+      temperatureDropProfileAffectsForecast:
+        settings.heatingNeedMode === "automatic" &&
+        heatingRecommendationForecast.nextHeatingStart !== null &&
+        currentWeightedTemperature !== null,
+      temperatureDropProfileBypassReason:
+        settings.heatingNeedMode === "fixed"
+          ? "fixed/manual mode uses heatingHoursPerDay and bypasses forecast"
+          : heatingRecommendationForecast.nextHeatingStart === null
+            ? "forecast mode has no future heating start"
+            : currentWeightedTemperature === null
+              ? "forecast mode has no current weighted tank temperature"
+              : null,
+      tomorrowTargetHours,
+      tomorrowTargetHoursSource:
+        settings.heatingNeedMode === "automatic"
+          ? "temperature forecast"
+          : "fixed heatingHoursPerDay setting",
+    });
+  }, [
+    currentWeightedTemperature,
+    heatingRecommendationForecast.nextHeatingStart,
+    settings.heatingHoursPerDay,
+    settings.heatingNeedMode,
+    tomorrowTargetHours,
+  ]);
+  const currentSavedPlan = storedHeatingPlans[chartDayKey] ?? null;
   const plannedHeatingHourIds = useMemo(() => {
-    if (selectedDay === "yesterday") {
-      return new Set<string>();
-    }
-
-    const plannedHours =
-      selectedDay === "today"
-        ? recommendedHeatingHours.filter((item) => item.status === "planned")
-        : tomorrowPlannedHeatingHours;
-
-    return new Set(plannedHours.map((item) => item.id));
-  }, [recommendedHeatingHours, selectedDay, tomorrowPlannedHeatingHours]);
-  const missedHeatingHourIds = useMemo(() => {
-    if (selectedDay !== "today") {
-      return new Set<string>();
-    }
+    const plannedHours = normalizeStoredHeatingPlanHours(
+      currentSavedPlan?.planned_hours,
+    );
 
     return new Set(
-      recommendedHeatingHours
-        .filter((item) => item.status === "missed")
-        .map((item) => item.id),
+      plannedHours.map((hour) => getDateHourKey(chartDayKey, hour)),
     );
-  }, [recommendedHeatingHours, selectedDay]);
-  const heatedHourNumbers = useMemo(
-    () => new Set(actualHeatingHours[selectedDay] ?? []),
-    [actualHeatingHours, selectedDay],
+  }, [chartDayKey, currentSavedPlan?.planned_hours]);
+  const heatedHourIds = useMemo(
+    () =>
+      new Set(
+        (actualHeatingHours[selectedDay] ?? []).map((hour) =>
+          getDateHourKey(chartDayKey, hour),
+        ),
+      ),
+    [actualHeatingHours, chartDayKey, selectedDay],
   );
+  const missedHeatingHourIds = useMemo(
+    () =>
+      new Set(
+        selectedDay === "today"
+          ? chartHourlyPrices
+              .filter((item) => {
+                const dateHourKey = getHourlyPriceDateHourKey(item);
+
+                return (
+                  plannedHeatingHourIds.has(dateHourKey) &&
+                  !heatedHourIds.has(dateHourKey) &&
+                  item.endDate.getTime() <= currentHourStart.getTime()
+                );
+              })
+              .map(getHourlyPriceDateHourKey)
+          : [],
+      ),
+    [
+      chartHourlyPrices,
+      currentHourStart,
+      heatedHourIds,
+      plannedHeatingHourIds,
+      selectedDay,
+    ],
+  );
+  const chartHeatingMarkers = useMemo(
+    () =>
+      chartHourlyPrices
+        .map((item) => {
+          const dateHourKey = getHourlyPriceDateHourKey(item);
+          const isInCurrentSavedPlan =
+            plannedHeatingHourIds.has(dateHourKey);
+          const marker = heatedHourIds.has(dateHourKey)
+            ? heatingMarkers.actual
+            : missedHeatingHourIds.has(dateHourKey)
+              ? heatingMarkers.missed
+              : isInCurrentSavedPlan
+                ? heatingMarkers.planned
+                : null;
+          const markerSource = heatedHourIds.has(dateHourKey)
+            ? "actualHeatingHours"
+            : missedHeatingHourIds.has(dateHourKey)
+              ? "missedHeatingHourIds + Supabase heating_plans"
+              : isInCurrentSavedPlan
+                ? "plannedHeatingHourIds + Supabase heating_plans"
+                : null;
+
+          return {
+            chartDateKey: chartDayKey,
+            dateHourKey,
+            helsinkiDateHour: formatHelsinkiDateHour(item),
+            isInCurrentSavedPlan,
+            itemId: item.id,
+            marker,
+            markerSource,
+          };
+        })
+        .filter((item) => item.marker !== null),
+    [
+      chartDayKey,
+      chartHourlyPrices,
+      heatedHourIds,
+      missedHeatingHourIds,
+      plannedHeatingHourIds,
+    ],
+  );
+  useEffect(() => {
+    for (const item of chartHeatingMarkers) {
+      debugLog("Heating marker debug", {
+        chartDateKey: item.chartDateKey,
+        dateHourKey: item.dateHourKey,
+        helsinkiDateHour: item.helsinkiDateHour,
+        isInCurrentSavedPlan: item.isInCurrentSavedPlan,
+        itemId: item.itemId,
+        marker: item.marker,
+        markerSource: item.markerSource,
+      });
+    }
+  }, [chartHeatingMarkers]);
   const isHeatingNow = recommendedHeatingHours.some(
     (item) =>
       item.date.getTime() <= currentHourStart.getTime() &&
@@ -1613,16 +1834,15 @@ export default function HomeScreen() {
                           const isCheapest = cheapestHour?.id === item.id;
                           const isSelected =
                             selectedHourlyPrice?.id === item.id;
+                          const dateHourKey = getHourlyPriceDateHourKey(item);
                           const isHeatedHour =
-                            heatedHourNumbers.has(
-                              getHelsinkiHourNumber(item.date),
-                            );
+                            heatedHourIds.has(dateHourKey);
                           const heatingMarker = isHeatedHour
-                            ? "🔥"
-                            : missedHeatingHourIds.has(item.id)
-                              ? "⚠️"
-                              : plannedHeatingHourIds.has(item.id)
-                                ? "⭐"
+                            ? heatingMarkers.actual
+                            : missedHeatingHourIds.has(dateHourKey)
+                              ? heatingMarkers.missed
+                              : plannedHeatingHourIds.has(dateHourKey)
+                                ? heatingMarkers.planned
                                 : null;
                           const heatingMarkerLabel =
                             getHeatingMarkerLabel(heatingMarker);
