@@ -17,6 +17,11 @@ import {
   fetchAllHeatingHistory,
 } from "@/lib/heatingHistory";
 import {
+  createHeatingOptimizationSettings,
+  HeatingOptimizationHour,
+  optimizeHeatingPlan,
+} from "@/lib/heatingOptimizer";
+import {
   DaySelection,
   getCheapestHours,
   getDateKeyOffset,
@@ -54,6 +59,7 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
+const fallbackHeatingGainPerHour = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
@@ -353,13 +359,19 @@ function normalizePriceToCents(value: number) {
   return value < 1 ? value * 100 : value;
 }
 
-function getSortedUniqueHelsinkiHourNumbers(prices: HourlyPrice[]) {
+function getSortedUniqueHelsinkiHourNumbers(
+  prices: Pick<HourlyPrice, "date">[],
+) {
   return [...new Set(prices.map((item) => getHelsinkiHourNumber(item.date)))]
     .sort((a, b) => a - b);
 }
 
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
+}
+
+function formatSignedFinnishDecimal(value: number) {
+  return formatFinnishDecimal(value);
 }
 
 function formatHourLabel(date: Date) {
@@ -425,7 +437,9 @@ function getHourlyPriceDateHourKey(item: HourlyPrice) {
   );
 }
 
-function formatHelsinkiDateHour(item: HourlyPrice) {
+function formatHelsinkiDateHour(
+  item: Pick<HourlyPrice, "date" | "startDate">,
+) {
   return `${getFinnishDateKey(item.startDate)} ${String(
     getHelsinkiHourNumber(item.date),
   ).padStart(2, "0")}:00`;
@@ -442,6 +456,20 @@ function normalizeStoredHeatingPlanHours(plannedHours: unknown) {
         Number.isInteger(hour) && hour >= 0 && hour <= 23,
     ),
   )].sort((first, second) => first - second);
+}
+
+function isStoredHeatingPlanNewerOrSame(
+  incomingPlan: StoredHeatingPlan,
+  currentPlan: StoredHeatingPlan | undefined,
+) {
+  if (!currentPlan?.updated_at || !incomingPlan.updated_at) {
+    return true;
+  }
+
+  return (
+    new Date(incomingPlan.updated_at).getTime() >=
+    new Date(currentPlan.updated_at).getTime()
+  );
 }
 
 function getHelsinkiDateStartIso(dateKey: string) {
@@ -666,6 +694,7 @@ export default function HomeScreen() {
   const [storedHeatingPlans, setStoredHeatingPlans] = useState<
     Record<string, StoredHeatingPlan>
   >({});
+  const storedHeatingPlansRef = useRef(storedHeatingPlans);
   const [heating, setHeating] = useState(false);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
@@ -676,6 +705,9 @@ export default function HomeScreen() {
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    storedHeatingPlansRef.current = storedHeatingPlans;
+  }, [storedHeatingPlans]);
   const currentHourStart = startOfCurrentHour(currentTime);
   const chartDayKey = getChartDayKey(selectedDay);
   const chartHourlyPrices = useMemo(
@@ -872,16 +904,162 @@ export default function HomeScreen() {
   }, [hourlyPrices, tomorrowTargetHours]);
   const todayPlanDate = getChartDayKey("today");
   const tomorrowPlanDate = getChartDayKey("tomorrow");
+  const oldTodayPlannedHeatingHours = useMemo(
+    () => recommendedHeatingHours.filter((item) => item.status === "planned"),
+    [recommendedHeatingHours],
+  );
+  const optimizerHours = useMemo<HeatingOptimizationHour[]>(() => {
+    const todayKey = getChartDayKey("today");
+    const tomorrowKey = getChartDayKey("tomorrow");
+
+    return sortHoursChronologically(
+      hourlyPrices.filter((item) => {
+        const dateKey = getFinnishDateKey(item.startDate);
+
+        return (
+          (dateKey === todayKey &&
+            item.endDate.getTime() > currentHourStart.getTime()) ||
+          dateKey === tomorrowKey
+        );
+      }),
+    ).map((item) => ({
+      date: item.date,
+      endDate: item.endDate,
+      id: item.id,
+      price: item.price,
+      startDate: item.startDate,
+    }));
+  }, [currentHourStart, hourlyPrices]);
+  const heatingOptimization = useMemo(() => {
+    if (
+      settings.heatingNeedMode !== "automatic" ||
+      currentWeightedTemperature === null ||
+      optimizerHours.length === 0
+    ) {
+      return null;
+    }
+
+    return optimizeHeatingPlan({
+      currentWeightedTemperature,
+      hourlyDrops: hourlyTemperatureDropProfile,
+      hours: optimizerHours,
+      settings: createHeatingOptimizationSettings(
+        settings,
+        fallbackHeatingGainPerHour,
+      ),
+      tankReadings: tankTemperatureHistory,
+    });
+  }, [
+    currentWeightedTemperature,
+    hourlyTemperatureDropProfile,
+    optimizerHours,
+    settings,
+    tankTemperatureHistory,
+  ]);
+  const optimizerSelectedHeatingHourIds = useMemo(
+    () => new Set(heatingOptimization?.selectedHeatingHourIds ?? []),
+    [heatingOptimization?.selectedHeatingHourIds],
+  );
+  const optimizerSelectedHeatingHours = useMemo(
+    () =>
+      optimizerHours.filter((item) =>
+        optimizerSelectedHeatingHourIds.has(item.id),
+      ),
+    [optimizerHours, optimizerSelectedHeatingHourIds],
+  );
+  const optimizerTodayHeatingHours = useMemo(
+    () =>
+      optimizerSelectedHeatingHours.filter(
+        (item) => getFinnishDateKey(item.startDate) === todayPlanDate,
+      ),
+    [optimizerSelectedHeatingHours, todayPlanDate],
+  );
+  const optimizerTomorrowHeatingHours = useMemo(
+    () =>
+      optimizerSelectedHeatingHours.filter(
+        (item) => getFinnishDateKey(item.startDate) === tomorrowPlanDate,
+      ),
+    [optimizerSelectedHeatingHours, tomorrowPlanDate],
+  );
+  const isOptimizerPlanActive =
+    settings.heatingNeedMode === "automatic" && heatingOptimization !== null;
+  const finalTodayPlannedHeatingHours = isOptimizerPlanActive
+    ? optimizerTodayHeatingHours
+    : oldTodayPlannedHeatingHours;
+  const finalTomorrowPlannedHeatingHours = isOptimizerPlanActive
+    ? optimizerTomorrowHeatingHours
+    : tomorrowPlannedHeatingHours;
+  const finalTargetHours = isOptimizerPlanActive
+    ? optimizerSelectedHeatingHours.length
+    : heatingRecommendation.targetHours;
+  const finalTomorrowTargetHours = isOptimizerPlanActive
+    ? optimizerSelectedHeatingHours.length
+    : tomorrowTargetHours;
+  const optimizerReason = heatingOptimization
+    ? [
+        `Optimointi valitsi ${optimizerSelectedHeatingHours.length} h yhteiselle aikaikkunalle.`,
+        `Tänään ${optimizerTodayHeatingHours.length} h, huomenna ${optimizerTomorrowHeatingHours.length} h.`,
+        `Alin ennustettu suihkuvaraus ${formatSignedFinnishDecimal(
+          heatingOptimization.minimumPredictedShowersLeft,
+        )}.`,
+        `Lämmityksen nousuarvio ${formatSignedFinnishDecimal(
+          heatingOptimization.heatingGainEstimate.gainPerHour,
+        )} °C/h.`,
+        heatingOptimization.heatingGainEstimate.fallbackUsed
+          ? "Nousuarviossa käytettiin fallback-arvoa."
+          : "Nousuarvio laskettiin historiasta.",
+      ].join(" ")
+    : null;
+  useEffect(() => {
+    debugLog("Heating optimizer debug", {
+      optimizerHeatingGainEstimate:
+        heatingOptimization?.heatingGainEstimate ?? null,
+      optimizerHours: optimizerHours.map((item) => ({
+        helsinkiDateHour: formatHelsinkiDateHour(item),
+        id: item.id,
+        price: item.price,
+      })),
+      optimizerMinimumPredictedShowersLeft:
+        heatingOptimization?.minimumPredictedShowersLeft ?? null,
+      optimizerSelectedHeatingHourIds:
+        heatingOptimization?.selectedHeatingHourIds ?? [],
+      optimizerSelectedHourCount:
+        heatingOptimization?.selectedHeatingHourIds.length ?? 0,
+      optimizerTodayHours: optimizerTodayHeatingHours.map((item) => ({
+        helsinkiDateHour: formatHelsinkiDateHour(item),
+        id: item.id,
+      })),
+      optimizerTomorrowHours: optimizerTomorrowHeatingHours.map((item) => ({
+        helsinkiDateHour: formatHelsinkiDateHour(item),
+        id: item.id,
+      })),
+      oldTodayHours: oldTodayPlannedHeatingHours.map((item) => ({
+        helsinkiDateHour: formatHelsinkiDateHour(item),
+        id: item.id,
+      })),
+      oldTomorrowHours: tomorrowPlannedHeatingHours.map((item) => ({
+        helsinkiDateHour: formatHelsinkiDateHour(item),
+        id: item.id,
+      })),
+    });
+  }, [
+    heatingOptimization,
+    oldTodayPlannedHeatingHours,
+    optimizerHours,
+    optimizerTodayHeatingHours,
+    optimizerTomorrowHeatingHours,
+    tomorrowPlannedHeatingHours,
+  ]);
   const visiblePlanDatesKey = [
     getChartDayKey("yesterday"),
     todayPlanDate,
     tomorrowPlanDate,
   ].join(",");
   const todayPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
-    recommendedHeatingHours.filter((item) => item.status === "planned"),
+    finalTodayPlannedHeatingHours,
   ).join(",");
   const tomorrowPlannedHourNumbersKey = getSortedUniqueHelsinkiHourNumbers(
-    tomorrowPlannedHeatingHours,
+    finalTomorrowPlannedHeatingHours,
   ).join(",");
 
   useEffect(() => {
@@ -913,9 +1091,32 @@ export default function HomeScreen() {
 
           for (const plan of (data ?? []) as StoredHeatingPlan[]) {
             if (plan.plan_date) {
-              nextPlans[plan.plan_date] = plan;
+              const currentPlan = nextPlans[plan.plan_date];
+
+              if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
+                nextPlans[plan.plan_date] = plan;
+              }
             }
           }
+
+          debugLog("Heating plans loaded into local state", {
+            loadedPlans: (data ?? []).map((plan) => ({
+              plan_date: plan.plan_date,
+              planned_hours: normalizeStoredHeatingPlanHours(
+                plan.planned_hours,
+              ),
+              target_hours: plan.target_hours,
+              updated_at: plan.updated_at,
+            })),
+            storedHeatingPlansAfterLoad: planDates.map((planDate) => ({
+              plan_date: planDate,
+              planned_hours: normalizeStoredHeatingPlanHours(
+                nextPlans[planDate]?.planned_hours,
+              ),
+              target_hours: nextPlans[planDate]?.target_hours ?? null,
+              updated_at: nextPlans[planDate]?.updated_at ?? null,
+            })),
+          });
 
           return nextPlans;
         });
@@ -932,6 +1133,15 @@ export default function HomeScreen() {
   }, [visiblePlanDatesKey]);
 
   useEffect(() => {
+    if (settings.heatingNeedMode === "automatic" && !heatingOptimization) {
+      debugLog("Heating plan save skipped until optimizer is ready", {
+        currentWeightedTemperature,
+        optimizerHourCount: optimizerHours.length,
+        optimizerSelectedHeatingHourIds: [],
+      });
+      return;
+    }
+
     const getHourNumbersFromKey = (key: string) =>
       key.length === 0 ? [] : key.split(",").map(Number);
     const updatedAt = new Date().toISOString();
@@ -939,8 +1149,8 @@ export default function HomeScreen() {
       mode: settings.heatingNeedMode,
       plan_date: todayPlanDate,
       planned_hours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
-      reason: heatingRecommendation.reason,
-      target_hours: heatingRecommendation.targetHours,
+      reason: optimizerReason ?? heatingRecommendation.reason,
+      target_hours: finalTargetHours,
       updated_at: updatedAt,
     };
     const tomorrowPlan = {
@@ -948,18 +1158,38 @@ export default function HomeScreen() {
       plan_date: tomorrowPlanDate,
       planned_hours: getHourNumbersFromKey(tomorrowPlannedHourNumbersKey),
       reason:
-        settings.heatingNeedMode === "automatic"
-          ? `Lämpötilaennusteen mukainen alustava lämmityssuunnitelma → ${tomorrowTargetHours} h`
-          : `Käytössä kiinteä tuntimäärä ${settings.heatingHoursPerDay} h/vrk.`,
-      target_hours: tomorrowTargetHours,
+        optimizerReason ??
+        (settings.heatingNeedMode === "automatic"
+          ? `Lämpötilaennusteen mukainen alustava lämmityssuunnitelma → ${finalTomorrowTargetHours} h`
+          : `Käytössä kiinteä tuntimäärä ${settings.heatingHoursPerDay} h/vrk.`),
+      target_hours: finalTomorrowTargetHours,
       updated_at: updatedAt,
     };
+    const upsertPayload = [todayPlan, tomorrowPlan];
+
+    debugLog("Heating plan upsert payload debug", {
+      optimizerSelectedHeatingHourIds:
+        heatingOptimization?.selectedHeatingHourIds ?? [],
+      optimizerSelectedHourCount:
+        heatingOptimization?.selectedHeatingHourIds.length ?? 0,
+      reasonToday: todayPlan.reason,
+      reasonTomorrow: tomorrowPlan.reason,
+      storedHeatingPlansBeforeUpsert: {
+        [todayPlanDate]:
+          storedHeatingPlansRef.current[todayPlanDate] ?? null,
+        [tomorrowPlanDate]:
+          storedHeatingPlansRef.current[tomorrowPlanDate] ?? null,
+      },
+      supabaseUpsertPayload: upsertPayload,
+      todayPlanPlannedHours: todayPlan.planned_hours,
+      tomorrowPlanPlannedHours: tomorrowPlan.planned_hours,
+    });
 
     async function saveHeatingPlans() {
       try {
         const { error } = await supabase
           .from("heating_plans")
-          .upsert([todayPlan, tomorrowPlan], { onConflict: "plan_date" });
+          .upsert(upsertPayload, { onConflict: "plan_date" });
 
         if (error) {
           console.warn("Failed to save heating plans", error);
@@ -971,6 +1201,16 @@ export default function HomeScreen() {
           [todayPlanDate]: todayPlan,
           [tomorrowPlanDate]: tomorrowPlan,
         }));
+        debugLog("Heating plans stored locally after upsert", {
+          optimizerSelectedHeatingHourIds:
+            heatingOptimization?.selectedHeatingHourIds ?? [],
+          storedHeatingPlansAfterUpsert: {
+            [todayPlanDate]: todayPlan,
+            [tomorrowPlanDate]: tomorrowPlan,
+          },
+          todayPlanPlannedHours: todayPlan.planned_hours,
+          tomorrowPlanPlannedHours: tomorrowPlan.planned_hours,
+        });
       } catch (error) {
         console.warn("Failed to save heating plans", error);
       }
@@ -978,15 +1218,19 @@ export default function HomeScreen() {
 
     saveHeatingPlans();
   }, [
+    currentWeightedTemperature,
     heatingRecommendation.reason,
-    heatingRecommendation.targetHours,
+    heatingOptimization,
+    finalTargetHours,
+    finalTomorrowTargetHours,
+    optimizerReason,
+    optimizerHours.length,
     settings.heatingNeedMode,
     settings.heatingHoursPerDay,
     todayPlanDate,
     todayPlannedHourNumbersKey,
     tomorrowPlanDate,
     tomorrowPlannedHourNumbersKey,
-    tomorrowTargetHours,
   ]);
   const selectedHeatingHoursCount = useMemo(() => {
     if (selectedDay === "yesterday") {
@@ -994,18 +1238,16 @@ export default function HomeScreen() {
     }
 
     return selectedDay === "today"
-      ? recommendedHeatingHours.length
-      : tomorrowPlannedHeatingHours.length;
+      ? finalTodayPlannedHeatingHours.length
+      : finalTomorrowPlannedHeatingHours.length;
   }, [
-    recommendedHeatingHours.length,
+    finalTodayPlannedHeatingHours.length,
+    finalTomorrowPlannedHeatingHours.length,
     selectedDay,
     settings.heatingHoursPerDay,
-    tomorrowPlannedHeatingHours.length,
   ]);
   const todayActualHeatingHoursCount = actualHeatingHours.today?.length ?? 0;
-  const remainingPlannedHeatingHoursCount = recommendedHeatingHours.filter(
-    (item) => item.status === "planned",
-  ).length;
+  const remainingPlannedHeatingHoursCount = finalTodayPlannedHeatingHours.length;
   const showSeparatedTodayHeatingHours =
     selectedDay === "today" &&
     settings.heatingNeedMode === "automatic" &&
