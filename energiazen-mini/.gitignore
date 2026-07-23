@@ -36,6 +36,7 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 .tmp-forecast-tests/
+.tmp-optimizer-simulator/
 
 app-example
 

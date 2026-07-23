@@ -5,6 +5,7 @@
   "scripts": {
     "start": "expo start",
     "test": "tsc -p tsconfig.forecast-tests.json && node .tmp-forecast-tests/scripts/run-tank-temperature-forecast-tests.js",
+    "simulate:heating": "tsc -p tsconfig.optimizer-simulator.json && node .tmp-optimizer-simulator/scripts/simulateHeatingOptimizer.js",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",

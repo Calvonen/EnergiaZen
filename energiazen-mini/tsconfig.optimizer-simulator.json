@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": ".tmp-optimizer-simulator",
+    "strict": true,
+    "target": "es2020"
+  },
+  "include": [
+    "lib/heatingOptimizer.ts",
+    "lib/tankTemperatureForecast.ts",
+    "scripts/simulateHeatingOptimizer.ts"
+  ]
+}
