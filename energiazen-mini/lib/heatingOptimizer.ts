@@ -24,7 +24,7 @@ export type HeatingOptimizationSettings = {
 export type HeatingOptimizationSettingsSource = {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
-  heatingHoursPerDay: number;
+  automaticMaxHeatingHours: number;
   minTankTemperature: number;
   safetyShowerReserve: number;
   targetShowerReserve: number;
@@ -230,7 +230,7 @@ export function createHeatingOptimizationSettings(
     fallbackHeatingGainPerHour,
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
     fullTankShowers: settings.fullTankShowers,
-    maxHeatingHours: settings.heatingHoursPerDay,
+    maxHeatingHours: settings.automaticMaxHeatingHours,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
   };

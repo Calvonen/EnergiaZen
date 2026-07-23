@@ -4,6 +4,11 @@ import {
   defaultTargetShowerReserve,
   normalizeStoredShowerReserves,
 } from "./showerReserveSettings";
+import {
+  defaultAutomaticMaxHeatingHours,
+  defaultFixedHeatingHoursPerDay,
+  normalizeStoredHeatingHours,
+} from "./heatingHourSettings";
 
 export { normalizeStoredShowerReserves } from "./showerReserveSettings";
 
@@ -16,7 +21,8 @@ export const defaultSettings = {
   heatingNeedMode: "automatic" as HeatingNeedMode,
   fallbackEnabled: true,
   backupHours: [2, 3, 4],
-  heatingHoursPerDay: 3,
+  automaticMaxHeatingHours: defaultAutomaticMaxHeatingHours,
+  fixedHeatingHoursPerDay: defaultFixedHeatingHoursPerDay,
   priceDifferenceThresholdCents: 2,
   minTankTemperature: 10,
   maxTankTemperature: 70,
@@ -30,7 +36,8 @@ export type EnergiaZenSettings = typeof defaultSettings;
 
 export type EditableSettingKey =
   | "tankSizeLiters"
-  | "heatingHoursPerDay"
+  | "automaticMaxHeatingHours"
+  | "fixedHeatingHoursPerDay"
   | "fullTankShowers"
   | "targetShowerReserve"
   | "safetyShowerReserve"
@@ -41,7 +48,8 @@ export const settingsStorageKey = "energiazen:settings";
 
 const editableSettingRanges = {
   tankSizeLiters: { max: 1000, min: 50 },
-  heatingHoursPerDay: { max: 6, min: 1 },
+  automaticMaxHeatingHours: { max: 6, min: 1 },
+  fixedHeatingHoursPerDay: { max: 6, min: 1 },
   fullTankShowers: { max: 10, min: 3 },
   targetShowerReserve: { max: 10, min: 0.5 },
   safetyShowerReserve: { max: 9.5, min: 0 },
@@ -60,6 +68,7 @@ function clampSettingValue(key: EditableSettingKey, value: number) {
 }
 
 type LegacySettings = Partial<EnergiaZenSettings> & {
+  heatingHoursPerDay?: number;
   minimumShowersBeforeExpensiveTomorrow?: number;
   showersAtMaxTemperature?: number;
   tankVolumeLiters?: number;
@@ -92,6 +101,7 @@ export function normalizeSettings(
         ),
       ].sort((a, b) => a - b)
     : defaultSettings.backupHours;
+  const heatingHours = normalizeStoredHeatingHours(settings);
 
   return {
     heatingNeedMode:
@@ -104,10 +114,7 @@ export function normalizeSettings(
         : defaultSettings.fallbackEnabled,
     backupHours:
       backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
-    heatingHoursPerDay:
-      typeof settings.heatingHoursPerDay === "number"
-        ? clampSettingValue("heatingHoursPerDay", settings.heatingHoursPerDay)
-        : defaultSettings.heatingHoursPerDay,
+    ...heatingHours,
     priceDifferenceThresholdCents:
       typeof settings.priceDifferenceThresholdCents === "number"
         ? Math.min(

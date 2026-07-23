@@ -23,6 +23,7 @@ import {
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
 import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
+import { getHeatingModeSettingKeys } from "@/lib/heatingModeSettings";
 import {
   fetchLatestTemperatureDropProfile,
   getTemperatureDropProfileHours,
@@ -70,7 +71,12 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     options: [200, 250, 290, 300, 500],
     unit: "l",
   },
-  heatingHoursPerDay: {
+  automaticMaxHeatingHours: {
+    max: 6,
+    min: 1,
+    unit: "h",
+  },
+  fixedHeatingHoursPerDay: {
     max: 6,
     min: 1,
     unit: "h / vrk",
@@ -205,7 +211,15 @@ export default function SettingsScreen() {
   }, []);
 
   const settingsSections = useMemo(
-    (): SettingsSection[] => [
+    (): SettingsSection[] => {
+      const heatingModeSettingKeys = new Set(
+        getHeatingModeSettingKeys(settings.heatingNeedMode),
+      );
+      const showAutomaticSettings = heatingModeSettingKeys.has(
+        "targetShowerReserve",
+      );
+
+      return [
       {
         title: "Varaajan perusasetukset",
         rows: [
@@ -247,16 +261,10 @@ export default function SettingsScreen() {
       },
       {
         title: "Pörssisähkön ohjausasetukset",
-        rows: [
-          {
-            accent: "#54eaa0",
-            key: "heatingHoursPerDay",
-            label: "Lämmitystarve h/vrk",
-            value: `${settings.heatingHoursPerDay} h / vrk`,
-          },
-        ],
+        rows: [],
       },
-      {
+      ...(showAutomaticSettings
+        ? [{
         title: "Lämminvesivaraus",
         rows: [
           {
@@ -275,9 +283,31 @@ export default function SettingsScreen() {
             label: "Turvaraja suihkuina",
             value: `${settings.safetyShowerReserve} suihkua`,
           },
+          {
+            accent: "#54eaa0",
+            description:
+              "Optimointi voi käyttää enintään tämän määrän lämmitystunteja tarkasteluikkunan aikana. Todellinen tuntimäärä määräytyy varaajan ennusteen mukaan.",
+            key: "automaticMaxHeatingHours",
+            label: "Lämmitystuntien enimmäismäärä",
+            value: `${settings.automaticMaxHeatingHours} h`,
+          },
         ],
-      },
-    ],
+      } as SettingsSection]
+        : [{
+            title: "Kiinteä lämmitys",
+            rows: [
+              {
+                accent: "#54eaa0",
+                description:
+                  "Varaajaa lämmitetään joka vuorokausi tämän määrän verran vuorokauden halvimmilla tunneilla.",
+                key: "fixedHeatingHoursPerDay",
+                label: "Lämmitystunnit vuorokaudessa",
+                value: `${settings.fixedHeatingHoursPerDay} h / vrk`,
+              },
+            ],
+          } as SettingsSection]),
+    ];
+    },
     [settings],
   );
   const settingsRows = settingsSections.flatMap((section) => section.rows);
@@ -604,7 +634,7 @@ export default function SettingsScreen() {
                 <View style={styles.modeSettingGroup}>
                   <View style={styles.modeSettingHeader}>
                     <Text style={styles.settingLabel}>
-                      Lämmitystarpeen määritys
+                      Lämmitystila
                     </Text>
                     <Text style={styles.settingDescription}>
                       Automaattinen säätää lämmitystunteja varaajan

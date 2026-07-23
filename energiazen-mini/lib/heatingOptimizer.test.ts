@@ -85,7 +85,7 @@ export function runHeatingOptimizerUnitTests() {
       {
         fullTankAverageTemperature: 70,
         fullTankShowers: 6,
-        heatingHoursPerDay: 3,
+        automaticMaxHeatingHours: 3,
         minTankTemperature: 10,
         safetyShowerReserve: 2,
         targetShowerReserve: 4,

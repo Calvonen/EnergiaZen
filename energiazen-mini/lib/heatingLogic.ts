@@ -3,6 +3,7 @@ import {
   defaultTankTemperature,
   EnergiaZenSettings,
 } from "@/lib/settings";
+import { selectRemainingFixedHeatingHours } from "@/lib/fixedHeatingPlan";
 
 const maintenanceHeatingHours = 1;
 
@@ -32,7 +33,7 @@ export function getEffectiveHeatingHours(
   tankTemperature = defaultTankTemperature,
 ) {
   return Math.min(
-    settings.heatingHoursPerDay,
+    settings.automaticMaxHeatingHours,
     getTemperatureBasedHeatingNeed(tankTemperature).hours,
   );
 }
@@ -69,8 +70,8 @@ export function getHeatingNeedFromShowers(
     return {
       fillRatio,
       hours: Math.min(
-        settings.heatingHoursPerDay,
-        settings.heatingHoursPerDay,
+        settings.automaticMaxHeatingHours,
+        settings.automaticMaxHeatingHours,
       ),
       reason: "Varaus alle 60 % → täysi lämmitystarve",
     };
@@ -79,7 +80,7 @@ export function getHeatingNeedFromShowers(
   if (fillRatio < 0.85) {
     return {
       fillRatio,
-      hours: Math.min(settings.heatingHoursPerDay, 2),
+      hours: Math.min(settings.automaticMaxHeatingHours, 2),
       reason: "Varaus 60–84 % → enintään 2 h lämmitys",
     };
   }
@@ -87,7 +88,7 @@ export function getHeatingNeedFromShowers(
   if (fillRatio < 0.95) {
     return {
       fillRatio,
-      hours: Math.min(settings.heatingHoursPerDay, 1),
+      hours: Math.min(settings.automaticMaxHeatingHours, 1),
       reason: "Varaus 85–94 % → enintään 1 h lämmitys",
     };
   }
@@ -251,8 +252,8 @@ export function selectHeatingRecommendation(
   const { effectiveHeatingHours, heatingReason } =
     isFixedHeatingNeed
       ? {
-          effectiveHeatingHours: settings.heatingHoursPerDay,
-          heatingReason: `Kiinteä lämmitystarve → ${settings.heatingHoursPerDay} h päivän halvimmilla tunneilla`,
+          effectiveHeatingHours: settings.fixedHeatingHoursPerDay,
+          heatingReason: `Kiinteä lämmitys ${settings.fixedHeatingHoursPerDay} h/vrk vuorokauden halvimmilla tunneilla.`,
         }
       : {
           effectiveHeatingHours: automaticEffectiveHeatingHours,
@@ -294,7 +295,7 @@ export function selectHeatingRecommendation(
   const remainingHeatingNeed = Math.max(
     effectiveHeatingHours -
       completedTodayHours.length -
-      missedPlannedTodayHours.length,
+      (isFixedHeatingNeed ? 0 : missedPlannedTodayHours.length),
     0,
   );
   const toPlanHours = (selectedHours: HourlyPrice[]) => {
@@ -345,10 +346,12 @@ export function selectHeatingRecommendation(
   if (isFixedHeatingNeed) {
     return {
       hours: toPlanHours(
-        getCheapestHours(
-          futureCandidates(remainingTodayPrices),
-          remainingHeatingNeed,
-        ),
+        selectRemainingFixedHeatingHours({
+          completedHeatingHours: completedTodayHours.length,
+          fixedHeatingHoursPerDay: settings.fixedHeatingHoursPerDay,
+          hours: futureCandidates(remainingTodayPrices),
+          now: currentHourStart,
+        }),
       ),
       realizedHours: completedTodayHours.length,
       reason: heatingReason,

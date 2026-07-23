@@ -825,7 +825,7 @@ export default function HomeScreen() {
     const heatingHoursAfterForecast = getForecastHeatingHours({
       currentHeatingHours: heatingHoursBeforeForecast.targetHours,
       predictedTemperature: predictedWeightedTemperature,
-      settingsHeatingHoursPerDay: settings.heatingHoursPerDay,
+      settingsHeatingHoursPerDay: settings.automaticMaxHeatingHours,
     });
     const recommendation = selectHeatingRecommendation(
       hourlyPrices,
@@ -889,7 +889,11 @@ export default function HomeScreen() {
   const tomorrowTargetHours =
     settings.heatingNeedMode === "automatic"
       ? heatingRecommendationForecast.heatingHoursAfterForecast
-      : settings.heatingHoursPerDay;
+      : settings.fixedHeatingHoursPerDay;
+  const configuredHeatingHours =
+    settings.heatingNeedMode === "automatic"
+      ? settings.automaticMaxHeatingHours
+      : settings.fixedHeatingHoursPerDay;
   const tomorrowPlannedHeatingHours = useMemo(() => {
     const tomorrowKey = getChartDayKey("tomorrow");
 
@@ -998,6 +1002,7 @@ export default function HomeScreen() {
   const optimizerReason = heatingOptimization
     ? [
         `Optimointi valitsi ${optimizerSelectedHeatingHours.length} h yhteiselle aikaikkunalle.`,
+        `Lämmitystuntien enimmäismäärä ${settings.automaticMaxHeatingHours} h.`,
         `Tänään ${optimizerTodayHeatingHours.length} h, huomenna ${optimizerTomorrowHeatingHours.length} h.`,
         `Alin ennustettu suihkuvaraus ${formatSignedFinnishDecimal(
           heatingOptimization.minimumPredictedShowersLeft,
@@ -1165,7 +1170,7 @@ export default function HomeScreen() {
         optimizerReason ??
         (settings.heatingNeedMode === "automatic"
           ? `Lämpötilaennusteen mukainen alustava lämmityssuunnitelma → ${finalTomorrowTargetHours} h`
-          : `Käytössä kiinteä tuntimäärä ${settings.heatingHoursPerDay} h/vrk.`),
+          : `Kiinteä lämmitys ${settings.fixedHeatingHoursPerDay} h/vrk vuorokauden halvimmilla tunneilla.`),
       target_hours: finalTomorrowTargetHours,
       updated_at: updatedAt,
     };
@@ -1230,7 +1235,7 @@ export default function HomeScreen() {
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,
-    settings.heatingHoursPerDay,
+    settings.fixedHeatingHoursPerDay,
     todayPlanDate,
     todayPlannedHourNumbersKey,
     tomorrowPlanDate,
@@ -1238,7 +1243,7 @@ export default function HomeScreen() {
   ]);
   const selectedHeatingHoursCount = useMemo(() => {
     if (selectedDay === "yesterday") {
-      return settings.heatingHoursPerDay;
+      return configuredHeatingHours;
     }
 
     return selectedDay === "today"
@@ -1248,7 +1253,7 @@ export default function HomeScreen() {
     finalTodayPlannedHeatingHours.length,
     finalTomorrowPlannedHeatingHours.length,
     selectedDay,
-    settings.heatingHoursPerDay,
+    configuredHeatingHours,
   ]);
   const todayActualHeatingHoursCount = actualHeatingHours.today?.length ?? 0;
   const remainingPlannedHeatingHoursCount = finalTodayPlannedHeatingHours.length;
@@ -1257,7 +1262,7 @@ export default function HomeScreen() {
     settings.heatingNeedMode === "automatic" &&
     todayActualHeatingHoursCount > 0;
   const explanationVisible =
-    selectedHeatingHoursCount !== settings.heatingHoursPerDay;
+    selectedHeatingHoursCount !== configuredHeatingHours;
   const forecastHeatingHours =
     heatingRecommendationForecast.heatingHoursAfterForecast;
   const forecastHeatingDuration =
@@ -1275,14 +1280,14 @@ export default function HomeScreen() {
           ? "fixed/manual"
           : "temperature-based/forecast",
       heatingNeedMode: settings.heatingNeedMode,
-      settingsHeatingHoursPerDay: settings.heatingHoursPerDay,
+      configuredHeatingHours,
       temperatureDropProfileAffectsForecast:
         settings.heatingNeedMode === "automatic" &&
         heatingRecommendationForecast.nextHeatingStart !== null &&
         currentWeightedTemperature !== null,
       temperatureDropProfileBypassReason:
         settings.heatingNeedMode === "fixed"
-          ? "fixed/manual mode uses heatingHoursPerDay and bypasses forecast"
+          ? "fixed/manual mode uses fixedHeatingHoursPerDay and bypasses forecast"
           : heatingRecommendationForecast.nextHeatingStart === null
             ? "forecast mode has no future heating start"
             : currentWeightedTemperature === null
@@ -1292,12 +1297,12 @@ export default function HomeScreen() {
       tomorrowTargetHoursSource:
         settings.heatingNeedMode === "automatic"
           ? "temperature forecast"
-          : "fixed heatingHoursPerDay setting",
+          : "fixedHeatingHoursPerDay setting",
     });
   }, [
     currentWeightedTemperature,
     heatingRecommendationForecast.nextHeatingStart,
-    settings.heatingHoursPerDay,
+    configuredHeatingHours,
     settings.heatingNeedMode,
     tomorrowTargetHours,
   ]);
@@ -2239,25 +2244,38 @@ export default function HomeScreen() {
                     <Text style={styles.heatingPlanInfoText}>
                       {showSeparatedTodayHeatingHours ? (
                         <>
-                          Asetettu lämmitystarve on {settings.heatingHoursPerDay}{" "}
-                          h / vrk.{"\n"}
+                          {settings.heatingNeedMode === "automatic"
+                            ? "Lämmitystuntien enimmäismäärä"
+                            : "Kiinteä lämmitys"}{" "}
+                          on {configuredHeatingHours} h / vrk.{"\n"}
                           Toteutunut {todayActualHeatingHoursCount} h, jäljellä{" "}
                           {remainingPlannedHeatingHoursCount} h.
                         </>
                       ) : (
                         <>
-                          Asetettu lämmitystarve on {settings.heatingHoursPerDay}{" "}
-                          h / vrk, mutta suunnitelmaan valittiin{" "}
+                          {settings.heatingNeedMode === "automatic"
+                            ? "Lämmitystuntien enimmäismäärä"
+                            : "Kiinteä lämmitys"}{" "}
+                          on {configuredHeatingHours} h / vrk, mutta suunnitelmaan valittiin{" "}
                           {selectedHeatingHoursCount} h.
                         </>
                       )}
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      Lämpötilaennusteen perusteella varaaja tarvitsee{" "}
-                      {forecastHeatingDuration} lämmitystä ennen seuraavaa{" "}
-                      lämmityskertaa. {tomorrowPricesAvailable
-                        ? "Tunnit valittiin tämän ja huomisen halvimpien hintojen perusteella."
-                        : "Huomisen hintoja ei ole vielä saatavilla, joten tunnit valittiin tältä päivältä."}
+                      {settings.heatingNeedMode === "fixed" ? (
+                        <>
+                          Kiinteä lämmitys {settings.fixedHeatingHoursPerDay} h/vrk{" "}
+                          vuorokauden halvimmilla tunneilla.
+                        </>
+                      ) : (
+                        <>
+                          Lämpötilaennusteen perusteella varaaja tarvitsee{" "}
+                          {forecastHeatingDuration} lämmitystä ennen seuraavaa{" "}
+                          lämmityskertaa. {tomorrowPricesAvailable
+                            ? "Tunnit valittiin tämän ja huomisen halvimpien hintojen perusteella."
+                            : "Huomisen hintoja ei ole vielä saatavilla, joten tunnit valittiin tältä päivältä."}
+                        </>
+                      )}
                     </Text>
                   </View>
                 ) : null}
