@@ -44,6 +44,49 @@ export function runHeatingPlanPresentationUnitTests() {
     "valittujen tuntien maara naytetaan luonnollisesti",
   );
   assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      selectedHours: [
+        { label: "15–16", period: "Huomenna", price: 0.9 },
+      ],
+    }).selectedHours,
+    [{ label: "15–16 · 0,9 c/kWh", period: "Huomenna", price: 0.9 }],
+    "yhden valitun tunnin hinta naytetaan tunnin perassa",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      selectedHours: [
+        { label: "15–16", period: "Huomenna", price: 0.9 },
+        { label: "16–17", period: "Huomenna", price: 1 },
+      ],
+    }).selectedHours.map((hour) => hour.label),
+    ["15–16 · 0,9 c/kWh", "16–17 · 1,0 c/kWh"],
+    "usean valitun tunnin hinnat naytetaan aikajarjestyksessa",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      selectedHours: [
+        { label: "03–04", period: "Tänään", price: 12.34 },
+      ],
+    }).selectedHours[0].label,
+    "03–04 · 12,3 c/kWh",
+    "hinta muotoillaan suomalaisella desimaalipilkulla ja yhdella desimaalilla",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      selectedHours: [
+        { label: "04–05", period: "Tänään", price: null },
+        { label: "05–06", period: "Tänään" },
+        { label: "06–07", period: "Tänään", price: Number.NaN },
+      ],
+    }).selectedHours.map((hour) => hour.label),
+    ["04–05", "05–06", "06–07"],
+    "puuttuvaa hintaa ei korvata virheellisella nolla-arvolla",
+  );
+  assertEqual(
     {
       statusSummary: standard.statusSummary,
     },

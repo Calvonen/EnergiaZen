@@ -16,12 +16,21 @@ export type HeatingPlanPresentation = {
   selectedHours: {
     label: string;
     period: "Huomenna" | "Tänään";
+    price?: number | null;
   }[];
   statusSummary: string;
 };
 
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
+}
+
+function formatHeatingHourPrice(price: number | null | undefined) {
+  if (typeof price !== "number" || !Number.isFinite(price)) {
+    return null;
+  }
+
+  return `${formatFinnishDecimal(price)} c/kWh`;
 }
 
 export function buildHeatingPlanPresentation({
@@ -104,7 +113,14 @@ export function buildHeatingPlanPresentation({
     limitsSummary: `Tavoite ${targetShowerReserve} suihkua · turvaraja ${safetyShowerReserve} suihkua`,
     reason,
     reasonKind,
-    selectedHours,
+    selectedHours: selectedHours.map((hour) => {
+      const priceLabel = formatHeatingHourPrice(hour.price);
+
+      return {
+        ...hour,
+        label: priceLabel ? `${hour.label} · ${priceLabel}` : hour.label,
+      };
+    }),
     statusSummary,
   };
 }

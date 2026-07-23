@@ -1106,6 +1106,7 @@ export default function HomeScreen() {
         getFinnishDateKey(hour.startDate) === todayPlanDate
           ? ("Tänään" as const)
           : ("Huomenna" as const),
+      price: hour.price,
     }));
     const finalShowers =
       heatingOptimization.forecast[
