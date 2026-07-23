@@ -1,0 +1,133 @@
+export type HeatingPlanReasonKind =
+  | "early-for-safety"
+  | "fallback"
+  | "fixed"
+  | "max-hours-insufficient"
+  | "no-heating"
+  | "standard";
+
+export type HeatingPlanPresentation = {
+  emptyPlanLabel: string | null;
+  forecastSummary: string;
+  heatingSummary: string | null;
+  limitsSummary: string;
+  reason: string;
+  reasonKind: HeatingPlanReasonKind;
+  selectedHours: {
+    label: string;
+    period: "Huomenna" | "Tänään";
+  }[];
+  statusSummary: string;
+};
+
+function formatFinnishDecimal(value: number) {
+  return value.toFixed(1).replace(".", ",");
+}
+
+export function buildHeatingPlanPresentation({
+  automaticMaxHeatingHours,
+  cheaperPlanRejectedForSafety,
+  currentShowers,
+  forecastEndLabel,
+  fallbackInUse,
+  finalShowers,
+  fixedHeatingHoursPerDay,
+  heatingNeedMode,
+  minimumShowers,
+  planValid,
+  safetyShowerReserve,
+  selectedHours,
+  targetShowerReserve,
+}: {
+  automaticMaxHeatingHours: number;
+  cheaperPlanRejectedForSafety: boolean;
+  currentShowers: number | null;
+  fallbackInUse: boolean;
+  finalShowers: number;
+  fixedHeatingHoursPerDay: number;
+  forecastEndLabel: string;
+  heatingNeedMode: "automatic" | "fixed";
+  minimumShowers: number;
+  planValid: boolean;
+  safetyShowerReserve: number;
+  selectedHours: HeatingPlanPresentation["selectedHours"];
+  targetShowerReserve: number;
+}): HeatingPlanPresentation {
+  let reasonKind: HeatingPlanReasonKind;
+  let reason: string;
+
+  if (fallbackInUse) {
+    reasonKind = "fallback";
+    reason =
+      "Pörssisähköohjaus ei voinut muodostaa kelvollista suunnitelmaa, joten käytetään valittuja varakäyttötunteja.";
+  } else if (heatingNeedMode === "fixed") {
+    reasonKind = "fixed";
+    reason = `Kiinteä lämmitys ${fixedHeatingHoursPerDay} h/vrk vuorokauden halvimmilla tunneilla.`;
+  } else if (!planValid) {
+    reasonKind = "max-hours-insufficient";
+    reason = `Tavoitevarausta ei saavuteta asetetulla enintään ${automaticMaxHeatingHours} tunnin lämmityksellä. Valittu suunnitelma on paras mahdollinen käytettävissä olevilla tunneilla.`;
+  } else if (selectedHours.length === 0) {
+    reasonKind = "no-heating";
+    reason =
+      "Nykyinen lämminvesivaraus riittää turvarajan yläpuolella pysymiseen ja tavoite saavutetaan ilman lisälämmitystä.";
+  } else if (cheaperPlanRejectedForSafety) {
+    reasonKind = "early-for-safety";
+    reason =
+      "Lämmitys aloitetaan aikaisemmin, koska myöhempään odottaminen alittaisi turvarajan.";
+  } else {
+    reasonKind = "standard";
+    reason =
+      "Halvin suunnitelma, jolla turvaraja säilyy ja tavoite saavutetaan.";
+  }
+
+  const safetyReserveMet = minimumShowers >= safetyShowerReserve;
+  const targetReserveMet = finalShowers >= targetShowerReserve;
+  const statusSummary =
+    safetyReserveMet && targetReserveMet
+      ? "Tavoite ja turvaraja täyttyvät"
+      : safetyReserveMet
+        ? "Turvaraja täyttyy, mutta tavoitetta ei saavuteta"
+        : targetReserveMet
+          ? "Tavoite saavutetaan, mutta turvaraja ei täyty"
+          : "Tavoitetta eikä turvarajaa saavuteta";
+  const currentShowersLabel =
+    currentShowers === null ? "--" : formatFinnishDecimal(currentShowers);
+
+  return {
+    emptyPlanLabel:
+      selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
+    forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowers)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
+    heatingSummary:
+      selectedHours.length === 0
+        ? null
+        : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
+    limitsSummary: `Tavoite ${targetShowerReserve} suihkua · turvaraja ${safetyShowerReserve} suihkua`,
+    reason,
+    reasonKind,
+    selectedHours,
+    statusSummary,
+  };
+}
+
+export function hasCheaperSafetyRejectedPlan({
+  rejectedPlans,
+  selectedCost,
+  selectedHourCount,
+}: {
+  rejectedPlans: {
+    cost: number;
+    laterThanSelected: boolean;
+    selectedHourCount: number;
+    violations: string[];
+  }[];
+  selectedCost: number;
+  selectedHourCount: number;
+}) {
+  return rejectedPlans.some(
+    (plan) =>
+      plan.selectedHourCount === selectedHourCount &&
+      plan.cost < selectedCost &&
+      plan.laterThanSelected &&
+      plan.violations.includes("safety shower reserve would be violated"),
+  );
+}

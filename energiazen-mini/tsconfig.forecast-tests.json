@@ -17,6 +17,8 @@
     "lib/tankTemperatureForecast.test.ts",
     "lib/heatingOptimizer.ts",
     "lib/heatingOptimizer.test.ts",
+    "lib/heatingPlanPresentation.ts",
+    "lib/heatingPlanPresentation.test.ts",
     "lib/fixedHeatingPlan.ts",
     "lib/heatingHourSettings.ts",
     "lib/heatingModeSettings.ts",

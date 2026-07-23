@@ -22,6 +22,10 @@ import {
   optimizeHeatingPlan,
 } from "@/lib/heatingOptimizer";
 import {
+  buildHeatingPlanPresentation,
+  hasCheaperSafetyRejectedPlan,
+} from "@/lib/heatingPlanPresentation";
+import {
   DaySelection,
   getCheapestHours,
   getDateKeyOffset,
@@ -376,6 +380,46 @@ function formatSignedFinnishDecimal(value: number) {
 
 function formatHourLabel(date: Date) {
   return `${helsinkiHourFormatter.format(date).replace(".", "")}:00`;
+}
+
+function formatHeatingHourRange(date: Date) {
+  const startHour = getHelsinkiHourNumber(date);
+  const endHour = (startHour + 1) % 24;
+
+  return `${String(startHour).padStart(2, "0")}–${String(endHour).padStart(2, "0")}`;
+}
+
+function getForecastEndLabel({
+  endDate,
+  startDate,
+  todayDateKey,
+  tomorrowDateKey,
+}: {
+  endDate: Date;
+  startDate: string;
+  todayDateKey: string;
+  tomorrowDateKey: string;
+}) {
+  const startDateKey = getFinnishDateKey(startDate);
+
+  if (
+    startDateKey === tomorrowDateKey &&
+    getHelsinkiHourNumber(new Date(startDate)) === 23
+  ) {
+    return "huomenna vuorokauden lopussa";
+  }
+
+  const endTime = helsinkiTimeFormatter.format(endDate).replace(".", ":");
+
+  if (startDateKey === tomorrowDateKey) {
+    return `huomenna klo ${endTime}`;
+  }
+
+  if (startDateKey === todayDateKey) {
+    return `tänään klo ${endTime}`;
+  }
+
+  return `suunnittelujakson päättyessä klo ${endTime}`;
 }
 
 function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
@@ -1019,6 +1063,100 @@ export default function HomeScreen() {
           : "Nousuarvio laskettiin historiasta.",
       ].join(" ")
     : null;
+  const heatingPlanPresentation = useMemo(() => {
+    if (!heatingOptimization || settings.heatingNeedMode !== "automatic") {
+      return null;
+    }
+
+    const pricesById = new Map(
+      optimizerHours.map((hour) => [hour.id, hour.price]),
+    );
+    const startTimesById = new Map(
+      optimizerHours.map((hour) => [hour.id, hour.date.getTime()]),
+    );
+    const firstSelectedStartTime = Math.min(
+      ...heatingOptimization.selectedHeatingHourIds.map(
+        (id) => startTimesById.get(id) ?? Number.POSITIVE_INFINITY,
+      ),
+    );
+    const cheaperPlanRejectedForSafety = hasCheaperSafetyRejectedPlan({
+      rejectedPlans: heatingOptimization.diagnostics.rejectedShifts.map(
+        (rejectedPlan) => ({
+          cost: rejectedPlan.selectedHeatingHourIds.reduce(
+            (sum, id) => sum + (pricesById.get(id) ?? 0),
+            0,
+          ),
+          laterThanSelected:
+            rejectedPlan.selectedHeatingHourIds.length > 0 &&
+            rejectedPlan.selectedHeatingHourIds.every(
+              (id) =>
+                (startTimesById.get(id) ?? Number.NEGATIVE_INFINITY) >
+                firstSelectedStartTime,
+            ),
+          selectedHourCount: rejectedPlan.selectedHeatingHourIds.length,
+          violations: rejectedPlan.reason.split("; "),
+        }),
+      ),
+      selectedCost: heatingOptimization.totalCost,
+      selectedHourCount: heatingOptimization.selectedHeatingHourIds.length,
+    });
+    const optimizerSelectedHourLabels = optimizerSelectedHeatingHours.map((hour) => ({
+      label: formatHeatingHourRange(hour.date),
+      period:
+        getFinnishDateKey(hour.startDate) === todayPlanDate
+          ? ("Tänään" as const)
+          : ("Huomenna" as const),
+    }));
+    const finalShowers =
+      heatingOptimization.forecast[
+        heatingOptimization.forecast.length - 1
+      ]?.showersLeftAfter ?? heatingOptimization.minimumPredictedShowersLeft;
+    const lastForecastHour = optimizerHours[optimizerHours.length - 1];
+    const forecastEndLabel = lastForecastHour
+      ? getForecastEndLabel({
+          endDate: lastForecastHour.endDate,
+          startDate: lastForecastHour.startDate,
+          todayDateKey: todayPlanDate,
+          tomorrowDateKey: tomorrowPlanDate,
+        })
+      : "suunnittelujakson päättyessä";
+    const fallbackInUse =
+      settings.fallbackEnabled &&
+      !heatingOptimization.valid &&
+      heatingOptimization.selectedHeatingHourIds.length === 0;
+    const selectedHours = fallbackInUse
+      ? settings.backupHours.map((hour) => ({
+          label: `${String(hour).padStart(2, "0")}–${String(
+            (hour + 1) % 24,
+          ).padStart(2, "0")}`,
+          period: "Tänään" as const,
+        }))
+      : optimizerSelectedHourLabels;
+
+    return buildHeatingPlanPresentation({
+      automaticMaxHeatingHours: settings.automaticMaxHeatingHours,
+      cheaperPlanRejectedForSafety,
+      currentShowers: warmWaterEstimate?.showersLeft ?? null,
+      forecastEndLabel,
+      fallbackInUse,
+      finalShowers,
+      fixedHeatingHoursPerDay: settings.fixedHeatingHoursPerDay,
+      heatingNeedMode: settings.heatingNeedMode,
+      minimumShowers: heatingOptimization.minimumPredictedShowersLeft,
+      planValid: heatingOptimization.valid,
+      safetyShowerReserve: settings.safetyShowerReserve,
+      selectedHours,
+      targetShowerReserve: settings.targetShowerReserve,
+    });
+  }, [
+    heatingOptimization,
+    optimizerHours,
+    optimizerSelectedHeatingHours,
+    settings,
+    todayPlanDate,
+    tomorrowPlanDate,
+    warmWaterEstimate?.showersLeft,
+  ]);
   useEffect(() => {
     debugLog("Heating optimizer debug", {
       optimizerHeatingGainEstimate:
@@ -2236,7 +2374,55 @@ export default function HomeScreen() {
                   </Text>
                 </View>
 
-                {explanationVisible ? (
+                {heatingPlanPresentation ? (
+                  <View style={styles.heatingPlanInfo}>
+                    <Text style={styles.heatingPlanInfoTitle}>
+                      Lämmityssuunnitelma
+                    </Text>
+                    {heatingPlanPresentation.selectedHours.length > 0 ? (
+                      <View style={styles.heatingPlanHourList}>
+                        {heatingPlanPresentation.selectedHours.map(
+                          (hour, index) => (
+                            <Text
+                              key={`${hour.period}-${hour.label}-${index}`}
+                              style={styles.heatingPlanInfoText}
+                            >
+                              ⭐ {hour.period} {hour.label}
+                            </Text>
+                          ),
+                        )}
+                      </View>
+                    ) : (
+                      <Text style={styles.heatingPlanInfoText}>
+                        {heatingPlanPresentation.emptyPlanLabel}
+                      </Text>
+                    )}
+
+                    <Text style={styles.heatingPlanInfoReason}>
+                      {heatingPlanPresentation.reason}
+                    </Text>
+
+                    <Text style={styles.heatingPlanInfoSubtitle}>
+                      Käytetyt rajat
+                    </Text>
+                    <Text style={styles.heatingPlanInfoText}>
+                      {heatingPlanPresentation.limitsSummary}
+                    </Text>
+
+                    <Text style={styles.heatingPlanInfoSubtitle}>Ennuste</Text>
+                    <Text style={styles.heatingPlanInfoText}>
+                      {heatingPlanPresentation.forecastSummary}
+                    </Text>
+                    {heatingPlanPresentation.heatingSummary ? (
+                      <Text style={styles.heatingPlanInfoReason}>
+                        {heatingPlanPresentation.heatingSummary}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.heatingPlanInfoReason}>
+                      {heatingPlanPresentation.statusSummary}
+                    </Text>
+                  </View>
+                ) : explanationVisible ? (
                   <View style={styles.heatingPlanInfo}>
                     <Text style={styles.heatingPlanInfoTitle}>
                       Lämmityssuunnitelma muuttui
@@ -2372,6 +2558,15 @@ const styles = StyleSheet.create({
     color: "#f7fbff",
     fontSize: 14,
     fontWeight: "900",
+  },
+  heatingPlanInfoSubtitle: {
+    color: "#dffefa",
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  heatingPlanHourList: {
+    gap: 2,
   },
   heatingPlanInfoText: {
     color: "#cfe9ff",
