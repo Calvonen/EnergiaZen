@@ -13,8 +13,10 @@ import {
 
 import { debugLog } from "@/lib/debug";
 import {
+  calculateHeatingEnergyConsumption,
   calculateRealizedHeatingHours,
   fetchAllHeatingHistory,
+  HeatingEnergyConsumptionSummary,
 } from "@/lib/heatingHistory";
 import {
   createHeatingOptimizationSettings,
@@ -746,6 +748,8 @@ export default function HomeScreen() {
     today: [],
     yesterday: [],
   });
+  const [heatingEnergyConsumption, setHeatingEnergyConsumption] =
+    useState<HeatingEnergyConsumptionSummary | null>(null);
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
@@ -1408,6 +1412,12 @@ export default function HomeScreen() {
     forecastHeatingHours === 1
       ? "1 tunnin"
       : `${forecastHeatingHours} tuntia`;
+  const latestHeatingEnergyPeriod =
+    heatingEnergyConsumption?.periods.at(-1) ?? null;
+  const todayEstimatedEnergyKwh =
+    heatingEnergyConsumption?.today_estimated_energy_kwh ?? 0;
+  const latestEstimatedEnergyKwh =
+    latestHeatingEnergyPeriod?.estimated_energy_kwh ?? 0;
   const tomorrowPricesAvailable = hourlyPrices.some(
     (item) =>
       getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
@@ -1633,7 +1643,6 @@ export default function HomeScreen() {
                   .select("created_at,heating")
                   .gte("created_at", startOfYesterdayIso)
                   .lte("created_at", historyEndIso)
-                  .eq("heating", true)
                   .order("created_at", { ascending: true })
                   .range(from, to);
 
@@ -1674,17 +1683,24 @@ export default function HomeScreen() {
             getFinnishDateKey,
             (createdAt) => getHelsinkiHourNumber(new Date(createdAt)),
           );
+          const heatingEnergy = calculateHeatingEnergyConsumption({
+            getDateKey: getFinnishDateKey,
+            readings: heatingHistoryResult.readings,
+            todayKey,
+          });
 
           debugLog("Heating history pagination debug", {
             actualHeatingHours: realizedHeatingHours,
             fetchedPages: heatingHistoryResult.pageCount,
             firstCreatedAt:
               heatingHistoryResult.readings[0]?.created_at ?? null,
+            heatingEnergy,
             lastCreatedAt:
               heatingHistoryResult.readings.at(-1)?.created_at ?? null,
             rowCount: heatingHistoryResult.readings.length,
           });
           setActualHeatingHours(realizedHeatingHours);
+          setHeatingEnergyConsumption(heatingEnergy);
           setStoredTemperatureDropProfile(temperatureDropProfileResult);
 
           if (temperatureHistoryResult.error) {
@@ -1705,6 +1721,7 @@ export default function HomeScreen() {
           setTankTemperatureHistory([]);
           setStoredTemperatureDropProfile(null);
           setHeating(false);
+          setHeatingEnergyConsumption(null);
           setTankUpdatedAt(null);
         } finally {
           if (isActive) {
@@ -2419,6 +2436,14 @@ export default function HomeScreen() {
                         {heatingPlanPresentation.heatingSummary}
                       </Text>
                     ) : null}
+                    <Text style={styles.heatingPlanInfoSubtitle}>
+                      Arvioitu kulutus
+                    </Text>
+                    <Text style={styles.heatingPlanInfoText}>
+                      Tänään {formatFinnishDecimal(todayEstimatedEnergyKwh)} kWh
+                      {" · "}viimeisin jakso{" "}
+                      {formatFinnishDecimal(latestEstimatedEnergyKwh)} kWh
+                    </Text>
                     <Text style={styles.heatingPlanInfoReason}>
                       {heatingPlanPresentation.statusSummary}
                     </Text>
