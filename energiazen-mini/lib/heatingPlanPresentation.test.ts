@@ -64,6 +64,36 @@ export function runHeatingPlanPresentationUnitTests() {
     ["15–16 · 0,9 c/kWh", "16–17 · 1,0 c/kWh"],
     "usean valitun tunnin hinnat naytetaan aikajarjestyksessa",
   );
+  const planWithCosts = buildHeatingPlanPresentation({
+    ...baseInput,
+    selectedHours: [
+      {
+        estimatedCostEuros: 0.2856,
+        label: "15–16",
+        period: "Huomenna",
+        price: 0.9,
+      },
+      {
+        estimatedCostEuros: 0.2886,
+        label: "16–17",
+        period: "Huomenna",
+        price: 1,
+      },
+    ],
+  });
+  assertEqual(
+    planWithCosts.selectedHours.map((hour) => hour.label),
+    [
+      "15–16 · 0,9 c/kWh · n. 0,29 €",
+      "16–17 · 1,0 c/kWh · n. 0,29 €",
+    ],
+    "valitun tunnin arvioitu eurohinta naytetaan spot-hinnan jalkeen",
+  );
+  assertEqual(
+    planWithCosts.planCostSummary,
+    "Suunnitelman arvioitu hinta n. 0,57 €",
+    "suunnitelman arvioitu hinta naytetaan valittujen tuntien summana",
+  );
   assertEqual(
     buildHeatingPlanPresentation({
       ...baseInput,

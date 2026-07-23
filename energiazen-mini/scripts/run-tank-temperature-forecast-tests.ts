@@ -6,10 +6,12 @@ import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.
 import { runHeatingSettingsUnitTests } from "../lib/heatingSettings.test";
 import { runSettingsSectionSummaryUnitTests } from "../lib/settingsSectionSummaries.test";
 import { runHeatingPlanPresentationUnitTests } from "../lib/heatingPlanPresentation.test";
+import { runHeatingEnergyCostUnitTests } from "../lib/heatingEnergyCost.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
   await runHeatingHistoryUnitTests();
+  runHeatingEnergyCostUnitTests();
   runHeatingOptimizerUnitTests();
   runHeatingPlanPresentationUnitTests();
   runHeatingSettingsUnitTests();
@@ -18,7 +20,7 @@ async function runTests() {
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingOptimizer, heatingPlanPresentation, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, heatingOptimizer, heatingPlanPresentation, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

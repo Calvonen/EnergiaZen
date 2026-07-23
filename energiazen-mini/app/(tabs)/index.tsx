@@ -13,6 +13,10 @@ import {
 
 import { debugLog } from "@/lib/debug";
 import {
+  calculateHeatingPeriodCostEuros,
+  calculatePlannedHeatingHourCostEuros,
+} from "@/lib/heatingEnergyCost";
+import {
   calculateHeatingEnergyConsumption,
   calculateRealizedHeatingHours,
   fetchAllHeatingHistory,
@@ -374,6 +378,10 @@ function getSortedUniqueHelsinkiHourNumbers(
 
 function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
+}
+
+function formatFinnishCurrency(value: number) {
+  return value.toFixed(2).replace(".", ",");
 }
 
 function formatSignedFinnishDecimal(value: number) {
@@ -1105,6 +1113,9 @@ export default function HomeScreen() {
       selectedHourCount: heatingOptimization.selectedHeatingHourIds.length,
     });
     const optimizerSelectedHourLabels = optimizerSelectedHeatingHours.map((hour) => ({
+      estimatedCostEuros: calculatePlannedHeatingHourCostEuros({
+        spotPriceCentsPerKwh: hour.price,
+      }),
       label: formatHeatingHourRange(hour.date),
       period:
         getFinnishDateKey(hour.startDate) === todayPlanDate
@@ -1414,10 +1425,15 @@ export default function HomeScreen() {
       : `${forecastHeatingHours} tuntia`;
   const latestHeatingEnergyPeriod =
     heatingEnergyConsumption?.periods.at(-1) ?? null;
-  const todayEstimatedEnergyKwh =
-    heatingEnergyConsumption?.today_estimated_energy_kwh ?? 0;
   const latestEstimatedEnergyKwh =
     latestHeatingEnergyPeriod?.estimated_energy_kwh ?? 0;
+  const latestEstimatedHeatingCostEuros = latestHeatingEnergyPeriod
+    ? calculateHeatingPeriodCostEuros({
+        endedAt: latestHeatingEnergyPeriod.ended_at,
+        priceIntervals: hourlyPrices,
+        startedAt: latestHeatingEnergyPeriod.started_at,
+      })
+    : null;
   const tomorrowPricesAvailable = hourlyPrices.some(
     (item) =>
       getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
@@ -2415,6 +2431,11 @@ export default function HomeScreen() {
                         {heatingPlanPresentation.emptyPlanLabel}
                       </Text>
                     )}
+                    {heatingPlanPresentation.planCostSummary ? (
+                      <Text style={styles.heatingPlanInfoReason}>
+                        {heatingPlanPresentation.planCostSummary}
+                      </Text>
+                    ) : null}
 
                     <Text style={styles.heatingPlanInfoReason}>
                       {heatingPlanPresentation.reason}
@@ -2437,12 +2458,13 @@ export default function HomeScreen() {
                       </Text>
                     ) : null}
                     <Text style={styles.heatingPlanInfoSubtitle}>
-                      Arvioitu kulutus
+                      Viimeisin jakso
                     </Text>
                     <Text style={styles.heatingPlanInfoText}>
-                      Tänään {formatFinnishDecimal(todayEstimatedEnergyKwh)} kWh
-                      {" · "}viimeisin jakso{" "}
                       {formatFinnishDecimal(latestEstimatedEnergyKwh)} kWh
+                      {latestEstimatedHeatingCostEuros === null
+                        ? " · hinta ei saatavilla"
+                        : ` · n. ${formatFinnishCurrency(latestEstimatedHeatingCostEuros)} €`}
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
                       {heatingPlanPresentation.statusSummary}
