@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
@@ -25,6 +25,14 @@ import { supabase } from "@/lib/supabase";
 import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
 import { getHeatingModeSettingKeys } from "@/lib/heatingModeSettings";
 import {
+  getFallbackSettingsSummary,
+  getShowerCalculationSummary,
+  getTankSettingsSummary,
+  getWarmWaterReserveSummary,
+  isWarmWaterReserveSectionVisible,
+  toggleExpandedSection,
+} from "@/lib/settingsSectionSummaries";
+import {
   fetchLatestTemperatureDropProfile,
   getTemperatureDropProfileHours,
   isTemperatureDropProfileFresh,
@@ -44,6 +52,52 @@ type SettingsSection = {
   rows: SettingsRow[];
   title: string;
 };
+
+type CollapsibleSectionKey = "fallback" | "showers" | "tank" | "warmWater";
+
+function CollapsibleSettingsSection({
+  accessibilityLabel,
+  children,
+  expanded,
+  onToggle,
+  summary,
+  title,
+}: {
+  accessibilityLabel: string;
+  children: ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  summary: string;
+  title: string;
+}) {
+  return (
+    <View style={styles.collapsibleSection}>
+      <Pressable
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={onToggle}
+        style={({ pressed }) => [
+          styles.collapsibleSectionHeader,
+          pressed && styles.collapsibleSectionHeaderPressed,
+        ]}
+      >
+        <View style={styles.collapsibleSectionHeaderText}>
+          <Text style={styles.collapsibleSectionTitle}>{title}</Text>
+          <Text numberOfLines={2} style={styles.collapsibleSectionSummary}>
+            {summary}
+          </Text>
+        </View>
+        <Text style={styles.collapsibleSectionChevron}>
+          {expanded ? "⌃" : "⌄"}
+        </Text>
+      </Pressable>
+      {expanded ? (
+        <View style={styles.collapsibleSectionContent}>{children}</View>
+      ) : null}
+    </View>
+  );
+}
 
 type TankReadingCalibrationRow = {
   bottom_temp: number | null;
@@ -193,6 +247,14 @@ export default function SettingsScreen() {
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [showHourlyDetails, setShowHourlyDetails] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<
+    Record<CollapsibleSectionKey, boolean>
+  >({
+    fallback: false,
+    showers: false,
+    tank: false,
+    warmWater: false,
+  });
 
   const loadTemperatureDropProfile = useCallback(async () => {
     setIsProfileLoading(true);
@@ -215,9 +277,9 @@ export default function SettingsScreen() {
       const heatingModeSettingKeys = new Set(
         getHeatingModeSettingKeys(settings.heatingNeedMode),
       );
-      const showAutomaticSettings = heatingModeSettingKeys.has(
-        "targetShowerReserve",
-      );
+      const showAutomaticSettings =
+        heatingModeSettingKeys.has("targetShowerReserve") &&
+        isWarmWaterReserveSectionVisible(settings.heatingNeedMode);
 
       return [
       {
@@ -243,7 +305,11 @@ export default function SettingsScreen() {
         ],
       },
       {
-        title: "Suihkulaskennan asetukset",
+        title: "Pörssisähkön ohjausasetukset",
+        rows: [],
+      },
+      {
+        title: "Suihkulaskenta",
         rows: [
           {
             accent: "#ff9b30",
@@ -258,10 +324,6 @@ export default function SettingsScreen() {
             value: `${settings.fullTankShowers} suihkua`,
           },
         ],
-      },
-      {
-        title: "Pörssisähkön ohjausasetukset",
-        rows: [],
       },
       ...(showAutomaticSettings
         ? [{
@@ -311,6 +373,27 @@ export default function SettingsScreen() {
     [settings],
   );
   const settingsRows = settingsSections.flatMap((section) => section.rows);
+  const getCollapsibleSectionDetails = (title: string) => {
+    switch (title) {
+      case "Varaajan perusasetukset":
+        return {
+          key: "tank" as const,
+          summary: getTankSettingsSummary(settings),
+        };
+      case "Suihkulaskenta":
+        return {
+          key: "showers" as const,
+          summary: getShowerCalculationSummary(settings.fullTankShowers),
+        };
+      case "Lämminvesivaraus":
+        return {
+          key: "warmWater" as const,
+          summary: getWarmWaterReserveSummary(settings),
+        };
+      default:
+        return null;
+    }
+  };
 
   const selectedRow = settingsRows.find(
     (row) => row.key === selectedSettingKey,
@@ -627,9 +710,9 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.settingsCard}>
-          {settingsSections.map((section) => (
-            <View key={section.title} style={styles.settingsSection}>
-              <Text style={styles.sectionLabel}>{section.title}</Text>
+          {settingsSections.map((section) => {
+            const sectionContent = (
+              <>
               {section.title === "Pörssisähkön ohjausasetukset" ? (
                 <View style={styles.modeSettingGroup}>
                   <View style={styles.modeSettingHeader}>
@@ -760,10 +843,51 @@ export default function SettingsScreen() {
                   </View>
                 );
               })}
-            </View>
-          ))}
-          <View style={styles.settingsSection}>
-            <Text style={styles.sectionLabel}>Varakäyttö</Text>
+              </>
+            );
+            const collapsibleDetails = getCollapsibleSectionDetails(
+              section.title,
+            );
+
+            if (collapsibleDetails) {
+              const { key, summary } = collapsibleDetails;
+
+              return (
+                <CollapsibleSettingsSection
+                  accessibilityLabel={`${section.title}, ${expandedSections[key] ? "sulje" : "avaa"}`}
+                  expanded={expandedSections[key]}
+                  key={section.title}
+                  onToggle={() =>
+                    setExpandedSections((current) =>
+                      toggleExpandedSection(current, key),
+                    )
+                  }
+                  summary={summary}
+                  title={section.title}
+                >
+                  {sectionContent}
+                </CollapsibleSettingsSection>
+              );
+            }
+
+            return (
+              <View key={section.title} style={styles.settingsSection}>
+                <Text style={styles.sectionLabel}>{section.title}</Text>
+                {sectionContent}
+              </View>
+            );
+          })}
+          <CollapsibleSettingsSection
+            accessibilityLabel={`Varakäyttö, ${expandedSections.fallback ? "sulje" : "avaa"}`}
+            expanded={expandedSections.fallback}
+            onToggle={() =>
+              setExpandedSections((current) =>
+                toggleExpandedSection(current, "fallback"),
+              )
+            }
+            summary={getFallbackSettingsSummary(settings)}
+            title="Varakäyttö"
+          >
             <View style={styles.fallbackHeader}>
               <View style={styles.settingTextGroup}>
                 <Text style={styles.settingLabel}>
@@ -820,7 +944,7 @@ export default function SettingsScreen() {
                 );
               })}
             </View>
-          </View>
+          </CollapsibleSettingsSection>
         </View>
 
         <View style={styles.profileCard}>
@@ -1157,6 +1281,56 @@ const styles = StyleSheet.create({
   settingsSection: {
     marginBottom: 10,
     paddingBottom: 8,
+  },
+  collapsibleSection: {
+    backgroundColor: "rgba(255,255,255,0.035)",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 16,
+    borderWidth: 1,
+    marginVertical: 6,
+    overflow: "hidden",
+  },
+  collapsibleSectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  collapsibleSectionHeaderPressed: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  collapsibleSectionHeaderText: {
+    flex: 1,
+    gap: 5,
+  },
+  collapsibleSectionTitle: {
+    color: "#d9e9ff",
+    fontSize: 14,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  collapsibleSectionSummary: {
+    color: "#8ea4cf",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+  },
+  collapsibleSectionChevron: {
+    color: "#36f4d4",
+    fontSize: 24,
+    fontWeight: "900",
+    lineHeight: 26,
+    textAlign: "center",
+    width: 28,
+  },
+  collapsibleSectionContent: {
+    borderTopColor: "rgba(255,255,255,0.1)",
+    borderTopWidth: 1,
+    paddingHorizontal: 14,
+    paddingTop: 4,
   },
   sectionLabel: {
     color: "#8ea4cf",

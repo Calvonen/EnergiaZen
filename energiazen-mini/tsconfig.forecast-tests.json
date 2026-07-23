@@ -23,6 +23,8 @@
     "lib/heatingSettings.test.ts",
     "lib/showerReserveSettings.ts",
     "lib/showerReserveSettings.test.ts",
+    "lib/settingsSectionSummaries.ts",
+    "lib/settingsSectionSummaries.test.ts",
     "lib/heatingHistory.ts",
     "lib/heatingHistory.test.ts",
     "lib/temperatureDropProfile.ts",
