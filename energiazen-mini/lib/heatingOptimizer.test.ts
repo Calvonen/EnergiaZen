@@ -4,6 +4,7 @@ import {
   HeatingOptimizationHour,
   HeatingOptimizationSettings,
   optimizeHeatingPlan,
+  simulateHeatingPlan,
 } from "./heatingOptimizer";
 import { HourlyTemperatureDropProfile, TankTemperatureReading } from "./tankTemperatureForecast";
 
@@ -59,7 +60,8 @@ function defaultSettings(
     fullTankAverageTemperature: 70,
     fullTankShowers: 6,
     maxHeatingHours: 1,
-    minimumShowerReserve: 3,
+    safetyShowerReserve: 3,
+    targetShowerReserve: 3,
     ...overrides,
   };
 }
@@ -85,13 +87,14 @@ export function runHeatingOptimizerUnitTests() {
         fullTankShowers: 6,
         heatingHoursPerDay: 3,
         minTankTemperature: 10,
-        minimumShowersBeforeExpensiveTomorrow: 4,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 4,
       },
       8,
     );
 
     assertEqual(
-      settings.minimumShowerReserve,
+      settings.targetShowerReserve,
       4,
       "optimizer kayttaa nykyista vahimmaisvaraus suihkuina -asetusta",
     );
@@ -134,7 +137,10 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-23", 1, 5),
         optimizationHour("2026-07-23", 2, 1),
       ],
-      settings: defaultSettings({ minimumShowerReserve: 3.1 }),
+      settings: defaultSettings({
+        safetyShowerReserve: 3.1,
+        targetShowerReserve: 3.1,
+      }),
     });
 
     assertEqual(
@@ -186,7 +192,8 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-22", 14, 1),
       ],
       settings: defaultSettings({
-        minimumShowerReserve: 2,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 2,
       }),
     });
     const reserve3 = optimizeHeatingPlan({
@@ -199,7 +206,7 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-22", 14, 1),
       ],
       settings: defaultSettings({
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
 
@@ -226,33 +233,13 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-22", 14, 1),
       ],
       settings: defaultSettings({
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
-    const explicitMargin = optimizeHeatingPlan({
-      currentWeightedTemperature: 40,
-      heatingGainPerHour: 10,
-      hourlyDrops: createHourlyDrops(0.2, { 14: 10 }),
-      hours: [
-        optimizationHour("2026-07-22", 12, 10),
-        optimizationHour("2026-07-22", 13, 5),
-        optimizationHour("2026-07-22", 14, 1),
-      ],
-      settings: defaultSettings({
-        minimumShowerReserve: 3,
-        spikeReserveShowers: 1,
-      }),
-    });
-
     assertEqual(
       defaultMargin.spikes[0]?.requiredShowersBefore,
       3,
-      "spikeReserveShowers ei lisa marginaalia oletuksena",
-    );
-    assertEqual(
-      explicitMargin.spikes[0]?.requiredShowersBefore,
-      4,
-      "spikeReserveShowers-arvoa kaytetaan kun se annetaan eksplisiittisesti",
+      "kulutuspiikin diagnostiikka kayttaa turvarajaa ilman erillista kovaa lisavarausta",
     );
   }
 
@@ -267,15 +254,14 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-22", 14, 1),
       ],
       settings: defaultSettings({
-        minimumShowerReserve: 3,
-        spikeReserveShowers: 1,
+        safetyShowerReserve: 3,
       }),
     });
 
     assertEqual(
       result.selectedHeatingHourIds,
-      ["2026-07-22:13"],
-      "suuri kulutuspiikki vaatii lisavarauksen ennen piikkituntia",
+      ["2026-07-22:14"],
+      "turvallisista vaihtoehdoista valitaan halvin myos kulutuspiikin kohdalla",
     );
     assertEqual(result.diagnostics.largestSpike?.hour, 14, "suurin piikki tunnistetaan profiilista");
     if (result.diagnostics.largestSpike) {
@@ -298,7 +284,10 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-23", 1, 1),
         optimizationHour("2026-07-23", 2, 2),
       ],
-      settings: defaultSettings({ minimumShowerReserve: 4.1 }),
+      settings: defaultSettings({
+        safetyShowerReserve: 4.1,
+        targetShowerReserve: 4.1,
+      }),
     });
 
     assertEqual(
@@ -356,7 +345,8 @@ export function runHeatingOptimizerUnitTests() {
       hours: liveLikeHours,
       settings: defaultSettings({
         maxHeatingHours: 3,
-        minimumShowerReserve: 2,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 2,
       }),
     });
     const reserve3 = optimizeHeatingPlan({
@@ -366,7 +356,7 @@ export function runHeatingOptimizerUnitTests() {
       hours: liveLikeHours,
       settings: defaultSettings({
         maxHeatingHours: 3,
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
 
@@ -393,7 +383,10 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-23", 0, 1),
         optimizationHour("2026-07-23", 1, 2),
       ],
-      settings: defaultSettings({ minimumShowerReserve: 5.2 }),
+      settings: defaultSettings({
+        safetyShowerReserve: 5.2,
+        targetShowerReserve: 5.2,
+      }),
     });
 
     assertEqual(
@@ -410,7 +403,7 @@ export function runHeatingOptimizerUnitTests() {
       heatingGainPerHour: 0,
       hourlyDrops: createHourlyDrops(3),
       hours: [optimizationHour("2026-07-22", 12, 1)],
-      settings: defaultSettings({ minimumShowerReserve: 0 }),
+      settings: defaultSettings({ safetyShowerReserve: 0, targetShowerReserve: 0 }),
     });
 
     assertEqual(
@@ -433,7 +426,7 @@ export function runHeatingOptimizerUnitTests() {
       ],
       settings: defaultSettings({
         maxHeatingHours: 4,
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
 
@@ -467,7 +460,7 @@ export function runHeatingOptimizerUnitTests() {
       ],
       settings: defaultSettings({
         maxHeatingHours: 3,
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
 
@@ -500,7 +493,8 @@ export function runHeatingOptimizerUnitTests() {
       ],
       settings: defaultSettings({
         maxHeatingHours: 3,
-        minimumShowerReserve: 5,
+        safetyShowerReserve: 5,
+        targetShowerReserve: 5,
       }),
     });
 
@@ -530,7 +524,7 @@ export function runHeatingOptimizerUnitTests() {
       ],
       settings: defaultSettings({
         maxHeatingHours: 4,
-        minimumShowerReserve: 3,
+        safetyShowerReserve: 3,
       }),
     });
 
@@ -568,6 +562,117 @@ export function runHeatingOptimizerUnitTests() {
       result.diagnostics.selectedPlanCost,
       10,
       "diagnostiikka raportoi valitun suunnitelman hinnan",
+    );
+  }
+
+  {
+    const settings = defaultSettings({
+      maxHeatingHours: 1,
+      safetyShowerReserve: 2,
+      targetShowerReserve: 4,
+    });
+    const result = optimizeHeatingPlan({
+      currentWeightedTemperature: 50,
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(5),
+      hours: [
+        optimizationHour("2026-07-22", 12, 10),
+        optimizationHour("2026-07-22", 13, 1),
+      ],
+      settings,
+    });
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "varaus saa kayda tavoitteen alapuolella ennen halpaa lammitystuntia",
+    );
+    assertClose(
+      result.minimumPredictedShowersLeft,
+      3.5,
+      "tavoitteen alitus ei hylkaa muuten turvallista suunnitelmaa",
+    );
+  }
+
+  {
+    const result = simulateHeatingPlan({
+      currentWeightedTemperature: 30,
+      heatingGainPerHour: 0,
+      hourlyDrops: createHourlyDrops(1),
+      hours: [optimizationHour("2026-07-22", 12, 1)],
+      selectedHeatingHourIds: [],
+      settings: defaultSettings({
+        safetyShowerReserve: 2,
+        targetShowerReserve: 2,
+      }),
+    });
+
+    assertEqual(
+      result.valid,
+      false,
+      "ennustettu varaus ei saa alittaa turvarajaa",
+    );
+    assertEqual(
+      result.violations.includes("safety shower reserve would be violated"),
+      true,
+      "turvarajan alitus raportoidaan",
+    );
+  }
+
+  {
+    const result = optimizeHeatingPlan({
+      currentWeightedTemperature: 50,
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(5),
+      hours: [
+        optimizationHour("2026-07-22", 12, 9),
+        optimizationHour("2026-07-22", 13, 1),
+      ],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 4,
+      }),
+    });
+
+    assertEqual(
+      result.diagnostics.firstValidSelectionCount,
+      1,
+      "yksi tunti valitaan kun se palauttaa tavoitevarauksen",
+    );
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "saman tuntimaaran vaihtoehdoista valitaan halvin",
+    );
+  }
+
+  {
+    const result = optimizeHeatingPlan({
+      currentWeightedTemperature: 50,
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(5),
+      hours: [
+        optimizationHour("2026-07-22", 12, 8),
+        optimizationHour("2026-07-22", 13, 2),
+        optimizationHour("2026-07-22", 14, 1),
+      ],
+      settings: defaultSettings({
+        maxHeatingHours: 3,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 4,
+      }),
+    });
+
+    assertEqual(
+      result.diagnostics.firstValidSelectionCount,
+      2,
+      "kaksi tuntia valitaan kun yksi ei palauta tavoitevarausta",
+    );
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:13", "2026-07-22:14"],
+      "halvin validi kahden tunnin yhdistelma valitaan",
     );
   }
 }

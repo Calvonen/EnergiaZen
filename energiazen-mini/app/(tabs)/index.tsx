@@ -1001,6 +1001,10 @@ export default function HomeScreen() {
         `Tänään ${optimizerTodayHeatingHours.length} h, huomenna ${optimizerTomorrowHeatingHours.length} h.`,
         `Alin ennustettu suihkuvaraus ${formatSignedFinnishDecimal(
           heatingOptimization.minimumPredictedShowersLeft,
+        )}, tavoite ${formatSignedFinnishDecimal(
+          settings.targetShowerReserve,
+        )} ja turvaraja ${formatSignedFinnishDecimal(
+          settings.safetyShowerReserve,
         )}.`,
         `Lämmityksen nousuarvio ${formatSignedFinnishDecimal(
           heatingOptimization.heatingGainEstimate.gainPerHour,

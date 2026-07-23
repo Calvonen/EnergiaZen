@@ -18,9 +18,11 @@ import {
   EditableSettingKey,
   HeatingNeedMode,
   loadSettings,
+  normalizeSettings,
   saveSettings,
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
+import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
 import {
   fetchLatestTemperatureDropProfile,
   getTemperatureDropProfileHours,
@@ -59,6 +61,7 @@ type EditableSettingOption = {
   max?: number;
   min?: number;
   options?: readonly number[];
+  step?: number;
   unit: string;
 };
 
@@ -72,19 +75,21 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     min: 1,
     unit: "h / vrk",
   },
-  priceDifferenceThresholdCents: {
-    max: 10,
-    min: 0,
-    unit: "c/kWh",
-  },
   fullTankShowers: {
     max: 10,
     min: 3,
     unit: "suihkua",
   },
-  minimumShowersBeforeExpensiveTomorrow: {
-    max: 8,
-    min: 1,
+  targetShowerReserve: {
+    max: 10,
+    min: 0.5,
+    step: 0.5,
+    unit: "suihkua",
+  },
+  safetyShowerReserve: {
+    max: 9.5,
+    min: 0,
+    step: 0.5,
     unit: "suihkua",
   },
   maxTankTemperature: {
@@ -249,22 +254,26 @@ export default function SettingsScreen() {
             label: "Lämmitystarve h/vrk",
             value: `${settings.heatingHoursPerDay} h / vrk`,
           },
-          {
-            accent: "#ffcf5a",
-            description:
-              "Kuinka paljon huomisen halvimpien tuntien pitää olla tämän päivän tunteja halvempia, jotta lämmitystä siirretään.",
-            key: "priceDifferenceThresholdCents",
-            label: "Hintarajaero",
-            subheadingBefore: "Lämmityksen siirto huomiselle",
-            value: `${settings.priceDifferenceThresholdCents} c/kWh`,
-          },
+        ],
+      },
+      {
+        title: "Lämminvesivaraus",
+        rows: [
           {
             accent: "#36f4d4",
             description:
-              "Lämmitystä voidaan siirtää huomiseen vain, jos suihkuja on vähintään tämä määrä.",
-            key: "minimumShowersBeforeExpensiveTomorrow",
-            label: "Vähimmäisvaraus suihkuina",
-            value: `${settings.minimumShowersBeforeExpensiveTomorrow} suihkua`,
+              "Optimointi pyrkii pitämään käytettävissä yleensä vähintään tämän määrän suihkuja. Varaus voi hetkellisesti laskea tavoitteen alle, jos edullisia lämmitystunteja on tulossa.",
+            key: "targetShowerReserve",
+            label: "Tavoitevaraus suihkuina",
+            value: `${settings.targetShowerReserve} suihkua`,
+          },
+          {
+            accent: "#ffcf5a",
+            description:
+              "Ennustettu varaus ei saa laskea tämän alle. Jos raja uhkaa alittua, lämmitystä aikaistetaan hinnasta riippumatta.",
+            key: "safetyShowerReserve",
+            label: "Turvaraja suihkuina",
+            value: `${settings.safetyShowerReserve} suihkua`,
           },
         ],
       },
@@ -281,10 +290,29 @@ export default function SettingsScreen() {
     : null;
   const selectedSettingOptions = selectedSetting
     ? selectedSetting.options ??
-      Array.from(
-        { length: selectedSetting.max! - selectedSetting.min! + 1 },
-        (_, index) => selectedSetting.min! + index,
-      )
+      (selectedSettingKey === "targetShowerReserve" ||
+      selectedSettingKey === "safetyShowerReserve"
+        ? getShowerReserveOptions({
+            fullTankShowers: settings.fullTankShowers,
+            safetyShowerReserve: settings.safetyShowerReserve,
+            targetShowerReserve: settings.targetShowerReserve,
+            type:
+              selectedSettingKey === "targetShowerReserve"
+                ? "target"
+                : "safety",
+          })
+        : (() => {
+        const step = selectedSetting.step ?? 1;
+
+        return Array.from(
+          {
+            length:
+              Math.floor((selectedSetting.max! - selectedSetting.min!) / step) +
+              1,
+          },
+          (_, index) => selectedSetting.min! + index * step,
+        );
+      })())
     : [];
 
   useEffect(() => {
@@ -302,8 +330,10 @@ export default function SettingsScreen() {
   }, []);
 
   const saveUpdatedSettings = (updatedSettings: typeof settings) => {
-    setSettings(updatedSettings);
-    saveSettings(updatedSettings).catch(() => undefined);
+    const normalizedSettings = normalizeSettings(updatedSettings);
+
+    setSettings(normalizedSettings);
+    saveSettings(normalizedSettings).catch(() => undefined);
     void (async () => {
       try {
         const { error } = await supabase
@@ -311,8 +341,8 @@ export default function SettingsScreen() {
           .upsert(
             {
               id: 1,
-              backup_hours: updatedSettings.backupHours,
-              fallback_enabled: updatedSettings.fallbackEnabled,
+              backup_hours: normalizedSettings.backupHours,
+              fallback_enabled: normalizedSettings.fallbackEnabled,
               timezone: "Europe/Helsinki",
               updated_at: new Date().toISOString(),
             },

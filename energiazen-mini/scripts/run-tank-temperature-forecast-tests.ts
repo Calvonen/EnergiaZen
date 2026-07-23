@@ -2,15 +2,17 @@ import { runTankTemperatureForecastUnitTests } from "../lib/tankTemperatureForec
 import { runHeatingHistoryUnitTests } from "../lib/heatingHistory.test";
 import { runHeatingOptimizerUnitTests } from "../lib/heatingOptimizer.test";
 import { runTemperatureDropProfileUnitTests } from "../lib/temperatureDropProfile.test";
+import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
   await runHeatingHistoryUnitTests();
   runHeatingOptimizerUnitTests();
+  runShowerReserveSettingsUnitTests();
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingOptimizer and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingOptimizer, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

@@ -204,7 +204,7 @@ function getTodayHeatingReason(
   heatingReason: string,
   tomorrowPriceDifference: number,
   warmWaterCanWait: boolean,
-  minimumShowersBeforeExpensiveTomorrow: number,
+  targetShowerReserve: number,
 ) {
   const priceDifferenceReason =
     tomorrowPriceDifference >= 0
@@ -216,7 +216,7 @@ function getTodayHeatingReason(
         )} snt/kWh kalliimpi`;
   const reserveReason = warmWaterCanWait
     ? "varausta on riittävästi"
-    : `varausta on alle ${minimumShowersBeforeExpensiveTomorrow} suihkua`;
+    : `varausta on alle ${targetShowerReserve} suihkua`;
   const conjunction = warmWaterCanWait ? "ja" : "mutta";
 
   return `${heatingReason}. ${priceDifferenceReason} ${conjunction} ${reserveReason}, joten lämmitys tehdään tänään.`;
@@ -393,7 +393,7 @@ export function selectHeatingRecommendation(
   const warmWaterCanWait =
     showersLeft !== null &&
     Number.isFinite(showersLeft) &&
-    showersLeft >= settings.minimumShowersBeforeExpensiveTomorrow;
+    showersLeft >= settings.targetShowerReserve;
   const tomorrowIsClearlyCheaper =
     averageTodayPrice - averageTomorrowPrice >
     settings.priceDifferenceThresholdCents;
@@ -435,7 +435,7 @@ export function selectHeatingRecommendation(
       heatingReason,
       tomorrowPriceDifference,
       warmWaterCanWait,
-      settings.minimumShowersBeforeExpensiveTomorrow,
+      settings.targetShowerReserve,
     ),
     targetHours: effectiveHeatingHours,
   };

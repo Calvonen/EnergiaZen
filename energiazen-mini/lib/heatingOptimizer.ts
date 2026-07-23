@@ -17,8 +17,8 @@ export type HeatingOptimizationSettings = {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   maxHeatingHours: number;
-  minimumShowerReserve: number;
-  spikeReserveShowers?: number;
+  safetyShowerReserve: number;
+  targetShowerReserve: number;
 };
 
 export type HeatingOptimizationSettingsSource = {
@@ -26,7 +26,8 @@ export type HeatingOptimizationSettingsSource = {
   fullTankShowers: number;
   heatingHoursPerDay: number;
   minTankTemperature: number;
-  minimumShowersBeforeExpensiveTomorrow: number;
+  safetyShowerReserve: number;
+  targetShowerReserve: number;
 };
 
 export type HeatingGainEstimate = {
@@ -230,7 +231,8 @@ export function createHeatingOptimizationSettings(
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
     fullTankShowers: settings.fullTankShowers,
     maxHeatingHours: settings.heatingHoursPerDay,
-    minimumShowerReserve: settings.minimumShowersBeforeExpensiveTomorrow,
+    safetyShowerReserve: settings.safetyShowerReserve,
+    targetShowerReserve: settings.targetShowerReserve,
   };
 }
 
@@ -301,7 +303,7 @@ export function estimateHeatingGainPerHour(
 
 export function detectConsumptionSpikes(
   hourlyDrops: HourlyTemperatureDropProfile,
-  settings: Pick<HeatingOptimizationSettings, "minimumShowerReserve" | "spikeReserveShowers">,
+  settings: Pick<HeatingOptimizationSettings, "safetyShowerReserve">,
 ) {
   const drops = Array.from({ length: 24 }, (_, hour) => hourlyDrops[hour] ?? 0);
   const sortedDrops = [...drops].sort((a, b) => a - b);
@@ -312,16 +314,13 @@ export function detectConsumptionSpikes(
     medianDrop * 1.5,
     upperQuartile + Math.max(upperQuartile - lowerQuartile, 0.1),
   );
-  const reserveMargin = settings.spikeReserveShowers ?? 0;
-
   return drops
     .map((drop, hour): ConsumptionSpike | null =>
       drop > threshold
         ? {
             drop,
             hour,
-            requiredShowersBefore:
-              settings.minimumShowerReserve + reserveMargin,
+            requiredShowersBefore: settings.safetyShowerReserve,
           }
         : null,
     )
@@ -374,9 +373,7 @@ export function simulateHeatingPlan({
       weightedTemperature: temperatureBefore,
     });
     const spike = spikesByHour.get(helsinkiHour) ?? null;
-    const violatedSpikeReserve =
-      spike !== null &&
-      showersLeftBefore < spike.requiredShowersBefore;
+    const violatedSpikeReserve = false;
 
     temperature = temperature - hourlyDrop + heatingGain;
 
@@ -391,22 +388,18 @@ export function simulateHeatingPlan({
       weightedTemperature: temperature,
     });
     const violatedReserve =
-      showersLeftBefore < settings.minimumShowerReserve ||
-      showersLeftAfter < settings.minimumShowerReserve;
+      showersLeftBefore < settings.safetyShowerReserve ||
+      showersLeftAfter < settings.safetyShowerReserve;
     const violatedAbsoluteSafety =
       temperatureBefore < settings.absoluteMinimumTemperature ||
       temperature < settings.absoluteMinimumTemperature;
 
     if (violatedReserve) {
-      violations.add("minimum shower reserve would be violated");
+      violations.add("safety shower reserve would be violated");
     }
 
     if (violatedAbsoluteSafety) {
       violations.add("absolute temperature safety limit would be violated");
-    }
-
-    if (violatedSpikeReserve) {
-      violations.add("reserve before consumption spike would be violated");
     }
 
     if (!largestSpike || (spike && spike.drop > largestSpike.drop)) {
@@ -446,6 +439,14 @@ export function simulateHeatingPlan({
       violatedReserve,
       violatedSpikeReserve,
     });
+  }
+
+  const finalShowersLeft =
+    forecast[forecast.length - 1]?.showersLeftAfter ??
+    minimumPredictedShowersLeft;
+
+  if (finalShowersLeft < settings.targetShowerReserve) {
+    violations.add("target shower reserve would not be restored");
   }
 
   return {

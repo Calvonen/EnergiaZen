@@ -1,4 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  defaultSafetyShowerReserve,
+  defaultTargetShowerReserve,
+  normalizeStoredShowerReserves,
+} from "./showerReserveSettings";
+
+export { normalizeStoredShowerReserves } from "./showerReserveSettings";
 
 export const defaultTankTemperature = 58;
 
@@ -15,7 +22,8 @@ export const defaultSettings = {
   maxTankTemperature: 70,
   fullTankAverageTemperature: 70,
   fullTankShowers: 6,
-  minimumShowersBeforeExpensiveTomorrow: 3,
+  targetShowerReserve: defaultTargetShowerReserve,
+  safetyShowerReserve: defaultSafetyShowerReserve,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
@@ -23,9 +31,9 @@ export type EnergiaZenSettings = typeof defaultSettings;
 export type EditableSettingKey =
   | "tankSizeLiters"
   | "heatingHoursPerDay"
-  | "priceDifferenceThresholdCents"
   | "fullTankShowers"
-  | "minimumShowersBeforeExpensiveTomorrow"
+  | "targetShowerReserve"
+  | "safetyShowerReserve"
   | "maxTankTemperature"
   | "fullTankAverageTemperature";
 
@@ -34,21 +42,25 @@ export const settingsStorageKey = "energiazen:settings";
 const editableSettingRanges = {
   tankSizeLiters: { max: 1000, min: 50 },
   heatingHoursPerDay: { max: 6, min: 1 },
-  priceDifferenceThresholdCents: { max: 10, min: 0 },
   fullTankShowers: { max: 10, min: 3 },
-  minimumShowersBeforeExpensiveTomorrow: { max: 8, min: 1 },
+  targetShowerReserve: { max: 10, min: 0.5 },
+  safetyShowerReserve: { max: 9.5, min: 0 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
 
 function clampSettingValue(key: EditableSettingKey, value: number) {
   const range = editableSettingRanges[key];
-  const roundedValue = Math.round(value);
+  const roundedValue =
+    key === "targetShowerReserve" || key === "safetyShowerReserve"
+      ? Math.round(value * 2) / 2
+      : Math.round(value);
 
   return Math.min(Math.max(roundedValue, range.min), range.max);
 }
 
 type LegacySettings = Partial<EnergiaZenSettings> & {
+  minimumShowersBeforeExpensiveTomorrow?: number;
   showersAtMaxTemperature?: number;
   tankVolumeLiters?: number;
 };
@@ -59,6 +71,17 @@ export function normalizeSettings(
   const tankSizeLiters = settings.tankSizeLiters ?? settings.tankVolumeLiters;
   const fullTankShowers =
     settings.fullTankShowers ?? settings.showersAtMaxTemperature;
+  const normalizedFullTankShowers =
+    typeof fullTankShowers === "number"
+      ? clampSettingValue("fullTankShowers", fullTankShowers)
+      : defaultSettings.fullTankShowers;
+  const showerReserves = normalizeStoredShowerReserves({
+    fullTankShowers: normalizedFullTankShowers,
+    minimumShowersBeforeExpensiveTomorrow:
+      settings.minimumShowersBeforeExpensiveTomorrow,
+    safetyShowerReserve: settings.safetyShowerReserve,
+    targetShowerReserve: settings.targetShowerReserve,
+  });
   const backupHours = Array.isArray(settings.backupHours)
     ? [
         ...new Set(
@@ -87,9 +110,9 @@ export function normalizeSettings(
         : defaultSettings.heatingHoursPerDay,
     priceDifferenceThresholdCents:
       typeof settings.priceDifferenceThresholdCents === "number"
-        ? clampSettingValue(
-            "priceDifferenceThresholdCents",
-            settings.priceDifferenceThresholdCents,
+        ? Math.min(
+            Math.max(Math.round(settings.priceDifferenceThresholdCents), 0),
+            10,
           )
         : defaultSettings.priceDifferenceThresholdCents,
     minTankTemperature: defaultSettings.minTankTemperature,
@@ -97,17 +120,8 @@ export function normalizeSettings(
       typeof tankSizeLiters === "number"
         ? clampSettingValue("tankSizeLiters", tankSizeLiters)
         : defaultSettings.tankSizeLiters,
-    fullTankShowers:
-      typeof fullTankShowers === "number"
-        ? clampSettingValue("fullTankShowers", fullTankShowers)
-        : defaultSettings.fullTankShowers,
-    minimumShowersBeforeExpensiveTomorrow:
-      typeof settings.minimumShowersBeforeExpensiveTomorrow === "number"
-        ? clampSettingValue(
-            "minimumShowersBeforeExpensiveTomorrow",
-            settings.minimumShowersBeforeExpensiveTomorrow,
-          )
-        : defaultSettings.minimumShowersBeforeExpensiveTomorrow,
+    fullTankShowers: normalizedFullTankShowers,
+    ...showerReserves,
     maxTankTemperature:
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
