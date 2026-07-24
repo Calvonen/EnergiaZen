@@ -200,11 +200,32 @@ function buildInputs(scenario: SimulationScenario) {
     fullTankAverageTemperature: scenario.fullTankAverageTemperature,
     fullTankShowers: scenario.fullTankShowers,
     maxHeatingHours: scenario.maxHeatingHours,
+    maxTankTemperature: scenario.fullTankAverageTemperature,
     safetyShowerReserve: scenario.safetyShowerReserve,
     targetShowerReserve: scenario.targetShowerReserve,
   };
 
   return { hourlyDrops, hours, settings };
+}
+
+function getTemperatureInput(scenario: SimulationScenario) {
+  if ("topTemperature" in scenario) {
+    return {
+      currentBottomTemperature: scenario.bottomTemperature,
+      currentTopTemperature: scenario.topTemperature,
+      currentWeightedTemperature: getWeightedTemperature(scenario),
+    };
+  }
+
+  const topTemperature = scenario.fullTankAverageTemperature;
+  const bottomTemperature =
+    (scenario.currentWeightedTemperature - topTemperature * 0.7) / 0.3;
+
+  return {
+    currentBottomTemperature: bottomTemperature,
+    currentTopTemperature: topTemperature,
+    currentWeightedTemperature: scenario.currentWeightedTemperature,
+  };
 }
 
 function formatNumber(value: number) {
@@ -217,8 +238,9 @@ function formatBoolean(value: boolean) {
 
 function runScenario(scenario: SimulationScenario) {
   const { hourlyDrops, hours, settings } = buildInputs(scenario);
+  const temperatureInput = getTemperatureInput(scenario);
   const result = optimizeHeatingPlan({
-    currentWeightedTemperature: getWeightedTemperature(scenario),
+    ...temperatureInput,
     heatingGainPerHour: scenario.heatingGainPerHour,
     hourlyDrops,
     hours,
@@ -232,7 +254,7 @@ function runScenario(scenario: SimulationScenario) {
     result.minimumPredictedShowersLeft;
   const cheaperRejectedResult = scenario.cheaperRejectedHeatingHourIndexes
     ? simulateHeatingPlan({
-        currentWeightedTemperature: getWeightedTemperature(scenario),
+        ...temperatureInput,
         heatingGainPerHour: scenario.heatingGainPerHour,
         hourlyDrops,
         hours,

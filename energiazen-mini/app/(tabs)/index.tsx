@@ -32,6 +32,7 @@ import {
   normalizeStoredHeatingPlanHours,
 } from "@/lib/heatingPlanMarkers";
 import {
+  calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
   HeatingOptimizationHour,
   optimizeHeatingPlan,
@@ -294,39 +295,21 @@ function getStratifiedWarmWaterEstimate(
     return null;
   }
 
-  const weightedTemperature = topTemperature * 0.7 + bottomTemperature * 0.3;
-  const fullTankTemp =
-    settings.fullTankAverageTemperature ?? settings.maxTankTemperature;
-  const energyTemperatureRange = Math.max(
-    fullTankTemp - settings.minTankTemperature,
-    1,
-  );
-  const energyRatio = clamp(
-    (weightedTemperature - settings.minTankTemperature) /
-      energyTemperatureRange,
-    0,
-    1,
-  );
-  const minimumUsableTopTemperature = 42;
-  const topUsabilityTemperatureRange = Math.max(
-    fullTankTemp - minimumUsableTopTemperature,
-    1,
-  );
-  const topUsability = clamp(
-    (topTemperature - minimumUsableTopTemperature) /
-      topUsabilityTemperatureRange,
-    0,
-    1,
-  );
-  const fillRatio = energyRatio * topUsability;
-  const showersLeft = fillRatio * settings.fullTankShowers;
+  const estimate = calculateStratifiedShowersLeft({
+    bottomTemperature,
+    fullTankAverageTemperature: settings.fullTankAverageTemperature,
+    fullTankShowers: settings.fullTankShowers,
+    maxTankTemperature: settings.maxTankTemperature,
+    minTankTemperature: settings.minTankTemperature,
+    topTemperature,
+  });
 
   return {
-    weightedTemperature,
-    energyRatio,
-    topUsability,
-    fillRatio,
-    showersLeft,
+    weightedTemperature: estimate.weightedTemperature,
+    energyRatio: estimate.energyRatio,
+    topUsability: estimate.topUsability,
+    fillRatio: estimate.fillRatio,
+    showersLeft: estimate.showersLeft,
     tankSizeLiters: settings.tankSizeLiters,
   };
 }
@@ -973,12 +956,16 @@ export default function HomeScreen() {
     if (
       settings.heatingNeedMode !== "automatic" ||
       currentWeightedTemperature === null ||
+      topTemp === null ||
+      bottomTemp === null ||
       optimizerHours.length === 0
     ) {
       return null;
     }
 
     return optimizeHeatingPlan({
+      currentBottomTemperature: bottomTemp,
+      currentTopTemperature: topTemp,
       currentWeightedTemperature,
       hourlyDrops: hourlyTemperatureDropProfile,
       hours: optimizerHours,
@@ -989,11 +976,13 @@ export default function HomeScreen() {
       tankReadings: tankTemperatureHistory,
     });
   }, [
+    bottomTemp,
     currentWeightedTemperature,
     hourlyTemperatureDropProfile,
     optimizerHours,
     settings,
     tankTemperatureHistory,
+    topTemp,
   ]);
   const optimizerSelectedHeatingHourIds = useMemo(
     () => new Set(heatingOptimization?.selectedHeatingHourIds ?? []),

@@ -17,6 +17,7 @@ export type HeatingOptimizationSettings = {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   maxHeatingHours: number;
+  maxTankTemperature: number;
   safetyShowerReserve: number;
   targetShowerReserve: number;
 };
@@ -25,9 +26,18 @@ export type HeatingOptimizationSettingsSource = {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   automaticMaxHeatingHours: number;
+  maxTankTemperature?: number;
   minTankTemperature: number;
   safetyShowerReserve: number;
   targetShowerReserve: number;
+};
+
+export type StratifiedShowersEstimate = {
+  energyRatio: number;
+  fillRatio: number;
+  showersLeft: number;
+  topUsability: number;
+  weightedTemperature: number;
 };
 
 export type HeatingGainEstimate = {
@@ -44,6 +54,8 @@ export type ConsumptionSpike = {
 };
 
 export type HourlyHeatingForecast = {
+  bottomTemperatureAfter: number;
+  bottomTemperatureBeforeHeating: number;
   heatingGain: number;
   helsinkiHour: number;
   hourlyDrop: number;
@@ -53,6 +65,9 @@ export type HourlyHeatingForecast = {
   startDate: string;
   temperatureAfter: number;
   temperatureBefore: number;
+  temperatureBeforeHeating: number;
+  topTemperatureAfter: number;
+  topTemperatureBeforeHeating: number;
   violatedAbsoluteSafety: boolean;
   violatedReserve: boolean;
   violatedSpikeReserve: boolean;
@@ -129,6 +144,35 @@ function getWeightedTemperature(reading: TankTemperatureReading) {
   }
 
   return reading.top_temp * 0.7 + reading.bottom_temp * 0.3;
+}
+
+function getWeightedTemperatureFromSensors(
+  topTemperature: number,
+  bottomTemperature: number,
+) {
+  return topTemperature * 0.7 + bottomTemperature * 0.3;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getStratifiedTemperaturesFromWeightedTemperature({
+  temperatureDifference,
+  weightedTemperature,
+}: {
+  temperatureDifference: number;
+  weightedTemperature: number;
+}) {
+  const safeTemperatureDifference = Math.max(temperatureDifference, 0);
+  const bottomTemperature =
+    weightedTemperature - 0.7 * safeTemperatureDifference;
+  const topTemperature = bottomTemperature + safeTemperatureDifference;
+
+  return {
+    bottomTemperature,
+    topTemperature: Math.max(topTemperature, bottomTemperature),
+  };
 }
 
 function getMedian(values: number[]) {
@@ -221,6 +265,58 @@ export function estimateShowersLeftFromWeightedTemperature({
   return fillRatio * fullTankShowers;
 }
 
+export function calculateStratifiedShowersLeft({
+  bottomTemperature,
+  fullTankAverageTemperature,
+  fullTankShowers,
+  maxTankTemperature,
+  minTankTemperature,
+  topTemperature,
+}: {
+  bottomTemperature: number;
+  fullTankAverageTemperature?: number | null;
+  fullTankShowers: number;
+  maxTankTemperature: number;
+  minTankTemperature: number;
+  topTemperature: number;
+}): StratifiedShowersEstimate {
+  const weightedTemperature = getWeightedTemperatureFromSensors(
+    topTemperature,
+    bottomTemperature,
+  );
+  const fullTankTemp = fullTankAverageTemperature ?? maxTankTemperature;
+  const energyTemperatureRange = Math.max(
+    fullTankTemp - minTankTemperature,
+    1,
+  );
+  const energyRatio = clamp(
+    (weightedTemperature - minTankTemperature) / energyTemperatureRange,
+    0,
+    1,
+  );
+  const minimumUsableTopTemperature = 42;
+  const topUsabilityTemperatureRange = Math.max(
+    fullTankTemp - minimumUsableTopTemperature,
+    1,
+  );
+  const topUsability = clamp(
+    (topTemperature - minimumUsableTopTemperature) /
+      topUsabilityTemperatureRange,
+    0,
+    1,
+  );
+  const fillRatio = energyRatio * topUsability;
+  const showersLeft = fillRatio * fullTankShowers;
+
+  return {
+    energyRatio,
+    fillRatio,
+    showersLeft,
+    topUsability,
+    weightedTemperature,
+  };
+}
+
 export function createHeatingOptimizationSettings(
   settings: HeatingOptimizationSettingsSource,
   fallbackHeatingGainPerHour: number,
@@ -231,6 +327,8 @@ export function createHeatingOptimizationSettings(
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
     fullTankShowers: settings.fullTankShowers,
     maxHeatingHours: settings.automaticMaxHeatingHours,
+    maxTankTemperature:
+      settings.maxTankTemperature ?? settings.fullTankAverageTemperature,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
   };
@@ -329,6 +427,8 @@ export function detectConsumptionSpikes(
 }
 
 export function simulateHeatingPlan({
+  currentBottomTemperature,
+  currentTopTemperature,
   currentWeightedTemperature,
   heatingGainPerHour,
   hourlyDrops,
@@ -337,7 +437,9 @@ export function simulateHeatingPlan({
   settings,
   spikes = detectConsumptionSpikes(hourlyDrops, settings),
 }: {
-  currentWeightedTemperature: number;
+  currentBottomTemperature: number;
+  currentTopTemperature: number;
+  currentWeightedTemperature?: number;
   heatingGainPerHour: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
@@ -349,14 +451,20 @@ export function simulateHeatingPlan({
   const spikesByHour = new Map(spikes.map((spike) => [spike.hour, spike]));
   const forecast: HourlyHeatingForecast[] = [];
   const violations = new Set<string>();
-  let temperature = currentWeightedTemperature;
-  let minimumPredictedTemperature = currentWeightedTemperature;
-  let minimumPredictedShowersLeft = estimateShowersLeftFromWeightedTemperature({
-    absoluteMinimumTemperature: settings.absoluteMinimumTemperature,
+  const temperatureDifference = currentTopTemperature - currentBottomTemperature;
+  let temperature =
+    currentWeightedTemperature ??
+    getWeightedTemperatureFromSensors(currentTopTemperature, currentBottomTemperature);
+  let minimumPredictedTemperature = temperature;
+  const currentShowers = calculateStratifiedShowersLeft({
+    bottomTemperature: currentBottomTemperature,
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
     fullTankShowers: settings.fullTankShowers,
-    weightedTemperature: currentWeightedTemperature,
-  });
+    maxTankTemperature: settings.maxTankTemperature,
+    minTankTemperature: settings.absoluteMinimumTemperature,
+    topTemperature: currentTopTemperature,
+  }).showersLeft;
+  let minimumPredictedShowersLeft = currentShowers;
   let largestSpike: HeatingSimulationResult["largestSpike"] = null;
   let totalCost = 0;
 
@@ -366,32 +474,52 @@ export function simulateHeatingPlan({
     const isHeatingSelected = selectedHourIds.has(hour.id);
     const heatingGain = isHeatingSelected ? heatingGainPerHour : 0;
     const temperatureBefore = temperature;
-    const showersLeftBefore = estimateShowersLeftFromWeightedTemperature({
-      absoluteMinimumTemperature: settings.absoluteMinimumTemperature,
+    const temperatureBeforeHeating = temperatureBefore - hourlyDrop;
+    const {
+      bottomTemperature: bottomTemperatureBeforeHeating,
+      topTemperature: topTemperatureBeforeHeating,
+    } = getStratifiedTemperaturesFromWeightedTemperature({
+      temperatureDifference,
+      weightedTemperature: temperatureBeforeHeating,
+    });
+    const showersLeftBefore = calculateStratifiedShowersLeft({
+      bottomTemperature: bottomTemperatureBeforeHeating,
       fullTankAverageTemperature: settings.fullTankAverageTemperature,
       fullTankShowers: settings.fullTankShowers,
-      weightedTemperature: temperatureBefore,
-    });
+      maxTankTemperature: settings.maxTankTemperature,
+      minTankTemperature: settings.absoluteMinimumTemperature,
+      topTemperature: topTemperatureBeforeHeating,
+    }).showersLeft;
     const spike = spikesByHour.get(helsinkiHour) ?? null;
     const violatedSpikeReserve = false;
 
-    temperature = temperature - hourlyDrop + heatingGain;
+    temperature = temperatureBeforeHeating + heatingGain;
+    const {
+      bottomTemperature: bottomTemperatureAfter,
+      topTemperature: topTemperatureAfter,
+    } = getStratifiedTemperaturesFromWeightedTemperature({
+      temperatureDifference,
+      weightedTemperature: temperature,
+    });
 
     if (isHeatingSelected) {
       totalCost += hour.price;
     }
 
-    const showersLeftAfter = estimateShowersLeftFromWeightedTemperature({
-      absoluteMinimumTemperature: settings.absoluteMinimumTemperature,
+    const showersLeftAfter = calculateStratifiedShowersLeft({
+      bottomTemperature: bottomTemperatureAfter,
       fullTankAverageTemperature: settings.fullTankAverageTemperature,
       fullTankShowers: settings.fullTankShowers,
-      weightedTemperature: temperature,
-    });
+      maxTankTemperature: settings.maxTankTemperature,
+      minTankTemperature: settings.absoluteMinimumTemperature,
+      topTemperature: topTemperatureAfter,
+    }).showersLeft;
     const violatedReserve =
       showersLeftBefore < settings.safetyShowerReserve ||
       showersLeftAfter < settings.safetyShowerReserve;
     const violatedAbsoluteSafety =
       temperatureBefore < settings.absoluteMinimumTemperature ||
+      temperatureBeforeHeating < settings.absoluteMinimumTemperature ||
       temperature < settings.absoluteMinimumTemperature;
 
     if (violatedReserve) {
@@ -410,7 +538,7 @@ export function simulateHeatingPlan({
           requiredShowersBefore: spike.requiredShowersBefore,
           showersLeftBefore,
           startDate: hour.startDate,
-          temperatureBefore,
+          temperatureBefore: temperatureBeforeHeating,
         };
       }
     }
@@ -418,6 +546,7 @@ export function simulateHeatingPlan({
     minimumPredictedTemperature = Math.min(
       minimumPredictedTemperature,
       temperatureBefore,
+      temperatureBeforeHeating,
       temperature,
     );
     minimumPredictedShowersLeft = Math.min(
@@ -426,6 +555,8 @@ export function simulateHeatingPlan({
       showersLeftAfter,
     );
     forecast.push({
+      bottomTemperatureAfter,
+      bottomTemperatureBeforeHeating,
       heatingGain,
       helsinkiHour,
       hourlyDrop,
@@ -435,6 +566,9 @@ export function simulateHeatingPlan({
       startDate: hour.startDate,
       temperatureAfter: temperature,
       temperatureBefore,
+      temperatureBeforeHeating,
+      topTemperatureAfter,
+      topTemperatureBeforeHeating,
       violatedAbsoluteSafety,
       violatedReserve,
       violatedSpikeReserve,
@@ -462,6 +596,8 @@ export function simulateHeatingPlan({
 }
 
 export function optimizeHeatingPlan({
+  currentBottomTemperature,
+  currentTopTemperature,
   currentWeightedTemperature,
   heatingGainPerHour,
   hourlyDrops,
@@ -469,7 +605,9 @@ export function optimizeHeatingPlan({
   settings,
   tankReadings = [],
 }: {
-  currentWeightedTemperature: number;
+  currentBottomTemperature: number;
+  currentTopTemperature: number;
+  currentWeightedTemperature?: number;
   heatingGainPerHour?: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
@@ -508,6 +646,8 @@ export function optimizeHeatingPlan({
         (index) => sortedHours[index].id,
       );
       const result = simulateHeatingPlan({
+        currentBottomTemperature,
+        currentTopTemperature,
         currentWeightedTemperature,
         heatingGainPerHour: heatingGainEstimate.gainPerHour,
         hourlyDrops,
@@ -567,6 +707,8 @@ export function optimizeHeatingPlan({
     bestResult ??
     bestInvalidResult ??
     simulateHeatingPlan({
+      currentBottomTemperature,
+      currentTopTemperature,
       currentWeightedTemperature,
       heatingGainPerHour: heatingGainEstimate.gainPerHour,
       hourlyDrops,
