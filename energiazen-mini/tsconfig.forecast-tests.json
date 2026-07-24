@@ -31,6 +31,13 @@
     "lib/heatingHistory.test.ts",
     "lib/heatingEnergyCost.ts",
     "lib/heatingEnergyCost.test.ts",
+    "lib/electricityPrices.ts",
+    "lib/electricityPrices.test.ts",
+    "lib/electricityPriceTrend.ts",
+    "lib/electricityPriceTrend.test.ts",
+    "lib/heatingPlanMarkers.ts",
+    "lib/heatingPlanMarkers.test.ts",
+    "tests/historyUiSource.test.ts",
     "lib/temperatureDropProfile.ts",
     "lib/temperatureDropProfile.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"

@@ -36,6 +36,15 @@ function getTotalCentsPerKwh(
   );
 }
 
+export function calculateTotalElectricityPriceCentsPerKwh(
+  spotPriceCentsPerKwh: number,
+  settings: HeatingEnergyCostSettings = heatingEnergyCostSettings,
+) {
+  const total = getTotalCentsPerKwh(spotPriceCentsPerKwh, settings);
+
+  return total === null ? null : Math.round(total * 10_000) / 10_000;
+}
+
 export function calculateHeatingCostEuros({
   energyKwh,
   settings = heatingEnergyCostSettings,

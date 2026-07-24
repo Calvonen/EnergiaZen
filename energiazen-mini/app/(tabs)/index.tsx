@@ -13,15 +13,24 @@ import {
 
 import { debugLog } from "@/lib/debug";
 import {
-  calculateHeatingPeriodCostEuros,
+  electricityPriceRegion,
+  getHelsinkiElectricityDateKey,
+  getResolutionMinutes,
+  getTotalPriceCentsPerKwh,
+} from "@/lib/electricityPrices";
+import {
   calculatePlannedHeatingHourCostEuros,
 } from "@/lib/heatingEnergyCost";
 import {
   calculateHeatingEnergyConsumption,
   calculateRealizedHeatingHours,
   fetchAllHeatingHistory,
-  HeatingEnergyConsumptionSummary,
 } from "@/lib/heatingHistory";
+import {
+  getHeatingHourMarker,
+  heatingMarkers,
+  normalizeStoredHeatingPlanHours,
+} from "@/lib/heatingPlanMarkers";
 import {
   createHeatingOptimizationSettings,
   HeatingOptimizationHour,
@@ -73,12 +82,6 @@ const fallbackHeatingGainPerHour = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
-const heatingMarkers = {
-  actual: "\u{1F525}",
-  missed: "\u26A0\uFE0F",
-  planned: "\u2B50",
-} as const;
-
 const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -131,7 +134,14 @@ type StoredHeatingPlan = {
 type ElectricityPriceInsert = {
   start_date: string;
   end_date: string;
+  ends_at: string;
+  fetched_at: string;
   price: number;
+  price_date: string;
+  region: string;
+  resolution_minutes: number;
+  spot_price_cents_kwh: number;
+  starts_at: string;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -380,10 +390,6 @@ function formatFinnishDecimal(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
 
-function formatFinnishCurrency(value: number) {
-  return value.toFixed(2).replace(".", ",");
-}
-
 function formatSignedFinnishDecimal(value: number) {
   return formatFinnishDecimal(value);
 }
@@ -497,19 +503,6 @@ function formatHelsinkiDateHour(
   return `${getFinnishDateKey(item.startDate)} ${String(
     getHelsinkiHourNumber(item.date),
   ).padStart(2, "0")}:00`;
-}
-
-function normalizeStoredHeatingPlanHours(plannedHours: unknown) {
-  if (!Array.isArray(plannedHours)) {
-    return [];
-  }
-
-  return [...new Set(
-    plannedHours.filter(
-      (hour): hour is number =>
-        Number.isInteger(hour) && hour >= 0 && hour <= 23,
-    ),
-  )].sort((first, second) => first - second);
 }
 
 function isStoredHeatingPlanNewerOrSame(
@@ -655,57 +648,43 @@ function normalizeSpotPrices(data: SpotPriceResponse[]) {
 
 async function saveElectricityPrices(prices: HourlyPrice[]) {
   try {
-    const electricityPrices = prices.map((item) => ({
-      start_date: item.startDate,
-      end_date: item.endDate.toISOString(),
-      price: item.price,
-    })) satisfies ElectricityPriceInsert[];
+    const fetchedAt = new Date().toISOString();
+    const electricityPrices = prices.map((item) => {
+      const endsAt = item.endDate.toISOString();
+
+      return {
+        start_date: item.startDate,
+        end_date: endsAt,
+        ends_at: endsAt,
+        fetched_at: fetchedAt,
+        price: item.price,
+        price_date: getHelsinkiElectricityDateKey(item.startDate),
+        region: electricityPriceRegion,
+        resolution_minutes: getResolutionMinutes(item.startDate, endsAt),
+        spot_price_cents_kwh: item.price,
+        starts_at: item.startDate,
+      };
+    }) satisfies ElectricityPriceInsert[];
 
     if (electricityPrices.length === 0) {
       debugLog("Saved electricity prices: 0 rows");
-      debugLog("Existing electricity prices: 0 rows");
       return;
     }
 
-    const startDates = electricityPrices.map((item) => item.start_date);
-    const { data: existingPrices, error: existingPricesError } = await supabase
+    // Historia karttuu tässä vaiheessa vain sovelluksen hakiessa hinnat.
+    // Ajastettua taustahakua tai Edge Functionia ei vielä ole.
+    const { error } = await supabase
       .from("electricity_prices")
-      .select("start_date")
-      .in("start_date", startDates);
+      .upsert(electricityPrices, {
+        onConflict: "region,starts_at,resolution_minutes",
+      });
 
-    if (existingPricesError) {
-      console.warn(
-        "Electricity price duplicate check failed",
-        existingPricesError,
-      );
+    if (error) {
+      console.warn("Electricity price save failed", error);
       return;
     }
 
-    const existingStartDates = new Set(
-      ((existingPrices ?? []) as Pick<StoredElectricityPrice, "start_date">[])
-        .map((item) =>
-          item.start_date ? new Date(item.start_date).toISOString() : null,
-        )
-        .filter((startDate): startDate is string => Boolean(startDate)),
-    );
-    const newElectricityPrices = electricityPrices.filter(
-      (item) =>
-        !existingStartDates.has(new Date(item.start_date).toISOString()),
-    );
-
-    if (newElectricityPrices.length > 0) {
-      const { error: insertError } = await supabase
-        .from("electricity_prices")
-        .insert(newElectricityPrices);
-
-      if (insertError) {
-        console.warn("Electricity price save failed", insertError);
-        return;
-      }
-    }
-
-    debugLog(`Saved electricity prices: ${newElectricityPrices.length} rows`);
-    debugLog(`Existing electricity prices: ${existingStartDates.size} rows`);
+    debugLog(`Upserted electricity prices: ${electricityPrices.length} rows`);
   } catch (error) {
     console.warn("Electricity price save failed", error);
   }
@@ -756,8 +735,6 @@ export default function HomeScreen() {
     today: [],
     yesterday: [],
   });
-  const [heatingEnergyConsumption, setHeatingEnergyConsumption] =
-    useState<HeatingEnergyConsumptionSummary | null>(null);
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
@@ -778,6 +755,8 @@ export default function HomeScreen() {
       item.date.getTime() <= Date.now() && item.endDate.getTime() > Date.now(),
   );
   const currentPrice = currentPriceItem?.price ?? null;
+  const currentTotalPrice =
+    currentPrice === null ? null : getTotalPriceCentsPerKwh(currentPrice);
   const { ringColor } =
     currentPrice === null
       ? { ringColor: "#36f4d4" }
@@ -1423,17 +1402,6 @@ export default function HomeScreen() {
     forecastHeatingHours === 1
       ? "1 tunnin"
       : `${forecastHeatingHours} tuntia`;
-  const latestHeatingEnergyPeriod =
-    heatingEnergyConsumption?.periods.at(-1) ?? null;
-  const latestEstimatedEnergyKwh =
-    latestHeatingEnergyPeriod?.estimated_energy_kwh ?? 0;
-  const latestEstimatedHeatingCostEuros = latestHeatingEnergyPeriod
-    ? calculateHeatingPeriodCostEuros({
-        endedAt: latestHeatingEnergyPeriod.ended_at,
-        priceIntervals: hourlyPrices,
-        startedAt: latestHeatingEnergyPeriod.started_at,
-      })
-    : null;
   const tomorrowPricesAvailable = hourlyPrices.some(
     (item) =>
       getFinnishDateKey(item.startDate) === getChartDayKey("tomorrow"),
@@ -1498,11 +1466,12 @@ export default function HomeScreen() {
               .filter((item) => {
                 const dateHourKey = getHourlyPriceDateHourKey(item);
 
-                return (
-                  plannedHeatingHourIds.has(dateHourKey) &&
-                  !heatedHourIds.has(dateHourKey) &&
-                  item.endDate.getTime() <= currentHourStart.getTime()
-                );
+                return getHeatingHourMarker({
+                  endsAt: item.endDate,
+                  isActual: heatedHourIds.has(dateHourKey),
+                  isPlanned: plannedHeatingHourIds.has(dateHourKey),
+                  now: currentHourStart,
+                }) === heatingMarkers.missed;
               })
               .map(getHourlyPriceDateHourKey)
           : [],
@@ -1522,13 +1491,12 @@ export default function HomeScreen() {
           const dateHourKey = getHourlyPriceDateHourKey(item);
           const isInCurrentSavedPlan =
             plannedHeatingHourIds.has(dateHourKey);
-          const marker = heatedHourIds.has(dateHourKey)
-            ? heatingMarkers.actual
-            : missedHeatingHourIds.has(dateHourKey)
-              ? heatingMarkers.missed
-              : isInCurrentSavedPlan
-                ? heatingMarkers.planned
-                : null;
+          const marker = getHeatingHourMarker({
+            endsAt: item.endDate,
+            isActual: heatedHourIds.has(dateHourKey),
+            isPlanned: isInCurrentSavedPlan,
+            now: currentHourStart,
+          });
           const markerSource = heatedHourIds.has(dateHourKey)
             ? "actualHeatingHours"
             : missedHeatingHourIds.has(dateHourKey)
@@ -1551,6 +1519,7 @@ export default function HomeScreen() {
     [
       chartDayKey,
       chartHourlyPrices,
+      currentHourStart,
       heatedHourIds,
       missedHeatingHourIds,
       plannedHeatingHourIds,
@@ -1716,7 +1685,6 @@ export default function HomeScreen() {
             rowCount: heatingHistoryResult.readings.length,
           });
           setActualHeatingHours(realizedHeatingHours);
-          setHeatingEnergyConsumption(heatingEnergy);
           setStoredTemperatureDropProfile(temperatureDropProfileResult);
 
           if (temperatureHistoryResult.error) {
@@ -1737,7 +1705,6 @@ export default function HomeScreen() {
           setTankTemperatureHistory([]);
           setStoredTemperatureDropProfile(null);
           setHeating(false);
-          setHeatingEnergyConsumption(null);
           setTankUpdatedAt(null);
         } finally {
           if (isActive) {
@@ -1978,10 +1945,20 @@ export default function HomeScreen() {
               { borderColor: ringColor, shadowColor: ringColor },
             ]}
           />
-          <View
-            style={[
+          <Pressable
+            accessibilityHint="Avaa sähkön hintahistorian"
+            accessibilityLabel={
+              currentPrice === null
+                ? "Sähkön hintaa ei saatavilla"
+                : `Spot-hinta ${formatFinnishDecimal(currentPrice)} senttiä kilowattitunnilta, yhteensä ${formatFinnishDecimal(currentTotalPrice ?? currentPrice)} senttiä kilowattitunnilta`
+            }
+            accessibilityRole="button"
+            android_ripple={{ color: "rgba(255,255,255,0.1)" }}
+            onPress={() => router.push("/electricity-history")}
+            style={({ pressed }) => [
               styles.ring,
               { borderColor: ringColor, shadowColor: ringColor },
+              pressed && styles.pressedRing,
             ]}
           >
             {currentPrice === null ? (
@@ -1994,9 +1971,16 @@ export default function HomeScreen() {
                   {formatFinnishDecimal(currentPrice)}
                 </Text>
                 <Text style={styles.unit}>c/kWh</Text>
+                <View style={styles.totalPriceBlock}>
+                  <Text style={styles.totalPriceLabel}>Yhteensä</Text>
+                  <Text style={styles.totalPriceValue}>
+                    {formatFinnishDecimal(currentTotalPrice ?? currentPrice)}
+                    {" c/kWh"}
+                  </Text>
+                </View>
               </>
             )}
-          </View>
+          </Pressable>
         </View>
 
         <View style={styles.cardsRow}>
@@ -2260,13 +2244,12 @@ export default function HomeScreen() {
                           const dateHourKey = getHourlyPriceDateHourKey(item);
                           const isHeatedHour =
                             heatedHourIds.has(dateHourKey);
-                          const heatingMarker = isHeatedHour
-                            ? heatingMarkers.actual
-                            : missedHeatingHourIds.has(dateHourKey)
-                              ? heatingMarkers.missed
-                              : plannedHeatingHourIds.has(dateHourKey)
-                                ? heatingMarkers.planned
-                                : null;
+                          const heatingMarker = getHeatingHourMarker({
+                            endsAt: item.endDate,
+                            isActual: isHeatedHour,
+                            isPlanned: plannedHeatingHourIds.has(dateHourKey),
+                            now: currentHourStart,
+                          });
                           const heatingMarkerLabel =
                             getHeatingMarkerLabel(heatingMarker);
                           const zeroBottom =
@@ -2457,15 +2440,6 @@ export default function HomeScreen() {
                         {heatingPlanPresentation.heatingSummary}
                       </Text>
                     ) : null}
-                    <Text style={styles.heatingPlanInfoSubtitle}>
-                      Viimeisin jakso
-                    </Text>
-                    <Text style={styles.heatingPlanInfoText}>
-                      {formatFinnishDecimal(latestEstimatedEnergyKwh)} kWh
-                      {latestEstimatedHeatingCostEuros === null
-                        ? " · hinta ei saatavilla"
-                        : ` · n. ${formatFinnishCurrency(latestEstimatedHeatingCostEuros)} €`}
-                    </Text>
                     <Text style={styles.heatingPlanInfoReason}>
                       {heatingPlanPresentation.statusSummary}
                     </Text>
@@ -2655,6 +2629,10 @@ const styles = StyleSheet.create({
     shadowRadius: 34,
     width: 244,
   },
+  pressedRing: {
+    opacity: 0.86,
+    transform: [{ scale: 0.98 }],
+  },
   price: {
     color: "#ffffff",
     fontSize: 68,
@@ -2674,6 +2652,22 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     marginTop: -4,
+  },
+  totalPriceBlock: {
+    alignItems: "center",
+    marginTop: 9,
+  },
+  totalPriceLabel: {
+    color: "#9fc7df",
+    fontSize: 12,
+    fontWeight: "800",
+    lineHeight: 15,
+  },
+  totalPriceValue: {
+    color: "#e9fbff",
+    fontSize: 17,
+    fontWeight: "900",
+    lineHeight: 21,
   },
   cardsRow: {
     flexDirection: "row",
