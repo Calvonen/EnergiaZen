@@ -113,7 +113,85 @@ limit 20;
 
 Upsert käyttää konfliktisarakkeita
 `region,starts_at,resolution_minutes`, joten saman aineiston uudelleenajo
-päivittää olemassa olevat rivit eikä luo duplikaatteja. Cron-ajastusta ei ole
-vielä määritetty. Edge Functionin tarvitsemat `service_role`-oikeudet ja
+päivittää olemassa olevat rivit eikä luo duplikaatteja. Edge Functionin
+tarvitsemat `service_role`-oikeudet ja
 sovelluksen `authenticated`-lukuoikeus tulevat Supabase-migraatiosta, joten
 niitä ei tarvitse myöntää käsin SQL Editorissä.
+
+### Automaattisen hintahaun ajastus
+
+Tallenna Cron-kutsun URL ja publishable-avain ensin Supabase Vaultiin SQL
+Editorissä. Avainta ei tallenneta migraatioon tai repoon:
+
+```sql
+select vault.create_secret(
+  'https://amyvzelzbvjvrevikvrp.supabase.co',
+  'project_url'
+);
+
+select vault.create_secret(
+  '<SUPABASE_PUBLISHABLE_KEY>',
+  'publishable_key'
+);
+```
+
+Aja migraatiot linkitettyyn projektiin:
+
+```bash
+supabase link --project-ref amyvzelzbvjvrevikvrp
+supabase db push
+```
+
+Migraatio luo jobin `fetch-electricity-prices-hourly`, joka käynnistyy kerran
+tunnissa minuutilla 10. Tarkista jobi:
+
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'fetch-electricity-prices-hourly';
+```
+
+Tarkista kymmenen viimeisintä Cron-ajoa:
+
+```sql
+select *
+from cron.job_run_details
+where jobid = (
+  select jobid
+  from cron.job
+  where jobname = 'fetch-electricity-prices-hourly'
+)
+order by start_time desc
+limit 10;
+```
+
+Testaa sama kutsu käsin SQL Editorissä Vault-arvoja käyttäen:
+
+```sql
+select net.http_post(
+  url := (
+    select rtrim(decrypted_secret, '/')
+    from vault.decrypted_secrets
+    where name = 'project_url'
+    limit 1
+  ) || '/functions/v1/fetch-electricity-prices',
+  headers := jsonb_build_object(
+    'Content-Type', 'application/json',
+    'apikey', (
+      select decrypted_secret
+      from vault.decrypted_secrets
+      where name = 'publishable_key'
+      limit 1
+    )
+  ),
+  body := '{}'::jsonb
+);
+```
+
+Poista ajastus tarvittaessa:
+
+```sql
+select cron.unschedule(jobid)
+from cron.job
+where jobname = 'fetch-electricity-prices-hourly';
+```
