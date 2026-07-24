@@ -48,3 +48,72 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Sähkön hintahistorian Edge Function
+
+`fetch-electricity-prices` hakee Spot-hinta.fi-palvelusta Suomen nykyisen ja
+seuraavan saatavilla olevan vuorokauden hinnat. Funktio käyttää oletuksena 60
+minuutin resoluutiota. Resoluutio voidaan vaihtaa 15 minuuttiin secretillä:
+
+```bash
+supabase secrets set PRICE_RESOLUTION_MINUTES=15
+```
+
+Supabasen hostatussa Edge Function -ympäristössä `SUPABASE_URL` ja
+`SUPABASE_SERVICE_ROLE_KEY` ovat valmiiksi käytettävissä, eikä niitä pidä
+kirjoittaa lähdekoodiin tai commitoitavaan `.env`-tiedostoon. Paikallista ajoa
+varten tee versionhallinnan ulkopuolinen `.env.local`:
+
+```dotenv
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_SERVICE_ROLE_KEY=<local-service-role-key>
+PRICE_RESOLUTION_MINUTES=60
+```
+
+Käynnistä funktio paikallisesti:
+
+```bash
+supabase functions serve fetch-electricity-prices --env-file .env.local
+curl --request POST http://127.0.0.1:54321/functions/v1/fetch-electricity-prices \
+  --header "Authorization: Bearer <local-anon-key>"
+```
+
+Linkitä projekti ja deployaa funktio:
+
+```bash
+supabase login
+supabase link --project-ref <project-ref>
+supabase functions deploy fetch-electricity-prices
+```
+
+Käynnistä deployattu funktio käsin projektin publishable-avaimella:
+
+```bash
+curl --request POST \
+  https://<project-ref>.supabase.co/functions/v1/fetch-electricity-prices \
+  --header "apikey: <publishable-key>"
+```
+
+Varmista tallennus Supabase SQL Editorissä:
+
+```sql
+select
+  region,
+  price_date,
+  starts_at,
+  ends_at,
+  spot_price_cents_kwh,
+  resolution_minutes,
+  fetched_at
+from public.electricity_prices
+where region = 'FI'
+order by starts_at desc
+limit 20;
+```
+
+Upsert käyttää konfliktisarakkeita
+`region,starts_at,resolution_minutes`, joten saman aineiston uudelleenajo
+päivittää olemassa olevat rivit eikä luo duplikaatteja. Cron-ajastusta ei ole
+vielä määritetty. Edge Functionin tarvitsemat `service_role`-oikeudet ja
+sovelluksen `authenticated`-lukuoikeus tulevat Supabase-migraatiosta, joten
+niitä ei tarvitse myöntää käsin SQL Editorissä.

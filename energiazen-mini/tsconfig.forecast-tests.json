@@ -35,6 +35,8 @@
     "lib/electricityPrices.test.ts",
     "lib/electricityPriceTrend.ts",
     "lib/electricityPriceTrend.test.ts",
+    "supabase/functions/fetch-electricity-prices/normalize.ts",
+    "supabase/functions/fetch-electricity-prices/normalize.test.ts",
     "lib/heatingPlanMarkers.ts",
     "lib/heatingPlanMarkers.test.ts",
     "tests/historyUiSource.test.ts",
