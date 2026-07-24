@@ -21,6 +21,12 @@ export type HeatingEnergyConsumptionSummary = {
   today_measured_energy_kwh: number | null;
 };
 
+export type HeatingPeriodRpcRow = {
+  duration_minutes?: number | null;
+  end_time?: string | null;
+  start_time?: string | null;
+};
+
 const defaultHeaterPowerKw = 3.0;
 const defaultMaxHeatingSampleGapMinutes = 10;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -156,6 +162,91 @@ function buildHeatingEnergyPeriod({
   };
 }
 
+function summarizeHeatingEnergyPeriods({
+  getDateKey,
+  periods,
+  todayKey,
+}: {
+  getDateKey: (createdAt: string) => string;
+  periods: HeatingEnergyPeriod[];
+  todayKey: string;
+}): HeatingEnergyConsumptionSummary {
+  const todayPeriods = periods.filter(
+    (period) => getDateKey(period.started_at) === todayKey,
+  );
+  const todayEstimatedEnergyKwh = todayPeriods.reduce(
+    (sum, period) => sum + period.estimated_energy_kwh,
+    0,
+  );
+
+  return {
+    energy_source: "estimated",
+    estimated_energy_kwh: periods.reduce(
+      (sum, period) => sum + period.estimated_energy_kwh,
+      0,
+    ),
+    measured_energy_kwh: null,
+    periods,
+    today_estimated_energy_kwh: todayEstimatedEnergyKwh,
+    today_measured_energy_kwh: null,
+  };
+}
+
+export function mapHeatingPeriodRowsToEnergyConsumption({
+  getDateKey = (createdAt) => helsinkiDateFormatter.format(new Date(createdAt)),
+  heaterPowerKw = defaultHeaterPowerKw,
+  rows,
+  todayKey,
+}: {
+  getDateKey?: (createdAt: string) => string;
+  heaterPowerKw?: number;
+  rows: HeatingPeriodRpcRow[];
+  todayKey: string;
+}): HeatingEnergyConsumptionSummary {
+  const periods = rows
+    .map((row): HeatingEnergyPeriod | null => {
+      if (!row.start_time || !row.end_time) {
+        return null;
+      }
+
+      const startedAt = new Date(row.start_time).getTime();
+      const endedAt = new Date(row.end_time).getTime();
+
+      if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) {
+        return null;
+      }
+
+      const fallbackDurationMinutes = Math.max(
+        0,
+        (endedAt - startedAt) / (60 * 1000),
+      );
+      const durationMinutes =
+        typeof row.duration_minutes === "number" &&
+        Number.isFinite(row.duration_minutes)
+          ? Math.max(0, row.duration_minutes)
+          : fallbackDurationMinutes;
+
+      return {
+        duration_minutes: durationMinutes,
+        ended_at: row.end_time,
+        energy_source: "estimated",
+        estimated_energy_kwh: (durationMinutes / 60) * heaterPowerKw,
+        measured_energy_kwh: null,
+        started_at: row.start_time,
+      };
+    })
+    .filter((period): period is HeatingEnergyPeriod => period !== null)
+    .sort((first, second) =>
+      first.started_at.localeCompare(second.started_at),
+    );
+
+  return summarizeHeatingEnergyPeriods({
+    getDateKey,
+    periods,
+    todayKey,
+  });
+}
+
 export function calculateHeatingEnergyConsumption({
   getDateKey = (createdAt) => helsinkiDateFormatter.format(new Date(createdAt)),
   heaterPowerKw = defaultHeaterPowerKw,
@@ -228,23 +319,9 @@ export function calculateHeatingEnergyConsumption({
     );
   }
 
-  const todayPeriods = periods.filter(
-    (period) => getDateKey(period.started_at) === todayKey,
-  );
-  const todayEstimatedEnergyKwh = todayPeriods.reduce(
-    (sum, period) => sum + period.estimated_energy_kwh,
-    0,
-  );
-
-  return {
-    energy_source: "estimated",
-    estimated_energy_kwh: periods.reduce(
-      (sum, period) => sum + period.estimated_energy_kwh,
-      0,
-    ),
-    measured_energy_kwh: null,
+  return summarizeHeatingEnergyPeriods({
+    getDateKey,
     periods,
-    today_estimated_energy_kwh: todayEstimatedEnergyKwh,
-    today_measured_energy_kwh: null,
-  };
+    todayKey,
+  });
 }

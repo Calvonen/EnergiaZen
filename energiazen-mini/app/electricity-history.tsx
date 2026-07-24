@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import {
   ActivityIndicator,
+  FlatList,
+  InteractionManager,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -28,10 +29,9 @@ import {
   ElectricityPriceTrend,
 } from "@/lib/electricityPriceTrend";
 import {
-  calculateHeatingEnergyConsumption,
-  fetchAllHeatingHistory,
   HeatingEnergyPeriod,
-  HeatingHistoryReading,
+  HeatingPeriodRpcRow,
+  mapHeatingPeriodRowsToEnergyConsumption,
 } from "@/lib/heatingHistory";
 import {
   buildTodayHeatingTimeline,
@@ -41,11 +41,49 @@ import { supabase } from "@/lib/supabase";
 
 type HistoryDataFilter = "all" | "heated";
 
+type ElectricityHistoryCacheEntry = {
+  error: string | null;
+  fetchedAt: number;
+  heatingError: string | null;
+  heatingPeriods: HeatingEnergyPeriod[];
+  plannedHeatingHours: number[];
+  prices: ElectricityPriceRecord[];
+};
+
+const DEBUG_HISTORY_PERFORMANCE = false;
 const ranges: { label: string; value: ElectricityPriceRange }[] = [
   { label: "Tänään", value: 1 },
   { label: "7 päivää", value: 7 },
   { label: "30 päivää", value: 30 },
 ];
+
+function getPerformanceNow() {
+  return Date.now();
+}
+
+function getRangeLogLabel(range: ElectricityPriceRange) {
+  return range === 1 ? "Tanaan" : `${range} paivaa`;
+}
+
+function logElectricityHistoryPerformance(
+  range: ElectricityPriceRange,
+  event: string,
+  data: Record<string, unknown>,
+) {
+  if (!DEBUG_HISTORY_PERFORMANCE) {
+    return;
+  }
+
+  console.log("[EnergyZen perf][electricity-history]", {
+    event,
+    range: getRangeLogLabel(range),
+    ...data,
+  });
+}
+
+const electricityHistoryCache: Partial<
+  Record<ElectricityPriceRange, ElectricityHistoryCacheEntry>
+> = {};
 
 const hourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -221,30 +259,91 @@ function PriceTrendChart({ trend }: { trend: ElectricityPriceTrend }) {
 
 export default function ElectricityHistoryScreen() {
   const router = useRouter();
+  const mountedAtRef = useRef(getPerformanceNow());
+  const initialRangeRef = useRef<ElectricityPriceRange>(1);
+  const firstRenderLoggedRef = useRef(false);
+  const fetchCountRef = useRef(0);
+  const cacheRef = useRef<
+    Partial<Record<ElectricityPriceRange, ElectricityHistoryCacheEntry>>
+  >(electricityHistoryCache);
+  const inFlightRef = useRef<Partial<Record<ElectricityPriceRange, boolean>>>(
+    {},
+  );
   const [range, setRange] = useState<ElectricityPriceRange>(1);
   const [dataFilter, setDataFilter] = useState<HistoryDataFilter>("heated");
-  const [prices, setPrices] = useState<ElectricityPriceRecord[]>([]);
-  const [heatingPeriods, setHeatingPeriods] = useState<HeatingEnergyPeriod[]>([]);
-  const [plannedHeatingHours, setPlannedHeatingHours] = useState<number[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isHeatingLoading, setIsHeatingLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [heatingError, setHeatingError] = useState<string | null>(null);
+  const [prices, setPrices] = useState<ElectricityPriceRecord[]>(
+    electricityHistoryCache[1]?.prices ?? [],
+  );
+  const [heatingPeriods, setHeatingPeriods] = useState<HeatingEnergyPeriod[]>(
+    electricityHistoryCache[1]?.heatingPeriods ?? [],
+  );
+  const [plannedHeatingHours, setPlannedHeatingHours] = useState<number[]>(
+    electricityHistoryCache[1]?.plannedHeatingHours ?? [],
+  );
+  const [isInteractionComplete, setIsInteractionComplete] = useState(false);
+  const [isLoading, setIsLoading] = useState(!electricityHistoryCache[1]);
+  const [isHeatingLoading, setIsHeatingLoading] = useState(
+    !electricityHistoryCache[1],
+  );
+  const [error, setError] = useState<string | null>(
+    electricityHistoryCache[1]?.error ?? null,
+  );
+  const [heatingError, setHeatingError] = useState<string | null>(
+    electricityHistoryCache[1]?.heatingError ?? null,
+  );
+  const [, setCache] = useState<
+    Partial<Record<ElectricityPriceRange, ElectricityHistoryCacheEntry>>
+  >({});
 
-  const fetchHistory = useCallback(async () => {
-    setIsLoading(true);
+  const updateCacheEntry = useCallback(
+    (
+      nextRange: ElectricityPriceRange,
+      updater: (
+        previousEntry: ElectricityHistoryCacheEntry | undefined,
+      ) => ElectricityHistoryCacheEntry,
+    ) => {
+      const nextCache = {
+        ...cacheRef.current,
+        [nextRange]: updater(cacheRef.current[nextRange]),
+      };
+      Object.assign(electricityHistoryCache, nextCache);
+      cacheRef.current = nextCache;
+      setCache(nextCache);
+    },
+    [],
+  );
+
+  const fetchHistory = useCallback(async (nextRange = range, force = false) => {
+    if (inFlightRef.current[nextRange]) {
+      return;
+    }
+    if (!force && cacheRef.current[nextRange]) {
+      return;
+    }
+
+    inFlightRef.current[nextRange] = true;
+    fetchCountRef.current += 1;
+    const viewLoadStartedAt = getPerformanceNow();
+    const hasCachedData = Boolean(cacheRef.current[nextRange]);
+    setIsLoading(!hasCachedData);
     setIsHeatingLoading(true);
-    setError(null);
-    setHeatingError(null);
-    setPlannedHeatingHours([]);
-    const rangeStart = getElectricityHistoryRangeStartIso(range);
+    setError(cacheRef.current[nextRange]?.error ?? null);
+    setHeatingError(cacheRef.current[nextRange]?.heatingError ?? null);
+    const rangeStart = getElectricityHistoryRangeStartIso(nextRange);
     const tomorrowKey = offsetDateKey(
       getHelsinkiElectricityDateKey(new Date()),
       1,
     );
     const rangeEnd = getHelsinkiDateStartIso(tomorrowKey);
 
+    logElectricityHistoryPerformance(nextRange, "query started", {
+      fetchCount: fetchCountRef.current,
+      force,
+      hasCachedData,
+    });
+
     try {
+      const electricityPricesStartedAt = getPerformanceNow();
       const { data, error: queryError } = await supabase
         .from("electricity_prices")
         .select(
@@ -258,54 +357,68 @@ export default function ElectricityHistoryScreen() {
       if (queryError) {
         throw queryError;
       }
+      logElectricityHistoryPerformance(nextRange, "electricity_prices query", {
+        durationMs: getPerformanceNow() - electricityPricesStartedAt,
+        rowCount: data?.length ?? 0,
+      });
       setPrices((data ?? []) as ElectricityPriceRecord[]);
+      updateCacheEntry(nextRange, (previousEntry) => ({
+        error: null,
+        fetchedAt: getPerformanceNow(),
+        heatingError: previousEntry?.heatingError ?? null,
+        heatingPeriods: previousEntry?.heatingPeriods ?? [],
+        plannedHeatingHours: previousEntry?.plannedHeatingHours ?? [],
+        prices: (data ?? []) as ElectricityPriceRecord[],
+      }));
     } catch {
-      setPrices([]);
       setError("Hintahistorian hakeminen epäonnistui. Yritä myöhemmin uudelleen.");
     } finally {
       setIsLoading(false);
     }
 
     try {
-      const previousReadingResult = await supabase
-        .from("tank_readings")
-        .select("created_at,heating")
-        .lt("created_at", rangeStart)
-        .order("created_at", { ascending: false })
-        .limit(1);
+      const tankReadingsStartedAt = getPerformanceNow();
+      const { data, error: heatingPeriodsError } = await supabase.rpc(
+        "get_heating_periods",
+        {
+          p_end: rangeEnd,
+          p_start: rangeStart,
+        },
+      );
 
-      if (previousReadingResult.error) {
-        throw previousReadingResult.error;
+      if (heatingPeriodsError) {
+        throw heatingPeriodsError;
       }
 
-      const history = await fetchAllHeatingHistory(async (from, to) => {
-        const result = await supabase
-          .from("tank_readings")
-          .select("created_at,heating")
-          .gte("created_at", rangeStart)
-          .lt("created_at", rangeEnd)
-          .order("created_at", { ascending: true })
-          .range(from, to);
-
-        return {
-          data: (result.data ?? []) as HeatingHistoryReading[],
-          error: result.error,
-        };
+      const heatingPeriodRows = (data ?? []) as HeatingPeriodRpcRow[];
+      logElectricityHistoryPerformance(nextRange, "tank_readings queries", {
+        durationMs: getPerformanceNow() - tankReadingsStartedAt,
+        fetchAllHeatingHistoryPages: 0,
+        heatingPeriodRowCount: heatingPeriodRows.length,
+        tankReadingsRowCount: 0,
       });
-      const previousReading = (
-        previousReadingResult.data as HeatingHistoryReading[] | null
-      )?.[0];
-      const readings =
-        previousReading?.heating === true
-          ? [{ created_at: rangeStart, heating: true }, ...history.readings]
-          : history.readings;
-      const consumption = calculateHeatingEnergyConsumption({
-        readings,
+      const heatingCalculationStartedAt = getPerformanceNow();
+      const consumption = mapHeatingPeriodRowsToEnergyConsumption({
+        rows: heatingPeriodRows,
         todayKey: getHelsinkiElectricityDateKey(new Date()),
       });
-      setHeatingPeriods(
-        consumption.periods.filter((period) => period.duration_minutes > 0),
+      logElectricityHistoryPerformance(nextRange, "heating periods calculation", {
+        durationMs: getPerformanceNow() - heatingCalculationStartedAt,
+        heatingPeriodCount: consumption.periods.length,
+        tankReadingsRowCount: 0,
+      });
+      const nextHeatingPeriods = consumption.periods.filter(
+        (period) => period.duration_minutes > 0,
       );
+      setHeatingPeriods(nextHeatingPeriods);
+      updateCacheEntry(nextRange, (previousEntry) => ({
+        error: previousEntry?.error ?? null,
+        fetchedAt: getPerformanceNow(),
+        heatingError: null,
+        heatingPeriods: nextHeatingPeriods,
+        plannedHeatingHours: previousEntry?.plannedHeatingHours ?? [],
+        prices: previousEntry?.prices ?? [],
+      }));
 
       const todayKey = getHelsinkiElectricityDateKey(new Date());
       const planResult = await supabase
@@ -318,29 +431,109 @@ export default function ElectricityHistoryScreen() {
         console.warn("Lämmityssuunnitelmaa ei saatu ladattua.", planResult.error);
       } else {
         const plan = (planResult.data as { planned_hours?: unknown }[] | null)?.[0];
-        setPlannedHeatingHours(
-          normalizeStoredHeatingPlanHours(plan?.planned_hours),
+        const nextPlannedHeatingHours = normalizeStoredHeatingPlanHours(
+          plan?.planned_hours,
         );
+        setHeatingPeriods(nextHeatingPeriods);
+        setPlannedHeatingHours(nextPlannedHeatingHours);
+        updateCacheEntry(nextRange, (previousEntry) => ({
+          error: previousEntry?.error ?? null,
+          fetchedAt: getPerformanceNow(),
+          heatingError: null,
+          heatingPeriods: nextHeatingPeriods,
+          plannedHeatingHours: nextPlannedHeatingHours,
+          prices: previousEntry?.prices ?? [],
+        }));
       }
     } catch {
-      setHeatingPeriods([]);
       setHeatingError("Lämmityshistoriaa ei saatu ladattua.");
     } finally {
+      inFlightRef.current[nextRange] = false;
       setIsHeatingLoading(false);
+      logElectricityHistoryPerformance(nextRange, "query completed", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+        fetchCount: fetchCountRef.current,
+      });
+      logElectricityHistoryPerformance(nextRange, "view load", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+      });
     }
-  }, [range]);
+  }, [range, updateCacheEntry]);
 
   useEffect(() => {
-    void fetchHistory();
-  }, [fetchHistory]);
+    if (!isInteractionComplete) {
+      return;
+    }
+
+    const cachedEntry = cacheRef.current[range];
+    if (cachedEntry) {
+      setPrices(cachedEntry.prices);
+      setHeatingPeriods(cachedEntry.heatingPeriods);
+      setPlannedHeatingHours(cachedEntry.plannedHeatingHours);
+      setError(cachedEntry.error);
+      setHeatingError(cachedEntry.heatingError);
+      setIsLoading(false);
+      setIsHeatingLoading(false);
+    }
+
+    const shouldRefresh =
+      cachedEntry &&
+      getPerformanceNow() - cachedEntry.fetchedAt > 60 * 1000;
+
+    void fetchHistory(range, Boolean(shouldRefresh));
+  }, [fetchHistory, isInteractionComplete, range]);
+
+  useEffect(() => {
+    logElectricityHistoryPerformance(initialRangeRef.current, "navigation mounted", {
+      fetchCount: fetchCountRef.current,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (firstRenderLoggedRef.current) {
+      return;
+    }
+    firstRenderLoggedRef.current = true;
+    const elapsedMs = getPerformanceNow() - mountedAtRef.current;
+
+    logElectricityHistoryPerformance(initialRangeRef.current, "first render", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 24,
+      targetUnderMs: 100,
+    });
+    logElectricityHistoryPerformance(initialRangeRef.current, "first content visible", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 24,
+      targetUnderMs: 100,
+    });
+  }, []);
+
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      setIsInteractionComplete(true);
+      logElectricityHistoryPerformance(
+        initialRangeRef.current,
+        "interaction completed",
+        {
+          durationMs: getPerformanceNow() - mountedAtRef.current,
+        },
+      );
+    });
+
+    return () => task.cancel();
+  }, []);
 
   const days = useMemo(
-    () => groupElectricityPricesByHelsinkiDay(prices),
-    [prices],
+    () =>
+      isInteractionComplete ? groupElectricityPricesByHelsinkiDay(prices) : [],
+    [isInteractionComplete, prices],
   );
   const heatedDays = useMemo(
-    () => calculateHeatedPriceHistory(heatingPeriods, prices),
-    [heatingPeriods, prices],
+    () =>
+      isInteractionComplete
+        ? calculateHeatedPriceHistory(heatingPeriods, prices)
+        : [],
+    [heatingPeriods, isInteractionComplete, prices],
   );
   const heatedDaysByKey = useMemo(
     () => new Map(heatedDays.map((day) => [day.dateKey, day])),
@@ -428,17 +621,20 @@ export default function ElectricityHistoryScreen() {
   );
   const todayHeatingTimeline = useMemo(
     () =>
-      buildTodayHeatingTimeline({
-        actualSegments: heatedDaysByKey.get(todayKey)?.segments ?? [],
-        dateKey: todayKey,
-        plannedHours: plannedHeatingHours,
-        prices,
-      }),
-    [heatedDaysByKey, plannedHeatingHours, prices, todayKey],
+      isInteractionComplete
+        ? buildTodayHeatingTimeline({
+            actualSegments: heatedDaysByKey.get(todayKey)?.segments ?? [],
+            dateKey: todayKey,
+            plannedHours: plannedHeatingHours,
+            prices,
+          })
+        : [],
+    [heatedDaysByKey, isInteractionComplete, plannedHeatingHours, prices, todayKey],
   );
-  const priceTrend = useMemo(
-    () =>
-      range === 1
+  const priceTrend = useMemo(() => {
+    const trendStartedAt = getPerformanceNow();
+    const trend =
+      !isInteractionComplete || range === 1
         ? null
         : buildElectricityPriceTrend({
             dataFilter,
@@ -446,16 +642,194 @@ export default function ElectricityHistoryScreen() {
             priceDays: days,
             range,
             todayKey,
-          }),
-    [dataFilter, days, heatedDays, range, todayKey],
-  );
-  const displayedValues = prices.flatMap((price) => [
-    price.spot_price_cents_kwh,
-    getTotalPriceCentsPerKwh(price.spot_price_cents_kwh),
-  ]);
+          });
+
+    logElectricityHistoryPerformance(range, "trend data build", {
+      dataFilter,
+      durationMs: getPerformanceNow() - trendStartedAt,
+      heatedDayCount: heatedDays.length,
+      priceDayCount: days.length,
+      trendPointCount: trend?.points.length ?? 0,
+    });
+
+    return trend;
+  }, [dataFilter, days, heatedDays, isInteractionComplete, range, todayKey]);
+  const displayedValues = isInteractionComplete
+    ? prices.flatMap((price) => [
+        price.spot_price_cents_kwh,
+        getTotalPriceCentsPerKwh(price.spot_price_cents_kwh),
+      ])
+    : [];
   const chartMin = displayedValues.length ? Math.min(...displayedValues, 0) : 0;
   const chartMax = displayedValues.length ? Math.max(...displayedValues, 0) : 1;
   const chartRange = Math.max(chartMax - chartMin, 1);
+  const backgroundRefreshing =
+    Boolean(cacheRef.current[range]) && (isLoading || isHeatingLoading);
+
+  const renderHistoryDay = useCallback(
+    ({ item: day }: { item: (typeof displayedDays)[number] }) => {
+      const priceSummaries = [
+        ["Keskihinta", day.averageTotalPrice, day.averageSpotPrice],
+        ["Alin", day.lowestTotalPrice, day.lowestSpotPrice],
+        ["Korkein", day.highestTotalPrice, day.highestSpotPrice],
+      ] as const;
+      const heatedDay = heatedDaysByKey.get(day.dateKey);
+      const showPartial =
+        dataFilter === "all" ? day.isPartial : Boolean(heatedDay?.isPartial);
+
+      return (
+        <View style={styles.dayCard}>
+          <View style={styles.dayHeader}>
+            <Text style={styles.dayTitle}>
+              {formatFinnishHistoryDate(day.dateKey)}
+            </Text>
+            {showPartial ? <Text style={styles.partial}>Osittainen</Text> : null}
+          </View>
+          {dataFilter === "all" ? (
+            <>
+              <View style={styles.summaryRow}>
+                {priceSummaries.map(([label, totalPrice, spotPrice]) => (
+                  <View key={String(label)} style={styles.summaryItem}>
+                    <Text style={styles.summaryLabel}>{label}</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatPrice(totalPrice)}
+                    </Text>
+                    <Text style={styles.summarySpotValue}>
+                      spot {formatPrice(spotPrice)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={styles.unitLabel}>c/kWh</Text>
+            </>
+          ) : range !== 1 ? (
+            heatedDay ? (
+              <View style={styles.heatedSummaryGrid}>
+                {[
+                  [
+                    "Lämmitetty keskihinta",
+                    heatedDay.weightedAveragePrice === null
+                      ? "Hintatieto puuttuu"
+                      : `${formatPrice(heatedDay.weightedAveragePrice)} c/kWh`,
+                  ],
+                  ["Lämmitys", formatDuration(heatedDay.durationMinutes)],
+                  ["Energia", formatEnergy(heatedDay.energyKwh)],
+                  ["Kustannus", `n. ${formatPrice(heatedDay.costEuros)} €`],
+                ].map(([label, value]) => (
+                  <View key={label} style={styles.heatedSummaryItem}>
+                    <Text style={styles.summaryLabel}>{label}</Text>
+                    <Text style={styles.heatedSummaryValue}>{value}</Text>
+                    {label === "Lämmitetty keskihinta" &&
+                    heatedDay.weightedAverageSpotPrice !== null ? (
+                      <Text style={styles.summarySpotValue}>
+                        spot {formatPrice(heatedDay.weightedAverageSpotPrice)} c/kWh
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.noHeatingText}>
+                {getHeatingDayEmptyLabel(heatedDay)}
+              </Text>
+            )
+          ) : null}
+          {range === 1 && dataFilter === "all" ? (
+            <View style={styles.hourList}>
+              {day.prices.map((price) => {
+                const spotPrice = price.spot_price_cents_kwh;
+                const totalPrice = getTotalPriceCentsPerKwh(spotPrice);
+                const zeroPosition = ((0 - chartMin) / chartRange) * 100;
+                const totalPosition =
+                  ((totalPrice - chartMin) / chartRange) * 100;
+                const spotPosition =
+                  ((spotPrice - chartMin) / chartRange) * 100;
+                const totalLeft = Math.min(zeroPosition, totalPosition);
+                const totalWidth = Math.max(
+                  Math.abs(totalPosition - zeroPosition),
+                  1.5,
+                );
+
+                return (
+                  <View
+                    key={`${price.region}-${price.starts_at}-${price.resolution_minutes}`}
+                    style={styles.hourRow}
+                  >
+                    <Text style={styles.hourLabel}>
+                      {hourFormatter.format(new Date(price.starts_at))}
+                    </Text>
+                    <View style={styles.barTrack}>
+                      <View
+                        style={[styles.zeroLine, { left: `${zeroPosition}%` }]}
+                      />
+                      <View
+                        style={[
+                          styles.bar,
+                          { left: `${totalLeft}%`, width: `${totalWidth}%` },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.spotMarker,
+                          { left: `${spotPosition}%` },
+                        ]}
+                      />
+                    </View>
+                    <View style={styles.hourPriceBlock}>
+                      <Text style={styles.hourPrice}>
+                        {formatPrice(totalPrice)} c/kWh
+                      </Text>
+                      <Text style={styles.hourSpotPrice}>
+                        spot {formatPrice(spotPrice)} c/kWh
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : range === 1 && day.dateKey === todayKey ? (
+            <View style={styles.heatedSegmentList}>
+              {todayHeatingTimeline.map((segment) => (
+                <View
+                  key={`${segment.status}-${segment.startedAt}-${segment.endedAt}`}
+                  style={styles.heatedSegmentRow}
+                >
+                  <Text style={styles.heatedSegmentTime}>
+                    {segment.marker} {formatTime(segment.startedAt)}–
+                    {formatTime(segment.endedAt)}
+                  </Text>
+                  <Text style={styles.heatedSegmentDetails}>
+                    {formatPrice(segment.priceCentsPerKwh)} c/kWh ·{" "}
+                    {formatEnergy(segment.energyKwh)} · n.{" "}
+                    {formatPrice(segment.costEuros)} €
+                  </Text>
+                  <Text style={styles.heatedSegmentSpotPrice}>
+                    spot {formatPrice(segment.spotPriceCentsPerKwh)} c/kWh
+                  </Text>
+                </View>
+              ))}
+              {todayHeatingTimeline.length === 0 ? (
+                <Text style={styles.noHeatingText}>Ei lämmitystä</Text>
+              ) : null}
+            </View>
+          ) : range === 1 ? (
+            <Text style={styles.noHeatingText}>
+              {getHeatingDayEmptyLabel(heatedDay)}
+            </Text>
+          ) : null}
+        </View>
+      );
+    },
+    [
+      chartMin,
+      chartRange,
+      dataFilter,
+      heatedDaysByKey,
+      range,
+      todayHeatingTimeline,
+      todayKey,
+    ],
+  );
 
   return (
     <View style={styles.screen}>
@@ -469,7 +843,20 @@ export default function ElectricityHistoryScreen() {
       >
         <Text style={styles.backButtonText}>‹</Text>
       </Pressable>
-      <ScrollView contentContainerStyle={styles.content}>
+      <FlatList
+        contentContainerStyle={styles.content}
+        data={
+          isInteractionComplete &&
+          !isLoading &&
+          !error &&
+          !(dataFilter === "heated" && heatingError)
+            ? displayedDays
+            : []
+        }
+        initialNumToRender={6}
+        keyExtractor={(day) => day.dateKey}
+        ListHeaderComponent={
+          <>
         <View style={styles.header}>
           <Text style={styles.title}>Hintahistoria</Text>
           <Text style={styles.subtitle}>Suomi · Europe/Helsinki</Text>
@@ -522,8 +909,19 @@ export default function ElectricityHistoryScreen() {
           verot. Kiinteitä kuukausimaksuja ei lasketa mukaan.
         </Text>
 
-        {isLoading || (dataFilter === "heated" && isHeatingLoading) ? (
-          <ActivityIndicator color="#36f4d4" size="large" style={styles.loader} />
+        {backgroundRefreshing ? (
+          <View style={styles.heatingLoadingCard}>
+            <ActivityIndicator color="#36f4d4" size="small" />
+            <Text style={styles.heatingLoadingText}>Päivitetään...</Text>
+          </View>
+        ) : null}
+
+        {isLoading ? (
+          <View style={styles.loadingCard}>
+            <Text style={styles.loadingTitle}>Ladataan hintatietoja...</Text>
+            <View style={styles.skeletonLineWide} />
+            <View style={styles.skeletonLine} />
+          </View>
         ) : error ? (
           <View style={styles.emptyCard}>
             <Text accessibilityRole="alert" style={styles.emptyText}>{error}</Text>
@@ -534,7 +932,8 @@ export default function ElectricityHistoryScreen() {
               {heatingError} Kaikki hinnat ovat edelleen käytettävissä.
             </Text>
           </View>
-        ) : displayedDays.length === 0 ? (
+        ) : displayedDays.length === 0 &&
+          !(dataFilter === "heated" && isHeatingLoading) ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>
               {dataFilter === "heated"
@@ -545,6 +944,14 @@ export default function ElectricityHistoryScreen() {
         ) : (
           <>
           {priceTrend ? <PriceTrendChart trend={priceTrend} /> : null}
+          {dataFilter === "heated" && isHeatingLoading ? (
+            <View style={styles.heatingLoadingCard}>
+              <ActivityIndicator color="#36f4d4" size="small" />
+              <Text style={styles.heatingLoadingText}>
+                Ladataan lämmitettyjä tunteja...
+              </Text>
+            </View>
+          ) : null}
           {dataFilter === "heated" && range !== 1 ? (
             <View style={styles.rangeSummaryCard}>
               <View style={styles.dayHeader}>
@@ -587,7 +994,7 @@ export default function ElectricityHistoryScreen() {
               </View>
             </View>
           ) : null}
-          {displayedDays.map((day) => {
+          {false && displayedDays.map((day) => {
             const priceSummaries = [
               ["Keskihinta", day.averageTotalPrice, day.averageSpotPrice],
               ["Alin", day.lowestTotalPrice, day.lowestSpotPrice],
@@ -739,7 +1146,13 @@ export default function ElectricityHistoryScreen() {
           })}
           </>
         )}
-      </ScrollView>
+          </>
+        }
+        maxToRenderPerBatch={6}
+        renderItem={renderHistoryDay}
+        showsVerticalScrollIndicator={false}
+        windowSize={5}
+      />
     </View>
   );
 }
@@ -767,6 +1180,10 @@ const styles = StyleSheet.create({
   activeText: { color: "#f8fbff" },
   costNote: { color: "#9fc7df", fontSize: 12, lineHeight: 17, marginBottom: 12, textAlign: "center" },
   loader: { marginTop: 64 },
+  loadingCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginTop: 12, padding: 18 },
+  loadingTitle: { color: "#cfe9ff", fontSize: 15, fontWeight: "900", marginBottom: 14 },
+  skeletonLine: { backgroundColor: "rgba(207,233,255,0.16)", borderRadius: 999, height: 12, marginTop: 10, width: "58%" },
+  skeletonLineWide: { backgroundColor: "rgba(207,233,255,0.16)", borderRadius: 999, height: 12, width: "86%" },
   emptyCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginTop: 12, padding: 30 },
   emptyText: { color: "#cfe9ff", fontSize: 16, fontWeight: "800", lineHeight: 23, textAlign: "center" },
   dayCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginBottom: 12, padding: 16 },
@@ -792,6 +1209,8 @@ const styles = StyleSheet.create({
   trendStat: { backgroundColor: "rgba(5,8,22,0.38)", borderRadius: 12, flex: 1, paddingHorizontal: 9, paddingVertical: 7 },
   trendStatLabel: { color: "#8190b5", fontSize: 10, fontWeight: "800" },
   trendStatValue: { color: "#f7fbff", fontSize: 14, fontWeight: "900", marginTop: 2 },
+  heatingLoadingCard: { alignItems: "center", backgroundColor: "rgba(54,244,212,0.1)", borderColor: "rgba(54,244,212,0.24)", borderRadius: 16, borderWidth: 1, flexDirection: "row", gap: 10, marginBottom: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  heatingLoadingText: { color: "#cfe9ff", fontSize: 13, fontWeight: "800" },
   dayHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   dayTitle: { color: "#f7fbff", fontSize: 18, fontWeight: "900", textTransform: "capitalize" },
   partial: { backgroundColor: "rgba(255,173,77,0.16)", borderRadius: 999, color: "#ffbf73", fontSize: 11, fontWeight: "900", overflow: "hidden", paddingHorizontal: 9, paddingVertical: 4 },

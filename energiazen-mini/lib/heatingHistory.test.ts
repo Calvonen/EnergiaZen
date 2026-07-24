@@ -3,6 +3,7 @@ import {
   calculateRealizedHeatingHours,
   fetchAllHeatingHistory,
   HeatingHistoryReading,
+  mapHeatingPeriodRowsToEnergyConsumption,
 } from "./heatingHistory";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -171,5 +172,138 @@ export async function runHeatingHistoryUnitTests() {
     emptyConsumption.today_estimated_energy_kwh,
     0,
     "tyhja data palauttaa 0 kWh",
+  );
+
+  const periodStartedBeforeRange = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [
+      {
+        duration_minutes: 45,
+        end_time: "2026-07-22T00:45:00.000Z",
+        start_time: "2026-07-22T00:00:00.000Z",
+      },
+    ],
+    todayKey: "2026-07-22",
+  });
+  assertEqual(
+    periodStartedBeforeRange.periods[0].started_at,
+    "2026-07-22T00:00:00.000Z",
+    "ennen aikavalia alkanut rpc-jakso alkaa laskennassa aikavalin alusta",
+  );
+  assertClose(
+    periodStartedBeforeRange.today_estimated_energy_kwh,
+    2.25,
+    "45 minuutin rpc-jakso kuluttaa 2,25 kWh",
+  );
+
+  const periodEndedInsideRange = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [
+      {
+        duration_minutes: 15,
+        end_time: "2026-07-22T02:15:00.000Z",
+        start_time: "2026-07-22T02:00:00.000Z",
+      },
+    ],
+    todayKey: "2026-07-22",
+  });
+  assertClose(
+    periodEndedInsideRange.periods[0].duration_minutes,
+    15,
+    "aikavalilla paattyvan rpc-jakson kesto sailyy",
+  );
+
+  const openPeriodEndedAtRangeEnd = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [
+      {
+        duration_minutes: null,
+        end_time: "2026-07-22T04:00:00.000Z",
+        start_time: "2026-07-22T03:00:00.000Z",
+      },
+    ],
+    todayKey: "2026-07-22",
+  });
+  assertClose(
+    openPeriodEndedAtRangeEnd.periods[0].duration_minutes,
+    60,
+    "avoin rpc-jakso paattyy p_end-aikaan ja kesto lasketaan aikaleimoista",
+  );
+
+  const multipleRpcPeriods = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [
+      {
+        duration_minutes: 10,
+        end_time: "2026-07-22T05:10:00.000Z",
+        start_time: "2026-07-22T05:00:00.000Z",
+      },
+      {
+        duration_minutes: 20,
+        end_time: "2026-07-22T06:20:00.000Z",
+        start_time: "2026-07-22T06:00:00.000Z",
+      },
+    ],
+    todayKey: "2026-07-22",
+  });
+  assertEqual(
+    multipleRpcPeriods.periods.length,
+    2,
+    "useat rpc paalle/pois-jaksot palautuvat erillisina jaksoina",
+  );
+  assertClose(
+    multipleRpcPeriods.today_estimated_energy_kwh,
+    1.5,
+    "useiden rpc-jaksojen energia summataan",
+  );
+
+  const emptyRpcPeriods = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [],
+    todayKey: "2026-07-22",
+  });
+  assertEqual(
+    emptyRpcPeriods.periods,
+    [],
+    "tyhja rpc-historia ei muodosta jaksoja",
+  );
+
+  const rawKnownConsumption = calculateHeatingEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    readings: [
+      { created_at: "2026-07-22T07:00:00.000Z", heating: true },
+      { created_at: "2026-07-22T07:05:00.000Z", heating: true },
+      { created_at: "2026-07-22T07:10:00.000Z", heating: true },
+      { created_at: "2026-07-22T07:15:00.000Z", heating: false },
+      { created_at: "2026-07-22T08:00:00.000Z", heating: true },
+      { created_at: "2026-07-22T08:10:00.000Z", heating: false },
+    ],
+    todayKey: "2026-07-22",
+  });
+  const rpcKnownConsumption = mapHeatingPeriodRowsToEnergyConsumption({
+    getDateKey: (createdAt) => createdAt.slice(0, 10),
+    rows: [
+      {
+        duration_minutes: 15,
+        end_time: "2026-07-22T07:15:00.000Z",
+        start_time: "2026-07-22T07:00:00.000Z",
+      },
+      {
+        duration_minutes: 10,
+        end_time: "2026-07-22T08:10:00.000Z",
+        start_time: "2026-07-22T08:00:00.000Z",
+      },
+    ],
+    todayKey: "2026-07-22",
+  });
+  assertEqual(
+    rpcKnownConsumption.periods.map((period) => period.duration_minutes),
+    rawKnownConsumption.periods.map((period) => period.duration_minutes),
+    "rpc-jaksot tuottavat samat kestot kuin tunnettu raakadata",
+  );
+  assertClose(
+    rpcKnownConsumption.today_estimated_energy_kwh,
+    rawKnownConsumption.today_estimated_energy_kwh,
+    "rpc-jaksot tuottavat saman energiankulutuksen kuin tunnettu raakadata",
   );
 }

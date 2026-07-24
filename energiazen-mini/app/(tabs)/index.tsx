@@ -72,6 +72,35 @@ import {
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
 
+const DEBUG_HISTORY_PERFORMANCE = false;
+const DEBUG_HOME_DAY_TAB_PERFORMANCE = false;
+
+function logHistoryNavigationTap(target: "electricity-history" | "history") {
+  if (!DEBUG_HISTORY_PERFORMANCE) {
+    return;
+  }
+
+  console.log("[EnergyZen perf][navigation]", {
+    event: "navigation tap",
+    target,
+    timestamp: Date.now(),
+  });
+}
+
+function logHomeDayTabPerformance(
+  event: string,
+  data: Record<string, unknown> = {},
+) {
+  if (!DEBUG_HOME_DAY_TAB_PERFORMANCE) {
+    return;
+  }
+
+  console.log("[EnergyZen perf][home-day-tabs]", {
+    event,
+    ...data,
+  });
+}
+
 const priceApiUrl =
   "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const chartPriceStep = 5;
@@ -689,6 +718,8 @@ function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
 }
 
 export default function HomeScreen() {
+  const homeRenderStartedAt = Date.now();
+  logHomeDayTabPerformance("HomeScreen render start");
   const router = useRouter();
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
@@ -721,17 +752,59 @@ export default function HomeScreen() {
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
+  const handleSelectedDayChange = useCallback((day: DaySelection) => {
+    const startedAt = Date.now();
+
+    logHomeDayTabPerformance("tab press", { day });
+    setSelectedDay(day);
+    logHomeDayTabPerformance("setSelectedDay", {
+      day,
+      durationMs: Date.now() - startedAt,
+    });
+  }, []);
+  const handleClearSelectedHourlyPrice = useCallback(() => {
+    setSelectedHourlyPrice(null);
+  }, []);
+  const handleSelectHourlyPrice = useCallback((item: HourlyPrice) => {
+    setSelectedHourlyPrice(item);
+  }, []);
   useEffect(() => {
     storedHeatingPlansRef.current = storedHeatingPlans;
   }, [storedHeatingPlans]);
   const currentHourStart = startOfCurrentHour(currentTime);
   const chartDayKey = getChartDayKey(selectedDay);
+  const pricesByDay = useMemo(() => {
+    const startedAt = Date.now();
+    const nextPricesByDay: Record<DaySelection, HourlyPrice[]> = {
+      today: [],
+      tomorrow: [],
+      yesterday: [],
+    };
+
+    for (const item of hourlyPrices) {
+      const priceDayKey = getFinnishDateKey(item.startDate);
+
+      if (priceDayKey === getChartDayKey("yesterday")) {
+        nextPricesByDay.yesterday.push(item);
+      } else if (priceDayKey === getChartDayKey("today")) {
+        nextPricesByDay.today.push(item);
+      } else if (priceDayKey === getChartDayKey("tomorrow")) {
+        nextPricesByDay.tomorrow.push(item);
+      }
+    }
+
+    logHomeDayTabPerformance("pricesByDay formed", {
+      durationMs: Date.now() - startedAt,
+      today: nextPricesByDay.today.length,
+      tomorrow: nextPricesByDay.tomorrow.length,
+      yesterday: nextPricesByDay.yesterday.length,
+    });
+
+    return nextPricesByDay;
+  }, [hourlyPrices]);
   const chartHourlyPrices = useMemo(
-    () =>
-      hourlyPrices.filter(
-        (item) => getFinnishDateKey(item.startDate) === chartDayKey,
-      ),
-    [chartDayKey, hourlyPrices],
+    () => pricesByDay[selectedDay],
+    [pricesByDay, selectedDay],
   );
   const currentPriceItem = hourlyPrices.find(
     (item) =>
@@ -744,10 +817,21 @@ export default function HomeScreen() {
     currentPrice === null
       ? { ringColor: "#36f4d4" }
       : getPriceTheme(currentPrice);
-  const chartScale = useMemo(
-    () => getChartScale(hourlyPrices),
-    [hourlyPrices],
-  );
+  const chartScaleByDay = useMemo(() => {
+    const startedAt = Date.now();
+    const nextChartScaleByDay = {
+      today: getChartScale(pricesByDay.today),
+      tomorrow: getChartScale(pricesByDay.tomorrow),
+      yesterday: getChartScale(pricesByDay.yesterday),
+    };
+
+    logHomeDayTabPerformance("chartScale formed", {
+      durationMs: Date.now() - startedAt,
+    });
+
+    return nextChartScaleByDay;
+  }, [pricesByDay]);
+  const chartScale = chartScaleByDay[selectedDay];
   useEffect(() => {
     const chartPrices = chartHourlyPrices.map((item) => item.price);
 
@@ -953,6 +1037,8 @@ export default function HomeScreen() {
     }));
   }, [currentHourStart, hourlyPrices]);
   const heatingOptimization = useMemo(() => {
+    const startedAt = Date.now();
+
     if (
       settings.heatingNeedMode !== "automatic" ||
       currentWeightedTemperature === null ||
@@ -963,7 +1049,7 @@ export default function HomeScreen() {
       return null;
     }
 
-    return optimizeHeatingPlan({
+    const result = optimizeHeatingPlan({
       currentBottomTemperature: bottomTemp,
       currentTopTemperature: topTemp,
       currentWeightedTemperature,
@@ -975,6 +1061,13 @@ export default function HomeScreen() {
       ),
       tankReadings: tankTemperatureHistory,
     });
+
+    logHomeDayTabPerformance("heating optimization", {
+      durationMs: Date.now() - startedAt,
+      optimizerHourCount: optimizerHours.length,
+    });
+
+    return result;
   }, [
     bottomTemp,
     currentWeightedTemperature,
@@ -1473,9 +1566,9 @@ export default function HomeScreen() {
       selectedDay,
     ],
   );
-  const chartHeatingMarkers = useMemo(
-    () =>
-      chartHourlyPrices
+  const chartHeatingMarkers = useMemo(() => {
+    const startedAt = Date.now();
+    const markers = chartHourlyPrices
         .map((item) => {
           const dateHourKey = getHourlyPriceDateHourKey(item);
           const isInCurrentSavedPlan =
@@ -1504,14 +1597,23 @@ export default function HomeScreen() {
             markerSource,
           };
         })
-        .filter((item) => item.marker !== null),
-    [
+        .filter((item) => item.marker !== null);
+
+    logHomeDayTabPerformance("heating markers formed", {
+      durationMs: Date.now() - startedAt,
+      markerCount: markers.length,
+      selectedDay,
+    });
+
+    return markers;
+  }, [
       chartDayKey,
       chartHourlyPrices,
       currentHourStart,
       heatedHourIds,
       missedHeatingHourIds,
       plannedHeatingHourIds,
+      selectedDay,
     ],
   );
   useEffect(() => {
@@ -1895,6 +1997,11 @@ export default function HomeScreen() {
     }),
     [pulseAnimation],
   );
+  logHomeDayTabPerformance("HomeScreen render end", {
+    durationMs: Date.now() - homeRenderStartedAt,
+    estimatedElementCount: 220,
+    selectedDay,
+  });
 
   return (
     <View style={styles.screen}>
@@ -1943,7 +2050,10 @@ export default function HomeScreen() {
             }
             accessibilityRole="button"
             android_ripple={{ color: "rgba(255,255,255,0.1)" }}
-            onPress={() => router.push("/electricity-history")}
+            onPress={() => {
+              logHistoryNavigationTap("electricity-history");
+              router.push("/electricity-history");
+            }}
             style={({ pressed }) => [
               styles.ring,
               { borderColor: ringColor, shadowColor: ringColor },
@@ -1991,7 +2101,10 @@ export default function HomeScreen() {
               }${loading ? ", tietoja haetaan" : ""}`}
               accessibilityRole="button"
               android_ripple={{ color: "rgba(255,255,255,0.1)" }}
-              onPress={() => router.push("/history")}
+              onPress={() => {
+                logHistoryNavigationTap("history");
+                router.push("/history");
+              }}
               style={({ pressed }) => [
                 styles.metricCardPressable,
                 pressed && styles.pressedMetricCard,
@@ -2134,7 +2247,7 @@ export default function HomeScreen() {
                   accessibilityLabel={`Näytä ${label.toLowerCase()} hintakaavio`}
                   accessibilityRole="button"
                   key={day}
-                  onPress={() => setSelectedDay(day)}
+                  onPress={() => handleSelectedDayChange(day)}
                   style={[
                     styles.daySelectorButton,
                     isActive && styles.activeDaySelectorButton,
@@ -2174,7 +2287,7 @@ export default function HomeScreen() {
               <>
                 <Pressable
                   accessibilityLabel="Tyhjennä kaavion valinta"
-                  onPress={() => setSelectedHourlyPrice(null)}
+                  onPress={handleClearSelectedHourlyPrice}
                   style={styles.chartTouchArea}
                 >
                   <View style={styles.chartPlotRow}>
@@ -2275,7 +2388,7 @@ export default function HomeScreen() {
                               key={item.id}
                               onPress={(event) => {
                                 event.stopPropagation();
-                                setSelectedHourlyPrice(item);
+                                handleSelectHourlyPrice(item);
                               }}
                               style={styles.chartBarButton}
                             >

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   GestureResponderEvent,
+  InteractionManager,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -48,6 +50,7 @@ type XAxisLabel = {
   text: string;
 };
 
+const DEBUG_HISTORY_PERFORMANCE = false;
 const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
@@ -57,6 +60,35 @@ const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
 const bottomTemperatureColor = "#60A5FA";
 const tooltipBottomOffset = 28;
+
+function getPerformanceNow() {
+  return Date.now();
+}
+
+function logTemperatureHistoryPerformance(
+  range: string,
+  event: string,
+  data: Record<string, unknown>,
+) {
+  if (!DEBUG_HISTORY_PERFORMANCE) {
+    return;
+  }
+
+  console.log("[EnergyZen perf][temperature-history]", {
+    event,
+    range,
+    ...data,
+  });
+}
+
+const temperatureHistoryCache: Record<HistoryTab, TemperatureHistoryPoint[]> = {
+  "24h": [],
+  "7d": [],
+};
+const temperatureHistoryLoaded: Record<HistoryTab, boolean> = {
+  "24h": false,
+  "7d": false,
+};
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -197,38 +229,38 @@ function mapTankReadingToHistoryPoint(
   };
 }
 
-async function fetchTankReadingsSince(startIso: string, maxRows: number) {
-  const pageSize = 1000;
-  const selectColumns = "created_at, top_temp, bottom_temp";
-  const rows: TankReadingRow[] = [];
+async function fetchTemperatureHistoryPoints(
+  startIso: string,
+  rangeLabel: string,
+  bucketMinutes: number,
+  mode: "average" | "latest",
+) {
+  const fetchStartedAt = getPerformanceNow();
+  const { data, error } = await supabase.rpc("get_temperature_history_points", {
+    p_bucket_minutes: bucketMinutes,
+    p_mode: mode,
+    p_start: startIso,
+  });
 
-  while (rows.length < maxRows) {
-    const from = rows.length;
-    const to = Math.min(from + pageSize, maxRows) - 1;
-    const { data, error } = await supabase
-      .from("tank_readings")
-      .select(selectColumns)
-      .gte("created_at", startIso)
-      .order("created_at", { ascending: false })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    const pageRows = (data ?? []) as TankReadingRow[];
-    rows.push(...pageRows);
-
-    if (pageRows.length < pageSize) {
-      break;
-    }
+  if (error) {
+    throw error;
   }
 
-  return sortHistoryByCreatedAtAscending(
-    rows
+  const history = sortHistoryByCreatedAtAscending(
+    ((data ?? []) as TankReadingRow[])
       .map(mapTankReadingToHistoryPoint)
       .filter((point): point is TemperatureHistoryPoint => point !== null),
   );
+
+  logTemperatureHistoryPerformance(rangeLabel, "temperature history fetch", {
+    bucketMinutes,
+    durationMs: getPerformanceNow() - fetchStartedAt,
+    mode,
+    rawRowCount: history.length,
+    rowCount: history.length,
+  });
+
+  return history;
 }
 
 function getVisibleHistory(
@@ -523,42 +555,162 @@ function getChartLineSegments(
 
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
+  const mountedAtRef = useRef(getPerformanceNow());
+  const initialTabRef = useRef<HistoryTab>("24h");
+  const firstRenderLoggedRef = useRef(false);
+  const firstContentLoggedRef = useRef(false);
+  const fetchCountRef = useRef(0);
+  const hasLoadedRef = useRef<Record<HistoryTab, boolean>>({
+    "24h": temperatureHistoryLoaded["24h"],
+    "7d": temperatureHistoryLoaded["7d"],
+  });
+  const inFlightRef = useRef<Record<HistoryTab, boolean>>({
+    "24h": false,
+    "7d": false,
+  });
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
-  const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>([]);
-  const [history7d, setHistory7d] = useState<TemperatureHistoryPoint[]>([]);
+  const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>(
+    temperatureHistoryCache["24h"],
+  );
+  const [history7d, setHistory7d] = useState<TemperatureHistoryPoint[]>(
+    temperatureHistoryCache["7d"],
+  );
+  const [isInteractionComplete, setIsInteractionComplete] = useState(false);
+  const [isLoading24h, setIsLoading24h] = useState(false);
+  const [isLoading7d, setIsLoading7d] = useState(false);
+  const [backgroundRefreshingTab, setBackgroundRefreshingTab] =
+    useState<HistoryTab | null>(null);
   const [chartWidth, setChartWidth] = useState(0);
   const [selectedHistoryPoint, setSelectedHistoryPoint] =
     useState<SelectedHistoryPoint | null>(null);
 
-  const loadHistory = useCallback(async () => {
-    const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
-    const d7Start = getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
+  const loadHistoryTab = useCallback(async (tab: HistoryTab, force = false) => {
+    if (inFlightRef.current[tab]) {
+      return;
+    }
+    if (!force && hasLoadedRef.current[tab]) {
+      return;
+    }
+
+    inFlightRef.current[tab] = true;
+    fetchCountRef.current += 1;
+    const viewLoadStartedAt = getPerformanceNow();
+    const rangeStart =
+      tab === "24h"
+        ? getHistoryRangeStart(24 * 60 * 60 * 1000)
+        : getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
+    const bucketMinutes = tab === "24h" ? 10 : 60;
+    const mode = tab === "24h" ? "latest" : "average";
+    const hasCachedData = hasLoadedRef.current[tab];
+
+    logTemperatureHistoryPerformance(tab, "query started", {
+      fetchCount: fetchCountRef.current,
+      force,
+      hasCachedData,
+    });
+
+    if (hasCachedData) {
+      setBackgroundRefreshingTab(tab);
+    } else if (tab === "24h") {
+      setIsLoading24h(true);
+    } else {
+      setIsLoading7d(true);
+    }
 
     try {
-      const next24h = await fetchTankReadingsSince(h24Start, 2000);
-      const next7d = await fetchTankReadingsSince(d7Start, 12000);
+      const nextHistory = await fetchTemperatureHistoryPoints(
+        rangeStart,
+        tab,
+        bucketMinutes,
+        mode,
+      );
 
-      setHistory24h(next24h);
-      setHistory7d(next7d);
+      if (tab === "24h") {
+        temperatureHistoryCache["24h"] = nextHistory;
+        setHistory24h(nextHistory);
+      } else {
+        temperatureHistoryCache["7d"] = nextHistory;
+        setHistory7d(nextHistory);
+      }
+      hasLoadedRef.current[tab] = true;
+      temperatureHistoryLoaded[tab] = true;
+
+      logTemperatureHistoryPerformance(tab, "query completed", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+        fetchCount: fetchCountRef.current,
+        rowCount: nextHistory.length,
+      });
+      logTemperatureHistoryPerformance(tab, "view load", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+        rowCount: nextHistory.length,
+      });
     } catch (error) {
       console.warn(
         "Lämpöhistorian haku epäonnistui",
         error instanceof Error ? error.message : error,
       );
-      setHistory24h([]);
-      setHistory7d([]);
+    } finally {
+      inFlightRef.current[tab] = false;
+      setBackgroundRefreshingTab((currentTab) =>
+        currentTab === tab ? null : currentTab,
+      );
+      if (tab === "24h") {
+        setIsLoading24h(false);
+      } else {
+        setIsLoading7d(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    void loadHistory();
+    logTemperatureHistoryPerformance(initialTabRef.current, "navigation mounted", {
+      fetchCount: fetchCountRef.current,
+    });
+  }, []);
 
+  useEffect(() => {
+    if (firstRenderLoggedRef.current) {
+      return;
+    }
+    firstRenderLoggedRef.current = true;
+    const elapsedMs = getPerformanceNow() - mountedAtRef.current;
+
+    logTemperatureHistoryPerformance(initialTabRef.current, "first render", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 18,
+      targetUnderMs: 100,
+    });
+    logTemperatureHistoryPerformance(initialTabRef.current, "first content visible", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 18,
+      targetUnderMs: 100,
+    });
+    firstContentLoggedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      setIsInteractionComplete(true);
+      logTemperatureHistoryPerformance(
+        initialTabRef.current,
+        "interaction completed",
+        {
+          durationMs: getPerformanceNow() - mountedAtRef.current,
+        },
+      );
+      void loadHistoryTab(selectedTab);
+    });
+
+    return () => task.cancel();
+  }, [loadHistoryTab, selectedTab]);
+
+  useEffect(() => {
     const intervalId = setInterval(() => {
-      void loadHistory();
+      void loadHistoryTab(selectedTab, true);
     }, 60 * 1000);
 
     return () => clearInterval(intervalId);
-  }, [loadHistory, selectedTab]);
+  }, [loadHistoryTab, selectedTab]);
 
   useEffect(() => {
     if (selectedTab === "7d") {
@@ -579,16 +731,27 @@ export default function TemperatureHistoryScreen() {
     });
   }, [history24h, history7d]);
 
-  const visibleHistory = useMemo(
-    () =>
-      selectedTab === "24h"
-        ? getVisibleHistory(history24h, selectedTab)
-        : getVisibleHistory(history7d, selectedTab),
-    [history24h, history7d, selectedTab],
-  );
+  const visibleHistory = useMemo(() => {
+    const trendStartedAt = getPerformanceNow();
+    const sourceHistory = selectedTab === "24h" ? history24h : history7d;
+    const nextVisibleHistory = isInteractionComplete
+      ? getVisibleHistory(sourceHistory, selectedTab)
+      : [];
+
+    logTemperatureHistoryPerformance(selectedTab, "trend data build", {
+      durationMs: getPerformanceNow() - trendStartedAt,
+      sourceRowCount: sourceHistory.length,
+      visibleRowCount: nextVisibleHistory.length,
+    });
+
+    return nextVisibleHistory;
+  }, [history24h, history7d, isInteractionComplete, selectedTab]);
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isSevenDayView = selectedTab === "7d";
+  const isSelectedTabLoading =
+    (selectedTab === "24h" ? isLoading24h : isLoading7d) ||
+    backgroundRefreshingTab === selectedTab;
   const selectedTooltipLeft = selectedHistoryPoint
     ? Math.min(
         Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
@@ -680,7 +843,22 @@ export default function TemperatureHistoryScreen() {
             );
           })}
         </View>
+        {isSelectedTabLoading ? (
+          <View style={styles.tabLoader}>
+            <ActivityIndicator color="#36f4d4" size="small" />
+            <Text style={styles.tabLoaderText}>
+              {backgroundRefreshingTab === selectedTab
+                ? "Päivitetään..."
+                : `Ladataan ${selectedTab === "24h" ? "24 h" : "7 vrk"} historiaa...`}
+            </Text>
+          </View>
+        ) : null}
 
+        {!isInteractionComplete ? (
+          <View style={styles.placeholderCard}>
+            <Text style={styles.placeholderText}>Lämpöhistoria valmistuu...</Text>
+          </View>
+        ) : (
         <View style={styles.historyCard}>
           <View style={styles.summaryRow}>
             <View style={styles.summaryPill}>
@@ -912,6 +1090,7 @@ export default function TemperatureHistoryScreen() {
             </>
           )}
         </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -1000,6 +1179,20 @@ const styles = StyleSheet.create({
   },
   tabText: { color: "#8ea4cf", fontSize: 14, fontWeight: "900" },
   activeTabText: { color: "#f8fbff" },
+  tabLoader: {
+    alignItems: "center",
+    backgroundColor: "rgba(54,244,212,0.1)",
+    borderColor: "rgba(54,244,212,0.24)",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    width: "100%",
+  },
+  tabLoaderText: { color: "#cfe9ff", fontSize: 13, fontWeight: "800" },
   historyCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
     borderColor: "rgba(255,255,255,0.12)",
