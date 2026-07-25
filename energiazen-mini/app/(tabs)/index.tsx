@@ -406,6 +406,70 @@ function formatSignedFinnishDecimal(value: number) {
   return formatFinnishDecimal(value);
 }
 
+function splitHeatingHourLabel(label: string) {
+  const [timeLabel, priceLabel, costLabel] = label.split(" · ");
+
+  return { costLabel, priceLabel, timeLabel: timeLabel ?? label };
+}
+
+function splitPlanCostSummary(summary: string) {
+  const match = summary.match(/^(Suunnitelman arvioitu hinta) (.+)$/);
+
+  return match
+    ? { label: match[1], value: match[2] }
+    : { label: summary, value: null };
+}
+
+function splitForecastSummary(summary: string) {
+  const match = summary.match(
+    /^Nyt ([^ ]+) · alimmillaan ([^ ]+) · (.+) ([^ ]+) suihkua$/,
+  );
+
+  return match
+    ? {
+        currentShowers: match[1],
+        endLabel: match[3],
+        finalShowers: match[4],
+        minimumShowers: match[2],
+      }
+    : null;
+}
+
+function splitLimitsSummary(summary: string) {
+  const match = summary.match(
+    /^Tavoite ([^ ]+) suihkua · turvaraja ([^ ]+) suihkua$/,
+  );
+
+  return match
+    ? { safetyReserve: match[2], targetReserve: match[1] }
+    : null;
+}
+
+function joinFinnishList(items: string[]) {
+  if (items.length === 0) {
+    return "";
+  }
+
+  if (items.length === 1) {
+    return items[0];
+  }
+
+  return `${items.slice(0, -1).join(", ")} ja ${items[items.length - 1]}`;
+}
+
+function formatManualHeatingHours(
+  day: DaySelection,
+  hours: Pick<HourlyPrice, "date">[],
+) {
+  if (hours.length === 0) {
+    return "Ei valittuja lämmitystunteja.";
+  }
+
+  return `${getDayLabel(day)} ${joinFinnishList(
+    hours.map((hour) => formatHeatingHourRange(hour.date)),
+  )}`;
+}
+
 function formatHourLabel(date: Date) {
   return `${helsinkiHourFormatter.format(date).replace(".", "")}:00`;
 }
@@ -1478,6 +1542,40 @@ export default function HomeScreen() {
     todayActualHeatingHoursCount > 0;
   const explanationVisible =
     selectedHeatingHoursCount !== configuredHeatingHours;
+  const manualSelectedHeatingHours = useMemo(() => {
+    if (settings.heatingNeedMode !== "fixed") {
+      return [];
+    }
+
+    if (selectedDay === "today") {
+      return finalTodayPlannedHeatingHours;
+    }
+
+    if (selectedDay === "tomorrow") {
+      return finalTomorrowPlannedHeatingHours;
+    }
+
+    return [];
+  }, [
+    finalTodayPlannedHeatingHours,
+    finalTomorrowPlannedHeatingHours,
+    selectedDay,
+    settings.heatingNeedMode,
+  ]);
+  const manualSelectedHeatingHoursText = useMemo(
+    () => formatManualHeatingHours(selectedDay, manualSelectedHeatingHours),
+    [manualSelectedHeatingHours, selectedDay],
+  );
+  const isManualHeatingHourNow = useMemo(
+    () =>
+      settings.heatingNeedMode === "fixed" &&
+      finalTodayPlannedHeatingHours.some(
+        (item) =>
+          item.date.getTime() <= currentHourStart.getTime() &&
+          item.endDate.getTime() > currentHourStart.getTime(),
+      ),
+    [currentHourStart, finalTodayPlannedHeatingHours, settings.heatingNeedMode],
+  );
   const forecastHeatingHours =
     heatingRecommendationForecast.heatingHoursAfterForecast;
   const forecastHeatingDuration =
@@ -1657,10 +1755,13 @@ export default function HomeScreen() {
       !cheapest || item.price < cheapest.price ? item : cheapest,
     null,
   );
-  const mostExpensiveHour = chartHourlyPrices.reduce<HourlyPrice | null>(
-    (mostExpensive, item) =>
-      !mostExpensive || item.price > mostExpensive.price ? item : mostExpensive,
-    null,
+  const averageSpotPrice = useMemo(
+    () =>
+      chartHourlyPrices.length > 0
+        ? chartHourlyPrices.reduce((sum, item) => sum + item.price, 0) /
+          chartHourlyPrices.length
+        : null,
+    [chartHourlyPrices],
   );
   useFocusEffect(
     useCallback(() => {
@@ -2478,18 +2579,13 @@ export default function HomeScreen() {
                   </Text>
                 </View>
 
-                <View style={styles.extremePrices}>
-                  <Text style={styles.extremePriceText}>
-                    Halvin tunti:{" "}
-                    {cheapestHour
-                      ? `${cheapestHour.hourLabel} (${formatFinnishDecimal(cheapestHour.price)} c/kWh)`
-                      : "--"}
-                  </Text>
-                  <Text style={styles.extremePriceText}>
-                    Kallein tunti:{" "}
-                    {mostExpensiveHour
-                      ? `${mostExpensiveHour.hourLabel} (${formatFinnishDecimal(mostExpensiveHour.price)} c/kWh)`
-                      : "--"}
+                <View style={styles.dailyAveragePriceInfo}>
+                  <Text style={styles.dailyAveragePriceText}>
+                    Päivän keskihinta{" "}
+                    {averageSpotPrice === null
+                      ? "--"
+                      : formatFinnishDecimal(averageSpotPrice)}{" "}
+                    c/kWh
                   </Text>
                 </View>
 
@@ -2501,14 +2597,35 @@ export default function HomeScreen() {
                     {heatingPlanPresentation.selectedHours.length > 0 ? (
                       <View style={styles.heatingPlanHourList}>
                         {heatingPlanPresentation.selectedHours.map(
-                          (hour, index) => (
-                            <Text
-                              key={`${hour.period}-${hour.label}-${index}`}
-                              style={styles.heatingPlanInfoText}
-                            >
-                              ⭐ {hour.period} {hour.label}
-                            </Text>
-                          ),
+                          (hour, index) => {
+                            const { costLabel, priceLabel, timeLabel } =
+                              splitHeatingHourLabel(hour.label);
+
+                            return (
+                              <Text
+                                key={`${hour.period}-${hour.label}-${index}`}
+                                style={styles.heatingPlanHourText}
+                              >
+                                ⭐ {hour.period} {timeLabel}
+                                {priceLabel ? (
+                                  <>
+                                    {" · "}
+                                    <Text style={styles.heatingPlanHourPrice}>
+                                      {priceLabel}
+                                    </Text>
+                                  </>
+                                ) : null}
+                                {costLabel ? (
+                                  <>
+                                    {" · "}
+                                    <Text style={styles.heatingPlanHourCost}>
+                                      {costLabel}
+                                    </Text>
+                                  </>
+                                ) : null}
+                              </Text>
+                            );
+                          },
                         )}
                       </View>
                     ) : (
@@ -2517,34 +2634,103 @@ export default function HomeScreen() {
                       </Text>
                     )}
                     {heatingPlanPresentation.planCostSummary ? (
-                      <Text style={styles.heatingPlanInfoReason}>
-                        {heatingPlanPresentation.planCostSummary}
-                      </Text>
+                      (() => {
+                        const { label, value } = splitPlanCostSummary(
+                          heatingPlanPresentation.planCostSummary,
+                        );
+
+                        return (
+                          <View style={styles.planEstimatedPriceRow}>
+                            <Text style={styles.planEstimatedPriceLabel}>
+                              {label}
+                            </Text>
+                            <Text style={styles.planEstimatedPriceValue}>
+                              {value ?? ""}
+                            </Text>
+                          </View>
+                        );
+                      })()
                     ) : null}
 
-                    <Text style={styles.heatingPlanInfoReason}>
-                      {heatingPlanPresentation.reason}
+                    <Text style={styles.heatingPlanForecastSubtitle}>
+                      Ennuste
                     </Text>
+                    {(() => {
+                      const forecastParts = splitForecastSummary(
+                        heatingPlanPresentation.forecastSummary,
+                      );
 
-                    <Text style={styles.heatingPlanInfoSubtitle}>
+                      return forecastParts ? (
+                        <Text style={styles.heatingPlanForecastText}>
+                          Nyt{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {forecastParts.currentShowers}
+                          </Text>
+                          {" · alimmillaan "}
+                          <Text style={styles.heatingPlanForecastMinimumValue}>
+                            {forecastParts.minimumShowers}
+                          </Text>
+                          {" · "}
+                          {forecastParts.endLabel}{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {forecastParts.finalShowers}
+                          </Text>{" "}
+                          suihkua
+                        </Text>
+                      ) : (
+                        <Text style={styles.heatingPlanForecastText}>
+                          {heatingPlanPresentation.forecastSummary}
+                        </Text>
+                      );
+                    })()}
+
+                    <Text style={styles.heatingPlanLimitsSubtitle}>
                       Käytetyt rajat
                     </Text>
-                    <Text style={styles.heatingPlanInfoText}>
-                      {heatingPlanPresentation.limitsSummary}
+                    {(() => {
+                      const limitsParts = splitLimitsSummary(
+                        heatingPlanPresentation.limitsSummary,
+                      );
+
+                      return limitsParts ? (
+                        <Text style={styles.heatingPlanLimitsText}>
+                          Tavoite{" "}
+                          <Text style={styles.heatingPlanLimitValue}>
+                            {limitsParts.targetReserve}
+                          </Text>{" "}
+                          suihkua · turvaraja{" "}
+                          <Text style={styles.heatingPlanLimitValue}>
+                            {limitsParts.safetyReserve}
+                          </Text>{" "}
+                          suihkua
+                        </Text>
+                      ) : (
+                        <Text style={styles.heatingPlanLimitsText}>
+                          {heatingPlanPresentation.limitsSummary}
+                        </Text>
+                      );
+                    })()}
+                  </View>
+                ) : settings.heatingNeedMode === "fixed" ? (
+                  <View style={styles.heatingPlanInfo}>
+                    <Text style={styles.heatingPlanInfoTitle}>
+                      Manuaalinen ohjaus
+                    </Text>
+                    <Text style={styles.manualHeatingInfoText}>
+                      Lämmitys toimii valitsemiesi tuntien mukaan.
                     </Text>
 
-                    <Text style={styles.heatingPlanInfoSubtitle}>Ennuste</Text>
-                    <Text style={styles.heatingPlanInfoText}>
-                      {heatingPlanPresentation.forecastSummary}
+                    <Text style={styles.manualHeatingSectionTitle}>
+                      Valitut tunnit
                     </Text>
-                    {heatingPlanPresentation.heatingSummary ? (
-                      <Text style={styles.heatingPlanInfoReason}>
-                        {heatingPlanPresentation.heatingSummary}
+                    <Text style={styles.manualHeatingHoursText}>
+                      {manualSelectedHeatingHoursText}
+                    </Text>
+                    {heating && isManualHeatingHourNow ? (
+                      <Text style={styles.manualHeatingStatusText}>
+                        Lämmitys käynnissä valitun tunnin mukaan.
                       </Text>
                     ) : null}
-                    <Text style={styles.heatingPlanInfoReason}>
-                      {heatingPlanPresentation.statusSummary}
-                    </Text>
                   </View>
                 ) : explanationVisible ? (
                   <View style={styles.heatingPlanInfo}>
@@ -2554,38 +2740,25 @@ export default function HomeScreen() {
                     <Text style={styles.heatingPlanInfoText}>
                       {showSeparatedTodayHeatingHours ? (
                         <>
-                          {settings.heatingNeedMode === "automatic"
-                            ? "Lämmitystuntien enimmäismäärä"
-                            : "Kiinteä lämmitys"}{" "}
+                          Lämmitystuntien enimmäismäärä{" "}
                           on {configuredHeatingHours} h / vrk.{"\n"}
                           Toteutunut {todayActualHeatingHoursCount} h, jäljellä{" "}
                           {remainingPlannedHeatingHoursCount} h.
                         </>
                       ) : (
                         <>
-                          {settings.heatingNeedMode === "automatic"
-                            ? "Lämmitystuntien enimmäismäärä"
-                            : "Kiinteä lämmitys"}{" "}
+                          Lämmitystuntien enimmäismäärä{" "}
                           on {configuredHeatingHours} h / vrk, mutta suunnitelmaan valittiin{" "}
                           {selectedHeatingHoursCount} h.
                         </>
                       )}
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      {settings.heatingNeedMode === "fixed" ? (
-                        <>
-                          Kiinteä lämmitys {settings.fixedHeatingHoursPerDay} h/vrk{" "}
-                          vuorokauden halvimmilla tunneilla.
-                        </>
-                      ) : (
-                        <>
-                          Lämpötilaennusteen perusteella varaaja tarvitsee{" "}
-                          {forecastHeatingDuration} lämmitystä ennen seuraavaa{" "}
-                          lämmityskertaa. {tomorrowPricesAvailable
-                            ? "Tunnit valittiin tämän ja huomisen halvimpien hintojen perusteella."
-                            : "Huomisen hintoja ei ole vielä saatavilla, joten tunnit valittiin tältä päivältä."}
-                        </>
-                      )}
+                      Lämpötilaennusteen perusteella varaaja tarvitsee{" "}
+                      {forecastHeatingDuration} lämmitystä ennen seuraavaa{" "}
+                      lämmityskertaa. {tomorrowPricesAvailable
+                        ? "Tunnit valittiin tämän ja huomisen halvimpien hintojen perusteella."
+                        : "Huomisen hintoja ei ole vielä saatavilla, joten tunnit valittiin tältä päivältä."}
                     </Text>
                   </View>
                 ) : null}
@@ -2673,7 +2846,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(54,244,212,0.36)",
     borderRadius: 18,
     borderWidth: 1,
-    gap: 6,
+    gap: 7,
     marginTop: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -2689,8 +2862,34 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 4,
   },
+  heatingPlanForecastSubtitle: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 3,
+  },
+  heatingPlanLimitsSubtitle: {
+    color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 4,
+  },
   heatingPlanHourList: {
     gap: 2,
+  },
+  heatingPlanHourText: {
+    color: "#cfe9ff",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  heatingPlanHourPrice: {
+    color: "#72ff9d",
+    fontWeight: "800",
+  },
+  heatingPlanHourCost: {
+    color: "#9df5d5",
+    fontWeight: "800",
   },
   heatingPlanInfoText: {
     color: "#cfe9ff",
@@ -2698,8 +2897,81 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     lineHeight: 18,
   },
+  planEstimatedPriceRow: {
+    alignItems: "baseline",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 3,
+    minHeight: 20,
+  },
+  planEstimatedPriceLabel: {
+    color: "#9fc7ff",
+    flex: 1,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 18,
+  },
+  planEstimatedPriceValue: {
+    color: "#72ff9d",
+    fontSize: 14,
+    fontWeight: "700",
+    flexShrink: 0,
+    lineHeight: 20,
+    marginLeft: 12,
+    textAlign: "right",
+  },
+  heatingPlanForecastText: {
+    color: "#cfe9ff",
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 18,
+  },
+  heatingPlanForecastValue: {
+    color: "#72ff9d",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  heatingPlanForecastMinimumValue: {
+    color: "#9df5d5",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  heatingPlanLimitsText: {
+    color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
+  },
+  heatingPlanLimitValue: {
+    fontWeight: "700",
+  },
   heatingPlanInfoReason: {
     color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+  },
+  manualHeatingInfoText: {
+    color: "#9fc7ff",
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 18,
+  },
+  manualHeatingSectionTitle: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  manualHeatingHoursText: {
+    color: "#dffefa",
+    fontSize: 13,
+    fontWeight: "800",
+    lineHeight: 18,
+  },
+  manualHeatingStatusText: {
+    color: "#9df5d5",
     fontSize: 12,
     fontWeight: "700",
     lineHeight: 17,
@@ -3239,17 +3511,16 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "center",
   },
-  extremePrices: {
+  dailyAveragePriceInfo: {
     borderTopColor: "rgba(255,255,255,0.1)",
     borderTopWidth: 1,
-    gap: 6,
     marginTop: 14,
     paddingTop: 14,
   },
-  extremePriceText: {
-    color: "#d9e9ff",
-    fontSize: 14,
-    fontWeight: "800",
+  dailyAveragePriceText: {
+    color: "#8190b5",
+    fontSize: 13,
+    fontWeight: "600",
     textAlign: "center",
   },
 });
