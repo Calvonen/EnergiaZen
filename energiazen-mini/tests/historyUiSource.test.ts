@@ -89,27 +89,44 @@ export function runHistoryUiSourceTests() {
     "hintahistoria ei saa palauttaa koko data-alueen isoa spinneria",
   );
   assertSource(
-    temperatureHistorySource.includes("void loadHistoryTab(selectedTab)") &&
-      temperatureHistorySource.includes("hasLoadedRef.current[tab]") &&
-      !temperatureHistorySource.includes("const d7Start") &&
-      !temperatureHistorySource.includes("fetchTankReadingsSince"),
-    "lampohistoria hakee 7 vrk datan laiskasti vain valitulle valilehdelle",
+    temperatureHistorySource.includes('(["24h", "day"] as const)') &&
+      temperatureHistorySource.includes('"Edelliset päivät"') &&
+      !temperatureHistorySource.includes('"7 vrk"') &&
+      !temperatureHistorySource.includes('"7d"'),
+    "lampohistoria korvaa 7 vrk -valilehden Edelliset paivat -nakymalla",
   );
   assertSource(
     temperatureHistorySource.includes("inFlightRef") &&
       temperatureHistorySource.includes("fetchCountRef") &&
       temperatureHistorySource.includes("Päivitetään...") &&
       !temperatureHistorySource.includes("setHistory24h([])") &&
-      !temperatureHistorySource.includes("setHistory7d([])"),
+      !temperatureHistorySource.includes("setHistoryDay([])"),
     "lampohistoria sailyttaa nakyvan datan ja estaa paallekkaiset haut",
   );
   assertSource(
     temperatureHistorySource.includes('"get_temperature_history_points"') &&
-      temperatureHistorySource.includes(
-        'const bucketMinutes = tab === "24h" ? 10 : 60',
-      ) &&
+      temperatureHistorySource.includes("dayHistoryBucketMinutes") &&
+      temperatureHistorySource.includes("getHelsinkiDayRange(dayKey)") &&
       temperatureHistorySource.includes("p_bucket_minutes: bucketMinutes"),
-    "lampohistoria kayttaa supabase-harvennusta 10/60 minuutin valeilla",
+    "lampohistoria kayttaa Supabase RPC:ta ja 30 minuutin paivabucketointia",
+  );
+  assertSource(
+    temperatureHistorySource.includes("temperatureHistoryDayCache") &&
+      temperatureHistorySource.includes("getTemperatureHistoryDayCacheKey") &&
+      temperatureHistorySource.includes("temperatureHistoryDayCache.has(cacheKey)") &&
+      temperatureHistorySource.includes("temperatureHistoryDayCache.set(cacheKey"),
+    "paivakohtainen lampohistoria cachetetaan nakyman, bucketin ja paivamaaran avaimella",
+  );
+  assertSource(
+    temperatureHistorySource.includes("addHelsinkiCalendarDays") &&
+      temperatureHistorySource.includes("isTodayHelsinkiDay") &&
+      !temperatureHistorySource.includes("Eilen") &&
+      !temperatureHistorySource.includes("Tänään") &&
+      !temperatureHistorySource.includes("dayShortcut") &&
+      temperatureHistorySource.includes(
+        "Tältä päivältä ei ole lämpötilatietoja",
+      ),
+    "paivavalitsin estaa tulevaisuuden, ei sisalla pikavalintoja ja tyhja paiva nayttaa tyhjan tilan",
   );
   assertSource(
     !homeSource.includes("Viimeisin jakso") &&
