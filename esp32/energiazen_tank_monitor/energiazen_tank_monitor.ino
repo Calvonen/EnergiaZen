@@ -73,13 +73,14 @@ unsigned long previousSupabaseSendMs = 0;
 unsigned long previousWiFiReconnectAttemptMs = 0;
 unsigned long lastSuccessfulSensorReadMillis = 0;
 unsigned long lastSuccessfulUploadMillis = 0;
-unsigned long lastUploadedSensorReadMillis = 0;
 unsigned long lastSensorValueChangeMillis = 0;
 unsigned long lastUploadRecoveryAttemptMillis = 0;
 unsigned long lastWiFiStatusLogMillis = 0;
 unsigned long sensorHealthySinceMillis = 0;
 unsigned long uploadHealthySinceMillis = 0;
 unsigned long startupMillis = 0;
+uint32_t acceptedSensorReadingSequence = 0;
+uint32_t lastUploadedSensorReadingSequence = 0;
 uint8_t consecutiveSensorReadFailures = 0;
 bool sensorDataStale = true;
 bool uploadRecoveryAttempted = false;
@@ -251,8 +252,11 @@ bool readTemperatures(unsigned long currentMs) {
   }
   sensorDataStale = false;
   lastSuccessfulSensorReadMillis = currentMs;
+  acceptedSensorReadingSequence++;
 
   Serial.println("Accepted sensor reading");
+  Serial.print("Accepted sensor reading sequence: ");
+  Serial.println(acceptedSensorReadingSequence);
   logElapsed("Time since successful sensor read: ",
              lastSuccessfulSensorReadMillis, currentMs);
   return true;
@@ -352,18 +356,45 @@ bool readShellyHeatingStatus() {
 bool sendSupabaseReading(unsigned long currentMs) {
   maintainWiFi(currentMs);
 
+  const bool hasAcceptedSensorReading = lastSuccessfulSensorReadMillis > 0;
+  const unsigned long sensorReadingAgeMs =
+      hasAcceptedSensorReading ? currentMs - lastSuccessfulSensorReadMillis : 0;
+  Serial.print("Accepted sensor reading sequence: ");
+  Serial.println(acceptedSensorReadingSequence);
+  Serial.print("Last uploaded sensor reading sequence: ");
+  Serial.println(lastUploadedSensorReadingSequence);
+  Serial.print("Accepted sensor reading age: ");
+  if (!hasAcceptedSensorReading) {
+    Serial.println("never");
+  } else {
+    Serial.print(sensorReadingAgeMs / 1000);
+    Serial.println(" s");
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Supabase send skipped: WiFi disconnected");
     uploadHealthySinceMillis = 0;
     return false;
   }
 
-  if (sensorDataStale ||
-      lastSuccessfulSensorReadMillis == 0 ||
-      lastSuccessfulSensorReadMillis != currentMs ||
-      lastSuccessfulSensorReadMillis == lastUploadedSensorReadMillis) {
+  if (sensorDataStale) {
+    Serial.println("Supabase send skipped: sensor data marked stale");
+    return false;
+  }
+
+  if (!hasAcceptedSensorReading) {
+    Serial.println("Supabase send skipped: no accepted sensor reading yet");
+    return false;
+  }
+
+  if (acceptedSensorReadingSequence == lastUploadedSensorReadingSequence) {
     Serial.println(
-        "Supabase send skipped: no fresh accepted sensor reading in this loop");
+        "Supabase send skipped: accepted sensor reading already uploaded");
+    return false;
+  }
+
+  if (sensorReadingAgeMs > 2 * SENSOR_READ_INTERVAL_MS) {
+    Serial.println("Supabase send skipped: accepted sensor reading too old");
     return false;
   }
 
@@ -401,12 +432,14 @@ bool sendSupabaseReading(unsigned long currentMs) {
 
   if (responseCode >= 200 && responseCode < 300) {
     lastSuccessfulUploadMillis = currentMs;
-    lastUploadedSensorReadMillis = lastSuccessfulSensorReadMillis;
+    lastUploadedSensorReadingSequence = acceptedSensorReadingSequence;
     if (uploadHealthySinceMillis == 0) {
       uploadHealthySinceMillis = currentMs;
     }
     uploadRecoveryAttempted = false;
     Serial.println("Supabase insert accepted");
+    Serial.print("Last uploaded sensor reading sequence: ");
+    Serial.println(lastUploadedSensorReadingSequence);
   } else {
     uploadHealthySinceMillis = 0;
     Serial.println("Supabase insert failed");
@@ -544,24 +577,17 @@ void setup() {
 
 void loop() {
   const unsigned long currentMs = millis();
-  bool acceptedSensorReadingThisLoop = false;
 
   if (currentMs - previousSensorReadMs >= SENSOR_READ_INTERVAL_MS) {
     previousSensorReadMs = currentMs;
-    acceptedSensorReadingThisLoop = readTemperatures(currentMs);
+    readTemperatures(currentMs);
     updateDisplay();
     checkSensorWatchdog(currentMs);
   }
 
   if (currentMs - previousSupabaseSendMs >= SUPABASE_SEND_INTERVAL_MS) {
     previousSupabaseSendMs = currentMs;
-    if (acceptedSensorReadingThisLoop) {
-      sendSupabaseReading(currentMs);
-    } else {
-      uploadHealthySinceMillis = 0;
-      Serial.println(
-          "Supabase send skipped: waiting for same-loop accepted sensor reading");
-    }
+    sendSupabaseReading(currentMs);
     checkUploadWatchdog(currentMs);
   }
 
