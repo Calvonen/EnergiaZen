@@ -1,7 +1,9 @@
 const assert = require("assert");
 const {
+  REQUIRED_BLOCKING_READINGS,
   START_HEATING_FILL_RATIO,
   calculateCurrentShowers,
+  createControllerState,
   createRequestError,
   decideHeating,
   resolvePlanControl,
@@ -49,57 +51,108 @@ function readingForShowers(showers, ageSeconds = 30) {
 
 function decide({
   currentHour = 15,
+  failSafeReason = null,
   plannedHours = [15],
   reading = readingForShowers(3),
   relayCurrentlyOn = false,
+  state = createControllerState(),
   testSettings = settings,
 } = {}) {
-  return decideHeating({
-    currentHour,
-    failSafeReason: null,
-    nowMs,
-    plannedHours,
-    reading,
-    relayCurrentlyOn,
-    settings: testSettings,
-  });
+  return decideHeating(
+    {
+      currentHour,
+      failSafeReason,
+      nowMs,
+      plannedHours,
+      reading,
+      relayCurrentlyOn,
+      settings: testSettings,
+    },
+    state,
+  );
 }
 
-assert.strictEqual(START_HEATING_FILL_RATIO, 0.9);
+assert.strictEqual(START_HEATING_FILL_RATIO, 0.92);
+assert.strictEqual(REQUIRED_BLOCKING_READINGS, 2);
 
+const highFillState = createControllerState();
+const firstHighFill = decide({
+  reading: readingForShowers(6),
+  state: highFillState,
+});
+assert.strictEqual(firstHighFill.finalTargetOn, false);
+assert.strictEqual(firstHighFill.startBlockedByFillRatio, false);
+assert.strictEqual(firstHighFill.consecutiveHighFillReadings, 1);
+assert.strictEqual(firstHighFill.reason, "start-fill-ratio-pending");
+
+const secondHighFill = decide({
+  reading: readingForShowers(6),
+  state: highFillState,
+});
+assert.strictEqual(secondHighFill.finalTargetOn, false);
+assert.strictEqual(secondHighFill.startBlockedByFillRatio, true);
+assert.strictEqual(secondHighFill.consecutiveHighFillReadings, 2);
+assert.strictEqual(secondHighFill.reason, "start-fill-ratio");
+
+const exactThresholdState = createControllerState();
+const exactThresholdShowers = settings.fullTankShowers * 0.92;
+decide({
+  reading: readingForShowers(exactThresholdShowers),
+  state: exactThresholdState,
+});
+const exactThresholdDecision = decide({
+  reading: readingForShowers(exactThresholdShowers),
+  state: exactThresholdState,
+});
+assert.strictEqual(exactThresholdDecision.finalTargetOn, false);
 assert.strictEqual(
-  decide({ reading: readingForShowers(6) }).finalTargetOn,
-  false,
-  "planned + full + relay OFF must stay OFF",
+  exactThresholdDecision.startThresholdShowers,
+  exactThresholdShowers,
 );
-assert.strictEqual(
-  decide({ reading: readingForShowers(5.4) }).finalTargetOn,
-  false,
-  "exactly 90 percent + relay OFF must stay OFF",
-);
-assert.strictEqual(
-  decide({ reading: readingForShowers(6 * 0.89) }).finalTargetOn,
-  true,
-  "89 percent + relay OFF may start",
-);
-assert.strictEqual(
-  decide({
-    reading: readingForShowers(6),
-    relayCurrentlyOn: true,
-  }).finalTargetOn,
-  true,
-  "planned relay already ON may continue at 100 percent",
-);
-assert.strictEqual(
-  decide({ currentHour: 14 }).finalTargetOn,
-  false,
-  "hour not planned must be OFF",
-);
-assert.strictEqual(
-  decide({ reading: readingForShowers(3, 121) }).reason,
-  "stale-reading",
-  "stale reading must fail safe OFF",
-);
+
+const resetBelowState = createControllerState();
+decide({ reading: readingForShowers(6), state: resetBelowState });
+const belowThreshold = decide({
+  reading: readingForShowers(settings.fullTankShowers * 0.91),
+  state: resetBelowState,
+});
+assert.strictEqual(belowThreshold.finalTargetOn, true);
+assert.strictEqual(belowThreshold.consecutiveHighFillReadings, 0);
+assert.strictEqual(belowThreshold.reason, "planned-heating-starts");
+
+const lowFirst = decide({
+  reading: readingForShowers(settings.fullTankShowers * 0.91),
+});
+assert.strictEqual(lowFirst.finalTargetOn, true);
+assert.strictEqual(lowFirst.reason, "planned-heating-starts");
+
+const relayOnState = createControllerState();
+decide({ reading: readingForShowers(6), state: relayOnState });
+const relayAlreadyOn = decide({
+  reading: readingForShowers(6),
+  relayCurrentlyOn: true,
+  state: relayOnState,
+});
+assert.strictEqual(relayAlreadyOn.finalTargetOn, true);
+assert.strictEqual(relayAlreadyOn.consecutiveHighFillReadings, 0);
+assert.strictEqual(relayAlreadyOn.reason, "planned-heating-continues");
+
+const unplannedState = createControllerState();
+decide({ reading: readingForShowers(6), state: unplannedState });
+const unplanned = decide({ currentHour: 14, state: unplannedState });
+assert.strictEqual(unplanned.finalTargetOn, false);
+assert.strictEqual(unplanned.consecutiveHighFillReadings, 0);
+
+const staleState = createControllerState();
+decide({ reading: readingForShowers(6), state: staleState });
+const stale = decide({
+  reading: readingForShowers(3, 121),
+  state: staleState,
+});
+assert.strictEqual(stale.reason, "stale-reading");
+assert.strictEqual(stale.finalTargetOn, false);
+assert.strictEqual(stale.consecutiveHighFillReadings, 0);
+
 assert.strictEqual(
   decide({ reading: null }).reason,
   "missing-reading",
@@ -113,6 +166,21 @@ assert.strictEqual(
   "invalid calibration must fail safe OFF",
 );
 
+const failSafeState = createControllerState();
+decide({ reading: readingForShowers(6), state: failSafeState });
+const failSafe = decide({
+  failSafeReason: "plan-fetch-error",
+  state: failSafeState,
+});
+assert.strictEqual(failSafe.finalTargetOn, false);
+assert.strictEqual(failSafe.consecutiveHighFillReadings, 0);
+
+const isolatedStateA = createControllerState();
+const isolatedStateB = createControllerState();
+decide({ reading: readingForShowers(6), state: isolatedStateA });
+assert.strictEqual(isolatedStateA.consecutiveHighFillReadings, 1);
+assert.strictEqual(isolatedStateB.consecutiveHighFillReadings, 0);
+
 const fallbackControl = resolvePlanControl(
   null,
   createRequestError("network down", true),
@@ -121,13 +189,21 @@ const fallbackControl = resolvePlanControl(
 );
 
 assert.strictEqual(fallbackControl.source, "backup");
+assert.strictEqual(fallbackControl.resetHighFillReadings, true);
+const fallbackHighState = createControllerState();
+decide({
+  plannedHours: fallbackControl.plannedHours,
+  reading: readingForShowers(6),
+  state: fallbackHighState,
+});
 assert.strictEqual(
   decide({
     plannedHours: fallbackControl.plannedHours,
     reading: readingForShowers(6),
+    state: fallbackHighState,
   }).finalTargetOn,
   false,
-  "Supabase error fallback cannot bypass full-tank start block",
+  "fallback must use the same two-reading start block",
 );
 assert.strictEqual(
   decide({
@@ -135,7 +211,7 @@ assert.strictEqual(
     reading: readingForShowers(3),
   }).finalTargetOn,
   true,
-  "Supabase error fallback may start below 90 percent",
+  "Supabase error fallback may start below 92 percent",
 );
 assert.strictEqual(
   decide({

@@ -1,26 +1,44 @@
+// EnergyZen Shelly controller source.
+// Keep this file readable. energyzen-controller.min.js is generated for Shelly.
+
 let SWITCH_ID = 0;
 let CHECK_INTERVAL_MS = 60000;
 let MAX_READING_AGE_SECONDS = 120;
-let START_HEATING_FILL_RATIO = 0.9;
+let START_HEATING_FILL_RATIO = 0.92;
+let REQUIRED_BLOCKING_READINGS = 2;
 
 let SUPABASE_URL = "https://amyvzelzbvjvrevikvrp.supabase.co";
-
 let SUPABASE_KEY =
   "sb_publishable_XTchn_mNxZwYWw06_Iphxw_IGYT44WV";
 
 let DEFAULT_BACKUP_HOURS = [2, 3, 4];
 let DEFAULT_FALLBACK_ENABLED = true;
-
 let requestRunning = false;
+
+function createControllerState() {
+  return { consecutiveHighFillReadings: 0 };
+}
+
+let controllerState = createControllerState();
+
+function resetHighFillReadings(state) {
+  state.consecutiveHighFillReadings = 0;
+}
 
 function pad2(value) {
   return value < 10 ? "0" + value : "" + value;
 }
 
 function getLocalDateKey() {
-  let value = new Date();
-  return value.getFullYear() + "-" + pad2(value.getMonth() + 1) +
-    "-" + pad2(value.getDate());
+  let now = new Date();
+
+  return (
+    now.getFullYear() +
+    "-" +
+    pad2(now.getMonth() + 1) +
+    "-" +
+    pad2(now.getDate())
+  );
 }
 
 function isFiniteNumber(value) {
@@ -49,10 +67,8 @@ function normalizeHours(hours) {
   }
 
   for (let index = 0; index < hours.length; index++) {
-    let hour = hours[index];
-
-    if (isValidHour(hour)) {
-      seen[hour] = true;
+    if (isValidHour(hours[index])) {
+      seen[hours[index]] = true;
     }
   }
 
@@ -144,7 +160,8 @@ function loadCachedSettings() {
         settings.enabled = parsed.enabled;
       }
 
-      settings.fullTankAverageTemperature = parsed.fullTankAverageTemperature;
+      settings.fullTankAverageTemperature =
+        parsed.fullTankAverageTemperature;
       settings.fullTankShowers = parsed.fullTankShowers;
       settings.maxTankTemperature = parsed.maxTankTemperature;
       settings.minTankTemperature = parsed.minTankTemperature;
@@ -182,19 +199,14 @@ function supabaseRequest(path, callback) {
     {
       method: "GET",
       url: SUPABASE_URL + "/rest/v1/" + path,
-      headers: {
-        apikey: SUPABASE_KEY,
-      },
+      headers: { apikey: SUPABASE_KEY },
       timeout: 10,
     },
     function (result, errorCode, errorMessage) {
       if (errorCode !== 0) {
         callback(
           null,
-          createRequestError(
-            "HTTP error: " + errorMessage,
-            true,
-          ),
+          createRequestError("HTTP error: " + errorMessage, true),
         );
         return;
       }
@@ -217,21 +229,10 @@ function supabaseRequest(path, callback) {
       try {
         callback(JSON.parse(result.body), null);
       } catch (error) {
-        callback(
-          null,
-          createRequestError("Invalid JSON response", false),
-        );
+        callback(null, createRequestError("Invalid JSON response", false));
       }
     },
   );
-}
-
-function getReadingTimestamp(reading) {
-  if (!reading) {
-    return null;
-  }
-
-  return reading.created_at || reading.measured_at || null;
 }
 
 function calculateCurrentShowers(reading, settings) {
@@ -246,7 +247,8 @@ function calculateCurrentShowers(reading, settings) {
     return null;
   }
 
-  let weightedTemperature = 0.7 * topTemperature + 0.3 * bottomTemperature;
+  let weightedTemperature =
+    0.7 * topTemperature + 0.3 * bottomTemperature;
   let energyRatio = clamp(
     (weightedTemperature - settings.minTankTemperature) /
       (settings.fullTankAverageTemperature -
@@ -264,7 +266,8 @@ function calculateCurrentShowers(reading, settings) {
   return energyRatio * topUsability * settings.fullTankShowers;
 }
 
-function decideHeating(input) {
+function decideHeating(input, state) {
+  let decisionState = state || controllerState;
   let plannedHours = normalizeHours(input.plannedHours);
   let planned = containsHour(plannedHours, input.currentHour);
   let relayCurrentlyOn = input.relayCurrentlyOn === true;
@@ -290,10 +293,8 @@ function decideHeating(input) {
   }
 
   if (!reason) {
-    let timestamp = getReadingTimestamp(reading);
-    let readingTime = timestamp
-      ? new Date(timestamp).getTime()
-      : NaN;
+    let timestamp = reading.created_at || reading.measured_at || null;
+    let readingTime = timestamp ? new Date(timestamp).getTime() : NaN;
 
     if (!isFinite(readingTime)) {
       reason = "missing-reading-time";
@@ -322,22 +323,36 @@ function decideHeating(input) {
       settings.fullTankShowers * START_HEATING_FILL_RATIO;
   }
 
-  if (!reason) {
-    startBlockedByFillRatio =
-      !relayCurrentlyOn &&
-      currentShowers >= startThresholdShowers;
+  if (reason) {
+    resetHighFillReadings(decisionState);
+  } else if (relayCurrentlyOn) {
+    resetHighFillReadings(decisionState);
+    finalTargetOn = true;
+    reason = "planned-heating-continues";
+  } else if (currentShowers < startThresholdShowers) {
+    resetHighFillReadings(decisionState);
+    finalTargetOn = true;
+    reason = "planned-heating-starts";
+  } else {
+    decisionState.consecutiveHighFillReadings = Math.min(
+      decisionState.consecutiveHighFillReadings + 1,
+      REQUIRED_BLOCKING_READINGS,
+    );
 
-    if (startBlockedByFillRatio) {
+    if (
+      decisionState.consecutiveHighFillReadings >=
+      REQUIRED_BLOCKING_READINGS
+    ) {
+      startBlockedByFillRatio = true;
       reason = "start-fill-ratio";
     } else {
-      finalTargetOn = true;
-      reason = relayCurrentlyOn
-        ? "planned-heating-continues"
-        : "planned-heating-starts";
+      reason = "start-fill-ratio-pending";
     }
   }
 
   return {
+    consecutiveHighFillReadings:
+      decisionState.consecutiveHighFillReadings,
     currentShowers: currentShowers,
     finalTargetOn: finalTargetOn,
     planned: planned,
@@ -345,7 +360,9 @@ function decideHeating(input) {
     readingAgeSeconds: readingAgeSeconds,
     reason: reason,
     relayCurrentlyOn: relayCurrentlyOn,
+    requiredBlockingReadings: REQUIRED_BLOCKING_READINGS,
     startBlockedByFillRatio: startBlockedByFillRatio,
+    startHeatingFillRatio: START_HEATING_FILL_RATIO,
     startThresholdShowers: startThresholdShowers,
   };
 }
@@ -356,6 +373,7 @@ function resolvePlanControl(rows, error, settings, today) {
       return {
         failSafeReason: null,
         plannedHours: settings.backupHours,
+        resetHighFillReadings: true,
         source: "backup",
       };
     }
@@ -366,6 +384,7 @@ function resolvePlanControl(rows, error, settings, today) {
           ? "fallback-disabled"
           : "plan-response-invalid",
       plannedHours: [],
+      resetHighFillReadings: true,
       source: "fail-safe",
     };
   }
@@ -397,15 +416,20 @@ function logDecision(decision, source) {
   console.log(
     "EnergyZen decision:",
     JSON.stringify({
+      consecutiveHighFillReadings:
+        decision.consecutiveHighFillReadings,
       currentShowers: decision.currentShowers,
       finalTargetOn: decision.finalTargetOn,
       planned: decision.planned,
-      plannedHours: decision.plannedHours,
       readingAgeSeconds: decision.readingAgeSeconds,
       reason: decision.reason,
       relayCurrentlyOn: decision.relayCurrentlyOn,
+      requiredBlockingReadings:
+        decision.requiredBlockingReadings,
       source: source,
-      startBlockedByFillRatio: decision.startBlockedByFillRatio,
+      startBlockedByFillRatio:
+        decision.startBlockedByFillRatio,
+      startHeatingFillRatio: decision.startHeatingFillRatio,
       startThresholdShowers: decision.startThresholdShowers,
     }),
   );
@@ -419,10 +443,7 @@ function setOutput(targetOn, currentOn) {
 
   Shelly.call(
     "Switch.Set",
-    {
-      id: SWITCH_ID,
-      on: targetOn,
-    },
+    { id: SWITCH_ID, on: targetOn },
     function (_result, errorCode, errorMessage) {
       if (errorCode !== 0) {
         console.log("EnergyZen: Switch.Set failed", errorMessage);
@@ -434,45 +455,49 @@ function setOutput(targetOn, currentOn) {
 }
 
 function executeDecision(control, settings, reading) {
+  if (control.resetHighFillReadings === true) {
+    resetHighFillReadings(controllerState);
+  }
+
   Shelly.call(
     "Switch.GetStatus",
     { id: SWITCH_ID },
     function (status, errorCode, errorMessage) {
       if (errorCode !== 0 || !status) {
-        let failedDecision = decideHeating({
-          currentHour: new Date().getHours(),
-          failSafeReason: "relay-status-error",
-          nowMs: new Date().getTime(),
-          plannedHours: control.plannedHours,
-          reading: reading,
-          relayCurrentlyOn: false,
-          settings: settings,
-        });
-
-        console.log(
-          "EnergyZen: switch status failed",
-          errorMessage,
+        let failedDecision = decideHeating(
+          {
+            currentHour: new Date().getHours(),
+            failSafeReason: "relay-status-error",
+            nowMs: new Date().getTime(),
+            plannedHours: control.plannedHours,
+            reading: reading,
+            relayCurrentlyOn: false,
+            settings: settings,
+          },
+          controllerState,
         );
+
+        console.log("EnergyZen: switch status failed", errorMessage);
         logDecision(failedDecision, control.source);
         setOutput(false, null);
         return;
       }
 
-      let decision = decideHeating({
-        currentHour: new Date().getHours(),
-        failSafeReason: control.failSafeReason,
-        nowMs: new Date().getTime(),
-        plannedHours: control.plannedHours,
-        reading: reading,
-        relayCurrentlyOn: status.output === true,
-        settings: settings,
-      });
+      let decision = decideHeating(
+        {
+          currentHour: new Date().getHours(),
+          failSafeReason: control.failSafeReason,
+          nowMs: new Date().getTime(),
+          plannedHours: control.plannedHours,
+          reading: reading,
+          relayCurrentlyOn: status.output === true,
+          settings: settings,
+        },
+        controllerState,
+      );
 
       logDecision(decision, control.source);
-      setOutput(
-        decision.finalTargetOn,
-        decision.relayCurrentlyOn,
-      );
+      setOutput(decision.finalTargetOn, decision.relayCurrentlyOn);
     },
   );
 }
@@ -517,12 +542,7 @@ function fetchTodayPlan(settings) {
     "&limit=1";
 
   supabaseRequest(planPath, function (rows, error) {
-    let control = resolvePlanControl(
-      rows,
-      error,
-      settings,
-      today,
-    );
+    let control = resolvePlanControl(rows, error, settings, today);
 
     if (control.failSafeReason !== null) {
       executeDecision(control, settings, null);
@@ -553,6 +573,10 @@ function runController() {
 
   supabaseRequest(settingsPath, function (rows, error) {
     let settings = null;
+
+    if (error !== null) {
+      resetHighFillReadings(controllerState);
+    }
 
     if (
       error === null &&
@@ -603,8 +627,10 @@ function startController() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    REQUIRED_BLOCKING_READINGS: REQUIRED_BLOCKING_READINGS,
     START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
     calculateCurrentShowers: calculateCurrentShowers,
+    createControllerState: createControllerState,
     createRequestError: createRequestError,
     decideHeating: decideHeating,
     isValidCalibration: isValidCalibration,
@@ -612,9 +638,6 @@ if (typeof module !== "undefined" && module.exports) {
   };
 }
 
-if (
-  typeof Shelly !== "undefined" &&
-  typeof Timer !== "undefined"
-) {
+if (typeof Shelly !== "undefined" && typeof Timer !== "undefined") {
   startController();
 }
