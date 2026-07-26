@@ -1,13 +1,10 @@
-// EnergyZen Shelly-ohjain
-// SWITCH_ID 0 on lämminvesivaraajan oikea relekanava.
-
 let SWITCH_ID = 0;
 let CHECK_INTERVAL_MS = 60000;
+let MAX_READING_AGE_SECONDS = 120;
+let START_HEATING_FILL_RATIO = 0.9;
 
 let SUPABASE_URL = "https://amyvzelzbvjvrevikvrp.supabase.co";
 
-// Käytä samaa publishable/anon-avainta kuin EnergyZen-sovelluksessa.
-// Älä käytä service_role- tai secret-avainta Shelly-scriptissä.
 let SUPABASE_KEY =
   "sb_publishable_XTchn_mNxZwYWw06_Iphxw_IGYT44WV";
 
@@ -21,15 +18,17 @@ function pad2(value) {
 }
 
 function getLocalDateKey() {
-  let now = new Date();
+  let value = new Date();
+  return value.getFullYear() + "-" + pad2(value.getMonth() + 1) +
+    "-" + pad2(value.getDate());
+}
 
-  return (
-    now.getFullYear() +
-    "-" +
-    pad2(now.getMonth() + 1) +
-    "-" +
-    pad2(now.getDate())
-  );
+function isFiniteNumber(value) {
+  return typeof value === "number" && isFinite(value);
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(Math.max(value, minimum), maximum);
 }
 
 function isValidHour(value) {
@@ -52,7 +51,7 @@ function normalizeHours(hours) {
   for (let index = 0; index < hours.length; index++) {
     let hour = hours[index];
 
-    if (isValidHour(hour) && seen[hour] !== true) {
+    if (isValidHour(hour)) {
       seen[hour] = true;
     }
   }
@@ -76,50 +75,105 @@ function containsHour(hours, hour) {
   return false;
 }
 
+function createDefaultSettings() {
+  return {
+    backupHours: DEFAULT_BACKUP_HOURS,
+    enabled: DEFAULT_FALLBACK_ENABLED,
+    fullTankAverageTemperature: null,
+    fullTankShowers: null,
+    maxTankTemperature: null,
+    minTankTemperature: null,
+    targetShowerReserve: null,
+  };
+}
+
+function isValidCalibration(settings) {
+  return (
+    settings !== null &&
+    isFiniteNumber(settings.fullTankShowers) &&
+    settings.fullTankShowers > 0 &&
+    isFiniteNumber(settings.fullTankAverageTemperature) &&
+    isFiniteNumber(settings.minTankTemperature) &&
+    isFiniteNumber(settings.maxTankTemperature) &&
+    isFiniteNumber(settings.targetShowerReserve) &&
+    settings.targetShowerReserve >= 0 &&
+    settings.targetShowerReserve <= settings.fullTankShowers &&
+    settings.fullTankAverageTemperature > settings.minTankTemperature &&
+    settings.fullTankAverageTemperature > 42 &&
+    settings.maxTankTemperature > settings.minTankTemperature &&
+    settings.fullTankAverageTemperature <= settings.maxTankTemperature
+  );
+}
+
+function normalizeSettingsRow(row, fallbackSettings) {
+  let backupHours = normalizeHours(row.backup_hours);
+
+  return {
+    backupHours:
+      backupHours.length > 0
+        ? backupHours
+        : fallbackSettings.backupHours,
+    enabled:
+      typeof row.fallback_enabled === "boolean"
+        ? row.fallback_enabled
+        : fallbackSettings.enabled,
+    fullTankAverageTemperature:
+      row.full_tank_average_temperature,
+    fullTankShowers: row.full_tank_showers,
+    maxTankTemperature: row.max_tank_temperature,
+    minTankTemperature: row.min_tank_temperature,
+    targetShowerReserve: row.target_shower_reserve,
+  };
+}
+
 function loadCachedSettings() {
-  let fallbackEnabled = DEFAULT_FALLBACK_ENABLED;
-  let backupHours = DEFAULT_BACKUP_HOURS;
+  let settings = createDefaultSettings();
 
   try {
     let stored = Script.storage.getItem("fallback");
 
     if (stored !== null) {
       let parsed = JSON.parse(stored);
-      let normalizedHours = normalizeHours(parsed.backupHours);
+      let backupHours = normalizeHours(parsed.backupHours);
+
+      if (backupHours.length > 0) {
+        settings.backupHours = backupHours;
+      }
 
       if (typeof parsed.enabled === "boolean") {
-        fallbackEnabled = parsed.enabled;
+        settings.enabled = parsed.enabled;
       }
 
-      if (normalizedHours.length > 0) {
-        backupHours = normalizedHours;
-      }
+      settings.fullTankAverageTemperature = parsed.fullTankAverageTemperature;
+      settings.fullTankShowers = parsed.fullTankShowers;
+      settings.maxTankTemperature = parsed.maxTankTemperature;
+      settings.minTankTemperature = parsed.minTankTemperature;
+      settings.targetShowerReserve = parsed.targetShowerReserve;
     }
   } catch (error) {
     console.log("EnergyZen: cached settings error", error);
   }
 
-  return {
-    enabled: fallbackEnabled,
-    backupHours: backupHours,
-  };
+  return settings;
 }
 
-function saveCachedSettings(enabled, backupHours) {
-  try {
-    Script.storage.setItem(
-      "fallback",
-      JSON.stringify({
-        enabled: enabled,
-        backupHours: backupHours,
-      }),
-    );
-  } catch (error) {
-    console.log(
-      "EnergyZen: settings cache write failed",
-      error,
-    );
+function saveCachedSettings(settings) {
+  if (!isValidCalibration(settings)) {
+    return;
   }
+
+  try {
+    Script.storage.setItem("fallback", JSON.stringify(settings));
+  } catch (error) {
+    console.log("EnergyZen: settings cache write failed", error);
+  }
+}
+
+function createRequestError(message, allowFallback) {
+  return {
+    allowFallback: allowFallback === true,
+    message: message,
+  };
 }
 
 function supabaseRequest(path, callback) {
@@ -135,19 +189,27 @@ function supabaseRequest(path, callback) {
     },
     function (result, errorCode, errorMessage) {
       if (errorCode !== 0) {
-        callback(null, "HTTP error: " + errorMessage);
+        callback(
+          null,
+          createRequestError(
+            "HTTP error: " + errorMessage,
+            true,
+          ),
+        );
         return;
       }
 
-      if (
-        !result ||
-        result.code < 200 ||
-        result.code >= 300
-      ) {
+      if (!result || result.code < 200 || result.code >= 300) {
+        let status = result ? result.code : 0;
+        let transient =
+          status === 0 || status === 408 || status === 429 || status >= 500;
+
         callback(
           null,
-          "Supabase status: " +
-            (result ? result.code : "unknown"),
+          createRequestError(
+            "Supabase status: " + (result ? result.code : "unknown"),
+            transient,
+          ),
         );
         return;
       }
@@ -155,223 +217,404 @@ function supabaseRequest(path, callback) {
       try {
         callback(JSON.parse(result.body), null);
       } catch (error) {
-        callback(null, "Invalid JSON response");
+        callback(
+          null,
+          createRequestError("Invalid JSON response", false),
+        );
       }
     },
   );
 }
 
-function setOutput(targetOn, source, hours) {
+function getReadingTimestamp(reading) {
+  if (!reading) {
+    return null;
+  }
+
+  return reading.created_at || reading.measured_at || null;
+}
+
+function calculateCurrentShowers(reading, settings) {
+  let topTemperature = reading ? reading.top_temp : null;
+  let bottomTemperature = reading ? reading.bottom_temp : null;
+
+  if (
+    !isFiniteNumber(topTemperature) ||
+    !isFiniteNumber(bottomTemperature) ||
+    !isValidCalibration(settings)
+  ) {
+    return null;
+  }
+
+  let weightedTemperature = 0.7 * topTemperature + 0.3 * bottomTemperature;
+  let energyRatio = clamp(
+    (weightedTemperature - settings.minTankTemperature) /
+      (settings.fullTankAverageTemperature -
+        settings.minTankTemperature),
+    0,
+    1,
+  );
+  let topUsability = clamp(
+    (topTemperature - 42) /
+      (settings.fullTankAverageTemperature - 42),
+    0,
+    1,
+  );
+
+  return energyRatio * topUsability * settings.fullTankShowers;
+}
+
+function decideHeating(input) {
+  let plannedHours = normalizeHours(input.plannedHours);
+  let planned = containsHour(plannedHours, input.currentHour);
+  let relayCurrentlyOn = input.relayCurrentlyOn === true;
+  let settings = input.settings;
+  let reading = input.reading;
+  let readingAgeSeconds = null;
+  let currentShowers = null;
+  let startThresholdShowers = null;
+  let startBlockedByFillRatio = false;
+  let finalTargetOn = false;
+  let reason = input.failSafeReason || null;
+
+  if (!reason && !planned) {
+    reason = "hour-not-planned";
+  }
+
+  if (!reason && !isValidCalibration(settings)) {
+    reason = "invalid-calibration";
+  }
+
+  if (!reason && !reading) {
+    reason = "missing-reading";
+  }
+
+  if (!reason) {
+    let timestamp = getReadingTimestamp(reading);
+    let readingTime = timestamp
+      ? new Date(timestamp).getTime()
+      : NaN;
+
+    if (!isFinite(readingTime)) {
+      reason = "missing-reading-time";
+    } else {
+      readingAgeSeconds = (input.nowMs - readingTime) / 1000;
+
+      if (
+        readingAgeSeconds < 0 ||
+        readingAgeSeconds > MAX_READING_AGE_SECONDS
+      ) {
+        reason = "stale-reading";
+      }
+    }
+  }
+
+  if (!reason) {
+    currentShowers = calculateCurrentShowers(reading, settings);
+
+    if (!isFiniteNumber(currentShowers)) {
+      reason = "invalid-reading";
+    }
+  }
+
+  if (isValidCalibration(settings)) {
+    startThresholdShowers =
+      settings.fullTankShowers * START_HEATING_FILL_RATIO;
+  }
+
+  if (!reason) {
+    startBlockedByFillRatio =
+      !relayCurrentlyOn &&
+      currentShowers >= startThresholdShowers;
+
+    if (startBlockedByFillRatio) {
+      reason = "start-fill-ratio";
+    } else {
+      finalTargetOn = true;
+      reason = relayCurrentlyOn
+        ? "planned-heating-continues"
+        : "planned-heating-starts";
+    }
+  }
+
+  return {
+    currentShowers: currentShowers,
+    finalTargetOn: finalTargetOn,
+    planned: planned,
+    plannedHours: plannedHours,
+    readingAgeSeconds: readingAgeSeconds,
+    reason: reason,
+    relayCurrentlyOn: relayCurrentlyOn,
+    startBlockedByFillRatio: startBlockedByFillRatio,
+    startThresholdShowers: startThresholdShowers,
+  };
+}
+
+function resolvePlanControl(rows, error, settings, today) {
+  if (error !== null) {
+    if (error.allowFallback === true && settings.enabled) {
+      return {
+        failSafeReason: null,
+        plannedHours: settings.backupHours,
+        source: "backup",
+      };
+    }
+
+    return {
+      failSafeReason:
+        error.allowFallback === true
+          ? "fallback-disabled"
+          : "plan-response-invalid",
+      plannedHours: [],
+      source: "fail-safe",
+    };
+  }
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return {
+      failSafeReason: "plan-missing",
+      plannedHours: [],
+      source: "fail-safe",
+    };
+  }
+
+  if (rows[0].plan_date !== today) {
+    return {
+      failSafeReason: "wrong-plan-date",
+      plannedHours: [],
+      source: "fail-safe",
+    };
+  }
+
+  return {
+    failSafeReason: null,
+    plannedHours: normalizeHours(rows[0].planned_hours),
+    source: "energyzen",
+  };
+}
+
+function logDecision(decision, source) {
+  console.log(
+    "EnergyZen decision:",
+    JSON.stringify({
+      currentShowers: decision.currentShowers,
+      finalTargetOn: decision.finalTargetOn,
+      planned: decision.planned,
+      plannedHours: decision.plannedHours,
+      readingAgeSeconds: decision.readingAgeSeconds,
+      reason: decision.reason,
+      relayCurrentlyOn: decision.relayCurrentlyOn,
+      source: source,
+      startBlockedByFillRatio: decision.startBlockedByFillRatio,
+      startThresholdShowers: decision.startThresholdShowers,
+    }),
+  );
+}
+
+function setOutput(targetOn, currentOn) {
+  if (currentOn === targetOn) {
+    requestRunning = false;
+    return;
+  }
+
+  Shelly.call(
+    "Switch.Set",
+    {
+      id: SWITCH_ID,
+      on: targetOn,
+    },
+    function (_result, errorCode, errorMessage) {
+      if (errorCode !== 0) {
+        console.log("EnergyZen: Switch.Set failed", errorMessage);
+      }
+
+      requestRunning = false;
+    },
+  );
+}
+
+function executeDecision(control, settings, reading) {
   Shelly.call(
     "Switch.GetStatus",
     { id: SWITCH_ID },
     function (status, errorCode, errorMessage) {
       if (errorCode !== 0 || !status) {
+        let failedDecision = decideHeating({
+          currentHour: new Date().getHours(),
+          failSafeReason: "relay-status-error",
+          nowMs: new Date().getTime(),
+          plannedHours: control.plannedHours,
+          reading: reading,
+          relayCurrentlyOn: false,
+          settings: settings,
+        });
+
         console.log(
           "EnergyZen: switch status failed",
           errorMessage,
         );
-        requestRunning = false;
+        logDecision(failedDecision, control.source);
+        setOutput(false, null);
         return;
       }
 
-      let currentOn = status.output === true;
+      let decision = decideHeating({
+        currentHour: new Date().getHours(),
+        failSafeReason: control.failSafeReason,
+        nowMs: new Date().getTime(),
+        plannedHours: control.plannedHours,
+        reading: reading,
+        relayCurrentlyOn: status.output === true,
+        settings: settings,
+      });
 
-      console.log(
-        "EnergyZen:",
-        "source=" + source,
-        "hour=" + new Date().getHours(),
-        "hours=" + JSON.stringify(hours),
-        "current=" + currentOn,
-        "target=" + targetOn,
-      );
-
-      if (currentOn === targetOn) {
-        requestRunning = false;
-        return;
-      }
-
-      Shelly.call(
-        "Switch.Set",
-        {
-          id: SWITCH_ID,
-          on: targetOn,
-        },
-        function (
-          _result,
-          setErrorCode,
-          setErrorMessage
-        ) {
-          if (setErrorCode !== 0) {
-            console.log(
-              "EnergyZen: Switch.Set failed",
-              setErrorMessage,
-            );
-          } else {
-            console.log(
-              "EnergyZen: water-heater relay set to",
-              targetOn ? "ON" : "OFF",
-            );
-          }
-
-          requestRunning = false;
-        },
+      logDecision(decision, control.source);
+      setOutput(
+        decision.finalTargetOn,
+        decision.relayCurrentlyOn,
       );
     },
   );
 }
 
-function useFallback(settings, reason) {
-  let currentHour = new Date().getHours();
+function fetchLatestReading(control, settings) {
+  let readingPath =
+    "tank_readings" +
+    "?select=top_temp,bottom_temp,created_at,heating" +
+    "&order=created_at.desc" +
+    "&limit=1";
 
-  if (!settings.enabled) {
-    console.log(
-      "EnergyZen: fallback disabled:",
-      reason,
-    );
-    setOutput(false, "fallback-disabled", []);
-    return;
-  }
+  supabaseRequest(readingPath, function (rows, error) {
+    if (error !== null) {
+      executeDecision(
+        {
+          failSafeReason: "reading-fetch-error",
+          plannedHours: control.plannedHours,
+          source: "fail-safe",
+        },
+        settings,
+        null,
+      );
+      return;
+    }
 
-  let targetOn = containsHour(
-    settings.backupHours,
-    currentHour,
-  );
+    let reading =
+      Array.isArray(rows) && rows.length > 0
+        ? rows[0]
+        : null;
 
-  console.log("EnergyZen: using fallback:", reason);
-
-  setOutput(
-    targetOn,
-    "backup",
-    settings.backupHours,
-  );
+    executeDecision(control, settings, reading);
+  });
 }
 
 function fetchTodayPlan(settings) {
   let today = getLocalDateKey();
-
-  let path =
+  let planPath =
     "heating_plans" +
     "?select=plan_date,planned_hours,updated_at" +
     "&plan_date=eq." +
     today +
     "&limit=1";
 
-  supabaseRequest(path, function (rows, error) {
-    if (error !== null) {
-      useFallback(settings, error);
+  supabaseRequest(planPath, function (rows, error) {
+    let control = resolvePlanControl(
+      rows,
+      error,
+      settings,
+      today,
+    );
+
+    if (control.failSafeReason !== null) {
+      executeDecision(control, settings, null);
       return;
     }
 
-    if (
-      !Array.isArray(rows) ||
-      rows.length === 0
-    ) {
-      useFallback(settings, "today plan missing");
-      return;
-    }
-
-    let plan = rows[0];
-
-    if (plan.plan_date !== today) {
-      useFallback(settings, "wrong plan date");
-      return;
-    }
-
-    let plannedHours = normalizeHours(
-      plan.planned_hours,
-    );
-
-    // Tyhjä planned_hours on kelvollinen suunnitelma:
-    // se tarkoittaa, ettei tänään lämmitetä.
-    let currentHour = new Date().getHours();
-
-    let targetOn = containsHour(
-      plannedHours,
-      currentHour,
-    );
-
-    setOutput(
-      targetOn,
-      "energyzen",
-      plannedHours,
-    );
+    fetchLatestReading(control, settings);
   });
 }
 
 function runController() {
   if (requestRunning) {
-    console.log(
-      "EnergyZen: previous request still running",
-    );
+    console.log("EnergyZen: previous request still running");
     return;
   }
 
   requestRunning = true;
 
   let cachedSettings = loadCachedSettings();
-
   let settingsPath =
     "heating_control_settings" +
-    "?select=backup_hours,fallback_enabled" +
+    "?select=backup_hours,fallback_enabled," +
+    "full_tank_showers,full_tank_average_temperature," +
+    "min_tank_temperature,max_tank_temperature," +
+    "target_shower_reserve" +
     "&id=eq.1" +
     "&limit=1";
 
-  supabaseRequest(
-    settingsPath,
-    function (rows, error) {
-      if (
-        error === null &&
-        Array.isArray(rows) &&
-        rows.length > 0
-      ) {
-        let row = rows[0];
+  supabaseRequest(settingsPath, function (rows, error) {
+    let settings = null;
 
-        let normalizedHours = normalizeHours(
-          row.backup_hours,
-        );
+    if (
+      error === null &&
+      Array.isArray(rows) &&
+      rows.length > 0
+    ) {
+      settings = normalizeSettingsRow(rows[0], cachedSettings);
 
-        if (normalizedHours.length > 0) {
-          cachedSettings.backupHours =
-            normalizedHours;
-        }
-
-        if (
-          typeof row.fallback_enabled ===
-          "boolean"
-        ) {
-          cachedSettings.enabled =
-            row.fallback_enabled;
-        }
-
-        saveCachedSettings(
-          cachedSettings.enabled,
-          cachedSettings.backupHours,
-        );
-      } else {
-        console.log(
-          "EnergyZen: settings fetch failed, using cached settings",
-          error,
-        );
+      if (isValidCalibration(settings)) {
+        saveCachedSettings(settings);
       }
+    } else if (
+      error !== null &&
+      error.allowFallback === true &&
+      isValidCalibration(cachedSettings)
+    ) {
+      settings = cachedSettings;
+      console.log(
+        "EnergyZen: settings connection failed, using valid cache",
+        error.message,
+      );
+    }
 
-      fetchTodayPlan(cachedSettings);
-    },
-  );
+    if (!isValidCalibration(settings)) {
+      executeDecision(
+        {
+          failSafeReason: "invalid-calibration",
+          plannedHours: [],
+          source: "fail-safe",
+        },
+        settings,
+        null,
+      );
+      return;
+    }
+
+    fetchTodayPlan(settings);
+  });
 }
 
-console.log("EnergyZen controller started");
-console.log(
-  "EnergyZen water-heater switch id:",
-  SWITCH_ID,
-);
+function startController() {
+  runController();
 
-runController();
-
-Timer.set(
-  CHECK_INTERVAL_MS,
-  true,
-  function () {
+  Timer.set(CHECK_INTERVAL_MS, true, function () {
     runController();
-  },
-);
+  });
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
+    calculateCurrentShowers: calculateCurrentShowers,
+    createRequestError: createRequestError,
+    decideHeating: decideHeating,
+    isValidCalibration: isValidCalibration,
+    resolvePlanControl: resolvePlanControl,
+  };
+}
+
+if (
+  typeof Shelly !== "undefined" &&
+  typeof Timer !== "undefined"
+) {
+  startController();
+}
