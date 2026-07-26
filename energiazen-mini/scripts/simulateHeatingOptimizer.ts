@@ -190,6 +190,7 @@ function buildInputs(scenario: SimulationScenario) {
         date,
         endDate,
         id: `${scenario.id}:${date.toISOString()}`,
+        isCurrentHour: false,
         price: scenario.hourlyPrices[index],
         segmentHours: 1,
         startDate: date.toISOString(),

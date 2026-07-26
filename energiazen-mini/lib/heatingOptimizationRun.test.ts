@@ -2,6 +2,7 @@ import {
   createHeatingOptimizationInputKey,
   createHeatingOptimizationRunController,
   HeatingOptimizationInputSnapshot,
+  materializeHeatingOptimizationHours,
 } from "./heatingOptimizationRun";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -9,6 +10,12 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
     throw new Error(
       `${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
     );
+  }
+}
+
+function assertClose(actual: number, expected: number, message: string) {
+  if (Math.abs(actual - expected) > 0.000001) {
+    throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
 
@@ -33,11 +40,13 @@ function createSnapshot(): HeatingOptimizationInputSnapshot {
         date: new Date("2026-07-26T10:00:00.000Z"),
         endDate: new Date("2026-07-26T11:00:00.000Z"),
         id: "2026-07-26:13",
+        isCurrentHour: false,
         price: 4,
         segmentHours: 1,
         startDate: "2026-07-26T10:00:00.000Z",
       },
     ],
+    isCurrentlyHeating: false,
     manualRefreshRevision: 0,
     mode: "automatic",
     readingCreatedAt: "2026-07-26T07:18:00.000Z",
@@ -105,6 +114,84 @@ export function runHeatingOptimizationRunUnitTests() {
       createHeatingOptimizationInputKey(changedPrices) !== baseKey,
       true,
       "muuttuneet hinnat kaynnistavat uuden ajon",
+    );
+  }
+
+  {
+    const atMinute18 = createSnapshot();
+    atMinute18.hours = materializeHeatingOptimizationHours(
+      atMinute18.hours,
+      new Date("2026-07-26T10:18:00.000Z"),
+    );
+    const atMinute18And30Seconds = createSnapshot();
+    atMinute18And30Seconds.hours = materializeHeatingOptimizationHours(
+      atMinute18And30Seconds.hours,
+      new Date("2026-07-26T10:18:30.000Z"),
+    );
+
+    assertClose(
+      atMinute18.hours[0].segmentHours,
+      42 / 60,
+      "segmentin kesto lasketaan ajon todellisesta aloitushetkesta",
+    );
+    assertEqual(
+      atMinute18.hours[0].segmentHours !==
+        atMinute18And30Seconds.hours[0].segmentHours,
+      true,
+      "materialisoitu segmentin kesto seuraa ajon tarkkaa aloitushetkea",
+    );
+    assertEqual(
+      createHeatingOptimizationInputKey(atMinute18),
+      createHeatingOptimizationInputKey(atMinute18And30Seconds),
+      "pelkka ajan kuluminen saman hintatunnin sisalla ei muuta snapshot-avainta",
+    );
+
+    const controller = createHeatingOptimizationRunController();
+    assertEqual(
+      typeof controller.start(createHeatingOptimizationInputKey(atMinute18)),
+      "number",
+      "ensimmainen tuntinsisainen snapshot kaynnistaa ajon",
+    );
+    assertEqual(
+      controller.start(
+        createHeatingOptimizationInputKey(atMinute18And30Seconds),
+      ),
+      null,
+      "30 sekunnin kellopaivitys ei kaynnista uutta optimointia",
+    );
+  }
+
+  {
+    const changedReading = createSnapshot();
+    changedReading.readingCreatedAt = "2026-07-26T07:18:30.000Z";
+    assertEqual(
+      createHeatingOptimizationInputKey(changedReading) !== baseKey,
+      true,
+      "uusi mittaus kaynnistaa optimoinnin vaikka lampotila olisi sama",
+    );
+
+    const changedHour = createSnapshot();
+    changedHour.hours = [
+      {
+        ...changedHour.hours[0],
+        date: new Date("2026-07-26T11:00:00.000Z"),
+        endDate: new Date("2026-07-26T12:00:00.000Z"),
+        id: "2026-07-26:14",
+        startDate: "2026-07-26T11:00:00.000Z",
+      },
+    ];
+    assertEqual(
+      createHeatingOptimizationInputKey(changedHour) !== baseKey,
+      true,
+      "hintatunnin vaihtuminen kaynnistaa optimoinnin",
+    );
+
+    const manualRefresh = createSnapshot();
+    manualRefresh.manualRefreshRevision += 1;
+    assertEqual(
+      createHeatingOptimizationInputKey(manualRefresh) !== baseKey,
+      true,
+      "manuaalinen paivitys kaynnistaa optimoinnin",
     );
   }
 

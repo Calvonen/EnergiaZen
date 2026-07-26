@@ -160,6 +160,42 @@ export function buildHeatingPlanPresentation({
   };
 }
 
+export function buildStoredHeatingPlanPresentation({
+  currentShowers,
+  safetyShowerReserve,
+  selectedHours,
+  targetShowerReserve,
+}: {
+  currentShowers: number | null;
+  safetyShowerReserve: number;
+  selectedHours: HeatingPlanPresentation["selectedHours"];
+  targetShowerReserve: number;
+}) {
+  const currentShowersValue = currentShowers ?? 0;
+  const presentation = buildHeatingPlanPresentation({
+    automaticMaxHeatingHours: selectedHours.length,
+    cheaperPlanRejectedForSafety: false,
+    currentShowers,
+    fallbackInUse: false,
+    finalShowers: currentShowersValue,
+    fixedHeatingHoursPerDay: selectedHours.length,
+    forecastEndLabel: "ennusteen paivittyessa",
+    heatingNeedMode: "automatic",
+    minimumShowers: currentShowersValue,
+    planValid: true,
+    safetyShowerReserve,
+    selectedHours,
+    targetShowerReserve,
+  });
+
+  return {
+    ...presentation,
+    forecastSummary: "Ennustetta päivitetään uusilla lämpötilatiedoilla.",
+    reason: "Näytetään viimeksi tallennettu lämmityssuunnitelma.",
+    statusSummary: "Viimeksi tallennettu suunnitelma",
+  };
+}
+
 export function hasCheaperSafetyRejectedPlan({
   rejectedPlans,
   selectedCost,

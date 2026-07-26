@@ -23,6 +23,8 @@
     "lib/heatingGain.test.ts",
     "lib/heatingPlanPresentation.ts",
     "lib/heatingPlanPresentation.test.ts",
+    "lib/heatingPlanPublication.ts",
+    "lib/heatingPlanPublication.test.ts",
     "lib/fixedHeatingPlan.ts",
     "lib/heatingHourSettings.ts",
     "lib/heatingModeSettings.ts",

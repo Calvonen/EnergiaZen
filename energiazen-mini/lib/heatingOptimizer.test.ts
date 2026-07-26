@@ -53,6 +53,7 @@ function optimizationHour(
     date: startDate,
     endDate: new Date(startDate.getTime() + 60 * 60 * 1000),
     id: `${helsinkiDate}:${String(helsinkiHour).padStart(2, "0")}`,
+    isCurrentHour: false,
     price,
     segmentHours,
     startDate: startDate.toISOString(),
@@ -86,6 +87,34 @@ function stratifiedTemperatureInput(weightedTemperature: number) {
   };
 }
 
+function uniformTemperatureForShowers(
+  showers: number,
+  settings: HeatingOptimizationSettings,
+) {
+  let lower = 42;
+  let upper = settings.fullTankAverageTemperature;
+
+  for (let iteration = 0; iteration < 80; iteration += 1) {
+    const temperature = (lower + upper) / 2;
+    const estimate = calculateStratifiedShowersLeft({
+      bottomTemperature: temperature,
+      fullTankAverageTemperature: settings.fullTankAverageTemperature,
+      fullTankShowers: settings.fullTankShowers,
+      maxTankTemperature: settings.maxTankTemperature,
+      minTankTemperature: settings.absoluteMinimumTemperature,
+      topTemperature: temperature,
+    }).showersLeft;
+
+    if (estimate < showers) {
+      lower = temperature;
+    } else {
+      upper = temperature;
+    }
+  }
+
+  return (lower + upper) / 2;
+}
+
 function reading(
   createdAt: string,
   temperature: number,
@@ -100,6 +129,163 @@ function reading(
 }
 
 export function runHeatingOptimizerUnitTests() {
+  {
+    const runStartThresholdScenario = (
+      currentShowers: number,
+      isCurrentlyHeating = false,
+    ) => {
+      const settings = defaultSettings({
+        maxHeatingHours: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: Math.max(currentShowers - 0.1, 0),
+      });
+      const temperature = uniformTemperatureForShowers(
+        currentShowers,
+        settings,
+      );
+      const currentHour = {
+        ...optimizationHour("2026-07-22", 12, 1),
+        isCurrentHour: true,
+      };
+
+      return optimizeHeatingPlan({
+        currentBottomTemperature: temperature,
+        currentTopTemperature: temperature,
+        currentWeightedTemperature: temperature,
+        heatingGainPerHour: 10,
+        hourlyDrops: createHourlyDrops(0, { 12: 5, 13: 5 }),
+        hours: [currentHour, optimizationHour("2026-07-22", 13, 2)],
+        isCurrentlyHeating,
+        settings,
+      });
+    };
+
+    const fullTank = runStartThresholdScenario(6);
+    assertEqual(
+      fullTank.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "taysi varaaja estaa nykyisen tunnin mutta sallii tulevan tunnin",
+    );
+    assertEqual(
+      fullTank.diagnostics.currentHourStartBlockedByFillRatio,
+      true,
+      "100 prosentin tayttoaste aktivoi aloitusportin",
+    );
+
+    const exactlyAtThreshold = runStartThresholdScenario(5.4);
+    assertEqual(
+      exactlyAtThreshold.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "tasan 90 prosenttia estaa nykyisen tunnin aloituksen",
+    );
+    assertClose(
+      exactlyAtThreshold.diagnostics.startHeatingThresholdShowers,
+      5.4,
+      "aloitusraja on 90 prosenttia tayden varaajan suihkuista",
+    );
+
+    const belowThreshold = runStartThresholdScenario(5.39);
+    assertEqual(
+      belowThreshold.selectedHeatingHourIds,
+      ["2026-07-22:12"],
+      "hieman alle 90 prosenttia sallii nykyisen halvimman tunnin",
+    );
+
+    const alreadyHeating = runStartThresholdScenario(6, true);
+    assertEqual(
+      alreadyHeating.selectedHeatingHourIds,
+      ["2026-07-22:12"],
+      "jo kaynnissa oleva lammitys saa jatkua tayttoasterajasta huolimatta",
+    );
+    assertEqual(
+      alreadyHeating.diagnostics.currentHourStartBlockedByFillRatio,
+      false,
+      "kaynnissa oleva lammitys ohittaa uuden aloituksen portin",
+    );
+    assertEqual(
+      alreadyHeating.diagnostics.heatingStartFillRatioDiagnostics[0]
+        ?.alreadyHeatingAtSegmentStart,
+      true,
+      "nykyisen segmentin heating-tila tunnistetaan jatkumiseksi",
+    );
+
+    const settings = defaultSettings({
+      maxHeatingHours: 1,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 5.9,
+    });
+    const fullTemperature = uniformTemperatureForShowers(6, settings);
+    const currentHour = {
+      ...optimizationHour("2026-07-22", 12, 1),
+      isCurrentHour: true,
+    };
+    const delayedStart = optimizeHeatingPlan({
+      currentBottomTemperature: fullTemperature,
+      currentTopTemperature: fullTemperature,
+      currentWeightedTemperature: fullTemperature,
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(0, { 12: 0.1, 13: 5 }),
+      hours: [
+        currentHour,
+        optimizationHour("2026-07-22", 13, 2),
+        optimizationHour("2026-07-22", 14, 3),
+      ],
+      settings,
+    });
+    const currentDecision =
+      delayedStart.diagnostics.heatingStartFillRatioDiagnostics.find(
+        (item) => item.candidateHour === "2026-07-22:12",
+      );
+    const nextDecision =
+      delayedStart.diagnostics.heatingStartFillRatioDiagnostics.find(
+        (item) => item.candidateHour === "2026-07-22:13",
+      );
+    const laterDecision =
+      delayedStart.diagnostics.heatingStartFillRatioDiagnostics.find(
+        (item) => item.candidateHour === "2026-07-22:14",
+      );
+
+    if (!currentDecision || !nextDecision || !laterDecision) {
+      throw new Error("aloitusrajan tuntikohtainen diagnostiikka puuttuu");
+    }
+
+    assertEqual(
+      currentDecision.blockedByStartFillRatio,
+      true,
+      "100 prosentin nykyinen tunti estyy",
+    );
+    assertEqual(
+      nextDecision.blockedByStartFillRatio,
+      true,
+      "seuraava tunti estyy kun ennustettu tayttoaste on yha vahintaan 90 prosenttia",
+    );
+    assertEqual(
+      nextDecision.projectedFillRatioBeforeHeating >= 0.9,
+      true,
+      "seuraavan tunnin aloitustaytto raportoidaan",
+    );
+    assertEqual(
+      laterDecision.blockedByStartFillRatio,
+      false,
+      "myohempi tunti sallitaan tayttoasteen pudottua alle 90 prosentin",
+    );
+    assertEqual(
+      laterDecision.projectedFillRatioBeforeHeating < 0.9,
+      true,
+      "myohemman tunnin sallittu aloitustaytto raportoidaan",
+    );
+    assertEqual(
+      delayedStart.selectedHeatingHourIds,
+      ["2026-07-22:14"],
+      "optimizer valitsee myohemman sallitun tunnin halvempien estettyjen sijaan",
+    );
+    assertEqual(
+      laterDecision.selected,
+      true,
+      "valittu myohempi tunti sisaltyy diagnostiikkaan",
+    );
+  }
+
   {
     const startDate = new Date("2026-07-22T07:00:00.000Z");
     const endDate = new Date("2026-07-22T08:00:00.000Z");
@@ -624,8 +810,8 @@ export function runHeatingOptimizerUnitTests() {
 
     assertEqual(
       result.selectedHeatingHourIds,
-      ["2026-07-22:22"],
-      "vuorokauden vaihde kasitellaan yhtena optimointi-ikkunana ja lammitys aikaistuu tarvittaessa",
+      ["2026-07-22:23"],
+      "vuorokauden vaihde kasitellaan yhtena ikkunana ja aloitus odottaa alle 90 prosentin tayttoastetta",
     );
     assertEqual(result.selectedHeatingHourIds.length, 1, "paiville ei anneta erillisia taytta kiintiota");
   }

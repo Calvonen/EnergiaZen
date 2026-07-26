@@ -13,6 +13,7 @@ export type HeatingOptimizationHour = {
   date: Date;
   endDate: Date;
   id: string;
+  isCurrentHour: boolean;
   price: number;
   segmentHours: number;
   startDate: string;
@@ -75,8 +76,18 @@ export type HourlyHeatingForecast = {
   violatedSpikeReserve: boolean;
 };
 
+export type HeatingStartFillRatioDiagnostic = {
+  alreadyHeatingAtSegmentStart: boolean;
+  blockedByStartFillRatio: boolean;
+  candidateHour: string;
+  projectedFillRatioBeforeHeating: number;
+  projectedShowersBeforeHeating: number;
+  selected: boolean;
+};
+
 export type HeatingSimulationResult = {
   forecast: HourlyHeatingForecast[];
+  heatingStartFillRatioDiagnostics: HeatingStartFillRatioDiagnostic[];
   largestSpike:
     | {
         drop: number;
@@ -104,16 +115,22 @@ export type RejectedShift = {
 export type HeatingOptimizationResult = HeatingSimulationResult & {
   diagnostics: {
     firstValidSelectionCount: number | null;
+    currentFillRatio: number;
+    currentShowers: number;
+    currentHourStartBlockedByFillRatio: boolean;
     forecast: HourlyHeatingForecast[];
+    fullTankShowers: number;
     heatingGainEstimate: Pick<
       HeatingGainEstimate,
       "fallbackUsed" | "gainPerHour"
     >;
+    heatingStartFillRatioDiagnostics: HeatingStartFillRatioDiagnostic[];
     largestSpike: HeatingSimulationResult["largestSpike"];
     minimumPredictedShowersLeft: number;
     minimumPredictedTemperature: number;
     rejectedShifts: RejectedShift[];
     selectedPlanCost: number;
+    startHeatingThresholdShowers: number;
     selectedHeatingHourIds: string[];
     validCombinationCountsBySelectionCount: Record<number, number>;
   };
@@ -122,6 +139,7 @@ export type HeatingOptimizationResult = HeatingSimulationResult & {
 };
 
 const millisecondsPerHour = 60 * 60 * 1000;
+export const startHeatingFillRatio = 0.9;
 
 export function getHeatingOptimizationSegmentHours({
   endDate,
@@ -373,6 +391,7 @@ export function simulateHeatingPlan({
   heatingGainPerHour,
   hourlyDrops,
   hours,
+  isCurrentlyHeating = false,
   selectedHeatingHourIds,
   settings,
   spikes = detectConsumptionSpikes(hourlyDrops, settings),
@@ -383,6 +402,7 @@ export function simulateHeatingPlan({
   heatingGainPerHour: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  isCurrentlyHeating?: boolean;
   selectedHeatingHourIds: string[];
   settings: HeatingOptimizationSettings;
   spikes?: ConsumptionSpike[];
@@ -390,6 +410,7 @@ export function simulateHeatingPlan({
   const selectedHourIds = new Set(selectedHeatingHourIds);
   const spikesByHour = new Map(spikes.map((spike) => [spike.hour, spike]));
   const forecast: HourlyHeatingForecast[] = [];
+  const heatingStartFillRatioDiagnostics: HeatingStartFillRatioDiagnostic[] = [];
   const violations = new Set<string>();
   const temperatureDifference = currentTopTemperature - currentBottomTemperature;
   let temperature =
@@ -407,6 +428,8 @@ export function simulateHeatingPlan({
   let minimumPredictedShowersLeft = currentShowers;
   let largestSpike: HeatingSimulationResult["largestSpike"] = null;
   let totalCost = 0;
+  let previousHourEndTime: number | null = null;
+  let wasHeatingAtPreviousSegmentEnd: boolean = false;
 
   for (const hour of hours) {
     const helsinkiHour = getHelsinkiHourNumber(hour.date);
@@ -415,12 +438,54 @@ export function simulateHeatingPlan({
     const segmentHours = Number.isFinite(hour.segmentHours)
       ? clamp(hour.segmentHours, 0, 1)
       : 1;
-    const appliedDrop = hourlyDrop * segmentHours;
     const isHeatingSelected = selectedHourIds.has(hour.id);
-    const heatingGain = isHeatingSelected
+    const temperatureBefore = temperature;
+    const {
+      bottomTemperature: bottomTemperatureAtSegmentStart,
+      topTemperature: topTemperatureAtSegmentStart,
+    } = getStratifiedTemperaturesFromWeightedTemperature({
+      temperatureDifference,
+      weightedTemperature: temperatureBefore,
+    });
+    const projectedShowersBeforeHeating = calculateStratifiedShowersLeft({
+      bottomTemperature: bottomTemperatureAtSegmentStart,
+      fullTankAverageTemperature: settings.fullTankAverageTemperature,
+      fullTankShowers: settings.fullTankShowers,
+      maxTankTemperature: settings.maxTankTemperature,
+      minTankTemperature: settings.absoluteMinimumTemperature,
+      topTemperature: topTemperatureAtSegmentStart,
+    }).showersLeft;
+    const projectedFillRatioBeforeHeating =
+      settings.fullTankShowers > 0
+        ? projectedShowersBeforeHeating / settings.fullTankShowers
+        : Number.POSITIVE_INFINITY;
+    const alreadyHeatingAtSegmentStart: boolean = hour.isCurrentHour
+      ? isCurrentlyHeating
+      : wasHeatingAtPreviousSegmentEnd &&
+        previousHourEndTime === hour.date.getTime();
+    const blockedByStartFillRatio: boolean =
+      projectedFillRatioBeforeHeating >= startHeatingFillRatio &&
+      !alreadyHeatingAtSegmentStart;
+    const heatingApplied: boolean =
+      isHeatingSelected && !blockedByStartFillRatio;
+    const appliedDrop = hourlyDrop * segmentHours;
+    const heatingGain = heatingApplied
       ? heatingGainPerHour * segmentHours
       : 0;
-    const temperatureBefore = temperature;
+
+    heatingStartFillRatioDiagnostics.push({
+      alreadyHeatingAtSegmentStart,
+      blockedByStartFillRatio,
+      candidateHour: hour.id,
+      projectedFillRatioBeforeHeating,
+      projectedShowersBeforeHeating,
+      selected: isHeatingSelected,
+    });
+
+    if (isHeatingSelected && blockedByStartFillRatio) {
+      violations.add("heating start fill ratio would be exceeded");
+    }
+
     const temperatureBeforeHeating = temperatureBefore - appliedDrop;
     const {
       bottomTemperature: bottomTemperatureBeforeHeating,
@@ -449,7 +514,7 @@ export function simulateHeatingPlan({
       weightedTemperature: temperature,
     });
 
-    if (isHeatingSelected) {
+    if (heatingApplied) {
       totalCost += hour.price;
     }
 
@@ -522,6 +587,8 @@ export function simulateHeatingPlan({
       violatedReserve,
       violatedSpikeReserve,
     });
+    previousHourEndTime = hour.endDate.getTime();
+    wasHeatingAtPreviousSegmentEnd = heatingApplied;
   }
 
   const finalShowersLeft =
@@ -534,6 +601,7 @@ export function simulateHeatingPlan({
 
   return {
     forecast,
+    heatingStartFillRatioDiagnostics,
     largestSpike,
     minimumPredictedShowersLeft,
     minimumPredictedTemperature,
@@ -551,6 +619,7 @@ export function optimizeHeatingPlan({
   heatingGainPerHour,
   hourlyDrops,
   hours,
+  isCurrentlyHeating = false,
   settings,
   tankReadings = [],
 }: {
@@ -560,6 +629,7 @@ export function optimizeHeatingPlan({
   heatingGainPerHour?: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  isCurrentlyHeating?: boolean;
   settings: HeatingOptimizationSettings;
   tankReadings?: TankTemperatureReading[];
 }): HeatingOptimizationResult {
@@ -584,7 +654,29 @@ export function optimizeHeatingPlan({
           settings.fallbackHeatingGainPerHour,
         );
   const spikes = detectConsumptionSpikes(hourlyDrops, settings);
-  const maxHeatingHours = Math.min(settings.maxHeatingHours, sortedHours.length);
+  const currentShowers = calculateStratifiedShowersLeft({
+    bottomTemperature: currentBottomTemperature,
+    fullTankAverageTemperature: settings.fullTankAverageTemperature,
+    fullTankShowers: settings.fullTankShowers,
+    maxTankTemperature: settings.maxTankTemperature,
+    minTankTemperature: settings.absoluteMinimumTemperature,
+    topTemperature: currentTopTemperature,
+  }).showersLeft;
+  const startHeatingThresholdShowers =
+    settings.fullTankShowers * startHeatingFillRatio;
+  const currentFillRatio =
+    settings.fullTankShowers > 0
+      ? currentShowers / settings.fullTankShowers
+      : 0;
+  const hasCurrentHour = sortedHours.some((hour) => hour.isCurrentHour);
+  const currentHourStartBlockedByFillRatio =
+    hasCurrentHour &&
+    !isCurrentlyHeating &&
+    currentShowers >= startHeatingThresholdShowers;
+  const maxHeatingHours = Math.min(
+    settings.maxHeatingHours,
+    sortedHours.length,
+  );
   const rejectedShifts: RejectedShift[] = [];
   let bestResult: HeatingSimulationResult | null = null;
   let bestInvalidResult: HeatingSimulationResult | null = null;
@@ -606,12 +698,17 @@ export function optimizeHeatingPlan({
         heatingGainPerHour: heatingGainEstimate.gainPerHour,
         hourlyDrops,
         hours: sortedHours,
+        isCurrentlyHeating,
         selectedHeatingHourIds,
         settings,
         spikes,
       });
 
       if (!result.valid) {
+        const selectedStartWasBlocked =
+          result.heatingStartFillRatioDiagnostics.some(
+            (item) => item.selected && item.blockedByStartFillRatio,
+          );
         const minimumShowersLeftBeforeNextHeating = Math.min(
           ...result.forecast
             .filter((item) => !item.isHeatingSelected)
@@ -624,12 +721,14 @@ export function optimizeHeatingPlan({
           reason: result.violations.join("; "),
           selectedHeatingHourIds,
         });
-        bestInvalidResult =
-          !bestInvalidResult ||
-          result.minimumPredictedShowersLeft >
-            bestInvalidResult.minimumPredictedShowersLeft
-            ? result
-            : bestInvalidResult;
+        if (!selectedStartWasBlocked) {
+          bestInvalidResult =
+            !bestInvalidResult ||
+            result.minimumPredictedShowersLeft >
+              bestInvalidResult.minimumPredictedShowersLeft
+              ? result
+              : bestInvalidResult;
+        }
         return;
       }
 
@@ -667,6 +766,7 @@ export function optimizeHeatingPlan({
       heatingGainPerHour: heatingGainEstimate.gainPerHour,
       hourlyDrops,
       hours: sortedHours,
+      isCurrentlyHeating,
       selectedHeatingHourIds: [],
       settings,
       spikes,
@@ -676,16 +776,25 @@ export function optimizeHeatingPlan({
     ...finalResult,
     diagnostics: {
       firstValidSelectionCount,
+      currentFillRatio,
+      currentShowers,
+      currentHourStartBlockedByFillRatio,
       forecast: finalResult.forecast,
+      fullTankShowers: settings.fullTankShowers,
       heatingGainEstimate: {
         fallbackUsed: heatingGainEstimate.fallbackUsed,
         gainPerHour: heatingGainEstimate.gainPerHour,
       },
+      heatingStartFillRatioDiagnostics:
+        finalResult.heatingStartFillRatioDiagnostics.filter(
+          (item) => item.selected || item.blockedByStartFillRatio,
+        ),
       largestSpike: finalResult.largestSpike,
       minimumPredictedShowersLeft: finalResult.minimumPredictedShowersLeft,
       minimumPredictedTemperature: finalResult.minimumPredictedTemperature,
       rejectedShifts,
       selectedPlanCost: finalResult.totalCost,
+      startHeatingThresholdShowers,
       selectedHeatingHourIds: finalResult.selectedHeatingHourIds,
       validCombinationCountsBySelectionCount,
     },

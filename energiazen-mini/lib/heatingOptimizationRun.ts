@@ -1,8 +1,11 @@
-import type {
-  HeatingOptimizationHour,
-  HeatingOptimizationSettings,
+import {
+  getHeatingOptimizationSegmentHours,
+  type HeatingOptimizationHour,
+  type HeatingOptimizationSettings,
 } from "./heatingOptimizer";
-import type { TankTemperatureReading } from "./tankTemperatureForecast";
+import type {
+  TankTemperatureReading,
+} from "./tankTemperatureForecast";
 
 export type HeatingOptimizationInputSnapshot = {
   currentBottomTemperature: number | null;
@@ -11,11 +14,29 @@ export type HeatingOptimizationInputSnapshot = {
   heatingHistory: TankTemperatureReading[];
   hourlyDrops: Record<number, number>;
   hours: HeatingOptimizationHour[];
+  isCurrentlyHeating: boolean;
   manualRefreshRevision: number;
   mode: string;
   readingCreatedAt: string | null;
   settings: HeatingOptimizationSettings;
 };
+
+export function materializeHeatingOptimizationHours(
+  hours: HeatingOptimizationHour[],
+  forecastStart: Date,
+) {
+  return hours.map((hour) => ({
+    ...hour,
+    isCurrentHour:
+      hour.date.getTime() <= forecastStart.getTime() &&
+      hour.endDate.getTime() > forecastStart.getTime(),
+    segmentHours: getHeatingOptimizationSegmentHours({
+      endDate: hour.endDate,
+      forecastStart,
+      startDate: hour.date,
+    }),
+  }));
+}
 
 export function createHeatingOptimizationInputKey(
   snapshot: HeatingOptimizationInputSnapshot,
@@ -36,11 +57,12 @@ export function createHeatingOptimizationInputKey(
     ),
     hours: snapshot.hours.map((hour) => [
       hour.id,
+      hour.isCurrentHour,
       hour.startDate,
       hour.endDate.toISOString(),
       hour.price,
-      hour.segmentHours,
     ]),
+    isCurrentlyHeating: snapshot.isCurrentlyHeating,
     manualRefreshRevision: snapshot.manualRefreshRevision,
     mode: snapshot.mode,
     readingCreatedAt: snapshot.readingCreatedAt,

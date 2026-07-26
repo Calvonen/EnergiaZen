@@ -39,7 +39,6 @@ import {
 import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
-  getHeatingOptimizationSegmentHours,
   HeatingOptimizationHour,
   HeatingOptimizationResult,
   optimizeHeatingPlan,
@@ -47,11 +46,18 @@ import {
 import {
   createHeatingOptimizationInputKey,
   createHeatingOptimizationRunController,
+  materializeHeatingOptimizationHours,
 } from "@/lib/heatingOptimizationRun";
 import {
   buildHeatingPlanPresentation,
+  buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
 } from "@/lib/heatingPlanPresentation";
+import {
+  getChangedHeatingPlans,
+  getHeatingPlanPresentationSource,
+  publishLatestHeatingPlan,
+} from "@/lib/heatingPlanPublication";
 import {
   DaySelection,
   getCheapestHours,
@@ -65,6 +71,7 @@ import {
 import {
   defaultSettings,
   defaultTankTemperature,
+  EnergiaZenSettings,
   loadSettings,
 } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
@@ -835,12 +842,27 @@ export default function HomeScreen() {
   const [manualOptimizationRevision, setManualOptimizationRevision] =
     useState(0);
   const [heatingOptimizationState, setHeatingOptimizationState] = useState<{
+    hours: HeatingOptimizationHour[];
     inputKey: string;
     result: HeatingOptimizationResult | null;
-  }>({ inputKey: "", result: null });
+    runId: number;
+    settings: EnergiaZenSettings;
+    todayPlanDate: string | null;
+    tomorrowPlanDate: string | null;
+  }>({
+    hours: [],
+    inputKey: "",
+    result: null,
+    runId: 0,
+    settings: defaultSettings,
+    todayPlanDate: null,
+    tomorrowPlanDate: null,
+  });
   const heatingOptimizationRunControllerRef = useRef(
     createHeatingOptimizationRunController(),
   );
+  const heatingPlanSaveChainRef = useRef(Promise.resolve());
+  const latestHeatingPlanSaveVersionRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const handleSelectedDayChange = useCallback((day: DaySelection) => {
     const startedAt = Date.now();
@@ -1126,15 +1148,14 @@ export default function HomeScreen() {
       date: item.date,
       endDate: item.endDate,
       id: item.id,
+      isCurrentHour:
+        item.date.getTime() <= currentHourStart.getTime() &&
+        item.endDate.getTime() > currentHourStart.getTime(),
       price: item.price,
-      segmentHours: getHeatingOptimizationSegmentHours({
-        endDate: item.endDate,
-        forecastStart: currentTime,
-        startDate: item.date,
-      }),
+      segmentHours: 1,
       startDate: item.startDate,
     }));
-  }, [currentHourStart, currentTime, hourlyPrices]);
+  }, [currentHourStart, hourlyPrices]);
   const heatingOptimizationSettings = useMemo(
     () =>
       createHeatingOptimizationSettings(
@@ -1151,6 +1172,7 @@ export default function HomeScreen() {
       heatingHistory: heatingGainHistory,
       hourlyDrops: hourlyTemperatureDropProfile,
       hours: optimizerHours,
+      isCurrentlyHeating: heating,
       manualRefreshRevision: manualOptimizationRevision,
       mode: settings.heatingNeedMode,
       readingCreatedAt: tankUpdatedAt,
@@ -1161,6 +1183,7 @@ export default function HomeScreen() {
       currentWeightedTemperature,
       heatingGainHistory,
       heatingOptimizationSettings,
+      heating,
       hourlyTemperatureDropProfile,
       manualOptimizationRevision,
       optimizerHours,
@@ -1177,11 +1200,16 @@ export default function HomeScreen() {
   useEffect(() => {
     const controller = heatingOptimizationRunControllerRef.current;
     const runId = controller.start(heatingOptimizationInputKey);
+    const settingsSnapshot = settings;
 
     if (runId === null) {
       return;
     }
     const acceptedRunId = runId;
+    const runHours = materializeHeatingOptimizationHours(
+      heatingOptimizationInput.hours,
+      new Date(),
+    );
 
     async function runOptimization() {
       const startedAt = Date.now();
@@ -1198,7 +1226,7 @@ export default function HomeScreen() {
         currentWeightedTemperature !== null &&
         currentTopTemperature !== null &&
         currentBottomTemperature !== null &&
-        heatingOptimizationInput.hours.length > 0
+        runHours.length > 0
       ) {
         result = await Promise.resolve().then(() =>
           optimizeHeatingPlan({
@@ -1206,7 +1234,8 @@ export default function HomeScreen() {
             currentTopTemperature,
             currentWeightedTemperature,
             hourlyDrops: heatingOptimizationInput.hourlyDrops,
-            hours: heatingOptimizationInput.hours,
+            hours: runHours,
+            isCurrentlyHeating: heatingOptimizationInput.isCurrentlyHeating,
             settings: heatingOptimizationInput.settings,
             tankReadings: heatingOptimizationInput.heatingHistory,
           }),
@@ -1217,21 +1246,33 @@ export default function HomeScreen() {
         return;
       }
 
-      setHeatingOptimizationState({
-        inputKey: heatingOptimizationInputKey,
-        result,
-      });
-
       if (result) {
+        setHeatingOptimizationState((currentPublication) =>
+          publishLatestHeatingPlan(currentPublication, {
+            hours: runHours,
+            inputKey: heatingOptimizationInputKey,
+            result,
+            runId: acceptedRunId,
+            settings: settingsSnapshot,
+            todayPlanDate,
+            tomorrowPlanDate,
+          }),
+        );
         logHomeDayTabPerformance("heating optimization", {
           durationMs: Date.now() - startedAt,
-          optimizerHourCount: heatingOptimizationInput.hours.length,
+          optimizerHourCount: runHours.length,
         });
       }
     }
 
     void runOptimization();
-  }, [heatingOptimizationInput, heatingOptimizationInputKey]);
+  }, [
+    heatingOptimizationInput,
+    heatingOptimizationInputKey,
+    settings,
+    todayPlanDate,
+    tomorrowPlanDate,
+  ]);
 
   useEffect(
     () => () => {
@@ -1240,34 +1281,42 @@ export default function HomeScreen() {
     [],
   );
 
-  const heatingOptimization =
+  const activeHeatingOptimization =
     heatingOptimizationState.inputKey === heatingOptimizationInputKey
       ? heatingOptimizationState.result
       : null;
+  const heatingOptimization = heatingOptimizationState.result;
+  const publishedOptimizerHours = heatingOptimizationState.hours;
+  const publishedOptimizationSettings = heatingOptimizationState.settings;
+  const publishedTodayPlanDate =
+    heatingOptimizationState.todayPlanDate ?? todayPlanDate;
+  const publishedTomorrowPlanDate =
+    heatingOptimizationState.tomorrowPlanDate ?? tomorrowPlanDate;
   const optimizerSelectedHeatingHourIds = useMemo(
     () => new Set(heatingOptimization?.selectedHeatingHourIds ?? []),
     [heatingOptimization?.selectedHeatingHourIds],
   );
   const optimizerSelectedHeatingHours = useMemo(
     () =>
-      optimizerHours.filter((item) =>
+      publishedOptimizerHours.filter((item) =>
         optimizerSelectedHeatingHourIds.has(item.id),
       ),
-    [optimizerHours, optimizerSelectedHeatingHourIds],
+    [publishedOptimizerHours, optimizerSelectedHeatingHourIds],
   );
   const optimizerTodayHeatingHours = useMemo(
     () =>
       optimizerSelectedHeatingHours.filter(
-        (item) => getFinnishDateKey(item.startDate) === todayPlanDate,
+        (item) => getFinnishDateKey(item.startDate) === publishedTodayPlanDate,
       ),
-    [optimizerSelectedHeatingHours, todayPlanDate],
+    [optimizerSelectedHeatingHours, publishedTodayPlanDate],
   );
   const optimizerTomorrowHeatingHours = useMemo(
     () =>
       optimizerSelectedHeatingHours.filter(
-        (item) => getFinnishDateKey(item.startDate) === tomorrowPlanDate,
+        (item) =>
+          getFinnishDateKey(item.startDate) === publishedTomorrowPlanDate,
       ),
-    [optimizerSelectedHeatingHours, tomorrowPlanDate],
+    [optimizerSelectedHeatingHours, publishedTomorrowPlanDate],
   );
   const isOptimizerPlanActive =
     settings.heatingNeedMode === "automatic" && heatingOptimization !== null;
@@ -1283,17 +1332,18 @@ export default function HomeScreen() {
   const finalTomorrowTargetHours = isOptimizerPlanActive
     ? optimizerSelectedHeatingHours.length
     : tomorrowTargetHours;
-  const optimizerReason = heatingOptimization
+  const optimizerReason =
+    settings.heatingNeedMode === "automatic" && heatingOptimization
     ? [
         `Optimointi valitsi ${optimizerSelectedHeatingHours.length} h yhteiselle aikaikkunalle.`,
-        `Lämmitystuntien enimmäismäärä ${settings.automaticMaxHeatingHours} h.`,
+        `Lämmitystuntien enimmäismäärä ${publishedOptimizationSettings.automaticMaxHeatingHours} h.`,
         `Tänään ${optimizerTodayHeatingHours.length} h, huomenna ${optimizerTomorrowHeatingHours.length} h.`,
         `Alin ennustettu suihkuvaraus ${formatSignedFinnishDecimal(
           heatingOptimization.minimumPredictedShowersLeft,
         )}, tavoite ${formatSignedFinnishDecimal(
-          settings.targetShowerReserve,
+          publishedOptimizationSettings.targetShowerReserve,
         )} ja turvaraja ${formatSignedFinnishDecimal(
-          settings.safetyShowerReserve,
+          publishedOptimizationSettings.safetyShowerReserve,
         )}.`,
         `Lämmityksen nousuarvio ${formatSignedFinnishDecimal(
           heatingOptimization.heatingGainEstimate.gainPerHour,
@@ -1302,17 +1352,17 @@ export default function HomeScreen() {
           ? "Nousuarviossa käytettiin fallback-arvoa."
           : "Nousuarvio laskettiin historiasta.",
       ].join(" ")
-    : null;
-  const heatingPlanPresentation = useMemo(() => {
+      : null;
+  const optimizerHeatingPlanPresentation = useMemo(() => {
     if (!heatingOptimization || settings.heatingNeedMode !== "automatic") {
       return null;
     }
 
     const pricesById = new Map(
-      optimizerHours.map((hour) => [hour.id, hour.price]),
+      publishedOptimizerHours.map((hour) => [hour.id, hour.price]),
     );
     const startTimesById = new Map(
-      optimizerHours.map((hour) => [hour.id, hour.date.getTime()]),
+      publishedOptimizerHours.map((hour) => [hour.id, hour.date.getTime()]),
     );
     const firstSelectedStartTime = Math.min(
       ...heatingOptimization.selectedHeatingHourIds.map(
@@ -1346,7 +1396,7 @@ export default function HomeScreen() {
       }),
       label: formatHeatingHourRange(hour.date),
       period:
-        getFinnishDateKey(hour.startDate) === todayPlanDate
+        getFinnishDateKey(hour.startDate) === publishedTodayPlanDate
           ? ("Tänään" as const)
           : ("Huomenna" as const),
       price: hour.price,
@@ -1355,21 +1405,22 @@ export default function HomeScreen() {
       heatingOptimization.forecast[
         heatingOptimization.forecast.length - 1
       ]?.showersLeftAfter ?? heatingOptimization.minimumPredictedShowersLeft;
-    const lastForecastHour = optimizerHours[optimizerHours.length - 1];
+    const lastForecastHour =
+      publishedOptimizerHours[publishedOptimizerHours.length - 1];
     const forecastEndLabel = lastForecastHour
       ? getForecastEndLabel({
           endDate: lastForecastHour.endDate,
           startDate: lastForecastHour.startDate,
-          todayDateKey: todayPlanDate,
-          tomorrowDateKey: tomorrowPlanDate,
+          todayDateKey: publishedTodayPlanDate,
+          tomorrowDateKey: publishedTomorrowPlanDate,
         })
       : "suunnittelujakson päättyessä";
     const fallbackInUse =
-      settings.fallbackEnabled &&
+      publishedOptimizationSettings.fallbackEnabled &&
       !heatingOptimization.valid &&
       heatingOptimization.selectedHeatingHourIds.length === 0;
     const selectedHours = fallbackInUse
-      ? settings.backupHours.map((hour) => ({
+      ? publishedOptimizationSettings.backupHours.map((hour) => ({
           label: `${String(hour).padStart(2, "0")}–${String(
             (hour + 1) % 24,
           ).padStart(2, "0")}`,
@@ -1378,28 +1429,110 @@ export default function HomeScreen() {
       : optimizerSelectedHourLabels;
 
     return buildHeatingPlanPresentation({
-      automaticMaxHeatingHours: settings.automaticMaxHeatingHours,
+      automaticMaxHeatingHours:
+        publishedOptimizationSettings.automaticMaxHeatingHours,
       cheaperPlanRejectedForSafety,
-      currentShowers: warmWaterEstimate?.showersLeft ?? null,
+      currentShowers: heatingOptimization.diagnostics.currentShowers,
       forecastEndLabel,
       fallbackInUse,
       finalShowers,
-      fixedHeatingHoursPerDay: settings.fixedHeatingHoursPerDay,
-      heatingNeedMode: settings.heatingNeedMode,
+      fixedHeatingHoursPerDay:
+        publishedOptimizationSettings.fixedHeatingHoursPerDay,
+      heatingNeedMode: publishedOptimizationSettings.heatingNeedMode,
       minimumShowers: heatingOptimization.minimumPredictedShowersLeft,
       planValid: heatingOptimization.valid,
+      safetyShowerReserve: publishedOptimizationSettings.safetyShowerReserve,
+      selectedHours,
+      targetShowerReserve: publishedOptimizationSettings.targetShowerReserve,
+    });
+  }, [
+    heatingOptimization,
+    optimizerSelectedHeatingHours,
+    publishedOptimizationSettings,
+    publishedOptimizerHours,
+    publishedTodayPlanDate,
+    publishedTomorrowPlanDate,
+    settings.heatingNeedMode,
+  ]);
+  const storedHeatingPlanPresentation = useMemo(() => {
+    if (settings.heatingNeedMode !== "automatic") {
+      return null;
+    }
+
+    const storedPlans = [
+      storedHeatingPlans[todayPlanDate],
+      storedHeatingPlans[tomorrowPlanDate],
+    ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
+
+    if (storedPlans.length === 0) {
+      return null;
+    }
+
+    const selectedHours = storedPlans.flatMap((plan) => {
+      const planDate = plan.plan_date;
+
+      if (!planDate) {
+        return [];
+      }
+
+      return normalizeStoredHeatingPlanHours(plan.planned_hours).map((hour) => {
+        const priceHour = hourlyPrices.find(
+          (item) =>
+            getFinnishDateKey(item.startDate) === planDate &&
+            getHelsinkiHourNumber(item.date) === hour,
+        );
+
+        return {
+          estimatedCostEuros: priceHour
+            ? calculatePlannedHeatingHourCostEuros({
+                spotPriceCentsPerKwh: priceHour.price,
+              })
+            : null,
+          label: priceHour
+            ? formatHeatingHourRange(priceHour.date)
+            : `${String(hour).padStart(2, "0")}:00-${String(
+                (hour + 1) % 24,
+              ).padStart(2, "0")}:00`,
+          period:
+            planDate === todayPlanDate
+              ? ("Tänään" as const)
+              : ("Huomenna" as const),
+          price: priceHour?.price ?? null,
+        };
+      });
+    });
+
+    return buildStoredHeatingPlanPresentation({
+      currentShowers: warmWaterEstimate?.showersLeft ?? null,
       safetyShowerReserve: settings.safetyShowerReserve,
       selectedHours,
       targetShowerReserve: settings.targetShowerReserve,
     });
   }, [
-    heatingOptimization,
-    optimizerHours,
-    optimizerSelectedHeatingHours,
-    settings,
+    hourlyPrices,
+    settings.heatingNeedMode,
+    settings.safetyShowerReserve,
+    settings.targetShowerReserve,
+    storedHeatingPlans,
     todayPlanDate,
     tomorrowPlanDate,
     warmWaterEstimate?.showersLeft,
+  ]);
+  const heatingPlanPresentationSource = getHeatingPlanPresentationSource({
+    hasPublishedOptimization: optimizerHeatingPlanPresentation !== null,
+    hasStoredPlan: storedHeatingPlanPresentation !== null,
+  });
+  const heatingPlanPresentation =
+    optimizerHeatingPlanPresentation ?? storedHeatingPlanPresentation;
+
+  useEffect(() => {
+    debugLog("Heating plan presentation source", {
+      optimizerRunId: heatingOptimizationState.runId,
+      source: heatingPlanPresentationSource,
+    });
+  }, [
+    heatingOptimizationState.runId,
+    heatingPlanPresentationSource,
   ]);
   useEffect(() => {
     if (!heatingOptimization) {
@@ -1436,23 +1569,32 @@ export default function HomeScreen() {
     console.log(
       "[EnergyZen optimization]",
       JSON.stringify({
-        currentShowers: warmWaterEstimate?.showersLeft ?? null,
+        currentShowers: heatingOptimization.diagnostics.currentShowers,
+        currentFillRatio:
+          heatingOptimization.diagnostics.currentFillRatio,
+        currentHourStartBlockedByFillRatio:
+          heatingOptimization.diagnostics
+            .currentHourStartBlockedByFillRatio,
         firstAppliedDrop: firstForecastSegment?.appliedDrop ?? null,
         firstHourDrop: firstForecastSegment?.hourlyDrop ?? null,
         firstSegmentHours: firstForecastSegment?.segmentHours ?? null,
+        fullTankShowers: heatingOptimization.diagnostics.fullTankShowers,
+        heatingStartFillRatioDiagnostics:
+          heatingOptimization.diagnostics.heatingStartFillRatioDiagnostics,
         heatingGainPerHour: gainEstimate.gainPerHour,
         plannedHours: heatingOptimization.selectedHeatingHourIds,
         projectedShowers,
         reasonOrStatus: optimizationStatus,
-        targetShowers: settings.targetShowerReserve,
+        startHeatingThresholdShowers:
+          heatingOptimization.diagnostics.startHeatingThresholdShowers,
+        targetShowers: publishedOptimizationSettings.targetShowerReserve,
       }),
     );
   }, [
     heatingGainHistoryFetch.fetchedRowCount,
     heatingGainHistoryFetch.pageCount,
     heatingOptimization,
-    settings.targetShowerReserve,
-    warmWaterEstimate?.showersLeft,
+    publishedOptimizationSettings.targetShowerReserve,
   ]);
   useEffect(() => {
     debugLog("Heating optimizer debug", {
@@ -1602,7 +1744,10 @@ export default function HomeScreen() {
   }, [visiblePlanDatesKey]);
 
   useEffect(() => {
-    if (settings.heatingNeedMode === "automatic" && !heatingOptimization) {
+    if (
+      settings.heatingNeedMode === "automatic" &&
+      !activeHeatingOptimization
+    ) {
       debugLog("Heating plan save skipped until optimizer is ready", {
         currentWeightedTemperature,
         optimizerHourCount: optimizerHours.length,
@@ -1636,7 +1781,11 @@ export default function HomeScreen() {
     };
     const upsertPayload = [todayPlan, tomorrowPlan];
 
+    const saveVersion = latestHeatingPlanSaveVersionRef.current + 1;
+    latestHeatingPlanSaveVersionRef.current = saveVersion;
+
     debugLog("Heating plan upsert payload debug", {
+      optimizerRunId: heatingOptimizationState.runId,
       optimizerSelectedHeatingHourIds:
         heatingOptimization?.selectedHeatingHourIds ?? [],
       optimizerSelectedHourCount:
@@ -1654,42 +1803,72 @@ export default function HomeScreen() {
       tomorrowPlanPlannedHours: tomorrowPlan.planned_hours,
     });
 
-    async function saveHeatingPlans() {
-      try {
-        const { error } = await supabase
-          .from("heating_plans")
-          .upsert(upsertPayload, { onConflict: "plan_date" });
-
-        if (error) {
-          console.warn("Failed to save heating plans", error);
+    heatingPlanSaveChainRef.current = heatingPlanSaveChainRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (saveVersion !== latestHeatingPlanSaveVersionRef.current) {
           return;
         }
 
-        setStoredHeatingPlans((currentPlans) => ({
-          ...currentPlans,
-          [todayPlanDate]: todayPlan,
-          [tomorrowPlanDate]: tomorrowPlan,
-        }));
-        debugLog("Heating plans stored locally after upsert", {
-          optimizerSelectedHeatingHourIds:
-            heatingOptimization?.selectedHeatingHourIds ?? [],
-          storedHeatingPlansAfterUpsert: {
-            [todayPlanDate]: todayPlan,
-            [tomorrowPlanDate]: tomorrowPlan,
-          },
-          todayPlanPlannedHours: todayPlan.planned_hours,
-          tomorrowPlanPlannedHours: tomorrowPlan.planned_hours,
-        });
-      } catch (error) {
-        console.warn("Failed to save heating plans", error);
-      }
-    }
+        const changedPlans = getChangedHeatingPlans(
+          storedHeatingPlansRef.current,
+          upsertPayload,
+        );
 
-    saveHeatingPlans();
+        if (changedPlans.length === 0) {
+          debugLog("Heating plan upsert skipped", {
+            identicalUpsertSkipped: true,
+            optimizerRunId: heatingOptimizationState.runId,
+            plannedHours: upsertPayload.map((plan) => ({
+              planDate: plan.plan_date,
+              plannedHours: plan.planned_hours,
+            })),
+          });
+          return;
+        }
+
+        try {
+          const { error } = await supabase
+            .from("heating_plans")
+            .upsert(changedPlans, { onConflict: "plan_date" });
+
+          if (error) {
+            console.warn("Failed to save heating plans", error);
+            return;
+          }
+
+          if (saveVersion !== latestHeatingPlanSaveVersionRef.current) {
+            return;
+          }
+
+          setStoredHeatingPlans((currentPlans) => {
+            const nextPlans = { ...currentPlans };
+
+            for (const plan of changedPlans) {
+              nextPlans[plan.plan_date] = plan;
+            }
+
+            storedHeatingPlansRef.current = nextPlans;
+            return nextPlans;
+          });
+          debugLog("Heating plans stored locally after upsert", {
+            identicalUpsertSkipped: false,
+            optimizerRunId: heatingOptimizationState.runId,
+            plannedHours: changedPlans.map((plan) => ({
+              planDate: plan.plan_date,
+              plannedHours: plan.planned_hours,
+            })),
+          });
+        } catch (error) {
+          console.warn("Failed to save heating plans", error);
+        }
+      });
   }, [
+    activeHeatingOptimization,
     currentWeightedTemperature,
     heatingRecommendation.reason,
     heatingOptimization,
+    heatingOptimizationState.runId,
     finalTargetHours,
     finalTomorrowTargetHours,
     optimizerReason,

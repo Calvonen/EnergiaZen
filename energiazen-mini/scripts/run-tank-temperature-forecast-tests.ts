@@ -8,6 +8,7 @@ import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.
 import { runHeatingSettingsUnitTests } from "../lib/heatingSettings.test";
 import { runSettingsSectionSummaryUnitTests } from "../lib/settingsSectionSummaries.test";
 import { runHeatingPlanPresentationUnitTests } from "../lib/heatingPlanPresentation.test";
+import { runHeatingPlanPublicationUnitTests } from "../lib/heatingPlanPublication.test";
 import { runHeatingEnergyCostUnitTests } from "../lib/heatingEnergyCost.test";
 import { runElectricityPricesUnitTests } from "../lib/electricityPrices.test";
 import { runHistoryUiSourceTests } from "../tests/historyUiSource.test";
@@ -38,13 +39,14 @@ async function runTests() {
   runHeatingOptimizationRunUnitTests();
   await runHeatingGainUnitTests();
   runHeatingPlanPresentationUnitTests();
+  runHeatingPlanPublicationUnitTests();
   runHeatingSettingsUnitTests();
   runShowerReserveSettingsUnitTests();
   runSettingsSectionSummaryUnitTests();
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsDraftUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingGain, heatingPlanPresentation, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsDraftUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

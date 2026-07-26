@@ -1,5 +1,6 @@
 import {
   buildHeatingPlanPresentation,
+  buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
 } from "./heatingPlanPresentation";
 
@@ -31,6 +32,25 @@ const baseInput = {
 };
 
 export function runHeatingPlanPresentationUnitTests() {
+  const stored = buildStoredHeatingPlanPresentation({
+    currentShowers: 5.8,
+    safetyShowerReserve: 2,
+    selectedHours: [
+      { label: "06-07", period: "Tänään", price: 2 },
+    ],
+    targetShowerReserve: 3,
+  });
+  assertEqual(
+    stored.statusSummary,
+    "Viimeksi tallennettu suunnitelma",
+    "tallennettu suunnitelma tarjoaa vakaan kortin optimoinnin ajaksi",
+  );
+  assertEqual(
+    stored.selectedHours.length,
+    1,
+    "tallennetun suunnitelman tunnit sailyvat odotusnakymaan",
+  );
+
   const standard = buildHeatingPlanPresentation(baseInput);
   assertEqual(standard.reasonKind, "standard", "tavallinen suunnitelma tunnistetaan");
   assertEqual(
