@@ -41,8 +41,13 @@
     "supabase/functions/fetch-electricity-prices/normalize.test.ts",
     "lib/heatingPlanMarkers.ts",
     "lib/heatingPlanMarkers.test.ts",
+    "lib/heatingControlSettingsPayload.ts",
+    "lib/heatingControlSettingsSupabase.ts",
+    "lib/settingsDraft.ts",
+    "lib/settingsDraft.test.ts",
     "tests/historyUiSource.test.ts",
     "tests/temperatureHistoryRpcMigration.test.ts",
+    "tests/settingsDraftUiSource.test.ts",
     "lib/temperatureDropProfile.ts",
     "lib/temperatureDropProfile.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"

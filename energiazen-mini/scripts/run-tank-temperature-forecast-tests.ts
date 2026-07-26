@@ -14,6 +14,8 @@ import { runElectricityPriceTrendUnitTests } from "../lib/electricityPriceTrend.
 import { runElectricityPriceFunctionUnitTests } from "../supabase/functions/fetch-electricity-prices/normalize.test";
 import { runTemperatureHistoryDayUnitTests } from "../lib/temperatureHistoryDay.test";
 import { runTemperatureHistoryRpcMigrationTests } from "../tests/temperatureHistoryRpcMigration.test";
+import { runSettingsDraftUnitTests } from "../lib/settingsDraft.test";
+import { runSettingsDraftUiSourceTests } from "../tests/settingsDraftUiSource.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -26,6 +28,8 @@ async function runTests() {
   runElectricityPriceFunctionUnitTests();
   runTemperatureHistoryDayUnitTests();
   runTemperatureHistoryRpcMigrationTests();
+  await runSettingsDraftUnitTests();
+  runSettingsDraftUiSourceTests();
   runHeatingOptimizerUnitTests();
   runHeatingPlanPresentationUnitTests();
   runHeatingSettingsUnitTests();
@@ -34,7 +38,7 @@ async function runTests() {
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, historyUiSource, heatingPlanMarkers, heatingOptimizer, heatingPlanPresentation, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsDraftUiSource, historyUiSource, heatingPlanMarkers, heatingOptimizer, heatingPlanPresentation, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

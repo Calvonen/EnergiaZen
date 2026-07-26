@@ -21,6 +21,17 @@ import {
   normalizeSettings,
   saveSettings,
 } from "@/lib/settings";
+import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
+import {
+  areSettingsEqual,
+  discardSettingsDraft,
+  persistSettingsDraft,
+  SettingsDraftLocalSaveError,
+  SettingsDraftSaveError,
+  SettingsValidationField,
+  updateDraftSetting,
+  validateSettingsDraft,
+} from "@/lib/settingsDraft";
 import { supabase } from "@/lib/supabase";
 import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
 import { getHeatingModeSettingKeys } from "@/lib/heatingModeSettings";
@@ -45,6 +56,7 @@ type SettingsRow = {
   key?: EditableSettingKey;
   label: string;
   subheadingBefore?: string;
+  validationKey?: SettingsValidationField;
   value: string;
 };
 
@@ -238,7 +250,15 @@ function getProfileDropColor(value: number, minimum: number, maximum: number) {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const [settings, setSettings] = useState(defaultSettings);
+  const [savedSettings, setSavedSettings] = useState(defaultSettings);
+  const [draftSettings, setDraftSettings] = useState(defaultSettings);
+  const [areSettingsLoaded, setAreSettingsLoaded] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{
+    kind: "error" | "success";
+    message: string;
+  } | null>(null);
+  const settings = draftSettings;
   const [selectedSettingKey, setSelectedSettingKey] =
     useState<EditableSettingKey | null>(null);
   const [isCalibratingFullTank, setIsCalibratingFullTank] = useState(false);
@@ -294,6 +314,7 @@ export default function SettingsScreen() {
           {
             accent: "#5aa7ff",
             label: "Minimilämpö",
+            validationKey: "minTankTemperature",
             value: `${settings.minTankTemperature} °C`,
           },
           {
@@ -433,7 +454,9 @@ export default function SettingsScreen() {
 
     loadSettings().then((storedSettings) => {
       if (isMounted) {
-        setSettings(storedSettings);
+        setSavedSettings(storedSettings);
+        setDraftSettings(storedSettings);
+        setAreSettingsLoaded(true);
       }
     });
 
@@ -442,51 +465,30 @@ export default function SettingsScreen() {
     };
   }, []);
 
-  const saveUpdatedSettings = (updatedSettings: typeof settings) => {
-    const normalizedSettings = normalizeSettings(updatedSettings);
-
-    setSettings(normalizedSettings);
-    saveSettings(normalizedSettings).catch(() => undefined);
-    void (async () => {
-      try {
-        const { error } = await supabase
-          .from("heating_control_settings")
-          .upsert(
-            {
-              id: 1,
-              backup_hours: normalizedSettings.backupHours,
-              fallback_enabled: normalizedSettings.fallbackEnabled,
-              timezone: "Europe/Helsinki",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "id" },
-          );
-
-        if (error) {
-          console.warn("Failed to save heating control settings", error);
-        }
-      } catch (error: unknown) {
-        console.warn("Failed to save heating control settings", error);
-      }
-    })();
-  };
-
   const updateSetting = (key: EditableSettingKey, value: number) => {
-    saveUpdatedSettings({
-      ...settings,
-      [key]: value,
-    });
+    if (isSavingSettings) {
+      return;
+    }
+
+    setDraftSettings((current) => updateDraftSetting(current, key, value));
+    setSaveFeedback(null);
     setSelectedSettingKey(null);
   };
 
   const updateHeatingNeedMode = (heatingNeedMode: HeatingNeedMode) => {
-    saveUpdatedSettings({
-      ...settings,
-      heatingNeedMode,
-    });
+    if (isSavingSettings) {
+      return;
+    }
+
+    setDraftSettings((current) => ({ ...current, heatingNeedMode }));
+    setSaveFeedback(null);
   };
 
   const toggleBackupHour = (hour: number) => {
+    if (isSavingSettings) {
+      return;
+    }
+
     const isSelected = settings.backupHours.includes(hour);
 
     if (
@@ -497,12 +499,88 @@ export default function SettingsScreen() {
       return;
     }
 
-    saveUpdatedSettings({
-      ...settings,
+    setDraftSettings((current) => ({
+      ...current,
       backupHours: isSelected
-        ? settings.backupHours.filter((backupHour) => backupHour !== hour)
-        : [...settings.backupHours, hour].sort((a, b) => a - b),
-    });
+        ? current.backupHours.filter((backupHour) => backupHour !== hour)
+        : [...current.backupHours, hour].sort((a, b) => a - b),
+    }));
+    setSaveFeedback(null);
+  };
+
+  const settingsValidation = useMemo(
+    () => validateSettingsDraft(draftSettings, savedSettings),
+    [draftSettings, savedSettings],
+  );
+  const hasUnsavedChanges = !areSettingsEqual(
+    draftSettings,
+    savedSettings,
+  );
+  const isSaveDisabled =
+    !areSettingsLoaded ||
+    !hasUnsavedChanges ||
+    settingsValidation.errors.length > 0 ||
+    isSavingSettings;
+  const isCancelDisabled = !hasUnsavedChanges || isSavingSettings;
+
+  const handleCancelSettings = () => {
+    if (isCancelDisabled) {
+      return;
+    }
+
+    setDraftSettings(discardSettingsDraft(savedSettings));
+    setSelectedSettingKey(null);
+    setSaveFeedback(null);
+  };
+
+  const handleSaveSettings = async () => {
+    if (isSaveDisabled) {
+      return;
+    }
+
+    const draftSnapshot = draftSettings;
+    const settingsToSave = normalizeSettings(draftSnapshot);
+    setIsSavingSettings(true);
+    setSaveFeedback(null);
+
+    try {
+      const persistedSettings = await persistSettingsDraft({
+        draftSettings: settingsToSave,
+        savedSettings,
+        saveLocal: saveSettings,
+        saveRemote: async (nextSettings) => {
+          await upsertHeatingControlSettings(supabase, nextSettings);
+        },
+      });
+
+      setSavedSettings(persistedSettings);
+      setDraftSettings((current) =>
+        areSettingsEqual(current, draftSnapshot)
+          ? persistedSettings
+          : current,
+      );
+      setSaveFeedback({
+        kind: "success",
+        message: "Asetukset tallennettiin.",
+      });
+      Alert.alert("Asetukset tallennettu", "Uudet asetukset ovat käytössä.");
+    } catch (error) {
+      const localSaveFailed = error instanceof SettingsDraftLocalSaveError;
+      const rollbackFailed =
+        error instanceof SettingsDraftSaveError &&
+        !error.rollbackSucceeded;
+      const message = localSaveFailed
+        ? "Paikallinen tallennus epäonnistui. Muutokset säilyvät luonnoksena."
+        : rollbackFailed
+          ? "Tallennus epäonnistui eikä paikallista palautusta voitu varmistaa. Yritä uudelleen."
+          : "Supabase-tallennus epäonnistui. Paikalliset asetukset palautettiin ja muutokset säilyvät luonnoksena.";
+
+      console.warn("Failed to save settings draft", error);
+      setSaveFeedback({ kind: "error", message });
+      Alert.alert("Tallennus epäonnistui", message);
+    } finally {
+      setIsSavingSettings(false);
+    }
   };
 
   useFocusEffect(
@@ -684,6 +762,96 @@ export default function SettingsScreen() {
     router.replace("/login");
   };
 
+  const settingsSavePanel = (
+    <View style={styles.settingsSavePanel}>
+      {hasUnsavedChanges ? (
+        <Text style={styles.unsavedSettingsText}>
+          Tallentamattomia muutoksia
+        </Text>
+      ) : null}
+
+      {settingsValidation.errors.length > 0 ? (
+        <View style={styles.validationSummary}>
+          <Text style={styles.validationSummaryErrorTitle}>
+            Korjaa ennen tallennusta
+          </Text>
+          {settingsValidation.errors.map((issue) => (
+            <Text
+              key={`summary-error-${issue.field}-${issue.message}`}
+              style={styles.validationSummaryErrorText}
+            >
+              {issue.message}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {settingsValidation.warnings.length > 0 ? (
+        <View style={styles.validationSummary}>
+          <Text style={styles.validationSummaryWarningTitle}>
+            Huomioitavaa
+          </Text>
+          {settingsValidation.warnings.map((issue) => (
+            <Text
+              key={`summary-warning-${issue.field}-${issue.message}`}
+              style={styles.validationSummaryWarningText}
+            >
+              {issue.message}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {saveFeedback ? (
+        <Text
+          style={[
+            styles.saveFeedback,
+            saveFeedback.kind === "success"
+              ? styles.saveFeedbackSuccess
+              : styles.saveFeedbackError,
+          ]}
+        >
+          {saveFeedback.message}
+        </Text>
+      ) : null}
+
+      {isSavingSettings ? (
+        <Text style={styles.savingSettingsText}>Tallennetaan...</Text>
+      ) : null}
+
+      <View style={styles.settingsSaveActions}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: isCancelDisabled }}
+          disabled={isCancelDisabled}
+          onPress={handleCancelSettings}
+          style={({ pressed }) => [
+            styles.cancelSettingsButton,
+            isCancelDisabled && styles.settingsActionDisabled,
+            pressed && !isCancelDisabled && styles.settingsActionPressed,
+          ]}
+        >
+          <Text style={styles.cancelSettingsButtonText}>Peru muutokset</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: isSaveDisabled }}
+          disabled={isSaveDisabled}
+          onPress={handleSaveSettings}
+          style={({ pressed }) => [
+            styles.saveSettingsButton,
+            isSaveDisabled && styles.settingsActionDisabled,
+            pressed && !isSaveDisabled && styles.settingsActionPressed,
+          ]}
+        >
+          <Text style={styles.saveSettingsButtonText}>
+            {isSavingSettings ? "Tallennetaan..." : "Tallenna asetukset"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.screen}>
       <View style={[styles.glow, styles.greenGlow]} />
@@ -733,6 +901,7 @@ export default function SettingsScreen() {
                       return (
                         <Pressable
                           accessibilityRole="button"
+                          disabled={isSavingSettings}
                           key={option.value}
                           onPress={() => updateHeatingNeedMode(option.value)}
                           style={({ pressed }) => [
@@ -753,9 +922,21 @@ export default function SettingsScreen() {
                       );
                     })}
                   </View>
+                  {settingsSavePanel}
                 </View>
               ) : null}
               {section.rows.map((row) => {
+                const validationField = row.validationKey ?? row.key;
+                const fieldErrors = validationField
+                  ? settingsValidation.errors.filter(
+                      (issue) => issue.field === validationField,
+                    )
+                  : [];
+                const fieldWarnings = validationField
+                  ? settingsValidation.warnings.filter(
+                      (issue) => issue.field === validationField,
+                    )
+                  : [];
                 const rowContent = (
                   <>
                     <View
@@ -788,6 +969,7 @@ export default function SettingsScreen() {
                         >
                           <Pressable
                             accessibilityRole="button"
+                            disabled={isSavingSettings}
                             onPress={() => setSelectedSettingKey(rowKey)}
                             style={styles.settingRowMainAction}
                           >
@@ -795,7 +977,9 @@ export default function SettingsScreen() {
                           </Pressable>
                           <Pressable
                             accessibilityRole="button"
-                            disabled={isCalibratingFullTank}
+                            disabled={
+                              isCalibratingFullTank || isSavingSettings
+                            }
                             onPress={calibrateFullTankFromWeek}
                             style={({ pressed }) => [
                               styles.calibrateButton,
@@ -816,6 +1000,7 @@ export default function SettingsScreen() {
                     return (
                       <Pressable
                         accessibilityRole="button"
+                        disabled={isSavingSettings}
                         key={row.label}
                         onPress={() => setSelectedSettingKey(rowKey)}
                         style={styles.settingRow}
@@ -840,6 +1025,22 @@ export default function SettingsScreen() {
                       </Text>
                     ) : null}
                     {renderedRow}
+                    {fieldErrors.map((issue) => (
+                      <Text
+                        key={`error-${issue.message}`}
+                        style={styles.settingValidationError}
+                      >
+                        {issue.message}
+                      </Text>
+                    ))}
+                    {fieldWarnings.map((issue) => (
+                      <Text
+                        key={`warning-${issue.message}`}
+                        style={styles.settingValidationWarning}
+                      >
+                        {issue.message}
+                      </Text>
+                    ))}
                   </View>
                 );
               })}
@@ -877,7 +1078,9 @@ export default function SettingsScreen() {
               </View>
             );
           })}
-          <CollapsibleSettingsSection
+        </View>
+
+        <CollapsibleSettingsSection
             accessibilityLabel={`Varakäyttö, ${expandedSections.fallback ? "sulje" : "avaa"}`}
             expanded={expandedSections.fallback}
             onToggle={() =>
@@ -900,15 +1103,17 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 accessibilityLabel="Käytä varatunteja yhteyskatkossa"
+                disabled={isSavingSettings}
                 onValueChange={(fallbackEnabled) => {
-                  saveUpdatedSettings({
-                    ...settings,
+                  setDraftSettings((current) => ({
+                    ...current,
                     backupHours:
-                      fallbackEnabled && settings.backupHours.length === 0
+                      fallbackEnabled && current.backupHours.length === 0
                         ? defaultSettings.backupHours
-                        : settings.backupHours,
+                        : current.backupHours,
                     fallbackEnabled,
-                  });
+                  }));
+                  setSaveFeedback(null);
                 }}
                 trackColor={{ false: "#39445d", true: "#238b7c" }}
                 thumbColor={settings.fallbackEnabled ? "#36f4d4" : "#9aaaca"}
@@ -924,6 +1129,7 @@ export default function SettingsScreen() {
                   <Pressable
                     accessibilityRole="button"
                     accessibilityState={{ selected: isActive }}
+                    disabled={isSavingSettings}
                     key={hour}
                     onPress={() => toggleBackupHour(hour)}
                     style={({ pressed }) => [
@@ -944,8 +1150,7 @@ export default function SettingsScreen() {
                 );
               })}
             </View>
-          </CollapsibleSettingsSection>
-        </View>
+        </CollapsibleSettingsSection>
 
         <View style={styles.profileCard}>
           <View style={styles.profileHeader}>
@@ -1164,6 +1369,7 @@ export default function SettingsScreen() {
                 {selectedSettingOptions.map((option) => (
                   <Pressable
                     accessibilityRole="button"
+                    disabled={isSavingSettings}
                     key={option}
                     onPress={() => updateSetting(selectedSettingKey, option)}
                     style={styles.selectorOption}
@@ -1372,6 +1578,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     lineHeight: 16,
   },
+  settingValidationError: {
+    color: "#ff9aa4",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    paddingBottom: 8,
+    paddingHorizontal: 22,
+  },
+  settingValidationWarning: {
+    color: "#ffdc7a",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    paddingBottom: 8,
+    paddingHorizontal: 22,
+  },
   settingSubsectionLabel: {
     color: "#9aaaca",
     fontSize: 12,
@@ -1508,6 +1730,105 @@ const styles = StyleSheet.create({
     color: "#dffefa",
     fontSize: 13,
     fontWeight: "900",
+  },
+  settingsSavePanel: {
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.14)",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    marginTop: 14,
+    padding: 14,
+  },
+  unsavedSettingsText: {
+    color: "#ffdc7a",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  validationSummary: {
+    gap: 4,
+  },
+  validationSummaryErrorTitle: {
+    color: "#ff9aa4",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  validationSummaryErrorText: {
+    color: "#ffc1c7",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
+  },
+  validationSummaryWarningTitle: {
+    color: "#ffdc7a",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  validationSummaryWarningText: {
+    color: "#ffe9a8",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
+  },
+  saveFeedback: {
+    fontSize: 12,
+    fontWeight: "800",
+    lineHeight: 17,
+  },
+  saveFeedbackSuccess: {
+    color: "#72ff9d",
+  },
+  saveFeedbackError: {
+    color: "#ff9aa4",
+  },
+  savingSettingsText: {
+    color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  settingsSaveActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  cancelSettingsButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.16)",
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 46,
+    paddingHorizontal: 8,
+  },
+  cancelSettingsButtonText: {
+    color: "#cfe0ff",
+    fontSize: 13,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  saveSettingsButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(54,244,212,0.18)",
+    borderColor: "rgba(54,244,212,0.48)",
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 46,
+    paddingHorizontal: 8,
+  },
+  saveSettingsButtonText: {
+    color: "#dffefa",
+    fontSize: 13,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  settingsActionDisabled: {
+    opacity: 0.4,
+  },
+  settingsActionPressed: {
+    opacity: 0.72,
   },
   signOutButton: {
     alignItems: "center",
