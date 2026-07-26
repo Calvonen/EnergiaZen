@@ -4,6 +4,7 @@ import {
   optimizeHeatingPlan,
   simulateHeatingPlan,
 } from "../lib/heatingOptimizer";
+import { fallbackHeatingGainPerHour } from "../lib/heatingGain";
 import { HourlyTemperatureDropProfile } from "../lib/tankTemperatureForecast";
 
 declare const process: {
@@ -190,13 +191,14 @@ function buildInputs(scenario: SimulationScenario) {
         endDate,
         id: `${scenario.id}:${date.toISOString()}`,
         price: scenario.hourlyPrices[index],
+        segmentHours: 1,
         startDate: date.toISOString(),
       };
     },
   );
   const settings: HeatingOptimizationSettings = {
     absoluteMinimumTemperature: 10,
-    fallbackHeatingGainPerHour: 8,
+    fallbackHeatingGainPerHour,
     fullTankAverageTemperature: scenario.fullTankAverageTemperature,
     fullTankShowers: scenario.fullTankShowers,
     maxHeatingHours: scenario.maxHeatingHours,

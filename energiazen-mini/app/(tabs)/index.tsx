@@ -27,6 +27,11 @@ import {
   fetchAllHeatingHistory,
 } from "@/lib/heatingHistory";
 import {
+  fallbackHeatingGainPerHour,
+  fetchHeatingGainHistory,
+  heatingGainHistoryDays,
+} from "@/lib/heatingGain";
+import {
   getHeatingHourMarker,
   heatingMarkers,
   normalizeStoredHeatingPlanHours,
@@ -34,9 +39,15 @@ import {
 import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
+  getHeatingOptimizationSegmentHours,
   HeatingOptimizationHour,
+  HeatingOptimizationResult,
   optimizeHeatingPlan,
 } from "@/lib/heatingOptimizer";
+import {
+  createHeatingOptimizationInputKey,
+  createHeatingOptimizationRunController,
+} from "@/lib/heatingOptimizationRun";
 import {
   buildHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
@@ -108,7 +119,6 @@ const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
-const fallbackHeatingGainPerHour = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
@@ -800,6 +810,13 @@ export default function HomeScreen() {
   const [tankTemperatureHistory, setTankTemperatureHistory] = useState<
     TankTemperatureReading[]
   >([]);
+  const [heatingGainHistory, setHeatingGainHistory] = useState<
+    TankTemperatureReading[]
+  >([]);
+  const [heatingGainHistoryFetch, setHeatingGainHistoryFetch] = useState({
+    fetchedRowCount: 0,
+    pageCount: 0,
+  });
   const [storedTemperatureDropProfile, setStoredTemperatureDropProfile] =
     useState<TemperatureDropProfile | null>(null);
   const [storedHeatingPlans, setStoredHeatingPlans] = useState<
@@ -815,6 +832,15 @@ export default function HomeScreen() {
   });
   const [tankUpdatedAt, setTankUpdatedAt] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [manualOptimizationRevision, setManualOptimizationRevision] =
+    useState(0);
+  const [heatingOptimizationState, setHeatingOptimizationState] = useState<{
+    inputKey: string;
+    result: HeatingOptimizationResult | null;
+  }>({ inputKey: "", result: null });
+  const heatingOptimizationRunControllerRef = useRef(
+    createHeatingOptimizationRunController(),
+  );
   const [loading, setLoading] = useState(true);
   const handleSelectedDayChange = useCallback((day: DaySelection) => {
     const startedAt = Date.now();
@@ -835,7 +861,11 @@ export default function HomeScreen() {
   useEffect(() => {
     storedHeatingPlansRef.current = storedHeatingPlans;
   }, [storedHeatingPlans]);
-  const currentHourStart = startOfCurrentHour(currentTime);
+  const currentHourStartTimestamp = startOfCurrentHour(currentTime).getTime();
+  const currentHourStart = useMemo(
+    () => new Date(currentHourStartTimestamp),
+    [currentHourStartTimestamp],
+  );
   const chartDayKey = getChartDayKey(selectedDay);
   const pricesByDay = useMemo(() => {
     const startedAt = Date.now();
@@ -1097,50 +1127,123 @@ export default function HomeScreen() {
       endDate: item.endDate,
       id: item.id,
       price: item.price,
+      segmentHours: getHeatingOptimizationSegmentHours({
+        endDate: item.endDate,
+        forecastStart: currentTime,
+        startDate: item.date,
+      }),
       startDate: item.startDate,
     }));
-  }, [currentHourStart, hourlyPrices]);
-  const heatingOptimization = useMemo(() => {
-    const startedAt = Date.now();
-
-    if (
-      settings.heatingNeedMode !== "automatic" ||
-      currentWeightedTemperature === null ||
-      topTemp === null ||
-      bottomTemp === null ||
-      optimizerHours.length === 0
-    ) {
-      return null;
-    }
-
-    const result = optimizeHeatingPlan({
-      currentBottomTemperature: bottomTemp,
-      currentTopTemperature: topTemp,
-      currentWeightedTemperature,
-      hourlyDrops: hourlyTemperatureDropProfile,
-      hours: optimizerHours,
-      settings: createHeatingOptimizationSettings(
+  }, [currentHourStart, currentTime, hourlyPrices]);
+  const heatingOptimizationSettings = useMemo(
+    () =>
+      createHeatingOptimizationSettings(
         settings,
         fallbackHeatingGainPerHour,
       ),
-      tankReadings: tankTemperatureHistory,
-    });
+    [settings],
+  );
+  const heatingOptimizationInput = useMemo(
+    () => ({
+      currentBottomTemperature: bottomTemp,
+      currentTopTemperature: topTemp,
+      currentWeightedTemperature,
+      heatingHistory: heatingGainHistory,
+      hourlyDrops: hourlyTemperatureDropProfile,
+      hours: optimizerHours,
+      manualRefreshRevision: manualOptimizationRevision,
+      mode: settings.heatingNeedMode,
+      readingCreatedAt: tankUpdatedAt,
+      settings: heatingOptimizationSettings,
+    }),
+    [
+      bottomTemp,
+      currentWeightedTemperature,
+      heatingGainHistory,
+      heatingOptimizationSettings,
+      hourlyTemperatureDropProfile,
+      manualOptimizationRevision,
+      optimizerHours,
+      settings.heatingNeedMode,
+      tankUpdatedAt,
+      topTemp,
+    ],
+  );
+  const heatingOptimizationInputKey = useMemo(
+    () => createHeatingOptimizationInputKey(heatingOptimizationInput),
+    [heatingOptimizationInput],
+  );
 
-    logHomeDayTabPerformance("heating optimization", {
-      durationMs: Date.now() - startedAt,
-      optimizerHourCount: optimizerHours.length,
-    });
+  useEffect(() => {
+    const controller = heatingOptimizationRunControllerRef.current;
+    const runId = controller.start(heatingOptimizationInputKey);
 
-    return result;
-  }, [
-    bottomTemp,
-    currentWeightedTemperature,
-    hourlyTemperatureDropProfile,
-    optimizerHours,
-    settings,
-    tankTemperatureHistory,
-    topTemp,
-  ]);
+    if (runId === null) {
+      return;
+    }
+    const acceptedRunId = runId;
+
+    async function runOptimization() {
+      const startedAt = Date.now();
+      let result: HeatingOptimizationResult | null = null;
+      const currentBottomTemperature =
+        heatingOptimizationInput.currentBottomTemperature;
+      const currentTopTemperature =
+        heatingOptimizationInput.currentTopTemperature;
+      const currentWeightedTemperature =
+        heatingOptimizationInput.currentWeightedTemperature;
+
+      if (
+        heatingOptimizationInput.mode === "automatic" &&
+        currentWeightedTemperature !== null &&
+        currentTopTemperature !== null &&
+        currentBottomTemperature !== null &&
+        heatingOptimizationInput.hours.length > 0
+      ) {
+        result = await Promise.resolve().then(() =>
+          optimizeHeatingPlan({
+            currentBottomTemperature,
+            currentTopTemperature,
+            currentWeightedTemperature,
+            hourlyDrops: heatingOptimizationInput.hourlyDrops,
+            hours: heatingOptimizationInput.hours,
+            settings: heatingOptimizationInput.settings,
+            tankReadings: heatingOptimizationInput.heatingHistory,
+          }),
+        );
+      }
+
+      if (!controller.canCommit(acceptedRunId)) {
+        return;
+      }
+
+      setHeatingOptimizationState({
+        inputKey: heatingOptimizationInputKey,
+        result,
+      });
+
+      if (result) {
+        logHomeDayTabPerformance("heating optimization", {
+          durationMs: Date.now() - startedAt,
+          optimizerHourCount: heatingOptimizationInput.hours.length,
+        });
+      }
+    }
+
+    void runOptimization();
+  }, [heatingOptimizationInput, heatingOptimizationInputKey]);
+
+  useEffect(
+    () => () => {
+      heatingOptimizationRunControllerRef.current.invalidate();
+    },
+    [],
+  );
+
+  const heatingOptimization =
+    heatingOptimizationState.inputKey === heatingOptimizationInputKey
+      ? heatingOptimizationState.result
+      : null;
   const optimizerSelectedHeatingHourIds = useMemo(
     () => new Set(heatingOptimization?.selectedHeatingHourIds ?? []),
     [heatingOptimization?.selectedHeatingHourIds],
@@ -1299,9 +1402,85 @@ export default function HomeScreen() {
     warmWaterEstimate?.showersLeft,
   ]);
   useEffect(() => {
+    if (!heatingOptimization) {
+      return;
+    }
+
+    const gainEstimate = heatingOptimization.heatingGainEstimate;
+    const firstForecastSegment = heatingOptimization.forecast[0] ?? null;
+    const projectedShowers =
+      heatingOptimization.forecast.at(-1)?.showersLeftAfter ?? null;
+    const optimizationStatus =
+      heatingOptimization.selectedHeatingHourIds.length > 0
+        ? "planned"
+        : heatingOptimization.valid
+          ? "not-needed"
+          : heatingOptimization.violations.join("; ") || "no-valid-plan";
+
+    console.log(
+      "[EnergyZen heating gain]",
+      JSON.stringify({
+        bottomMedian: gainEstimate.bottomGainPerHour,
+        gainPerHour: gainEstimate.gainPerHour,
+        historyRows: heatingGainHistoryFetch.fetchedRowCount,
+        pagesFetched: heatingGainHistoryFetch.pageCount,
+        segmentsAccepted: gainEstimate.acceptedSegmentCount,
+        segmentsFound: gainEstimate.discoveredSegmentCount,
+        source: gainEstimate.fallbackUsed ? "fallback" : "learned",
+        topMedian: gainEstimate.topGainPerHour,
+        weightedMedian: gainEstimate.fallbackUsed
+          ? null
+          : gainEstimate.gainPerHour,
+      }),
+    );
+    console.log(
+      "[EnergyZen optimization]",
+      JSON.stringify({
+        currentShowers: warmWaterEstimate?.showersLeft ?? null,
+        firstAppliedDrop: firstForecastSegment?.appliedDrop ?? null,
+        firstHourDrop: firstForecastSegment?.hourlyDrop ?? null,
+        firstSegmentHours: firstForecastSegment?.segmentHours ?? null,
+        heatingGainPerHour: gainEstimate.gainPerHour,
+        plannedHours: heatingOptimization.selectedHeatingHourIds,
+        projectedShowers,
+        reasonOrStatus: optimizationStatus,
+        targetShowers: settings.targetShowerReserve,
+      }),
+    );
+  }, [
+    heatingGainHistoryFetch.fetchedRowCount,
+    heatingGainHistoryFetch.pageCount,
+    heatingOptimization,
+    settings.targetShowerReserve,
+    warmWaterEstimate?.showersLeft,
+  ]);
+  useEffect(() => {
     debugLog("Heating optimizer debug", {
       optimizerHeatingGainEstimate:
         heatingOptimization?.heatingGainEstimate ?? null,
+      heatingGainHistory: {
+        acceptedSegmentCount:
+          heatingOptimization?.heatingGainEstimate.acceptedSegmentCount ?? 0,
+        bottomMedianGainPerHour:
+          heatingOptimization?.heatingGainEstimate.bottomGainPerHour ?? null,
+        discoveredSegmentCount:
+          heatingOptimization?.heatingGainEstimate.discoveredSegmentCount ?? 0,
+        fallbackUsed:
+          heatingOptimization?.heatingGainEstimate.fallbackUsed ?? true,
+        fetchedPageCount: heatingGainHistoryFetch.pageCount,
+        fetchedRowCount: heatingGainHistoryFetch.fetchedRowCount,
+        rejectedSegmentCount:
+          heatingOptimization?.heatingGainEstimate.rejectedSegmentCount ?? 0,
+        selectedGainPerHour:
+          heatingOptimization?.heatingGainEstimate.gainPerHour ??
+          fallbackHeatingGainPerHour,
+        topMedianGainPerHour:
+          heatingOptimization?.heatingGainEstimate.topGainPerHour ?? null,
+        weightedMedianGainPerHour:
+          heatingOptimization?.heatingGainEstimate.fallbackUsed === false
+            ? heatingOptimization.heatingGainEstimate.gainPerHour
+            : null,
+      },
       optimizerHours: optimizerHours.map((item) => ({
         helsinkiDateHour: formatHelsinkiDateHour(item),
         id: item.id,
@@ -1332,6 +1511,8 @@ export default function HomeScreen() {
     });
   }, [
     heatingOptimization,
+    heatingGainHistoryFetch.fetchedRowCount,
+    heatingGainHistoryFetch.pageCount,
     oldTodayPlannedHeatingHours,
     optimizerHours,
     optimizerTodayHeatingHours,
@@ -1790,7 +1971,15 @@ export default function HomeScreen() {
         }
       });
 
+      let tankReadingsRefreshInFlight = false;
+
       const refreshTankReadings = async () => {
+        if (tankReadingsRefreshInFlight) {
+          debugLog("tank_readings refresh skipped while request is in flight");
+          return;
+        }
+
+        tankReadingsRefreshInFlight = true;
         debugLog("tank_readings refreshed");
 
         try {
@@ -1801,9 +1990,13 @@ export default function HomeScreen() {
           const sevenDaysAgoIso = new Date(
             Date.now() - 7 * 24 * 60 * 60 * 1000,
           ).toISOString();
+          const heatingGainHistoryStartIso = new Date(
+            Date.now() - heatingGainHistoryDays * 24 * 60 * 60 * 1000,
+          ).toISOString();
           const [
             latestReadingResult,
             heatingHistoryResult,
+            heatingGainHistoryResult,
             temperatureHistoryResult,
             temperatureDropProfileResult,
           ] =
@@ -1825,6 +2018,26 @@ export default function HomeScreen() {
 
                 return { data, error };
               }),
+              fetchHeatingGainHistory(async (from, to) => {
+                const { data, error } = await supabase
+                  .from("tank_readings")
+                  .select("created_at,top_temp,bottom_temp,heating")
+                  .eq("heating", true)
+                  .gte("created_at", heatingGainHistoryStartIso)
+                  .lte("created_at", historyEndIso)
+                  .order("created_at", { ascending: true })
+                  .range(from, to);
+
+                return {
+                  data: (data ?? []) as TankTemperatureReading[],
+                  error,
+                };
+              }).catch((error) => ({
+                error,
+                fetchedRowCount: 0,
+                pageCount: 0,
+                readings: [] as TankTemperatureReading[],
+              })),
               supabase
                 .from("tank_readings")
                 .select("created_at,top_temp,bottom_temp,heating")
@@ -1879,6 +2092,21 @@ export default function HomeScreen() {
           setActualHeatingHours(realizedHeatingHours);
           setStoredTemperatureDropProfile(temperatureDropProfileResult);
 
+          if ("error" in heatingGainHistoryResult) {
+            console.warn(
+              "Failed to load paginated heating gain history",
+              heatingGainHistoryResult.error,
+            );
+            setHeatingGainHistory([]);
+            setHeatingGainHistoryFetch({ fetchedRowCount: 0, pageCount: 0 });
+          } else {
+            setHeatingGainHistory(heatingGainHistoryResult.readings);
+            setHeatingGainHistoryFetch({
+              fetchedRowCount: heatingGainHistoryResult.fetchedRowCount,
+              pageCount: heatingGainHistoryResult.pageCount,
+            });
+          }
+
           if (temperatureHistoryResult.error) {
             console.error(temperatureHistoryResult.error);
             setTankTemperatureHistory([]);
@@ -1894,11 +2122,15 @@ export default function HomeScreen() {
 
           setTopTemp(null);
           setBottomTemp(null);
+          setHeatingGainHistory([]);
+          setHeatingGainHistoryFetch({ fetchedRowCount: 0, pageCount: 0 });
           setTankTemperatureHistory([]);
           setStoredTemperatureDropProfile(null);
           setHeating(false);
           setTankUpdatedAt(null);
         } finally {
+          tankReadingsRefreshInFlight = false;
+
           if (isActive) {
             setLoading(false);
           }
@@ -2035,6 +2267,7 @@ export default function HomeScreen() {
     try {
       await fetchHourlyPrices();
     } finally {
+      setManualOptimizationRevision((current) => current + 1);
       setIsRefreshing(false);
     }
   }, [fetchHourlyPrices]);

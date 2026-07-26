@@ -1,13 +1,20 @@
 import {
+  fallbackHourlyTemperatureDrop,
   HourlyTemperatureDropProfile,
   TankTemperatureReading,
 } from "./tankTemperatureForecast";
+import { estimateHeatingGainPerHour } from "./heatingGain";
+import type { HeatingGainEstimate } from "./heatingGain";
+
+export { estimateHeatingGainPerHour } from "./heatingGain";
+export type { HeatingGainEstimate } from "./heatingGain";
 
 export type HeatingOptimizationHour = {
   date: Date;
   endDate: Date;
   id: string;
   price: number;
+  segmentHours: number;
   startDate: string;
 };
 
@@ -40,13 +47,6 @@ export type StratifiedShowersEstimate = {
   weightedTemperature: number;
 };
 
-export type HeatingGainEstimate = {
-  fallbackUsed: boolean;
-  gainPerHour: number;
-  sampleCount: number;
-  samples: number[];
-};
-
 export type ConsumptionSpike = {
   drop: number;
   hour: number;
@@ -56,12 +56,14 @@ export type ConsumptionSpike = {
 export type HourlyHeatingForecast = {
   bottomTemperatureAfter: number;
   bottomTemperatureBeforeHeating: number;
+  appliedDrop: number;
   heatingGain: number;
   helsinkiHour: number;
   hourlyDrop: number;
   isHeatingSelected: boolean;
   showersLeftAfter: number;
   showersLeftBefore: number;
+  segmentHours: number;
   startDate: string;
   temperatureAfter: number;
   temperatureBefore: number;
@@ -121,6 +123,22 @@ export type HeatingOptimizationResult = HeatingSimulationResult & {
 
 const millisecondsPerHour = 60 * 60 * 1000;
 
+export function getHeatingOptimizationSegmentHours({
+  endDate,
+  forecastStart,
+  startDate,
+}: {
+  endDate: Date;
+  forecastStart: Date;
+  startDate: Date;
+}) {
+  const segmentStart = Math.max(startDate.getTime(), forecastStart.getTime());
+  const durationHours =
+    (endDate.getTime() - segmentStart) / millisecondsPerHour;
+
+  return clamp(durationHours, 0, 1);
+}
+
 const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
   hour: "2-digit",
   hour12: false,
@@ -131,19 +149,6 @@ function getHelsinkiHourNumber(date: Date) {
   const hour = Number(helsinkiHourFormatter.format(date));
 
   return hour === 24 ? 0 : hour;
-}
-
-function getWeightedTemperature(reading: TankTemperatureReading) {
-  if (
-    typeof reading.top_temp !== "number" ||
-    typeof reading.bottom_temp !== "number" ||
-    !Number.isFinite(reading.top_temp) ||
-    !Number.isFinite(reading.bottom_temp)
-  ) {
-    return null;
-  }
-
-  return reading.top_temp * 0.7 + reading.bottom_temp * 0.3;
 }
 
 function getWeightedTemperatureFromSensors(
@@ -334,71 +339,6 @@ export function createHeatingOptimizationSettings(
   };
 }
 
-export function estimateHeatingGainPerHour(
-  readings: TankTemperatureReading[],
-  fallbackHeatingGainPerHour: number,
-): HeatingGainEstimate {
-  const sortedReadings = [...readings].sort((first, second) =>
-    String(first.created_at ?? "").localeCompare(
-      String(second.created_at ?? ""),
-    ),
-  );
-  const samples: number[] = [];
-  let heatingStart: { temperature: number; time: number } | null = null;
-  let previousHeatingReading: { temperature: number; time: number } | null =
-    null;
-
-  const closeCurrentHeatingSegment = () => {
-    if (!heatingStart || !previousHeatingReading) {
-      heatingStart = null;
-      previousHeatingReading = null;
-      return;
-    }
-
-    const durationHours =
-      (previousHeatingReading.time - heatingStart.time) / millisecondsPerHour;
-    const gain = previousHeatingReading.temperature - heatingStart.temperature;
-
-    if (durationHours >= 0.5 && gain > 0) {
-      samples.push(gain / durationHours);
-    }
-
-    heatingStart = null;
-    previousHeatingReading = null;
-  };
-
-  for (const reading of sortedReadings) {
-    const time = reading.created_at ? new Date(reading.created_at).getTime() : NaN;
-    const temperature = getWeightedTemperature(reading);
-
-    if (!Number.isFinite(time) || temperature === null) {
-      continue;
-    }
-
-    if (reading.heating === true) {
-      if (!heatingStart) {
-        heatingStart = { temperature, time };
-      }
-
-      previousHeatingReading = { temperature, time };
-      continue;
-    }
-
-    closeCurrentHeatingSegment();
-  }
-
-  closeCurrentHeatingSegment();
-
-  const medianGain = getMedian(samples);
-
-  return {
-    fallbackUsed: medianGain === null,
-    gainPerHour: medianGain ?? fallbackHeatingGainPerHour,
-    sampleCount: samples.length,
-    samples,
-  };
-}
-
 export function detectConsumptionSpikes(
   hourlyDrops: HourlyTemperatureDropProfile,
   settings: Pick<HeatingOptimizationSettings, "safetyShowerReserve">,
@@ -470,11 +410,18 @@ export function simulateHeatingPlan({
 
   for (const hour of hours) {
     const helsinkiHour = getHelsinkiHourNumber(hour.date);
-    const hourlyDrop = hourlyDrops[helsinkiHour] ?? 0;
+    const hourlyDrop =
+      hourlyDrops[helsinkiHour] ?? fallbackHourlyTemperatureDrop;
+    const segmentHours = Number.isFinite(hour.segmentHours)
+      ? clamp(hour.segmentHours, 0, 1)
+      : 1;
+    const appliedDrop = hourlyDrop * segmentHours;
     const isHeatingSelected = selectedHourIds.has(hour.id);
-    const heatingGain = isHeatingSelected ? heatingGainPerHour : 0;
+    const heatingGain = isHeatingSelected
+      ? heatingGainPerHour * segmentHours
+      : 0;
     const temperatureBefore = temperature;
-    const temperatureBeforeHeating = temperatureBefore - hourlyDrop;
+    const temperatureBeforeHeating = temperatureBefore - appliedDrop;
     const {
       bottomTemperature: bottomTemperatureBeforeHeating,
       topTemperature: topTemperatureBeforeHeating,
@@ -555,6 +502,7 @@ export function simulateHeatingPlan({
       showersLeftAfter,
     );
     forecast.push({
+      appliedDrop,
       bottomTemperatureAfter,
       bottomTemperatureBeforeHeating,
       heatingGain,
@@ -563,6 +511,7 @@ export function simulateHeatingPlan({
       isHeatingSelected,
       showersLeftAfter,
       showersLeftBefore,
+      segmentHours,
       startDate: hour.startDate,
       temperatureAfter: temperature,
       temperatureBefore,
@@ -620,10 +569,15 @@ export function optimizeHeatingPlan({
   const heatingGainEstimate =
     typeof heatingGainPerHour === "number" && Number.isFinite(heatingGainPerHour)
       ? {
+          acceptedSegmentCount: 0,
+          bottomGainPerHour: null,
+          discoveredSegmentCount: 0,
           fallbackUsed: false,
           gainPerHour: heatingGainPerHour,
+          rejectedSegmentCount: 0,
           sampleCount: 0,
           samples: [],
+          topGainPerHour: null,
         }
       : estimateHeatingGainPerHour(
           tankReadings,

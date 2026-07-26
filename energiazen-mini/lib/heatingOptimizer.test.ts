@@ -2,6 +2,7 @@ import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
   estimateHeatingGainPerHour,
+  getHeatingOptimizationSegmentHours,
   HeatingOptimizationHour,
   HeatingOptimizationSettings,
   optimizeHeatingPlan,
@@ -37,7 +38,12 @@ function createHourlyDrops(defaultDrop: number, overrides: Record<number, number
   ) as HourlyTemperatureDropProfile;
 }
 
-function optimizationHour(helsinkiDate: string, helsinkiHour: number, price: number) {
+function optimizationHour(
+  helsinkiDate: string,
+  helsinkiHour: number,
+  price: number,
+  segmentHours = 1,
+) {
   const [year, month, day] = helsinkiDate.split("-").map(Number);
   const startDate = new Date(
     Date.UTC(year, month - 1, day, helsinkiHour - 3),
@@ -48,6 +54,7 @@ function optimizationHour(helsinkiDate: string, helsinkiHour: number, price: num
     endDate: new Date(startDate.getTime() + 60 * 60 * 1000),
     id: `${helsinkiDate}:${String(helsinkiHour).padStart(2, "0")}`,
     price,
+    segmentHours,
     startDate: startDate.toISOString(),
   } satisfies HeatingOptimizationHour;
 }
@@ -93,6 +100,87 @@ function reading(
 }
 
 export function runHeatingOptimizerUnitTests() {
+  {
+    const startDate = new Date("2026-07-22T07:00:00.000Z");
+    const endDate = new Date("2026-07-22T08:00:00.000Z");
+    const segmentHoursAtMinute = (minute: number) =>
+      getHeatingOptimizationSegmentHours({
+        endDate,
+        forecastStart: new Date(
+          startDate.getTime() + minute * 60 * 1000,
+        ),
+        startDate,
+      });
+
+    assertClose(segmentHoursAtMinute(0), 1, "tasatunti kayttaa tayden segmentin");
+    assertClose(segmentHoursAtMinute(15), 0.75, "xx.15 kayttaa 0,75 tuntia");
+    assertClose(segmentHoursAtMinute(30), 0.5, "xx.30 kayttaa 0,5 tuntia");
+    assertClose(segmentHoursAtMinute(45), 0.25, "xx.45 kayttaa 0,25 tuntia");
+  }
+
+  {
+    const result = simulateHeatingPlan({
+      ...stratifiedTemperatureInput(60),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(1, { 12: 4, 13: 6 }),
+      hours: [
+        optimizationHour("2026-07-22", 12, 1, 0.5),
+        optimizationHour("2026-07-22", 13, 1),
+      ],
+      selectedHeatingHourIds: ["2026-07-22:12"],
+      settings: defaultSettings({
+        safetyShowerReserve: 0,
+        targetShowerReserve: 0,
+      }),
+    });
+    const [partialHour, fullHour] = result.forecast;
+
+    assertClose(partialHour.segmentHours, 0.5, "ensimmainen segmentti valittyy ennusteeseen");
+    assertClose(partialHour.hourlyDrop, 4, "Helsingin kellotunnin profiiliarvo sailyy");
+    assertClose(partialHour.appliedDrop, 2, "ensimmaisen tunnin pudotus skaalautuu kestolla");
+    assertClose(
+      partialHour.temperatureBefore - partialHour.temperatureBeforeHeating,
+      2,
+      "skaalattu pudotus vahennetaan simuloidusta lampotilasta",
+    );
+    assertClose(partialHour.heatingGain, 4, "osittainen tunti skaalaa myos lammitysnousun");
+    assertClose(
+      partialHour.temperatureAfter - partialHour.temperatureBeforeHeating,
+      4,
+      "skaalattu lammitysnousu lisataan simuloituun lampotilaan",
+    );
+    assertClose(fullHour.segmentHours, 1, "myohempi tunti on taysi segmentti");
+    assertClose(fullHour.appliedDrop, 6, "myohempi tunti kayttaa koko pudotuksen");
+    assertClose(
+      fullHour.temperatureBefore - fullHour.temperatureBeforeHeating,
+      6,
+      "myohemman tayden tunnin lampotilalaskenta ei muutu",
+    );
+  }
+
+  {
+    const result = simulateHeatingPlan({
+      ...stratifiedTemperatureInput(60),
+      heatingGainPerHour: 0,
+      hourlyDrops: {} as HourlyTemperatureDropProfile,
+      hours: [optimizationHour("2026-07-22", 12, 1, 0.5)],
+      selectedHeatingHourIds: [],
+      settings: defaultSettings({
+        safetyShowerReserve: 0,
+        targetShowerReserve: 0,
+      }),
+    });
+    const hour = result.forecast[0];
+
+    assertClose(hour.hourlyDrop, 0.25, "puuttuva profiilitunti kayttaa 0,25 fallbackia");
+    assertClose(hour.appliedDrop, 0.125, "fallback skaalautuu segmentin kestolla");
+    assertClose(
+      hour.temperatureBefore - hour.temperatureBeforeHeating,
+      0.125,
+      "skaalattu fallback vahennetaan simuloidusta lampotilasta",
+    );
+  }
+
   {
     const settings = defaultSettings();
     const estimate = calculateStratifiedShowersLeft({
@@ -248,13 +336,19 @@ export function runHeatingOptimizerUnitTests() {
     const gainEstimate = estimateHeatingGainPerHour(
       [
         reading("2026-07-01T00:00:00.000Z", 40, true),
-        reading("2026-07-01T01:00:00.000Z", 50, true),
-        reading("2026-07-01T01:05:00.000Z", 50, false),
+        reading("2026-07-01T00:10:00.000Z", 41.3333333333, true),
+        reading("2026-07-01T00:20:00.000Z", 42.6666666667, true),
+        reading("2026-07-01T00:30:00.000Z", 44, true),
+        reading("2026-07-01T00:35:00.000Z", 44, false),
         reading("2026-07-02T00:00:00.000Z", 42, true),
-        reading("2026-07-02T01:00:00.000Z", 48, true),
-        reading("2026-07-02T01:05:00.000Z", 48, false),
+        reading("2026-07-02T00:10:00.000Z", 43, true),
+        reading("2026-07-02T00:20:00.000Z", 44, true),
+        reading("2026-07-02T00:30:00.000Z", 45, true),
+        reading("2026-07-02T00:35:00.000Z", 45, false),
         reading("2026-07-03T00:00:00.000Z", 43, true),
-        reading("2026-07-03T01:00:00.000Z", 51, true),
+        reading("2026-07-03T00:10:00.000Z", 44.3333333333, true),
+        reading("2026-07-03T00:20:00.000Z", 45.6666666667, true),
+        reading("2026-07-03T00:30:00.000Z", 47, true),
       ],
       7,
     );
