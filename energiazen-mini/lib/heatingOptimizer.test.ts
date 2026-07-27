@@ -1070,6 +1070,11 @@ export function runHeatingOptimizerUnitTests() {
   }
 
   {
+    const settings = defaultSettings({
+      maxHeatingHours: 3,
+      safetyShowerReserve: 2,
+      targetShowerReserve: 4,
+    });
     const result = optimizeHeatingPlan({
       ...stratifiedTemperatureInput(50),
       heatingGainPerHour: 10,
@@ -1079,22 +1084,27 @@ export function runHeatingOptimizerUnitTests() {
         optimizationHour("2026-07-22", 13, 2),
         optimizationHour("2026-07-22", 14, 1),
       ],
-      settings: defaultSettings({
-        maxHeatingHours: 3,
-        safetyShowerReserve: 2,
-        targetShowerReserve: 4,
-      }),
+      settings,
     });
 
+    // Tavoite tarkistetaan viimeisen valitun lammitystunnin jalkeen, ei enaa
+    // koko horisontin (tassa: tunnin 14) lopusta. Yksi tunti (12) riittaa jo
+    // yksinaan tayttamaan tavoitteen sielta katsottuna, joten tarpeetonta
+    // toista lammitystuntia ei enaa valita.
     assertEqual(
       result.diagnostics.firstValidSelectionCount,
-      2,
-      "kaksi tuntia valitaan kun yksi ei palauta tavoitevarausta",
+      1,
+      "yksi tunti riittaa, koska tavoite tarkistetaan heti viimeisen valitun lammitystunnin jalkeen",
     );
     assertEqual(
       result.selectedHeatingHourIds,
-      ["2026-07-22:12", "2026-07-22:14"],
-      "halvin validi kahden tunnin yhdistelma valitaan yhteinen suihkuvaraus huomioiden",
+      ["2026-07-22:12"],
+      "halvin yhden tunnin yhdistelma, joka tayttaa tavoitteen tavoitehetkella, valitaan",
+    );
+    assertEqual(
+      result.finalShowersLeft < settings.targetShowerReserve,
+      true,
+      "horisontin aivan viimeinen arvo jaa alle tavoitteen, mutta se ei enaa tee suunnitelmasta invalidia",
     );
   }
 
@@ -1254,6 +1264,165 @@ export function runHeatingOptimizerUnitTests() {
       afterNewReading.selectedHeatingHourIds.includes(currentHour.id),
       true,
       "hieman muuttunut uusi mittaus kaynnistaa uuden optimoinnin, mutta nykyinen tunti sailyy edelleen mukana",
+    );
+  }
+
+  // Testi A: varaaja riittaa huomisen halpaan jaksoon, tarpeetonta illan
+  // tuntia ei valita.
+  {
+    const tonightHour = optimizationHour("2026-07-22", 21, 9);
+    const tomorrowCheapHour = optimizationHour("2026-07-23", 13, 1);
+    const settings = defaultSettings({
+      maxHeatingHours: 2,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 4,
+    });
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 70,
+      currentTopTemperature: 70,
+      currentWeightedTemperature: 70,
+      heatingGainPerHour: 100,
+      hourlyDrops: createHourlyDrops(30),
+      hours: [tonightHour, tomorrowCheapHour],
+      settings,
+    });
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-23:13"],
+      "varaaja riittaa huomisen halpaan jaksoon asti eika tarpeetonta illan tuntia valita",
+    );
+    assertEqual(
+      result.valid,
+      true,
+      "halvan huomisen tunnin lammitys yksinaan riittaa tayttamaan tavoitteen",
+    );
+  }
+
+  // Testi B: kaksi huomisen halpaa peräkkäistä tuntia palauttavat tavoitteen
+  // niiden jalkeen, vaikka horisontin lopussa (viela myohemman erillisen
+  // hukkatunnin jalkeen) varaus on alle tavoitteen.
+  {
+    const todayExpensive = optimizationHour("2026-07-22", 21, 9);
+    const tomorrowCheapA = optimizationHour("2026-07-23", 13, 2);
+    const tomorrowCheapB = optimizationHour("2026-07-23", 14, 1);
+    const tomorrowAfter = optimizationHour("2026-07-23", 15, 5);
+    const settings = defaultSettings({
+      maxHeatingHours: 3,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 4,
+    });
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 70,
+      currentTopTemperature: 70,
+      currentWeightedTemperature: 70,
+      heatingGainPerHour: 100,
+      hourlyDrops: createHourlyDrops(0, { 21: 30, 13: 10, 14: 10, 15: 200 }),
+      hours: [todayExpensive, tomorrowCheapA, tomorrowCheapB, tomorrowAfter],
+      settings,
+    });
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-23:13", "2026-07-23:14"],
+      "kaksi huomisen halpaa perakkaista tuntia valitaan kalliin illan tunnin sijaan",
+    );
+    assertEqual(
+      result.valid,
+      true,
+      "suunnitelma on valid, koska tavoite tayttyy heti viimeisen valitun tunnin jalkeen",
+    );
+    assertEqual(
+      result.finalShowersLeft < settings.targetShowerReserve,
+      true,
+      "horisontin aivan viimeinen arvo jaa todistetusti alle tavoitteen (vanha tarkistus olisi hylannyt taman suunnitelman)",
+    );
+    assertEqual(
+      result.targetCheckShowersLeft >= settings.targetShowerReserve,
+      true,
+      "tavoitehetken (viimeisen valitun lammitystunnin jalkeinen) arvo tayttaa tavoitteen",
+    );
+  }
+
+  // Testi C: horisontin lopussa varaus on alle tavoitteen, mutta turvaraja ei
+  // alitu yhdellakaan tunnilla koko horisontin aikana - suunnitelma on valid.
+  {
+    const heatedHour = optimizationHour("2026-07-22", 10, 3);
+    const afterHour = optimizationHour("2026-07-22", 11, 7);
+    const settings = defaultSettings({
+      maxHeatingHours: 1,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 4,
+    });
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 50,
+      currentTopTemperature: 50,
+      currentWeightedTemperature: 50,
+      heatingGainPerHour: 100,
+      hourlyDrops: createHourlyDrops(0, { 10: 5, 11: 120 }),
+      hours: [heatedHour, afterHour],
+      settings,
+    });
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:10"],
+      "ainoa validi yhden tunnin yhdistelma valitaan",
+    );
+    assertEqual(
+      result.valid,
+      true,
+      "suunnitelma voi olla valid vaikka horisontin loppu jaa alle tavoitteen",
+    );
+    assertEqual(
+      result.finalShowersLeft < settings.targetShowerReserve,
+      true,
+      "horisontin loppuarvo on todistetusti alle tavoitteen",
+    );
+    assertEqual(
+      result.forecast.every(
+        (entry) =>
+          entry.showersLeftAfter >= settings.safetyShowerReserve &&
+          entry.showersLeftBefore >= settings.safetyShowerReserve,
+      ),
+      true,
+      "turvaraja ei alitu yhdellakaan tunnilla koko horisontin aikana",
+    );
+  }
+
+  // Testi D: tavoite ei tayty viimeisen valitun lammitystunnin jalkeen ->
+  // suunnitelma on invalid.
+  {
+    const heatedHour = optimizationHour("2026-07-22", 10, 3);
+    const settings = defaultSettings({
+      safetyShowerReserve: 0,
+      targetShowerReserve: 3,
+    });
+    const result = simulateHeatingPlan({
+      currentBottomTemperature: 50,
+      currentTopTemperature: 50,
+      currentWeightedTemperature: 50,
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(0, { 10: 2 }),
+      hours: [heatedHour],
+      selectedHeatingHourIds: [heatedHour.id],
+      settings,
+    });
+
+    assertEqual(
+      result.valid,
+      false,
+      "tavoite ei tayty viimeisen valitun lammitystunnin jalkeen, joten suunnitelma on invalid",
+    );
+    assertEqual(
+      result.violations.includes("target shower reserve would not be restored"),
+      true,
+      "tavoitteen alitus raportoidaan viallisena",
+    );
+    assertClose(
+      result.targetCheckShowersLeft,
+      96 / 35,
+      "tavoitehetken arvo lasketaan viimeisen valitun lammitystunnin jalkeisesta tilasta, ei horisontin lopusta",
     );
   }
 }

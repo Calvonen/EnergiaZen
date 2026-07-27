@@ -1488,7 +1488,9 @@ export default function HomeScreen() {
       heatingOptimization.forecast.at(-1)?.showersLeftAfter ?? null;
     const optimizationStatus =
       heatingOptimization.selectedHeatingHourIds.length > 0
-        ? "planned"
+        ? heatingOptimization.valid
+          ? "planned"
+          : "planned-invalid-fallback"
         : heatingOptimization.valid
           ? "not-needed"
           : heatingOptimization.violations.join("; ") || "no-valid-plan";
@@ -1525,12 +1527,16 @@ export default function HomeScreen() {
         heatingStartFillRatioDiagnostics:
           heatingOptimization.diagnostics.heatingStartFillRatioDiagnostics,
         heatingGainPerHour: gainEstimate.gainPerHour,
+        finalShowersLeft: heatingOptimization.finalShowersLeft,
         plannedHours: heatingOptimization.selectedHeatingHourIds,
         projectedShowers,
         reasonOrStatus: optimizationStatus,
         startHeatingThresholdShowers:
           heatingOptimization.diagnostics.startHeatingThresholdShowers,
+        targetCheckShowersLeft: heatingOptimization.targetCheckShowersLeft,
+        targetCheckTime: heatingOptimization.targetCheckTime,
         targetShowers: publishedOptimizationSettings.targetShowerReserve,
+        valid: heatingOptimization.valid,
       }),
     );
   }, [

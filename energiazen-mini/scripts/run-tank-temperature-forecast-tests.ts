@@ -22,6 +22,7 @@ import { runSettingsDraftUnitTests } from "../lib/settingsDraft.test";
 import { runSettingsScenarioUnitTests } from "../lib/settingsScenario.test";
 import { runSettingsDraftUiSourceTests } from "../tests/settingsDraftUiSource.test";
 import { runSettingsScenarioUiSourceTests } from "../tests/settingsScenarioUiSource.test";
+import { runHeatingOptimizationStatusSourceTests } from "../tests/heatingOptimizationStatusSource.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -41,6 +42,7 @@ async function runTests() {
   runSettingsScenarioUiSourceTests();
   runHeatingOptimizerUnitTests();
   runHeatingOptimizationRunUnitTests();
+  runHeatingOptimizationStatusSourceTests();
   await runHeatingGainUnitTests();
   runHeatingPlanPresentationUnitTests();
   runHeatingPlanPublicationUnitTests();
@@ -50,7 +52,7 @@ async function runTests() {
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

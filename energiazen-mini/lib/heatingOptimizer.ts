@@ -86,6 +86,7 @@ export type HeatingStartFillRatioDiagnostic = {
 };
 
 export type HeatingSimulationResult = {
+  finalShowersLeft: number;
   forecast: HourlyHeatingForecast[];
   heatingStartFillRatioDiagnostics: HeatingStartFillRatioDiagnostic[];
   largestSpike:
@@ -101,6 +102,8 @@ export type HeatingSimulationResult = {
   minimumPredictedShowersLeft: number;
   minimumPredictedTemperature: number;
   selectedHeatingHourIds: string[];
+  targetCheckShowersLeft: number;
+  targetCheckTime: string | null;
   totalCost: number;
   valid: boolean;
   violations: string[];
@@ -435,6 +438,8 @@ export function simulateHeatingPlan({
   let totalCost = 0;
   let previousHourEndTime: number | null = null;
   let wasHeatingAtPreviousSegmentEnd: boolean = false;
+  let lastSelectedShowersLeftAfter: number | null = null;
+  let lastSelectedHourEndTime: string | null = null;
 
   for (const hour of hours) {
     const helsinkiHour = getHelsinkiHourNumber(hour.date);
@@ -531,6 +536,11 @@ export function simulateHeatingPlan({
       minTankTemperature: settings.absoluteMinimumTemperature,
       topTemperature: topTemperatureAfter,
     }).showersLeft;
+    if (isHeatingSelected) {
+      lastSelectedShowersLeftAfter = showersLeftAfter;
+      lastSelectedHourEndTime = hour.endDate.toISOString();
+    }
+
     const violatedReserve =
       showersLeftBefore < settings.safetyShowerReserve ||
       showersLeftAfter < settings.safetyShowerReserve;
@@ -600,17 +610,32 @@ export function simulateHeatingPlan({
     forecast[forecast.length - 1]?.showersLeftAfter ??
     minimumPredictedShowersLeft;
 
-  if (finalShowersLeft < settings.targetShowerReserve) {
+  // The target moment is right after the last SELECTED heating hour, not the
+  // end of the whole (up to ~30h, spanning into tomorrow) simulation
+  // horizon. Otherwise an otherwise-sound plan fails validity purely because
+  // of decay that happens long after the last hour it was ever asked to
+  // cover. With no heating hours selected at all, the target still applies
+  // to the end of the horizon (unchanged "no heating needed" behaviour).
+  const targetCheckShowersLeft =
+    lastSelectedShowersLeftAfter !== null
+      ? lastSelectedShowersLeftAfter
+      : finalShowersLeft;
+  const targetCheckTime = lastSelectedHourEndTime;
+
+  if (targetCheckShowersLeft < settings.targetShowerReserve) {
     violations.add("target shower reserve would not be restored");
   }
 
   return {
+    finalShowersLeft,
     forecast,
     heatingStartFillRatioDiagnostics,
     largestSpike,
     minimumPredictedShowersLeft,
     minimumPredictedTemperature,
     selectedHeatingHourIds,
+    targetCheckShowersLeft,
+    targetCheckTime,
     totalCost,
     valid: violations.size === 0,
     violations: [...violations],
