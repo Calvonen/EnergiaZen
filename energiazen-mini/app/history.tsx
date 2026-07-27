@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 
 import { debugLog } from "@/lib/debug";
 import { defaultSettings } from "@/lib/settings";
@@ -645,6 +646,19 @@ export default function TemperatureHistoryScreen() {
 
     return () => task.cancel();
   }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (selectedTab === "24h") {
+        void loadHistoryTab("24h", true);
+        return;
+      }
+
+      if (isTodayHelsinkiDay(selectedDayKey)) {
+        void loadDayHistory(selectedDayKey, true);
+      }
+    }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]),
+  );
 
   useEffect(() => {
     const intervalId = setInterval(() => {
