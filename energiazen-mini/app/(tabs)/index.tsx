@@ -54,6 +54,7 @@ import {
   hasCheaperSafetyRejectedPlan,
 } from "@/lib/heatingPlanPresentation";
 import {
+  canPublishActiveHeatingPlan,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   publishLatestHeatingPlan,
@@ -72,8 +73,9 @@ import {
   defaultSettings,
   defaultTankTemperature,
   EnergiaZenSettings,
-  loadSettings,
 } from "@/lib/settings";
+import { validateSettingsDraft } from "@/lib/settingsDraft";
+import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import {
   buildHourlyTemperatureDropProfileResult,
@@ -808,7 +810,23 @@ export default function HomeScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<DaySelection>("today");
-  const [settings, setSettings] = useState(defaultSettings);
+  const {
+    areSettingsLoaded,
+    draftSettings: scenarioSettings,
+    hasUnsavedChanges,
+    persistedSettings: activeSettings,
+  } = useSettingsScenario();
+  const [planView, setPlanView] = useState<"active" | "scenario">("active");
+  // The legacy UI reads active settings. Only the optimization input below may
+  // use scenarioSettings, and publication is guarded by hasUnsavedChanges.
+  const settings = activeSettings;
+  const optimizationSettingsSource = hasUnsavedChanges
+    ? scenarioSettings
+    : activeSettings;
+  const scenarioValidation = useMemo(
+    () => validateSettingsDraft(scenarioSettings, activeSettings),
+    [activeSettings, scenarioSettings],
+  );
   const [selectedHourlyPrice, setSelectedHourlyPrice] =
     useState<HourlyPrice | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -1159,10 +1177,10 @@ export default function HomeScreen() {
   const heatingOptimizationSettings = useMemo(
     () =>
       createHeatingOptimizationSettings(
-        settings,
+        optimizationSettingsSource,
         fallbackHeatingGainPerHour,
       ),
-    [settings],
+    [optimizationSettingsSource],
   );
   const heatingOptimizationInput = useMemo(
     () => ({
@@ -1174,7 +1192,7 @@ export default function HomeScreen() {
       hours: optimizerHours,
       isCurrentlyHeating: heating,
       manualRefreshRevision: manualOptimizationRevision,
-      mode: settings.heatingNeedMode,
+      mode: optimizationSettingsSource.heatingNeedMode,
       readingCreatedAt: tankUpdatedAt,
       settings: heatingOptimizationSettings,
     }),
@@ -1187,7 +1205,7 @@ export default function HomeScreen() {
       hourlyTemperatureDropProfile,
       manualOptimizationRevision,
       optimizerHours,
-      settings.heatingNeedMode,
+      optimizationSettingsSource.heatingNeedMode,
       tankUpdatedAt,
       topTemp,
     ],
@@ -1200,7 +1218,7 @@ export default function HomeScreen() {
   useEffect(() => {
     const controller = heatingOptimizationRunControllerRef.current;
     const runId = controller.start(heatingOptimizationInputKey);
-    const settingsSnapshot = settings;
+    const settingsSnapshot = optimizationSettingsSource;
 
     if (runId === null) {
       return;
@@ -1223,6 +1241,7 @@ export default function HomeScreen() {
 
       if (
         heatingOptimizationInput.mode === "automatic" &&
+        (!hasUnsavedChanges || scenarioValidation.errors.length === 0) &&
         currentWeightedTemperature !== null &&
         currentTopTemperature !== null &&
         currentBottomTemperature !== null &&
@@ -1269,7 +1288,9 @@ export default function HomeScreen() {
   }, [
     heatingOptimizationInput,
     heatingOptimizationInputKey,
-    settings,
+    hasUnsavedChanges,
+    optimizationSettingsSource,
+    scenarioValidation.errors.length,
     todayPlanDate,
     tomorrowPlanDate,
   ]);
@@ -1285,7 +1306,7 @@ export default function HomeScreen() {
     heatingOptimizationState.inputKey === heatingOptimizationInputKey
       ? heatingOptimizationState.result
       : null;
-  const heatingOptimization = heatingOptimizationState.result;
+  const heatingOptimization = activeHeatingOptimization;
   const publishedOptimizerHours = heatingOptimizationState.hours;
   const publishedOptimizationSettings = heatingOptimizationState.settings;
   const publishedTodayPlanDate =
@@ -1354,7 +1375,10 @@ export default function HomeScreen() {
       ].join(" ")
       : null;
   const optimizerHeatingPlanPresentation = useMemo(() => {
-    if (!heatingOptimization || settings.heatingNeedMode !== "automatic") {
+    if (
+      !heatingOptimization ||
+      optimizationSettingsSource.heatingNeedMode !== "automatic"
+    ) {
       return null;
     }
 
@@ -1452,7 +1476,7 @@ export default function HomeScreen() {
     publishedOptimizerHours,
     publishedTodayPlanDate,
     publishedTomorrowPlanDate,
-    settings.heatingNeedMode,
+    optimizationSettingsSource.heatingNeedMode,
   ]);
   const storedHeatingPlanPresentation = useMemo(() => {
     if (settings.heatingNeedMode !== "automatic") {
@@ -1518,12 +1542,30 @@ export default function HomeScreen() {
     tomorrowPlanDate,
     warmWaterEstimate?.showersLeft,
   ]);
+  useEffect(() => {
+    setPlanView(hasUnsavedChanges ? "scenario" : "active");
+  }, [hasUnsavedChanges]);
+
+  const activePlanPresentation =
+    storedHeatingPlanPresentation ??
+    (hasUnsavedChanges ? null : optimizerHeatingPlanPresentation);
+  const scenarioPlanPresentation =
+    scenarioValidation.errors.length === 0
+      ? optimizerHeatingPlanPresentation
+      : null;
+  const heatingPlanPresentation = hasUnsavedChanges
+    ? planView === "scenario"
+      ? scenarioPlanPresentation
+      : activePlanPresentation
+    : activePlanPresentation;
   const heatingPlanPresentationSource = getHeatingPlanPresentationSource({
-    hasPublishedOptimization: optimizerHeatingPlanPresentation !== null,
-    hasStoredPlan: storedHeatingPlanPresentation !== null,
+    hasPublishedOptimization:
+      heatingPlanPresentation === scenarioPlanPresentation &&
+      scenarioPlanPresentation !== null,
+    hasStoredPlan:
+      heatingPlanPresentation === activePlanPresentation &&
+      activePlanPresentation !== null,
   });
-  const heatingPlanPresentation =
-    optimizerHeatingPlanPresentation ?? storedHeatingPlanPresentation;
 
   useEffect(() => {
     debugLog("Heating plan presentation source", {
@@ -1744,6 +1786,22 @@ export default function HomeScreen() {
   }, [visiblePlanDatesKey]);
 
   useEffect(() => {
+    const isOptimizationCurrent =
+      settings.heatingNeedMode !== "automatic" || activeHeatingOptimization !== null;
+
+    if (
+      !areSettingsLoaded ||
+      !canPublishActiveHeatingPlan({
+        hasUnsavedChanges,
+        isOptimizationCurrent,
+      })
+    ) {
+      debugLog("Heating plan publication skipped for scenario settings", {
+        plannedHours: heatingOptimization?.selectedHeatingHourIds ?? [],
+      });
+      return;
+    }
+
     if (
       settings.heatingNeedMode === "automatic" &&
       !activeHeatingOptimization
@@ -1865,7 +1923,9 @@ export default function HomeScreen() {
       });
   }, [
     activeHeatingOptimization,
+    areSettingsLoaded,
     currentWeightedTemperature,
+    hasUnsavedChanges,
     heatingRecommendation.reason,
     heatingOptimization,
     heatingOptimizationState.runId,
@@ -2143,12 +2203,6 @@ export default function HomeScreen() {
             setUserEmail(data.user.email ?? null);
           },
         );
-
-      loadSettings().then((storedSettings) => {
-        if (isActive) {
-          setSettings(storedSettings);
-        }
-      });
 
       let tankReadingsRefreshInFlight = false;
 
@@ -3001,10 +3055,66 @@ export default function HomeScreen() {
                   </Text>
                 </View>
 
-                {heatingPlanPresentation ? (
+                {hasUnsavedChanges ? (
+                  <View style={styles.scenarioBanner}>
+                    <Text style={styles.scenarioBannerTitle}>
+                      Skenaariotila käytössä
+                    </Text>
+                    <Text style={styles.scenarioBannerText}>
+                      Näytettävä suunnitelma perustuu tallentamattomiin asetuksiin. Shelly käyttää edelleen viimeksi tallennettuja asetuksia ja käytössä olevaa lämmityssuunnitelmaa.
+                    </Text>
+                    <View style={styles.scenarioViewToggle}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => setPlanView("scenario")}
+                        style={[
+                          styles.scenarioViewButton,
+                          planView === "scenario" && styles.scenarioViewButtonActive,
+                        ]}
+                      >
+                        <Text style={styles.scenarioViewButtonText}>Skenaario</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => setPlanView("active")}
+                        style={[
+                          styles.scenarioViewButton,
+                          planView === "active" && styles.scenarioViewButtonActive,
+                        ]}
+                      >
+                        <Text style={styles.scenarioViewButtonText}>Käytössä oleva</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
+
+                {hasUnsavedChanges &&
+                planView === "scenario" &&
+                scenarioValidation.errors.length > 0 ? (
+                  <View style={styles.scenarioError}>
+                    <Text style={styles.scenarioErrorTitle}>
+                      Skenaariota ei voida laskea
+                    </Text>
+                    {scenarioValidation.errors.map((issue) => (
+                      <Text key={`${issue.field}-${issue.message}`} style={styles.scenarioErrorText}>
+                        {issue.message}
+                      </Text>
+                    ))}
+                  </View>
+                ) : hasUnsavedChanges &&
+                  planView === "scenario" &&
+                  !heatingPlanPresentation ? (
                   <View style={styles.heatingPlanInfo}>
                     <Text style={styles.heatingPlanInfoTitle}>
-                      Lämmityssuunnitelma
+                      Skenaariota lasketaan
+                    </Text>
+                  </View>
+                ) : heatingPlanPresentation ? (
+                  <View style={styles.heatingPlanInfo}>
+                    <Text style={styles.heatingPlanInfoTitle}>
+                      {hasUnsavedChanges && planView === "scenario"
+                        ? "Lämmityssuunnitelma · Skenaario"
+                        : "Lämmityssuunnitelma"}
                     </Text>
                     {heatingPlanPresentation.selectedHours.length > 0 ? (
                       <View style={styles.heatingPlanHourList}>
@@ -3251,6 +3361,75 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 6,
     textAlign: "center",
+  },
+  scenarioBanner: {
+    alignSelf: "stretch",
+    backgroundColor: "rgba(255, 181, 71, 0.16)",
+    borderColor: "rgba(255, 181, 71, 0.52)",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 7,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  scenarioBannerTitle: {
+    color: "#ffe1a6",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  scenarioBannerText: {
+    color: "#f7d8a0",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
+  },
+  scenarioViewToggle: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 2,
+  },
+  scenarioViewButton: {
+    alignItems: "center",
+    borderColor: "rgba(255, 225, 166, 0.42)",
+    borderRadius: 6,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 36,
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  scenarioViewButtonActive: {
+    backgroundColor: "rgba(255, 213, 135, 0.22)",
+    borderColor: "#ffe1a6",
+  },
+  scenarioViewButtonText: {
+    color: "#fff2d2",
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  scenarioError: {
+    alignSelf: "stretch",
+    backgroundColor: "rgba(255, 95, 109, 0.13)",
+    borderColor: "rgba(255, 95, 109, 0.44)",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  scenarioErrorTitle: {
+    color: "#ffc3c8",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  scenarioErrorText: {
+    color: "#ffd4d8",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
   },
   heatingPlanInfo: {
     alignSelf: "stretch",

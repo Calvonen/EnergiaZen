@@ -1,4 +1,5 @@
 import {
+  canPublishActiveHeatingPlan,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   publishLatestHeatingPlan,
@@ -20,6 +21,23 @@ function assertSame(actual: unknown, expected: unknown, message: string) {
 }
 
 export function runHeatingPlanPublicationUnitTests() {
+  assertEqual(
+    canPublishActiveHeatingPlan({
+      hasUnsavedChanges: true,
+      isOptimizationCurrent: true,
+    }),
+    false,
+    "skenaariosuunnitelmaa ei voi julkaista",
+  );
+  assertEqual(
+    canPublishActiveHeatingPlan({
+      hasUnsavedChanges: false,
+      isOptimizationCurrent: true,
+    }),
+    true,
+    "vain ajantasainen aktiivinen suunnitelma voidaan julkaista",
+  );
+
   const oldPublication: PublishedHeatingPlanState<
     { plannedHours: number[] },
     number

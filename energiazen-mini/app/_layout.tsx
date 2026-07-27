@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { SettingsScenarioProvider } from '@/lib/settingsScenarioContext';
 import { supabase } from '@/lib/supabase';
 
 export const unstable_settings = {
@@ -56,18 +57,20 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="settings" options={{ headerShown: false }} />
-        <Stack.Screen name="login" options={{ headerShown: false }} />
-        <Stack.Screen name="history" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="electricity-history"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
+      <SettingsScenarioProvider>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="settings" options={{ headerShown: false }} />
+          <Stack.Screen name="login" options={{ headerShown: false }} />
+          <Stack.Screen name="history" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="electricity-history"
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+        </Stack>
+        <StatusBar style="auto" />
+      </SettingsScenarioProvider>
     </ThemeProvider>
   );
 }

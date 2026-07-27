@@ -2,6 +2,7 @@ import type { EditableSettingKey, EnergiaZenSettings } from "./settings";
 
 export type SettingsValidationField =
   | EditableSettingKey
+  | "backupHours"
   | "minTankTemperature"
   | "priceDifferenceThresholdCents";
 
@@ -72,6 +73,7 @@ export function validateSettingsDraft(
 
   const fullTankShowers = draftSettings.fullTankShowers;
   const targetShowerReserve = draftSettings.targetShowerReserve;
+  const safetyShowerReserve = draftSettings.safetyShowerReserve;
   const minTankTemperature = draftSettings.minTankTemperature;
   const maxTankTemperature = draftSettings.maxTankTemperature;
   const fullTankAverageTemperature =
@@ -88,6 +90,24 @@ export function validateSettingsDraft(
     errors.push({
       field: "targetShowerReserve",
       message: "Tavoitevaraus ei voi olla negatiivinen.",
+    });
+  }
+
+  if (isFiniteNumber(safetyShowerReserve) && safetyShowerReserve < 0) {
+    errors.push({
+      field: "safetyShowerReserve",
+      message: "Turvaraja ei voi olla negatiivinen.",
+    });
+  }
+
+  if (
+    isFiniteNumber(safetyShowerReserve) &&
+    isFiniteNumber(targetShowerReserve) &&
+    safetyShowerReserve > targetShowerReserve
+  ) {
+    errors.push({
+      field: "safetyShowerReserve",
+      message: "Turvaraja ei voi ylittää tavoitevarausta.",
     });
   }
 
@@ -114,6 +134,16 @@ export function validateSettingsDraft(
   }
 
   if (
+    isFiniteNumber(fullTankAverageTemperature) &&
+    fullTankAverageTemperature <= 42
+  ) {
+    errors.push({
+      field: "fullTankAverageTemperature",
+      message: "Täyden varaajan vertailulämpötilan pitää olla yli 42 °C.",
+    });
+  }
+
+  if (
     isFiniteNumber(maxTankTemperature) &&
     isFiniteNumber(minTankTemperature) &&
     maxTankTemperature <= minTankTemperature
@@ -135,6 +165,40 @@ export function validateSettingsDraft(
     });
   }
 
+  for (const field of [
+    "automaticMaxHeatingHours",
+    "fixedHeatingHoursPerDay",
+  ] as const) {
+    const value = draftSettings[field];
+
+    if (
+      isFiniteNumber(value) &&
+      (!Number.isInteger(value) || value < 1 || value > 6)
+    ) {
+      errors.push({
+        field,
+        message: "Lämmitystuntien määrän pitää olla kokonaisluku välillä 1–6.",
+      });
+    }
+  }
+
+  if (
+    !Array.isArray(draftSettings.backupHours) ||
+    draftSettings.backupHours.some(
+      (hour) => !Number.isInteger(hour) || hour < 0 || hour > 23,
+    )
+  ) {
+    errors.push({
+      field: "backupHours",
+      message: "Varatuntien pitää olla kokonaislukuja välillä 0–23.",
+    });
+  } else if (new Set(draftSettings.backupHours).size !== draftSettings.backupHours.length) {
+    errors.push({
+      field: "backupHours",
+      message: "Varatunnit eivät saa sisältää duplikaatteja.",
+    });
+  }
+
   if (
     isFiniteNumber(targetShowerReserve) &&
     isFiniteNumber(fullTankShowers) &&
@@ -151,6 +215,27 @@ export function validateSettingsDraft(
     warnings.push({
       field: "targetShowerReserve",
       message: "Pieni turvaraja voi jättää liian vähän lämmintä vettä.",
+    });
+  }
+
+  if (
+    isFiniteNumber(safetyShowerReserve) &&
+    isFiniteNumber(targetShowerReserve) &&
+    targetShowerReserve - safetyShowerReserve <= 0.5
+  ) {
+    warnings.push({
+      field: "safetyShowerReserve",
+      message: "Turvaraja on hyvin lähellä tavoitevarausta.",
+    });
+  }
+
+  if (
+    isFiniteNumber(draftSettings.automaticMaxHeatingHours) &&
+    draftSettings.automaticMaxHeatingHours <= 1
+  ) {
+    warnings.push({
+      field: "automaticMaxHeatingHours",
+      message: "Pieni enimmäistuntien määrä voi estää tavoitevarauksen saavuttamisen.",
     });
   }
 

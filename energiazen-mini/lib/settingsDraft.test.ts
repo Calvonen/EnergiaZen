@@ -241,7 +241,10 @@ export async function runSettingsDraftUnitTests() {
 
   {
     const savedSettings = createSettings();
-    const warningDraft = createSettings({ targetShowerReserve: 1 });
+    const warningDraft = createSettings({
+      safetyShowerReserve: 1,
+      targetShowerReserve: 1,
+    });
     const validation = validateSettingsDraft(warningDraft, savedSettings);
     let localCalls = 0;
     let remoteCalls = 0;

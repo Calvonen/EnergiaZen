@@ -12,6 +12,16 @@ export type PublishedHeatingPlanState<TResult, THour> = {
   runId: number;
 };
 
+export function canPublishActiveHeatingPlan({
+  hasUnsavedChanges,
+  isOptimizationCurrent,
+}: {
+  hasUnsavedChanges: boolean;
+  isOptimizationCurrent: boolean;
+}) {
+  return !hasUnsavedChanges && isOptimizationCurrent;
+}
+
 export function publishLatestHeatingPlan<
   TState extends PublishedHeatingPlanState<unknown, unknown>,
 >(current: TState, next: TState): TState {

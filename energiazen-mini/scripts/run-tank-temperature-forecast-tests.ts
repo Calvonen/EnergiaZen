@@ -19,7 +19,9 @@ import { runElectricityPriceFunctionUnitTests } from "../supabase/functions/fetc
 import { runTemperatureHistoryDayUnitTests } from "../lib/temperatureHistoryDay.test";
 import { runTemperatureHistoryRpcMigrationTests } from "../tests/temperatureHistoryRpcMigration.test";
 import { runSettingsDraftUnitTests } from "../lib/settingsDraft.test";
+import { runSettingsScenarioUnitTests } from "../lib/settingsScenario.test";
 import { runSettingsDraftUiSourceTests } from "../tests/settingsDraftUiSource.test";
+import { runSettingsScenarioUiSourceTests } from "../tests/settingsScenarioUiSource.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -34,7 +36,9 @@ async function runTests() {
   runTemperatureHistoryDayUnitTests();
   runTemperatureHistoryRpcMigrationTests();
   await runSettingsDraftUnitTests();
+  runSettingsScenarioUnitTests();
   runSettingsDraftUiSourceTests();
+  runSettingsScenarioUiSourceTests();
   runHeatingOptimizerUnitTests();
   runHeatingOptimizationRunUnitTests();
   await runHeatingGainUnitTests();
@@ -46,7 +50,7 @@ async function runTests() {
   runTemperatureDropProfileUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsDraftUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
   );
 }
 

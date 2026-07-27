@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
@@ -17,14 +17,12 @@ import {
   defaultSettings,
   EditableSettingKey,
   HeatingNeedMode,
-  loadSettings,
   normalizeSettings,
   saveSettings,
 } from "@/lib/settings";
 import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
 import {
   areSettingsEqual,
-  discardSettingsDraft,
   persistSettingsDraft,
   SettingsDraftLocalSaveError,
   SettingsDraftSaveError,
@@ -32,6 +30,7 @@ import {
   updateDraftSetting,
   validateSettingsDraft,
 } from "@/lib/settingsDraft";
+import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
 import { getHeatingModeSettingKeys } from "@/lib/heatingModeSettings";
@@ -250,9 +249,14 @@ function getProfileDropColor(value: number, minimum: number, maximum: number) {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const [savedSettings, setSavedSettings] = useState(defaultSettings);
-  const [draftSettings, setDraftSettings] = useState(defaultSettings);
-  const [areSettingsLoaded, setAreSettingsLoaded] = useState(false);
+  const {
+    areSettingsLoaded,
+    commitPersistedSettings,
+    discardDraftSettings,
+    draftSettings,
+    persistedSettings: savedSettings,
+    updateDraftSettings,
+  } = useSettingsScenario();
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [saveFeedback, setSaveFeedback] = useState<{
     kind: "error" | "success";
@@ -449,28 +453,12 @@ export default function SettingsScreen() {
       })())
     : [];
 
-  useEffect(() => {
-    let isMounted = true;
-
-    loadSettings().then((storedSettings) => {
-      if (isMounted) {
-        setSavedSettings(storedSettings);
-        setDraftSettings(storedSettings);
-        setAreSettingsLoaded(true);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
   const updateSetting = (key: EditableSettingKey, value: number) => {
     if (isSavingSettings) {
       return;
     }
 
-    setDraftSettings((current) => updateDraftSetting(current, key, value));
+    updateDraftSettings((current) => updateDraftSetting(current, key, value));
     setSaveFeedback(null);
     setSelectedSettingKey(null);
   };
@@ -480,7 +468,7 @@ export default function SettingsScreen() {
       return;
     }
 
-    setDraftSettings((current) => ({ ...current, heatingNeedMode }));
+    updateDraftSettings((current) => ({ ...current, heatingNeedMode }));
     setSaveFeedback(null);
   };
 
@@ -499,7 +487,7 @@ export default function SettingsScreen() {
       return;
     }
 
-    setDraftSettings((current) => ({
+    updateDraftSettings((current) => ({
       ...current,
       backupHours: isSelected
         ? current.backupHours.filter((backupHour) => backupHour !== hour)
@@ -528,7 +516,7 @@ export default function SettingsScreen() {
       return;
     }
 
-    setDraftSettings(discardSettingsDraft(savedSettings));
+    discardDraftSettings();
     setSelectedSettingKey(null);
     setSaveFeedback(null);
   };
@@ -553,12 +541,7 @@ export default function SettingsScreen() {
         },
       });
 
-      setSavedSettings(persistedSettings);
-      setDraftSettings((current) =>
-        areSettingsEqual(current, draftSnapshot)
-          ? persistedSettings
-          : current,
-      );
+      commitPersistedSettings(persistedSettings);
       setSaveFeedback({
         kind: "success",
         message: "Asetukset tallennettiin.",
@@ -831,7 +814,7 @@ export default function SettingsScreen() {
             pressed && !isCancelDisabled && styles.settingsActionPressed,
           ]}
         >
-          <Text style={styles.cancelSettingsButtonText}>Peru muutokset</Text>
+          <Text style={styles.cancelSettingsButtonText}>Hylkää muutokset</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -1105,7 +1088,7 @@ export default function SettingsScreen() {
                 accessibilityLabel="Käytä varatunteja yhteyskatkossa"
                 disabled={isSavingSettings}
                 onValueChange={(fallbackEnabled) => {
-                  setDraftSettings((current) => ({
+                  updateDraftSettings((current) => ({
                     ...current,
                     backupHours:
                       fallbackEnabled && current.backupHours.length === 0

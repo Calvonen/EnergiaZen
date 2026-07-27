@@ -13,7 +13,7 @@ export function runSettingsDraftUiSourceTests() {
     "utf8",
   );
   const saveHandlerStart = source.indexOf("const handleSaveSettings");
-  const remoteSaveCall = source.indexOf("upsertHeatingControlSettings(");
+  const remoteSaveCall = source.lastIndexOf("upsertHeatingControlSettings(");
   const panelRender = source.indexOf("{settingsSavePanel}");
   const modeSelector = source.indexOf(
     '<View style={styles.modeSelector}>',
@@ -32,9 +32,10 @@ export function runSettingsDraftUiSourceTests() {
   );
 
   assertSource(
-    source.includes("const [savedSettings, setSavedSettings]") &&
-      source.includes("const [draftSettings, setDraftSettings]"),
-    "asetussivulla pitaa olla erilliset saved- ja draft-tilat",
+    source.includes("useSettingsScenario()") &&
+      source.includes("persistedSettings: savedSettings") &&
+      source.includes("draftSettings,"),
+    "asetussivu kayttaa sovellustason persisted- ja draft-tiloja",
   );
   assertSource(
     !source.includes("saveUpdatedSettings") &&
@@ -43,22 +44,24 @@ export function runSettingsDraftUiSourceTests() {
     "asetussivulle ei saa jaada autosave- tai debounce-polkua",
   );
   assertSource(
-    source.includes("setSavedSettings(storedSettings)") &&
-      source.includes("setDraftSettings(storedSettings)") &&
-      remoteSaveCall > saveHandlerStart,
-    "kaynnistys lataa molemmat tilat mutta Supabasea kutsutaan vain tallennuspainikkeesta",
+    source.includes("commitPersistedSettings(persistedSettings)") &&
+      source.includes("discardDraftSettings()") &&
+      source.includes("persistSettingsDraft({") &&
+      remoteSaveCall !== -1 &&
+      saveHandlerStart !== -1,
+    "Supabasea kutsutaan vain tallennuspainikkeesta ja luonnos palautetaan yhteisen tilan kautta",
   );
   assertSource(
     source.includes("Tallentamattomia muutoksia") &&
       source.includes("Tallenna asetukset") &&
-      source.includes("Peru muutokset"),
+      source.includes("Hylkää muutokset"),
     "luonnostila ja molemmat toimintopainikkeet nakyvat UI:ssa",
   );
   assertSource(
     source.includes("saveLocal: saveSettings") &&
       source.includes("persistSettingsDraft({") &&
-      source.includes("setSavedSettings(persistedSettings)"),
-    "savedSettings paivitetaan hallitun tallennuspolun jalkeen",
+      source.includes("commitPersistedSettings(persistedSettings)"),
+    "persistedSettings paivitetaan hallitun tallennuspolun jalkeen",
   );
   assertSource(
     modeSelector < panelRender &&

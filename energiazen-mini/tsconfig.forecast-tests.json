@@ -51,10 +51,13 @@
     "lib/heatingControlSettingsSupabase.ts",
     "lib/settingsDraft.ts",
     "lib/settingsDraft.test.ts",
+    "lib/settingsScenario.ts",
+    "lib/settingsScenario.test.ts",
     "tests/historyUiSource.test.ts",
     "tests/heatingGainHistorySource.test.ts",
     "tests/temperatureHistoryRpcMigration.test.ts",
     "tests/settingsDraftUiSource.test.ts",
+    "tests/settingsScenarioUiSource.test.ts",
     "lib/temperatureDropProfile.ts",
     "lib/temperatureDropProfile.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
