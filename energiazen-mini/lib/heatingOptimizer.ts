@@ -226,11 +226,16 @@ function getQuantile(sortedValues: number[], ratio: number) {
   return sortedValues[index];
 }
 
-function getCombinationCost(
+function getSelectedHoursCost(
   hours: HeatingOptimizationHour[],
-  selectedIndexes: number[],
+  selectedHeatingHourIds: string[],
 ) {
-  return selectedIndexes.reduce((sum, index) => sum + hours[index].price, 0);
+  const selectedIds = new Set(selectedHeatingHourIds);
+
+  return hours.reduce(
+    (sum, hour) => (selectedIds.has(hour.id) ? sum + hour.price : sum),
+    0,
+  );
 }
 
 function createCombinations(
@@ -673,9 +678,21 @@ export function optimizeHeatingPlan({
     hasCurrentHour &&
     !isCurrentlyHeating &&
     currentShowers >= startHeatingThresholdShowers;
-  const maxHeatingHours = Math.min(
-    settings.maxHeatingHours,
-    sortedHours.length,
+  // A hard requirement: if heating is already running this hour, that hour
+  // must survive every re-optimization until it ends, so a fresh run can
+  // never drop it and cut the running cycle short mid-hour.
+  const lockedHours = isCurrentlyHeating
+    ? sortedHours.filter((hour) => hour.isCurrentHour)
+    : [];
+  const lockedHourIds = lockedHours.map((hour) => hour.id);
+  const lockedHourIdSet = new Set(lockedHourIds);
+  const optionalHours = sortedHours.filter(
+    (hour) => !lockedHourIdSet.has(hour.id),
+  );
+  const maxOptionalHeatingHours = Math.max(
+    0,
+    Math.min(settings.maxHeatingHours, sortedHours.length) -
+      lockedHourIds.length,
   );
   const rejectedShifts: RejectedShift[] = [];
   let bestResult: HeatingSimulationResult | null = null;
@@ -683,14 +700,19 @@ export function optimizeHeatingPlan({
   let firstValidSelectionCount: number | null = null;
   const validCombinationCountsBySelectionCount: Record<number, number> = {};
 
-  for (let selectionCount = 0; selectionCount <= maxHeatingHours; selectionCount += 1) {
+  for (
+    let selectionCount = 0;
+    selectionCount <= maxOptionalHeatingHours;
+    selectionCount += 1
+  ) {
     let bestResultForSelectionCount: HeatingSimulationResult | null = null;
     let validCombinationCount = 0;
 
-    createCombinations(sortedHours.length, selectionCount, (selectedIndexes) => {
-      const selectedHeatingHourIds = selectedIndexes.map(
-        (index) => sortedHours[index].id,
-      );
+    createCombinations(optionalHours.length, selectionCount, (selectedIndexes) => {
+      const selectedHeatingHourIds = [
+        ...lockedHourIds,
+        ...selectedIndexes.map((index) => optionalHours[index].id),
+      ];
       const result = simulateHeatingPlan({
         currentBottomTemperature,
         currentTopTemperature,
@@ -732,7 +754,7 @@ export function optimizeHeatingPlan({
         return;
       }
 
-      const resultCost = getCombinationCost(sortedHours, selectedIndexes);
+      const resultCost = getSelectedHoursCost(sortedHours, selectedHeatingHourIds);
       validCombinationCount += 1;
 
       if (
@@ -767,7 +789,7 @@ export function optimizeHeatingPlan({
       hourlyDrops,
       hours: sortedHours,
       isCurrentlyHeating,
-      selectedHeatingHourIds: [],
+      selectedHeatingHourIds: lockedHourIds,
       settings,
       spikes,
     });

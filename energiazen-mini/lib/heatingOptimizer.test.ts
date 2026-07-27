@@ -1097,4 +1097,163 @@ export function runHeatingOptimizerUnitTests() {
       "halvin validi kahden tunnin yhdistelma valitaan yhteinen suihkuvaraus huomioiden",
     );
   }
+
+  {
+    const currentHour = {
+      ...optimizationHour("2026-07-22", 0, -100),
+      isCurrentHour: true,
+    };
+    const baseHours = [
+      currentHour,
+      optimizationHour("2026-07-22", 1, -100),
+      optimizationHour("2026-07-22", 2, -100),
+    ];
+    const baseSettings = defaultSettings({
+      maxHeatingHours: 3,
+      safetyShowerReserve: 5,
+      targetShowerReserve: 5,
+    });
+
+    const heatingRunning = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(70),
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(1),
+      hours: baseHours,
+      isCurrentlyHeating: true,
+      settings: baseSettings,
+    });
+
+    assertEqual(
+      heatingRunning.selectedHeatingHourIds,
+      ["2026-07-22:00"],
+      "kaynnissa oleva nykyinen tunti pysyy suunnitelmassa vaikka nolla valinnaista tuntia riittaisi",
+    );
+    assertEqual(
+      heatingRunning.diagnostics.firstValidSelectionCount,
+      0,
+      "lukittu tunti ei kuluta valinnaista tuntibudjettia kun nolla valinnaista tuntia riittaa",
+    );
+
+    const heatingNotRunning = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(70),
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(1),
+      hours: baseHours,
+      isCurrentlyHeating: false,
+      settings: baseSettings,
+    });
+
+    assertEqual(
+      heatingNotRunning.selectedHeatingHourIds,
+      [],
+      "nykyinen tunti ei ole automaattisesti pakollinen jos lammitys ei ole kaynnissa",
+    );
+  }
+
+  {
+    const currentHour = {
+      ...optimizationHour("2026-07-22", 10, 5),
+      isCurrentHour: true,
+    };
+    const result = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 10,
+      hourlyDrops: createHourlyDrops(20),
+      hours: [
+        currentHour,
+        optimizationHour("2026-07-22", 11, 4),
+        optimizationHour("2026-07-22", 12, 3),
+        optimizationHour("2026-07-22", 13, 2),
+      ],
+      isCurrentlyHeating: true,
+      settings: defaultSettings({
+        maxHeatingHours: 3,
+        safetyShowerReserve: 5.9,
+        targetShowerReserve: 5.9,
+      }),
+    });
+
+    assertEqual(
+      Object.keys(result.diagnostics.validCombinationCountsBySelectionCount)
+        .map(Number)
+        .sort((first, second) => first - second),
+      [0, 1, 2],
+      "lukittu nykyinen tunti vahentaa vapaasti valittavien tuntien maaran kahteen kun automaticMaxHeatingHours on kolme",
+    );
+    assertEqual(
+      result.selectedHeatingHourIds.includes("2026-07-22:10"),
+      true,
+      "nykyinen tunti on mukana myos silloin kun mikaan yhdistelma ei tayta tavoitetta",
+    );
+  }
+
+  {
+    const partialCurrentHour = {
+      ...optimizationHour("2026-07-22", 12, 5, 0.25),
+      isCurrentHour: true,
+    };
+    const result = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [partialCurrentHour],
+      isCurrentlyHeating: true,
+      settings: defaultSettings({ maxHeatingHours: 1 }),
+    });
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      [partialCurrentHour.id],
+      "lukittu tunti on ainoa ehdokas kun muita tunteja ei ole",
+    );
+    assertEqual(
+      result.forecast[0].segmentHours,
+      0.25,
+      "segmentHours sailyy lukitulle tunnille alkuperaisena jaljella olevana murto-osana",
+    );
+    assertClose(
+      result.forecast[0].heatingGain,
+      8 * 0.25,
+      "kaynnissa olevan tunnin jaljella oleva 0,25h skaalaa lammitysvaikutuksen oikein taydeksi tunniksi pyoristamatta",
+    );
+  }
+
+  {
+    const currentHour = {
+      ...optimizationHour("2026-07-22", 20, 6),
+      isCurrentHour: true,
+    };
+    const optionalHour = optimizationHour("2026-07-22", 21, 1);
+    const rerunArgs = {
+      heatingGainPerHour: 6,
+      hourlyDrops: createHourlyDrops(2),
+      hours: [currentHour, optionalHour],
+      isCurrentlyHeating: true,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 3,
+      }),
+    };
+
+    const beforeNewReading = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(45.12),
+      ...rerunArgs,
+    });
+    const afterNewReading = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(45.19),
+      ...rerunArgs,
+    });
+
+    assertEqual(
+      beforeNewReading.selectedHeatingHourIds.includes(currentHour.id),
+      true,
+      "ensimmainen mittaus: nykyinen kaynnissa oleva tunti on mukana",
+    );
+    assertEqual(
+      afterNewReading.selectedHeatingHourIds.includes(currentHour.id),
+      true,
+      "hieman muuttunut uusi mittaus kaynnistaa uuden optimoinnin, mutta nykyinen tunti sailyy edelleen mukana",
+    );
+  }
 }
