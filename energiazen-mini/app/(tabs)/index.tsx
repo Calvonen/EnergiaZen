@@ -646,9 +646,19 @@ function getDayLabel(day: DaySelection) {
 }
 
 function startOfCurrentHour(date = new Date()) {
-  const currentHour = new Date(date);
-  currentHour.setMinutes(0, 0, 0);
-  return currentHour;
+  // setMinutes(...) truncates using the JS engine's own local Date/timezone
+  // handling, which is not guaranteed to agree with Europe/Helsinki (unlike
+  // every other Helsinki-based date computation in this file, which goes
+  // through an explicit timeZone: "Europe/Helsinki" Intl formatter). Read
+  // the Helsinki wall-clock minute/second directly instead, the same way,
+  // and subtract only that elapsed time from the (timezone-agnostic) instant.
+  const parts = helsinkiDateTimePartsFormatter.formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const elapsedMsInHelsinkiHour =
+    getPart("minute") * 60000 + getPart("second") * 1000 + (date.getTime() % 1000);
+
+  return new Date(date.getTime() - elapsedMsInHelsinkiHour);
 }
 
 function getChartScale(prices: HourlyPrice[]) {
@@ -1042,6 +1052,23 @@ export default function HomeScreen() {
     return nextChartScaleByDay;
   }, [pricesByDay]);
   const chartScale = chartScaleByDay[selectedDay];
+  // Evenly spaced reference points independent of chartPriceStep, so a low
+  // price range (e.g. 0-5 c/kWh, chartPriceStep's own two values) still gets
+  // enough lines to read a single bar's price by eye. Grid lines and their
+  // left-axis numbers share this one source so a line never renders without
+  // its value (and vice versa).
+  const chartAxisValues = useMemo(() => {
+    const divisions = 4;
+
+    return Array.from(
+      { length: divisions + 1 },
+      (_, index) => chartScale.min + (index / divisions) * chartScale.range,
+    );
+  }, [chartScale.min, chartScale.range]);
+  const chartGridLineValues = useMemo(
+    () => chartAxisValues.slice(1, -1),
+    [chartAxisValues],
+  );
   useEffect(() => {
     const chartPrices = chartHourlyPrices.map((item) => item.price);
 
@@ -2768,9 +2795,10 @@ export default function HomeScreen() {
                 >
                   <View style={styles.chartPlotRow}>
                     <View pointerEvents="none" style={styles.chartScale}>
-                      {chartScale.values.map((value) => (
+                      {chartAxisValues.map((value) => (
                         <Text
                           key={value}
+                          numberOfLines={1}
                           style={[
                             styles.chartScaleLabel,
                             {
@@ -2780,7 +2808,7 @@ export default function HomeScreen() {
                             },
                           ]}
                         >
-                          {value}
+                          {formatFinnishDecimal(value)}
                         </Text>
                       ))}
                     </View>
@@ -2790,7 +2818,7 @@ export default function HomeScreen() {
                         c/kWh
                       </Text>
                       <View pointerEvents="none" style={styles.chartGrid}>
-                        {chartScale.values.map((value) => (
+                        {chartGridLineValues.map((value) => (
                           <View
                             key={value}
                             style={[
@@ -2940,18 +2968,32 @@ export default function HomeScreen() {
                   </View>
                 </Pressable>
 
-                <View style={styles.chartTimes}>
-                  <Text style={styles.chartTime}>
-                    {chartHourlyPrices[0]?.hourLabel ?? "00:00"}
-                  </Text>
-                  <Text style={styles.chartTime}>
-                    {chartHourlyPrices[Math.floor(chartHourlyPrices.length / 2)]
-                      ?.hourLabel ?? "12:00"}
-                  </Text>
-                  <Text style={styles.chartTime}>
-                    {chartHourlyPrices[chartHourlyPrices.length - 1]
-                      ?.hourLabel ?? "23:00"}
-                  </Text>
+                <View style={styles.chartTimesRow}>
+                  <View style={styles.chartScaleSpacer} />
+                  <View style={styles.chartTimes}>
+                    {chartHourlyPrices.map((item, index) => {
+                      const isFirst = index === 0;
+                      const isMiddle =
+                        index === Math.floor(chartHourlyPrices.length / 2);
+                      const isLast =
+                        index === chartHourlyPrices.length - 1;
+
+                      return (
+                        <View key={item.id} style={styles.chartTimeSlot}>
+                          {isFirst || isMiddle || isLast ? (
+                            <View
+                              pointerEvents="none"
+                              style={styles.chartTimeLabelOverlay}
+                            >
+                              <Text numberOfLines={1} style={styles.chartTime}>
+                                {item.hourLabel}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      );
+                    })}
+                  </View>
                 </View>
 
                 <View style={styles.dailyAveragePriceInfo}>
@@ -3995,14 +4037,39 @@ const styles = StyleSheet.create({
     position: "absolute",
     width: 0,
   },
-  chartTimes: {
+  chartTimesRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 8,
     marginTop: 8,
+  },
+  chartScaleSpacer: {
+    width: 24,
+  },
+  chartTimes: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 4,
+    overflow: "visible",
+  },
+  chartTimeSlot: {
+    flex: 1,
+    overflow: "visible",
+    position: "relative",
+  },
+  // Symmetric negative left/right offsets give this a fixed, generous width
+  // centered on the (narrow, one-band-wide) slot, so Yoga measures the text
+  // against that width instead of the slot's own ~12px share and never
+  // wraps/truncates it, while the overlay's center still lines up exactly
+  // with the slot (and therefore the bar) it belongs to.
+  chartTimeLabelOverlay: {
+    alignItems: "center",
+    left: -24,
+    position: "absolute",
+    right: -24,
   },
   chartTime: {
     color: "#8190b5",
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "800",
   },
   chartMessage: {
