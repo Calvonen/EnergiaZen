@@ -27,11 +27,64 @@ export function runSettingsScenarioUiSourceTests() {
       homeSource.includes("hasUnsavedChanges"),
     "etusivu erottaa skenaario- ja aktiiviset asetukset",
   );
+
+  const runCallCount = (
+    homeSource.match(/useHeatingOptimizationRun\(\{/g) ?? []
+  ).length;
   assertSource(
-    homeSource.includes("Heating plan publication skipped for scenario settings") &&
-      homeSource.includes("canPublishActiveHeatingPlan({"),
-    "skenaariosuunnitelma ei paase heating_plans-julkaisupolkuun",
+    runCallCount === 2 &&
+      homeSource.includes("const activeOptimizationRun = useHeatingOptimizationRun({") &&
+      homeSource.includes("const scenarioOptimizationRun = useHeatingOptimizationRun({") &&
+      homeSource.includes("appSettings: activeSettings") &&
+      homeSource.includes("appSettings: scenarioSettings") &&
+      homeSource.includes("mode: activeSettings.heatingNeedMode") &&
+      homeSource.includes("mode: scenarioSettings.heatingNeedMode") &&
+      homeSource.includes("isEnabled: true") &&
+      homeSource.includes(
+        "isEnabled: hasUnsavedChanges && scenarioValidation.errors.length === 0",
+      ),
+    "active- ja scenario-optimointi ovat kaksi erillista putkea, active aina paalla ja scenario vain kelvollisella luonnoksella",
   );
+
+  const publishEffectStart = homeSource.indexOf(
+    "This effect only ever reads activeOptimizationRun",
+  );
+  const publishEffectEnd = homeSource.indexOf(
+    "\n  const selectedHeatingHoursCount",
+    publishEffectStart,
+  );
+  const publishEffectSource =
+    publishEffectStart !== -1 && publishEffectEnd !== -1
+      ? homeSource.slice(publishEffectStart, publishEffectEnd)
+      : "";
+  assertSource(
+    publishEffectStart !== -1 &&
+      publishEffectEnd !== -1 &&
+      publishEffectSource.includes("canPublishActiveHeatingPlan({") &&
+      publishEffectSource.includes('source: "active"') &&
+      !publishEffectSource.includes("scenarioOptimizationRun") &&
+      !publishEffectSource.includes("scenarioOptimizerPresentation") &&
+      !publishEffectSource.includes("hasUnsavedChanges"),
+    "julkaisu-useEffect julkaisee vain aktiivisen persistedSettings-tuloksen eika viittaa skenaarioon tai hasUnsavedChanges-lippuun",
+  );
+
+  assertSource(
+    homeSource.includes(
+      "optimizationResult: activeOptimizationRun.result",
+    ) &&
+      homeSource.includes(
+        "optimizationResult: scenarioOptimizationRun.result",
+      ) &&
+      homeSource.includes(
+        "storedHeatingPlanPresentation ?? activeOptimizerPresentation",
+      ) &&
+      homeSource.includes(
+        "hasUnsavedChanges && scenarioValidation.errors.length === 0",
+      ) &&
+      homeSource.includes("? scenarioOptimizerPresentation"),
+    "aktiivinen nakyma kayttaa persisted-tulosta eika jaady tallentamattomiin muutoksiin, skenaarionakyma kayttaa draft-tulosta",
+  );
+
   assertSource(
     homeSource.includes("Skenaariotila käytössä") &&
       homeSource.includes("Skenaariota ei voida laskea") &&

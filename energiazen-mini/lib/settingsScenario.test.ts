@@ -63,8 +63,15 @@ export function runSettingsScenarioUnitTests() {
     "hylkaaminen palauttaa tallennetut arvot",
   );
   assertEqual(
-    commitSettingsScenario(draft),
+    commitSettingsScenario(draft, draft, draft),
     createSettingsScenarioState(draft),
-    "onnistunut tallennus tekee luonnoksesta persistedSettings-arvon",
+    "onnistunut tallennus tekee luonnoksesta persistedSettings-arvon kun luonnosta ei ole muutettu tallennuksen aikana",
+  );
+
+  const draftChangedDuringSave = createSettings({ targetShowerReserve: 5 });
+  assertEqual(
+    commitSettingsScenario(draft, draft, draftChangedDuringSave),
+    createSettingsScenarioState(draft, draftChangedDuringSave),
+    "tallennuksen aikana tehty uudempi luonnosmuutos ei katoa tallennuksen valmistuessa",
   );
 }

@@ -12,6 +12,10 @@ function assertIncludes(source: string, expected: string, message: string) {
 
 export function runHeatingGainHistorySourceTests() {
   const source = readFileSync("app/(tabs)/index.tsx", "utf8");
+  const optimizationRunSource = readFileSync(
+    "lib/useHeatingOptimizationRun.ts",
+    "utf8",
+  );
 
   assertIncludes(
     source,
@@ -35,7 +39,12 @@ export function runHeatingGainHistorySourceTests() {
   );
   assertIncludes(
     source,
-    "tankReadings: heatingOptimizationInput.heatingHistory",
+    "heatingHistory: heatingGainHistory",
+    "active ja scenario -optimointiputket saavat molemmat paginoidun lammityshistorian",
+  );
+  assertIncludes(
+    optimizationRunSource,
+    "tankReadings: snapshot.heatingHistory",
     "optimizer uses the dedicated paginated heating history",
   );
 }

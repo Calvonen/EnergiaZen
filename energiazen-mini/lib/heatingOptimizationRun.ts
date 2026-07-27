@@ -70,6 +70,31 @@ export function createHeatingOptimizationInputKey(
   });
 }
 
+export function shouldRunHeatingOptimization({
+  currentBottomTemperature,
+  currentTopTemperature,
+  currentWeightedTemperature,
+  hoursCount,
+  isEnabled,
+  mode,
+}: {
+  currentBottomTemperature: number | null;
+  currentTopTemperature: number | null;
+  currentWeightedTemperature: number | null;
+  hoursCount: number;
+  isEnabled: boolean;
+  mode: string;
+}) {
+  return (
+    mode === "automatic" &&
+    isEnabled &&
+    currentWeightedTemperature !== null &&
+    currentTopTemperature !== null &&
+    currentBottomTemperature !== null &&
+    hoursCount > 0
+  );
+}
+
 export function createHeatingOptimizationRunController() {
   let latestRunId = 0;
   let latestInputKey: string | null = null;

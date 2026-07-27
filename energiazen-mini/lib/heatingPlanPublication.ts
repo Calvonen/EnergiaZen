@@ -12,14 +12,16 @@ export type PublishedHeatingPlanState<TResult, THour> = {
   runId: number;
 };
 
+export type HeatingOptimizationRunSource = "active" | "scenario";
+
 export function canPublishActiveHeatingPlan({
-  hasUnsavedChanges,
   isOptimizationCurrent,
+  source,
 }: {
-  hasUnsavedChanges: boolean;
   isOptimizationCurrent: boolean;
+  source: HeatingOptimizationRunSource;
 }) {
-  return !hasUnsavedChanges && isOptimizationCurrent;
+  return source === "active" && isOptimizationCurrent;
 }
 
 export function publishLatestHeatingPlan<

@@ -3,6 +3,7 @@ import {
   createHeatingOptimizationRunController,
   HeatingOptimizationInputSnapshot,
   materializeHeatingOptimizationHours,
+  shouldRunHeatingOptimization,
 } from "./heatingOptimizationRun";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -235,6 +236,47 @@ export function runHeatingOptimizationRunUnitTests() {
       controller.canCommit(newerRun ?? -1),
       true,
       "vain uusin rinnakkainen ajo saa julkaista tuloksen",
+    );
+  }
+
+  {
+    const base = createSnapshot();
+    const gateArgs = {
+      currentBottomTemperature: base.currentBottomTemperature,
+      currentTopTemperature: base.currentTopTemperature,
+      currentWeightedTemperature: base.currentWeightedTemperature,
+      hoursCount: base.hours.length,
+      isEnabled: true,
+      mode: base.mode,
+    };
+
+    assertEqual(
+      shouldRunHeatingOptimization(gateArgs),
+      true,
+      "ajantasainen automaattitilan syote sallii optimoinnin",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({ ...gateArgs, isEnabled: false }),
+      false,
+      "pois kytketty putki ei saa kaynnistaa optimointia",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({ ...gateArgs, mode: "fixed" }),
+      false,
+      "kiintea tila ei kaynnista optimoijaa",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({
+        ...gateArgs,
+        currentWeightedTemperature: null,
+      }),
+      false,
+      "puuttuva lampotila estaa optimoinnin",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({ ...gateArgs, hoursCount: 0 }),
+      false,
+      "tyhja tuntivalikoima estaa optimoinnin",
     );
   }
 }

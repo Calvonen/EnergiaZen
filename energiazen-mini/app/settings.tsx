@@ -541,7 +541,7 @@ export default function SettingsScreen() {
         },
       });
 
-      commitPersistedSettings(persistedSettings);
+      commitPersistedSettings(persistedSettings, draftSnapshot);
       setSaveFeedback({
         kind: "success",
         message: "Asetukset tallennettiin.",

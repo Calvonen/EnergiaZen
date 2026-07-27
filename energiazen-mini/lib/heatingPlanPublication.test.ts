@@ -23,18 +23,34 @@ function assertSame(actual: unknown, expected: unknown, message: string) {
 export function runHeatingPlanPublicationUnitTests() {
   assertEqual(
     canPublishActiveHeatingPlan({
-      hasUnsavedChanges: true,
       isOptimizationCurrent: true,
+      source: "scenario",
     }),
     false,
-    "skenaariosuunnitelmaa ei voi julkaista",
+    "skenaariotuloksen lahde ei voi koskaan julkaista",
   );
   assertEqual(
     canPublishActiveHeatingPlan({
-      hasUnsavedChanges: false,
       isOptimizationCurrent: true,
+      source: "active",
     }),
     true,
+    "ajantasainen persistedSettings-tulos voidaan julkaista",
+  );
+  assertEqual(
+    canPublishActiveHeatingPlan({
+      isOptimizationCurrent: true,
+      source: "active",
+    }),
+    true,
+    "aktiivinen tulos julkaistaan vaikka luonnoksessa olisi tallentamattomia muutoksia",
+  );
+  assertEqual(
+    canPublishActiveHeatingPlan({
+      isOptimizationCurrent: false,
+      source: "active",
+    }),
+    false,
     "vain ajantasainen aktiivinen suunnitelma voidaan julkaista",
   );
 

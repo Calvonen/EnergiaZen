@@ -22,7 +22,10 @@ type DraftSettingsUpdate =
 
 type SettingsScenarioContextValue = SettingsScenarioState & {
   areSettingsLoaded: boolean;
-  commitPersistedSettings: (settings: EnergiaZenSettings) => void;
+  commitPersistedSettings: (
+    settings: EnergiaZenSettings,
+    draftSnapshot: EnergiaZenSettings,
+  ) => void;
   discardDraftSettings: () => void;
   updateDraftSettings: (update: DraftSettingsUpdate) => void;
 };
@@ -74,9 +77,14 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
     );
   }, []);
 
-  const commitPersistedSettings = useCallback((settings: EnergiaZenSettings) => {
-    setScenarioState(commitSettingsScenario(settings));
-  }, []);
+  const commitPersistedSettings = useCallback(
+    (settings: EnergiaZenSettings, draftSnapshot: EnergiaZenSettings) => {
+      setScenarioState((current) =>
+        commitSettingsScenario(settings, draftSnapshot, current.draftSettings),
+      );
+    },
+    [],
+  );
 
   const value = useMemo(
     () => ({

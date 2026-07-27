@@ -29,6 +29,15 @@ export function discardSettingsScenario(
 
 export function commitSettingsScenario(
   persistedSettings: EnergiaZenSettings,
+  draftSnapshot: EnergiaZenSettings,
+  currentDraftSettings: EnergiaZenSettings,
 ): SettingsScenarioState {
-  return createSettingsScenarioState(persistedSettings);
+  const nextDraftSettings = areSettingsEqual(
+    currentDraftSettings,
+    draftSnapshot,
+  )
+    ? persistedSettings
+    : currentDraftSettings;
+
+  return createSettingsScenarioState(persistedSettings, nextDraftSettings);
 }
