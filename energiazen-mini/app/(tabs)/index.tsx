@@ -99,6 +99,7 @@ import {
 
 const DEBUG_HISTORY_PERFORMANCE = false;
 const DEBUG_HOME_DAY_TAB_PERFORMANCE = false;
+const DEBUG_HEATING_OPTIMIZATION = false;
 
 function logHistoryNavigationTap(target: "electricity-history" | "history") {
   if (!DEBUG_HISTORY_PERFORMANCE) {
@@ -1352,7 +1353,7 @@ export default function HomeScreen() {
     heatingPlanPresentationSource,
   ]);
   useEffect(() => {
-    if (!heatingOptimization) {
+    if (!DEBUG_HEATING_OPTIMIZATION || !heatingOptimization) {
       return;
     }
 
