@@ -2,8 +2,8 @@ import {
   defaultSettings,
   defaultTankTemperature,
   EnergiaZenSettings,
-} from "@/lib/settings";
-import { selectRemainingFixedHeatingHours } from "@/lib/fixedHeatingPlan";
+} from "./settings";
+import { selectRemainingFixedHeatingHours } from "./fixedHeatingPlan";
 
 const maintenanceHeatingHours = 1;
 
