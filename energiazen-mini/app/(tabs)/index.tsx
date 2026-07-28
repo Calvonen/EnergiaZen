@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 
+import { PriceCard } from "@/components/home/price-card";
 import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
@@ -867,6 +868,16 @@ export default function HomeScreen() {
     currentPrice === null
       ? { ringColor: "#36f4d4" }
       : getPriceTheme(currentPrice);
+  const priceCardAccessibilityLabel =
+    currentPrice === null
+      ? "Sähkön hintaa ei saatavilla"
+      : `Spot-hinta ${formatFinnishDecimal(currentPrice)} senttiä kilowattitunnilta, yhteensä ${formatFinnishDecimal(currentTotalPrice ?? currentPrice)} senttiä kilowattitunnilta`;
+  const priceCardPriceLabel =
+    currentPrice === null ? "" : formatFinnishDecimal(currentPrice);
+  const priceCardTotalPriceLabel =
+    currentPrice === null
+      ? ""
+      : formatFinnishDecimal(currentTotalPrice ?? currentPrice);
   const chartScaleByDay = useMemo(() => {
     const startedAt = Date.now();
     const nextChartScaleByDay = {
@@ -2369,54 +2380,19 @@ export default function HomeScreen() {
           ) : null}
         </View>
 
-        <View style={styles.ringStage}>
-          <Animated.View
-            style={[
-              styles.pulse,
-              pulseStyle,
-              { borderColor: ringColor, shadowColor: ringColor },
-            ]}
-          />
-          <Pressable
-            accessibilityHint="Avaa sähkön hintahistorian"
-            accessibilityLabel={
-              currentPrice === null
-                ? "Sähkön hintaa ei saatavilla"
-                : `Spot-hinta ${formatFinnishDecimal(currentPrice)} senttiä kilowattitunnilta, yhteensä ${formatFinnishDecimal(currentTotalPrice ?? currentPrice)} senttiä kilowattitunnilta`
-            }
-            accessibilityRole="button"
-            android_ripple={{ color: "rgba(255,255,255,0.1)" }}
-            onPress={() => {
-              logHistoryNavigationTap("electricity-history");
-              router.push("/electricity-history");
-            }}
-            style={({ pressed }) => [
-              styles.ring,
-              { borderColor: ringColor, shadowColor: ringColor },
-              pressed && styles.pressedRing,
-            ]}
-          >
-            {currentPrice === null ? (
-              <Text style={styles.priceMessage}>
-                {isPriceLoading ? "Haetaan hintaa..." : "Hintaa ei saatavilla"}
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.price}>
-                  {formatFinnishDecimal(currentPrice)}
-                </Text>
-                <Text style={styles.unit}>c/kWh</Text>
-                <View style={styles.totalPriceBlock}>
-                  <Text style={styles.totalPriceLabel}>Yhteensä</Text>
-                  <Text style={styles.totalPriceValue}>
-                    {formatFinnishDecimal(currentTotalPrice ?? currentPrice)}
-                    {" c/kWh"}
-                  </Text>
-                </View>
-              </>
-            )}
-          </Pressable>
-        </View>
+        <PriceCard
+          accessibilityLabel={priceCardAccessibilityLabel}
+          hasPrice={currentPrice !== null}
+          isPriceLoading={isPriceLoading}
+          onPress={() => {
+            logHistoryNavigationTap("electricity-history");
+            router.push("/electricity-history");
+          }}
+          priceLabel={priceCardPriceLabel}
+          pulseStyle={pulseStyle}
+          ringColor={ringColor}
+          totalPriceLabel={priceCardTotalPriceLabel}
+        />
 
         <View style={styles.cardsRow}>
           <Animated.View
@@ -3293,73 +3269,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     lineHeight: 17,
-  },
-  ringStage: {
-    alignItems: "center",
-    height: 286,
-    justifyContent: "center",
-    marginBottom: 18,
-    width: 286,
-  },
-  pulse: {
-    borderRadius: 143,
-    borderWidth: 2,
-    height: 286,
-    position: "absolute",
-    shadowOpacity: 0.8,
-    shadowRadius: 32,
-    width: 286,
-  },
-  ring: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderRadius: 122,
-    borderWidth: 5,
-    height: 244,
-    justifyContent: "center",
-    shadowOpacity: 0.85,
-    shadowRadius: 34,
-    width: 244,
-  },
-  pressedRing: {
-    opacity: 0.86,
-    transform: [{ scale: 0.98 }],
-  },
-  price: {
-    color: "#ffffff",
-    fontSize: 68,
-    fontWeight: "900",
-    letterSpacing: -2,
-  },
-  priceMessage: {
-    color: "#ffffff",
-    fontSize: 23,
-    fontWeight: "900",
-    lineHeight: 31,
-    paddingHorizontal: 28,
-    textAlign: "center",
-  },
-  unit: {
-    color: "#cfe9ff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginTop: -4,
-  },
-  totalPriceBlock: {
-    alignItems: "center",
-    marginTop: 9,
-  },
-  totalPriceLabel: {
-    color: "#9fc7df",
-    fontSize: 12,
-    fontWeight: "800",
-    lineHeight: 15,
-  },
-  totalPriceValue: {
-    color: "#e9fbff",
-    fontSize: 17,
-    fontWeight: "900",
-    lineHeight: 21,
   },
   cardsRow: {
     flexDirection: "row",
