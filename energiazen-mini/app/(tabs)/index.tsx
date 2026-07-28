@@ -1488,8 +1488,10 @@ export default function HomeScreen() {
     : activePlanPresentation;
   const heatingPlanPresentationSource = getHeatingPlanPresentationSource({
     hasPublishedOptimization:
-      heatingPlanPresentation === scenarioPlanPresentation &&
-      scenarioPlanPresentation !== null,
+      (heatingPlanPresentation === activeOptimizerPresentation &&
+        activeOptimizerPresentation !== null) ||
+      (heatingPlanPresentation === scenarioPlanPresentation &&
+        scenarioPlanPresentation !== null),
     hasStoredPlan:
       heatingPlanPresentation === activePlanPresentation &&
       activePlanPresentation !== null,
