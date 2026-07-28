@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 
+import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import { getTemperatureCardTheme } from "@/lib/temperaturePresentation";
@@ -220,18 +221,6 @@ function getStratifiedWarmWaterEstimate(
     fillRatio: estimate.fillRatio,
     showersLeft: estimate.showersLeft,
     tankSizeLiters: settings.tankSizeLiters,
-  };
-}
-
-function getWarmWaterCardTheme() {
-  const accent = "#26d9d2";
-
-  return {
-    backgroundColor: `${accent}2b`,
-    borderColor: `${accent}a8`,
-    fillColor: accent,
-    shadowColor: "#16bfc8",
-    surfaceColor: "#d9fff9",
   };
 }
 
@@ -1938,7 +1927,6 @@ export default function HomeScreen() {
     tankTemperature,
     settings,
   );
-  const warmWaterCardTheme = getWarmWaterCardTheme();
   const warmWaterFillPercent = Math.round(
     (warmWaterEstimate?.fillRatio ?? 0) * 100,
   );
@@ -2518,70 +2506,13 @@ export default function HomeScreen() {
             </Pressable>
           </Animated.View>
 
-          <View
-            style={[
-              styles.metricCard,
-              styles.waterCard,
-              {
-                backgroundColor: warmWaterCardTheme.backgroundColor,
-                borderColor: warmWaterCardTheme.borderColor,
-                shadowColor: warmWaterCardTheme.shadowColor,
-              },
-            ]}
-          >
-            <Pressable
-              accessibilityLabel={`Lämmintä vettä ${warmWaterShowersAccessibilityLabel}`}
-              accessibilityRole="button"
-              android_ripple={{ color: "rgba(255,255,255,0.1)" }}
-              onPress={() => router.push("/settings")}
-              style={({ pressed }) => [
-                styles.metricCardPressable,
-                pressed && styles.pressedMetricCard,
-              ]}
-            >
-              <View style={styles.cardLabelRow}>
-                <Text style={styles.cardIcon}>💧</Text>
-                <Text style={styles.cardLabel}>Lämmin vesi</Text>
-              </View>
-              <View style={styles.warmWaterContent}>
-                <View style={styles.warmWaterTankArea}>
-                  <View style={styles.tankVisual}>
-                    <View
-                      style={[
-                        styles.tankFill,
-                        {
-                          backgroundColor: warmWaterCardTheme.fillColor,
-                          height: `${warmWaterFillPercent}%`,
-                          shadowColor: warmWaterCardTheme.shadowColor,
-                        },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.tankSurface,
-                        {
-                          backgroundColor: warmWaterCardTheme.surfaceColor,
-                          bottom: `${warmWaterFillPercent}%`,
-                        },
-                      ]}
-                    />
-                    <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-                    <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-                    <View style={[styles.tankBubble, styles.tankBubbleThree]} />
-                    <Text style={styles.tankAverageTemperature}>
-                      {warmWaterAverageTempLabel}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.waterShowersInfo}>
-                  <Text style={styles.waterValue}>{warmWaterShowersLabel}</Text>
-                  <Text numberOfLines={1} style={styles.waterDescriptionText}>
-                    Lämmintä suihkua jäljellä
-                  </Text>
-                </View>
-              </View>
-            </Pressable>
-          </View>
+          <WarmWaterCard
+            averageTempLabel={warmWaterAverageTempLabel}
+            fillPercent={warmWaterFillPercent}
+            onPress={() => router.push("/settings")}
+            showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
+            showersLabel={warmWaterShowersLabel}
+          />
         </View>
 
         <View style={styles.chartCard}>
@@ -3460,25 +3391,6 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     position: "relative",
   },
-  waterCard: {
-    shadowOpacity: 0.42,
-  },
-  warmWaterContent: {
-    alignItems: "stretch",
-    alignSelf: "stretch",
-    flex: 1,
-    justifyContent: "center",
-    marginTop: 10,
-    width: "100%",
-  },
-  warmWaterTankArea: {
-    alignItems: "center",
-    alignSelf: "stretch",
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 108,
-    width: "100%",
-  },
   pressedMetricCard: {
     opacity: 0.82,
   },
@@ -3589,96 +3501,6 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.2)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
-  },
-  tankVisual: {
-    backgroundColor: "rgba(2,11,30,0.42)",
-    borderColor: "rgba(221,247,255,0.72)",
-    borderRadius: 26,
-    borderWidth: 2,
-    height: 112,
-    overflow: "hidden",
-    position: "relative",
-    width: 82,
-  },
-  tankFill: {
-    backgroundColor: "#40d9ff",
-    borderTopColor: "rgba(255,255,255,0.42)",
-    borderTopWidth: 1,
-    bottom: 0,
-    left: 0,
-    position: "absolute",
-    right: 0,
-    shadowColor: "#40d9ff",
-    shadowOpacity: 0.56,
-    shadowRadius: 16,
-  },
-  tankSurface: {
-    backgroundColor: "rgba(255,255,255,0.78)",
-    borderRadius: 999,
-    height: 3,
-    left: 8,
-    marginBottom: -1.5,
-    position: "absolute",
-    right: 8,
-  },
-  tankBubble: {
-    backgroundColor: "rgba(255,255,255,0.78)",
-    borderRadius: 999,
-    height: 5,
-    position: "absolute",
-    width: 5,
-  },
-  tankBubbleOne: {
-    bottom: 14,
-    left: 16,
-  },
-  tankBubbleTwo: {
-    bottom: 34,
-    right: 14,
-  },
-  tankBubbleThree: {
-    bottom: 48,
-    left: 25,
-    opacity: 0.72,
-  },
-  tankAverageTemperature: {
-    color: "#ffffff",
-    fontSize: 28,
-    fontWeight: "900",
-    left: 0,
-    letterSpacing: -0.4,
-    lineHeight: 32,
-    position: "absolute",
-    right: 0,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.34)",
-    textShadowOffset: { height: 1, width: 0 },
-    textShadowRadius: 8,
-    top: 39,
-  },
-  waterShowersInfo: {
-    alignItems: "center",
-    alignSelf: "stretch",
-    marginTop: 8,
-    width: "100%",
-  },
-  waterValue: {
-    alignSelf: "stretch",
-    color: "#f8fbff",
-    fontSize: 18,
-    fontWeight: "900",
-    letterSpacing: -0.2,
-    lineHeight: 22,
-    textAlign: "center",
-  },
-  waterDescriptionText: {
-    alignSelf: "stretch",
-    color: "rgba(247,251,255,0.66)",
-    fontSize: 9,
-    fontWeight: "800",
-    lineHeight: 11,
-    marginTop: 1,
-    textAlign: "center",
   },
   chartCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
