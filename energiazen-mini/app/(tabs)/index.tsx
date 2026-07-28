@@ -1476,7 +1476,7 @@ export default function HomeScreen() {
   }, [hasUnsavedChanges]);
 
   const activePlanPresentation =
-    storedHeatingPlanPresentation ?? activeOptimizerPresentation;
+    activeOptimizerPresentation ?? storedHeatingPlanPresentation;
   const scenarioPlanPresentation =
     hasUnsavedChanges && scenarioValidation.errors.length === 0
       ? scenarioOptimizerPresentation
