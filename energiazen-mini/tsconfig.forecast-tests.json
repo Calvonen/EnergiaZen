@@ -60,6 +60,8 @@
     "tests/settingsScenarioUiSource.test.ts",
     "lib/temperatureDropProfile.ts",
     "lib/temperatureDropProfile.test.ts",
+    "lib/colorMixing.ts",
+    "lib/colorMixing.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }

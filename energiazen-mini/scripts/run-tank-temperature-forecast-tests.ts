@@ -4,6 +4,7 @@ import { runHeatingOptimizerUnitTests } from "../lib/heatingOptimizer.test";
 import { runHeatingOptimizationRunUnitTests } from "../lib/heatingOptimizationRun.test";
 import { runHeatingGainUnitTests } from "../lib/heatingGain.test";
 import { runTemperatureDropProfileUnitTests } from "../lib/temperatureDropProfile.test";
+import { runColorMixingUnitTests } from "../lib/colorMixing.test";
 import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.test";
 import { runHeatingSettingsUnitTests } from "../lib/heatingSettings.test";
 import { runSettingsSectionSummaryUnitTests } from "../lib/settingsSectionSummaries.test";
@@ -50,9 +51,10 @@ async function runTests() {
   runShowerReserveSettingsUnitTests();
   runSettingsSectionSummaryUnitTests();
   runTemperatureDropProfileUnitTests();
+  runColorMixingUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings and temperatureDropProfile tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile and colorMixing tests passed",
   );
 }
 
