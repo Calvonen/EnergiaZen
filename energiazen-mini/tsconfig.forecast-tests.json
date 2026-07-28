@@ -66,6 +66,10 @@
     "lib/temperatureColors.test.ts",
     "lib/temperaturePresentation.ts",
     "lib/temperaturePresentation.test.ts",
+    "lib/pricePresentation.ts",
+    "lib/pricePresentation.test.ts",
+    "lib/priceUtils.ts",
+    "lib/priceUtils.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }

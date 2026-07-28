@@ -7,6 +7,8 @@ import { runTemperatureDropProfileUnitTests } from "../lib/temperatureDropProfil
 import { runColorMixingUnitTests } from "../lib/colorMixing.test";
 import { runTemperatureColorsUnitTests } from "../lib/temperatureColors.test";
 import { runTemperaturePresentationUnitTests } from "../lib/temperaturePresentation.test";
+import { runPricePresentationUnitTests } from "../lib/pricePresentation.test";
+import { runPriceUtilsUnitTests } from "../lib/priceUtils.test";
 import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.test";
 import { runHeatingSettingsUnitTests } from "../lib/heatingSettings.test";
 import { runSettingsSectionSummaryUnitTests } from "../lib/settingsSectionSummaries.test";
@@ -56,9 +58,11 @@ async function runTests() {
   runColorMixingUnitTests();
   runTemperatureColorsUnitTests();
   runTemperaturePresentationUnitTests();
+  runPricePresentationUnitTests();
+  runPriceUtilsUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors and temperaturePresentation tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation and priceUtils tests passed",
   );
 }
 

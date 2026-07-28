@@ -14,6 +14,11 @@ import {
 import { debugLog } from "@/lib/debug";
 import { clamp, getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import { getTemperatureCardTheme } from "@/lib/temperaturePresentation";
+import { getPriceTheme } from "@/lib/pricePresentation";
+import {
+  getSortedUniqueHelsinkiHourNumbers,
+  normalizePriceToCents,
+} from "@/lib/priceUtils";
 import {
   electricityPriceRegion,
   getHelsinkiElectricityDateKey,
@@ -275,33 +280,6 @@ function getHeatingMarkerLabel(marker: string | null) {
   }
 
   return null;
-}
-
-function getPriceTheme(price: number) {
-  if (price <= 3) {
-    return { ringColor: "#72ff9d" };
-  }
-
-  if (price <= 8) {
-    return { ringColor: "#36f4d4" };
-  }
-
-  if (price < 15) {
-    return { ringColor: "#ffad4d" };
-  }
-
-  return { ringColor: "#ff5f6d" };
-}
-
-function normalizePriceToCents(value: number) {
-  return value < 1 ? value * 100 : value;
-}
-
-function getSortedUniqueHelsinkiHourNumbers(
-  prices: Pick<HourlyPrice, "date">[],
-) {
-  return [...new Set(prices.map((item) => getHelsinkiHourNumber(item.date)))]
-    .sort((a, b) => a - b);
 }
 
 function formatFinnishDecimal(value: number) {
