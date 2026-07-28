@@ -6,6 +6,7 @@ import { runHeatingGainUnitTests } from "../lib/heatingGain.test";
 import { runTemperatureDropProfileUnitTests } from "../lib/temperatureDropProfile.test";
 import { runColorMixingUnitTests } from "../lib/colorMixing.test";
 import { runTemperatureColorsUnitTests } from "../lib/temperatureColors.test";
+import { runTemperaturePresentationUnitTests } from "../lib/temperaturePresentation.test";
 import { runShowerReserveSettingsUnitTests } from "../lib/showerReserveSettings.test";
 import { runHeatingSettingsUnitTests } from "../lib/heatingSettings.test";
 import { runSettingsSectionSummaryUnitTests } from "../lib/settingsSectionSummaries.test";
@@ -54,9 +55,10 @@ async function runTests() {
   runTemperatureDropProfileUnitTests();
   runColorMixingUnitTests();
   runTemperatureColorsUnitTests();
+  runTemperaturePresentationUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing and temperatureColors tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors and temperaturePresentation tests passed",
   );
 }
 

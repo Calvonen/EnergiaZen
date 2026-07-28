@@ -11,9 +11,9 @@ import {
   View,
 } from "react-native";
 
-import { mixColors } from "@/lib/colorMixing";
 import { debugLog } from "@/lib/debug";
 import { clamp, getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
+import { getTemperatureCardTheme } from "@/lib/temperaturePresentation";
 import {
   electricityPriceRegion,
   getHelsinkiElectricityDateKey,
@@ -188,27 +188,6 @@ type ElectricityPriceInsert = {
   spot_price_cents_kwh: number;
   starts_at: string;
 };
-
-function getTemperatureCardTheme(
-  temperature: number,
-  settings = defaultSettings,
-) {
-  const ratio = clamp(
-    (temperature - settings.minTankTemperature) /
-      (settings.maxTankTemperature - settings.minTankTemperature),
-    0,
-    1,
-  );
-  const accent = mixColors("#188bff", "#ff3f46", ratio);
-  const deepAccent = mixColors("#0b4f9f", "#8f151d", ratio);
-
-  return {
-    accent,
-    backgroundColor: `${accent}33`,
-    borderColor: `${accent}b8`,
-    shadowColor: deepAccent,
-  };
-}
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getWarmWaterEstimate(
