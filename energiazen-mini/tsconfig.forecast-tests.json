@@ -62,6 +62,8 @@
     "lib/temperatureDropProfile.test.ts",
     "lib/colorMixing.ts",
     "lib/colorMixing.test.ts",
+    "lib/temperatureColors.ts",
+    "lib/temperatureColors.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }
