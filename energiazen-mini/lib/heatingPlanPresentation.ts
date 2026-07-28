@@ -196,6 +196,13 @@ export function buildStoredHeatingPlanPresentation({
   };
 }
 
+export function selectActiveHeatingPlanPresentation(
+  freshOptimizerPresentation: HeatingPlanPresentation | null,
+  storedPresentation: HeatingPlanPresentation | null,
+) {
+  return freshOptimizerPresentation ?? storedPresentation;
+}
+
 export function hasCheaperSafetyRejectedPlan({
   rejectedPlans,
   selectedCost,

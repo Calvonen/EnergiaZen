@@ -76,13 +76,13 @@ export function runSettingsScenarioUiSourceTests() {
         "optimizationResult: scenarioOptimizationRun.result",
       ) &&
       homeSource.includes(
-        "storedHeatingPlanPresentation ?? activeOptimizerPresentation",
+        "selectActiveHeatingPlanPresentation(\n    activeOptimizerPresentation,\n    storedHeatingPlanPresentation,\n  )",
       ) &&
       homeSource.includes(
         "hasUnsavedChanges && scenarioValidation.errors.length === 0",
       ) &&
       homeSource.includes("? scenarioOptimizerPresentation"),
-    "aktiivinen nakyma kayttaa persisted-tulosta eika jaady tallentamattomiin muutoksiin, skenaarionakyma kayttaa draft-tulosta",
+    "etusivu valitsee aktiivisen esityksen selectActiveHeatingPlanPresentation-funktiolla ja skenaarionakyma kayttaa draft-tulosta; itse valintasaanto (tuore voittaa tallennetun) on testattu erikseen heatingPlanPresentation.test.ts:ssa",
   );
 
   assertSource(

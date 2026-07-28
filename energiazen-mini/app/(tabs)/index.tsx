@@ -46,6 +46,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  selectActiveHeatingPlanPresentation,
 } from "@/lib/heatingPlanPresentation";
 import {
   canPublishActiveHeatingPlan,
@@ -1475,8 +1476,10 @@ export default function HomeScreen() {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
   }, [hasUnsavedChanges]);
 
-  const activePlanPresentation =
-    activeOptimizerPresentation ?? storedHeatingPlanPresentation;
+  const activePlanPresentation = selectActiveHeatingPlanPresentation(
+    activeOptimizerPresentation,
+    storedHeatingPlanPresentation,
+  );
   const scenarioPlanPresentation =
     hasUnsavedChanges && scenarioValidation.errors.length === 0
       ? scenarioOptimizerPresentation

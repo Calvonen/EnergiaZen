@@ -2,6 +2,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  selectActiveHeatingPlanPresentation,
 } from "./heatingPlanPresentation";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -207,5 +208,21 @@ export function runHeatingPlanPresentationUnitTests() {
     visibleContent.includes("nousuarvio") || visibleContent.includes("fallback-arvo"),
     false,
     "nousuarviota tai fallback-arvoa ei sisallyteta etusivun esitysmalliin",
+  );
+
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, stored) === standard,
+    true,
+    "tuore optimointitulos voittaa tallennetun suunnitelman",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(null, stored) === stored,
+    true,
+    "tallennettua suunnitelmaa kaytetaan varavaihtoehtona, kun tuoretta tulosta ei ole",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(null, null),
+    null,
+    "molempien puuttuessa aktiivista esitysta ei ole",
   );
 }
