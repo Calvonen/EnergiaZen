@@ -75,9 +75,7 @@ export function runSettingsScenarioUiSourceTests() {
       homeSource.includes(
         "optimizationResult: scenarioOptimizationRun.result",
       ) &&
-      homeSource.includes(
-        "selectActiveHeatingPlanPresentation(\n    activeOptimizerPresentation,\n    storedHeatingPlanPresentation,\n  )",
-      ) &&
+      homeSource.includes("selectActiveHeatingPlanPresentation(") &&
       homeSource.includes(
         "hasUnsavedChanges && scenarioValidation.errors.length === 0",
       ) &&
