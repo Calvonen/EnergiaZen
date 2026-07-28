@@ -52,7 +52,6 @@ import {
   HeatingOptimizationHour,
   HeatingOptimizationResult,
 } from "@/lib/heatingOptimizer";
-import { shouldRunHeatingOptimization } from "@/lib/heatingOptimizationRun";
 import { useHeatingOptimizationRun } from "@/lib/useHeatingOptimizationRun";
 import {
   buildHeatingPlanPresentation,
@@ -1420,57 +1419,6 @@ export default function HomeScreen() {
     heatingGainHistoryFetch.pageCount,
     heatingOptimization,
     publishedOptimizationSettings.targetShowerReserve,
-  ]);
-  useEffect(() => {
-    if (!DEBUG_HEATING_OPTIMIZATION) {
-      return;
-    }
-
-    const scenarioIsEnabled =
-      hasUnsavedChanges && scenarioValidation.errors.length === 0;
-    const scenarioMode = scenarioSettings.heatingNeedMode;
-    const scenarioHoursCount = optimizerHours.length;
-    const scenarioShouldRun = shouldRunHeatingOptimization({
-      currentBottomTemperature: bottomTemp,
-      currentTopTemperature: topTemp,
-      currentWeightedTemperature,
-      hoursCount: scenarioHoursCount,
-      isEnabled: scenarioIsEnabled,
-      mode: scenarioMode,
-    });
-
-    console.log(
-      "[EnergyZen scenario optimization]",
-      JSON.stringify({
-        blockingConditions: {
-          hasBottomTemperature: bottomTemp !== null,
-          hasHours: scenarioHoursCount > 0,
-          hasTopTemperature: topTemp !== null,
-          hasWeightedTemperature: currentWeightedTemperature !== null,
-          isEnabled: scenarioIsEnabled,
-          isModeAutomatic: scenarioMode === "automatic",
-        },
-        hasUnsavedChanges,
-        heatingPlanPresentation,
-        hoursCount: scenarioHoursCount,
-        scenarioMode,
-        scenarioOptimizationRunResult: scenarioOptimizationRun.result,
-        scenarioPlanPresentation,
-        scenarioValidationErrorCount: scenarioValidation.errors.length,
-        shouldRun: scenarioShouldRun,
-      }),
-    );
-  }, [
-    bottomTemp,
-    currentWeightedTemperature,
-    hasUnsavedChanges,
-    heatingPlanPresentation,
-    optimizerHours.length,
-    scenarioOptimizationRun.result,
-    scenarioPlanPresentation,
-    scenarioSettings.heatingNeedMode,
-    scenarioValidation.errors.length,
-    topTemp,
   ]);
   useEffect(() => {
     debugLog("Heating optimizer debug", {
