@@ -12,7 +12,7 @@ import {
 } from "react-native";
 
 import { debugLog } from "@/lib/debug";
-import { clamp, getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
+import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import { getTemperatureCardTheme } from "@/lib/temperaturePresentation";
 import { getPriceTheme } from "@/lib/pricePresentation";
 import {
@@ -193,37 +193,6 @@ type ElectricityPriceInsert = {
   spot_price_cents_kwh: number;
   starts_at: string;
 };
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function getWarmWaterEstimate(
-  topTemperature: number | null,
-  bottomTemperature: number | null,
-  settings = defaultSettings,
-) {
-  if (topTemperature === null || bottomTemperature === null) {
-    return null;
-  }
-
-  const fullTankTemp =
-    settings.fullTankAverageTemperature ?? settings.maxTankTemperature;
-  const temperatureRange = Math.max(
-    fullTankTemp - settings.minTankTemperature,
-    1,
-  );
-  const averageTemp = (topTemperature + bottomTemperature) / 2;
-  const fillRatio = clamp(
-    (averageTemp - settings.minTankTemperature) / temperatureRange,
-    0,
-    1,
-  );
-
-  return {
-    averageTemp,
-    fillRatio,
-    showersLeft: fillRatio * settings.fullTankShowers,
-    tankSizeLiters: settings.tankSizeLiters,
-  };
-}
 
 // Rinnakkainen kerrostumismalli testausta varten.
 function getStratifiedWarmWaterEstimate(
