@@ -5,6 +5,13 @@ import {
 import type { HeatingEnergyPeriod } from "./heatingHistory";
 
 export const electricityPriceRegion = "FI";
+// electricity_prices allows multiple resolution_minutes rows to coexist for
+// the same starts_at (see migration 20260724000000), but history math sums
+// resolution_minutes per slot, so mixing resolutions for an overlapping
+// interval would double-count minutes. Only one resolution is fetched today,
+// so we filter to it here; proper mixed-resolution reconciliation is out of
+// scope until 15-minute prices are actually introduced.
+export const configuredElectricityPriceResolutionMinutes = 60;
 export const spotMarginCentsPerKwh =
   heatingEnergyCostSettings.spotMarginCentsPerKwh;
 export const gridAndTaxCentsPerKwh =

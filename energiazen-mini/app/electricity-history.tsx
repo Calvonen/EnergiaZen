@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import {
+  configuredElectricityPriceResolutionMinutes,
   electricityPriceRegion,
   calculateHeatedPriceHistory,
   ElectricityPriceRange,
@@ -354,6 +355,7 @@ export default function ElectricityHistoryScreen() {
           "starts_at,ends_at,spot_price_cents_kwh,resolution_minutes,region,fetched_at",
         )
         .eq("region", electricityPriceRegion)
+        .eq("resolution_minutes", configuredElectricityPriceResolutionMinutes)
         .gte("starts_at", rangeStart)
         .lt("starts_at", rangeEnd)
         .order("starts_at", { ascending: true });
