@@ -2,7 +2,8 @@ import {
   defaultSettings,
   defaultTankTemperature,
   EnergiaZenSettings,
-} from "@/lib/settings";
+} from "./settings";
+import { selectRemainingFixedHeatingHours } from "./fixedHeatingPlan";
 
 const maintenanceHeatingHours = 1;
 
@@ -32,7 +33,7 @@ export function getEffectiveHeatingHours(
   tankTemperature = defaultTankTemperature,
 ) {
   return Math.min(
-    settings.heatingHoursPerDay,
+    settings.automaticMaxHeatingHours,
     getTemperatureBasedHeatingNeed(tankTemperature).hours,
   );
 }
@@ -69,8 +70,8 @@ export function getHeatingNeedFromShowers(
     return {
       fillRatio,
       hours: Math.min(
-        settings.heatingHoursPerDay,
-        settings.heatingHoursPerDay,
+        settings.automaticMaxHeatingHours,
+        settings.automaticMaxHeatingHours,
       ),
       reason: "Varaus alle 60 % → täysi lämmitystarve",
     };
@@ -79,7 +80,7 @@ export function getHeatingNeedFromShowers(
   if (fillRatio < 0.85) {
     return {
       fillRatio,
-      hours: Math.min(settings.heatingHoursPerDay, 2),
+      hours: Math.min(settings.automaticMaxHeatingHours, 2),
       reason: "Varaus 60–84 % → enintään 2 h lämmitys",
     };
   }
@@ -87,7 +88,7 @@ export function getHeatingNeedFromShowers(
   if (fillRatio < 0.95) {
     return {
       fillRatio,
-      hours: Math.min(settings.heatingHoursPerDay, 1),
+      hours: Math.min(settings.automaticMaxHeatingHours, 1),
       reason: "Varaus 85–94 % → enintään 1 h lämmitys",
     };
   }
@@ -204,7 +205,7 @@ function getTodayHeatingReason(
   heatingReason: string,
   tomorrowPriceDifference: number,
   warmWaterCanWait: boolean,
-  minimumShowersBeforeExpensiveTomorrow: number,
+  targetShowerReserve: number,
 ) {
   const priceDifferenceReason =
     tomorrowPriceDifference >= 0
@@ -216,7 +217,7 @@ function getTodayHeatingReason(
         )} snt/kWh kalliimpi`;
   const reserveReason = warmWaterCanWait
     ? "varausta on riittävästi"
-    : `varausta on alle ${minimumShowersBeforeExpensiveTomorrow} suihkua`;
+    : `varausta on alle ${targetShowerReserve} suihkua`;
   const conjunction = warmWaterCanWait ? "ja" : "mutta";
 
   return `${heatingReason}. ${priceDifferenceReason} ${conjunction} ${reserveReason}, joten lämmitys tehdään tänään.`;
@@ -229,6 +230,7 @@ export function selectHeatingRecommendation(
   settings: EnergiaZenSettings = defaultSettings,
   tankTemperature = defaultTankTemperature,
   showersLeft: number | null = null,
+  minimumAutomaticHeatingHours = 0,
 ) {
   const temperatureBasedHeatingNeed =
     getTemperatureBasedHeatingNeed(tankTemperature);
@@ -241,20 +243,27 @@ export function selectHeatingRecommendation(
     tankTemperature,
   );
   const isFixedHeatingNeed = settings.heatingNeedMode === "fixed";
+  const automaticBaseHeatingHours =
+    showerHeatingNeed?.hours ?? temperatureBasedEffectiveHeatingHours;
+  const automaticEffectiveHeatingHours = Math.max(
+    automaticBaseHeatingHours,
+    minimumAutomaticHeatingHours,
+  );
   const { effectiveHeatingHours, heatingReason } =
     isFixedHeatingNeed
       ? {
-          effectiveHeatingHours: settings.heatingHoursPerDay,
-          heatingReason: `Kiinteä lämmitystarve → ${settings.heatingHoursPerDay} h päivän halvimmilla tunneilla`,
+          effectiveHeatingHours: settings.fixedHeatingHoursPerDay,
+          heatingReason: `Kiinteä lämmitys ${settings.fixedHeatingHoursPerDay} h/vrk vuorokauden halvimmilla tunneilla.`,
         }
       : {
-          effectiveHeatingHours:
-            showerHeatingNeed?.hours ?? temperatureBasedEffectiveHeatingHours,
+          effectiveHeatingHours: automaticEffectiveHeatingHours,
           heatingReason:
-            getAutomaticHeatingReasonPrefix(
-              showerHeatingNeed,
-              temperatureBasedHeatingNeed,
-            ),
+            automaticEffectiveHeatingHours > automaticBaseHeatingHours
+              ? `Ennuste seuraavan lämmityksen alkuun → ${automaticEffectiveHeatingHours} h lämmitys`
+              : getAutomaticHeatingReasonPrefix(
+                  showerHeatingNeed,
+                  temperatureBasedHeatingNeed,
+                ),
         };
   const todayKey = formatHelsinkiDateKey(currentHourStart);
   const todayPrices = prices.filter(
@@ -286,7 +295,7 @@ export function selectHeatingRecommendation(
   const remainingHeatingNeed = Math.max(
     effectiveHeatingHours -
       completedTodayHours.length -
-      missedPlannedTodayHours.length,
+      (isFixedHeatingNeed ? 0 : missedPlannedTodayHours.length),
     0,
   );
   const toPlanHours = (selectedHours: HourlyPrice[]) => {
@@ -337,10 +346,12 @@ export function selectHeatingRecommendation(
   if (isFixedHeatingNeed) {
     return {
       hours: toPlanHours(
-        getCheapestHours(
-          futureCandidates(remainingTodayPrices),
-          remainingHeatingNeed,
-        ),
+        selectRemainingFixedHeatingHours({
+          completedHeatingHours: completedTodayHours.length,
+          fixedHeatingHoursPerDay: settings.fixedHeatingHoursPerDay,
+          hours: futureCandidates(remainingTodayPrices),
+          now: currentHourStart,
+        }),
       ),
       realizedHours: completedTodayHours.length,
       reason: heatingReason,
@@ -385,7 +396,7 @@ export function selectHeatingRecommendation(
   const warmWaterCanWait =
     showersLeft !== null &&
     Number.isFinite(showersLeft) &&
-    showersLeft >= settings.minimumShowersBeforeExpensiveTomorrow;
+    showersLeft >= settings.targetShowerReserve;
   const tomorrowIsClearlyCheaper =
     averageTodayPrice - averageTomorrowPrice >
     settings.priceDifferenceThresholdCents;
@@ -427,7 +438,7 @@ export function selectHeatingRecommendation(
       heatingReason,
       tomorrowPriceDifference,
       warmWaterCanWait,
-      settings.minimumShowersBeforeExpensiveTomorrow,
+      settings.targetShowerReserve,
     ),
     targetHours: effectiveHeatingHours,
   };

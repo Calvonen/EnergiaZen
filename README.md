@@ -58,6 +58,41 @@ Hae uusimmat muutokset:
 git pull
 ```
 
+## OTA-päivitysten julkaisu (EAS Update GitHub Actionsista)
+
+Sovelluksen voi päivittää käyttäjien puhelimiin ilman uutta APK/AAB-julkaisua
+`eas update`-komennolla. Tämä onnistuu suoraan GitHubin selainkäyttöliittymästä
+`.github/workflows/eas-update.yml`-workflow'lla — kotikonetta tai Codespacesia
+ei tarvita.
+
+### 1. Luo EXPO_TOKEN expo.dev:ssä
+
+1. Kirjaudu osoitteeseen https://expo.dev/settings/access-tokens
+2. Paina **Create token**
+3. Anna tokenille kuvaava nimi (esim. `github-actions-energyzen`)
+4. Kopioi luotu token talteen — se näytetään vain kerran
+
+### 2. Lisää token GitHubin secretiksi
+
+1. Avaa repo GitHubissa ja siirry **Settings → Secrets and variables → Actions**
+2. Paina **New repository secret**
+3. Nimeksi täsmälleen `EXPO_TOKEN`
+4. Arvoksi äsken kopioitu token, ja tallenna
+
+### 3. Käynnistä julkaisu Actions-välilehdeltä
+
+1. Avaa repon **Actions**-välilehti
+2. Valitse vasemmalta työnkulku **EAS Update**
+3. Paina **Run workflow**
+4. Valitse **branch** (`production`, `preview` tai `development` — vastaa
+   `eas.json`:n build-kanavia) ja halutessasi kirjoita oma julkaisuviesti
+   (tyhjänä käytetään viimeisimmän commitin viestiä)
+5. Paina **Run workflow**
+
+Ajon lopussa työnkulun **Summary**-välilehdellä (ja ajon lokissa) näkyy
+julkaistun update-ryhmän tunnus (`group`) sekä linkit jokaisen alustan
+manifestiin, jos EAS palautti ne.
+
 ## Tietolähteet
 
 ### Nykyinen sähkön hinta

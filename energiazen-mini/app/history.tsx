@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   GestureResponderEvent,
+  InteractionManager,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,12 +10,23 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 
 import { debugLog } from "@/lib/debug";
 import { defaultSettings } from "@/lib/settings";
 import { supabase } from "@/lib/supabase";
+import {
+  addHelsinkiCalendarDays,
+  createTemperatureHistoryDayCache,
+  dayHistoryBucketMinutes,
+  formatHelsinkiDaySelectorLabel,
+  getHelsinkiDayRange,
+  getTodayHelsinkiDayKey,
+  getTemperatureHistoryDayCacheKey,
+  isTodayHelsinkiDay,
+} from "@/lib/temperatureHistoryDay";
 
-type HistoryTab = "24h" | "7d";
+type HistoryTab = "24h" | "day";
 
 type TemperatureHistoryPoint = {
   timestamp: string;
@@ -24,17 +37,8 @@ type TemperatureHistoryPoint = {
 
 type SelectedHistoryPoint = {
   index: number;
-  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint;
+  point: TemperatureHistoryPoint;
   x: number;
-};
-
-type HourlyTemperatureHistoryPoint = {
-  timestamp: string;
-  hourKey: string;
-  hourLabel: string;
-  topTempAvg: number;
-  bottomTempAvg: number;
-  averageTempAvg: number;
 };
 
 type TankReadingRow = {
@@ -48,6 +52,7 @@ type XAxisLabel = {
   text: string;
 };
 
+const DEBUG_HISTORY_PERFORMANCE = false;
 const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
@@ -57,6 +62,38 @@ const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
 const bottomTemperatureColor = "#60A5FA";
 const tooltipBottomOffset = 28;
+const dayXAxisTargets = [
+  { label: "00", minute: 0 },
+  { label: "06", minute: 6 * 60 },
+  { label: "12", minute: 12 * 60 },
+  { label: "18", minute: 18 * 60 },
+  { label: "24", minute: 24 * 60 },
+];
+
+function getPerformanceNow() {
+  return Date.now();
+}
+
+function logTemperatureHistoryPerformance(
+  range: string,
+  event: string,
+  data: Record<string, unknown>,
+) {
+  if (!DEBUG_HISTORY_PERFORMANCE) {
+    return;
+  }
+
+  console.log("[EnergyZen perf][temperature-history]", {
+    event,
+    range,
+    ...data,
+  });
+}
+
+let temperatureHistory24hCache: TemperatureHistoryPoint[] = [];
+let temperatureHistory24hLoaded = false;
+const temperatureHistoryDayCache =
+  createTemperatureHistoryDayCache<TemperatureHistoryPoint[]>();
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -71,45 +108,11 @@ const tooltipTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   timeZone: "Europe/Helsinki",
 });
 
-const tooltipDateFormatter = new Intl.DateTimeFormat("fi-FI", {
-  day: "2-digit",
-  month: "2-digit",
-  timeZone: "Europe/Helsinki",
-  weekday: "short",
-});
-
-const axisDateFormatter = new Intl.DateTimeFormat("fi-FI", {
-  day: "numeric",
-  month: "numeric",
-  timeZone: "Europe/Helsinki",
-});
-
 const tooltipClockFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "numeric",
   hour12: false,
   minute: "2-digit",
   timeZone: "Europe/Helsinki",
-});
-
-const dayKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
-  day: "2-digit",
-  month: "2-digit",
-  timeZone: "Europe/Helsinki",
-  year: "numeric",
-});
-
-const hourKeyFormatter = new Intl.DateTimeFormat("sv-SE", {
-  day: "2-digit",
-  hour: "2-digit",
-  hour12: false,
-  month: "2-digit",
-  timeZone: "Europe/Helsinki",
-  year: "numeric",
-});
-
-const weekdayFormatter = new Intl.DateTimeFormat("fi-FI", {
-  timeZone: "Europe/Helsinki",
-  weekday: "short",
 });
 
 function formatHour(timestamp: string) {
@@ -120,28 +123,12 @@ function formatTooltipTime(timestamp: string) {
   return tooltipTimeFormatter.format(new Date(timestamp)).replace(".", ":");
 }
 
-function formatTooltipDateTime(timestamp: string) {
-  const dateParts = tooltipDateFormatter.formatToParts(new Date(timestamp));
-  const weekday = getDatePart(dateParts, "weekday").replace(".", "");
-  const day = getDatePart(dateParts, "day");
-  const month = getDatePart(dateParts, "month");
+function formatDayTooltipTime(timestamp: string) {
   const time = tooltipClockFormatter
     .format(new Date(timestamp))
     .replace(":", ".");
 
-  return `${weekday} ${day}.${month}. klo ${time}`;
-}
-
-function formatWeekday(timestamp: string) {
-  const weekday = weekdayFormatter.format(new Date(timestamp)).replace(".", "");
-
-  return weekday.charAt(0).toUpperCase() + weekday.slice(1);
-}
-
-function formatAxisDay(timestamp: string) {
-  const date = axisDateFormatter.format(new Date(timestamp));
-
-  return `${formatWeekday(timestamp)} ${date}`;
+  return `klo ${time}`;
 }
 
 function getDatePart(
@@ -149,10 +136,6 @@ function getDatePart(
   type: Intl.DateTimeFormatPartTypes,
 ) {
   return parts.find((part) => part.type === type)?.value ?? "";
-}
-
-function getHourKey(timestamp: string) {
-  return hourKeyFormatter.format(new Date(timestamp));
 }
 
 function roundTemperature(value: number) {
@@ -197,51 +180,47 @@ function mapTankReadingToHistoryPoint(
   };
 }
 
-async function fetchTankReadingsSince(startIso: string, maxRows: number) {
-  const pageSize = 1000;
-  const selectColumns = "created_at, top_temp, bottom_temp";
-  const rows: TankReadingRow[] = [];
+async function fetchTemperatureHistoryPoints(
+  startIso: string,
+  rangeLabel: string,
+  bucketMinutes: number,
+  mode: "average" | "latest",
+) {
+  const fetchStartedAt = getPerformanceNow();
+  const { data, error } = await supabase.rpc("get_temperature_history_points", {
+    p_bucket_minutes: bucketMinutes,
+    p_mode: mode,
+    p_start: startIso,
+  });
 
-  while (rows.length < maxRows) {
-    const from = rows.length;
-    const to = Math.min(from + pageSize, maxRows) - 1;
-    const { data, error } = await supabase
-      .from("tank_readings")
-      .select(selectColumns)
-      .gte("created_at", startIso)
-      .order("created_at", { ascending: false })
-      .range(from, to);
-
-    if (error) {
-      throw error;
-    }
-
-    const pageRows = (data ?? []) as TankReadingRow[];
-    rows.push(...pageRows);
-
-    if (pageRows.length < pageSize) {
-      break;
-    }
+  if (error) {
+    throw error;
   }
 
-  return sortHistoryByCreatedAtAscending(
-    rows
+  const history = sortHistoryByCreatedAtAscending(
+    ((data ?? []) as TankReadingRow[])
       .map(mapTankReadingToHistoryPoint)
       .filter((point): point is TemperatureHistoryPoint => point !== null),
   );
+
+  logTemperatureHistoryPerformance(rangeLabel, "temperature history fetch", {
+    bucketMinutes,
+    durationMs: getPerformanceNow() - fetchStartedAt,
+    mode,
+    rawRowCount: history.length,
+    rowCount: history.length,
+  });
+
+  return history;
 }
 
 function getVisibleHistory(
   history: TemperatureHistoryPoint[],
   selectedTab: HistoryTab,
 ) {
-  if (selectedTab === "24h") {
-    return history.length > 144
-      ? sampleHistoryByLatestPoint(history, 10 * 60 * 1000)
-      : history;
-  }
-
-  return getHourlyHistory(history);
+  return selectedTab === "24h" && history.length > 144
+    ? sampleHistoryByLatestPoint(history, 10 * 60 * 1000)
+    : history;
 }
 
 function sampleHistoryByLatestPoint(
@@ -263,85 +242,16 @@ function sampleHistoryByLatestPoint(
   );
 }
 
-function getHourlyHistory(history: TemperatureHistoryPoint[]) {
-  const hourlyBuckets = new Map<
-    string,
-    {
-      bottomTempSum: number;
-      count: number;
-      timestamp: string;
-      topTempSum: number;
-    }
-  >();
-
-  history.forEach((point) => {
-    const hourKey = getHourKey(point.timestamp);
-    const bucket = hourlyBuckets.get(hourKey);
-
-    if (!bucket) {
-      hourlyBuckets.set(hourKey, {
-        bottomTempSum: point.bottomTemp,
-        count: 1,
-        timestamp: point.timestamp,
-        topTempSum: point.topTemp,
-      });
-      return;
-    }
-
-    bucket.bottomTempSum += point.bottomTemp;
-    bucket.count += 1;
-    bucket.topTempSum += point.topTemp;
-  });
-
-  return [...hourlyBuckets.entries()]
-    .map(([hourKey, bucket]) => {
-      const topTempAvg = roundTemperature(bucket.topTempSum / bucket.count);
-      const bottomTempAvg = roundTemperature(
-        bucket.bottomTempSum / bucket.count,
-      );
-
-      return {
-        averageTempAvg: roundTemperature(
-          calculateWeightedTemperature(topTempAvg, bottomTempAvg),
-        ),
-        bottomTempAvg,
-        hourKey,
-        hourLabel: `${formatWeekday(bucket.timestamp)} ${formatHour(
-          bucket.timestamp,
-        )}`,
-        timestamp: bucket.timestamp,
-        topTempAvg,
-      };
-    })
-    .sort(
-      (firstPoint, secondPoint) =>
-        new Date(firstPoint.timestamp).getTime() -
-        new Date(secondPoint.timestamp).getTime(),
-    );
+function getTopTemperature(point: TemperatureHistoryPoint) {
+  return point.topTemp;
 }
 
-function getTopTemperature(
-  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
-) {
-  return "topTempAvg" in point ? point.topTempAvg : point.topTemp;
+function getBottomTemperature(point: TemperatureHistoryPoint) {
+  return point.bottomTemp;
 }
 
-function getBottomTemperature(
-  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
-) {
-  return "bottomTempAvg" in point ? point.bottomTempAvg : point.bottomTemp;
-}
-
-function getAverageTemperature(
-  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
-) {
-  return "averageTempAvg" in point ? point.averageTempAvg : point.averageTemp;
-}
-
-function isHourlyHistoryPoint(
-  point: TemperatureHistoryPoint | HourlyTemperatureHistoryPoint,
-): point is HourlyTemperatureHistoryPoint {
-  return "topTempAvg" in point;
+function getAverageTemperature(point: TemperatureHistoryPoint) {
+  return point.averageTemp;
 }
 
 function getPointBottom(temperature: number) {
@@ -386,54 +296,45 @@ function shouldShowXAxisLabel(
   );
 }
 
-function getSevenDayXAxisLabels(
-  history: (TemperatureHistoryPoint | HourlyTemperatureHistoryPoint)[],
-) {
-  const dayBuckets: {
-    firstIndex: number;
-    lastIndex: number;
-    timestamp: string;
-  }[] = [];
-  const dayBucketByKey = new Map<string, (typeof dayBuckets)[number]>();
+function getHelsinkiMinuteOfDay(timestamp: string) {
+  const parts = tooltipClockFormatter.formatToParts(new Date(timestamp));
+  const hour = Number(getDatePart(parts, "hour"));
+  const minute = Number(getDatePart(parts, "minute"));
 
-  history.forEach((point, index) => {
-    const dayKey = dayKeyFormatter.format(new Date(point.timestamp));
-    const bucket = dayBucketByKey.get(dayKey);
+  return hour * 60 + minute;
+}
 
-    if (!bucket) {
-      const nextBucket = {
-        firstIndex: index,
-        lastIndex: index,
-        timestamp: point.timestamp,
-      };
-      dayBucketByKey.set(dayKey, nextBucket);
-      dayBuckets.push(nextBucket);
+function getDayXAxisLabels(history: TemperatureHistoryPoint[]) {
+  const labels = new Map<number, XAxisLabel>();
+  const usedIndexes = new Set<number>();
+
+  dayXAxisTargets.forEach((target, targetIndex) => {
+    let closestIndex = -1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    history.forEach((point, index) => {
+      const minuteOfDay = getHelsinkiMinuteOfDay(point.timestamp);
+      const distance = Math.abs(minuteOfDay - target.minute);
+
+      if (distance < closestDistance && !usedIndexes.has(index)) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+
+    if (closestIndex === -1) {
       return;
     }
 
-    bucket.lastIndex = index;
-  });
-
-  const labels = new Map<number, XAxisLabel>();
-  const labelCount = Math.min(dayBuckets.length, 4);
-
-  Array.from({ length: labelCount }).forEach((_, labelIndex) => {
-    const dayIndex =
-      labelCount === 1
-        ? 0
-        : Math.round((labelIndex * (dayBuckets.length - 1)) / (labelCount - 1));
-    const bucket = dayBuckets[dayIndex];
-    const isFirstLabel = labelIndex === 0;
-    const isLastLabel = labelIndex === labelCount - 1;
-    const pointIndex = isFirstLabel
-      ? bucket.firstIndex
-      : isLastLabel
-        ? bucket.lastIndex
-        : Math.round((bucket.firstIndex + bucket.lastIndex) / 2);
-
-    labels.set(pointIndex, {
-      align: isFirstLabel ? "left" : isLastLabel ? "right" : "center",
-      text: formatAxisDay(bucket.timestamp),
+    usedIndexes.add(closestIndex);
+    labels.set(closestIndex, {
+      align:
+        targetIndex === 0
+          ? "left"
+          : targetIndex === dayXAxisTargets.length - 1
+            ? "right"
+            : "center",
+      text: target.label,
     });
   });
 
@@ -451,7 +352,7 @@ type ChartLineSegment = {
 };
 
 function getChartLineSegments(
-  history: (TemperatureHistoryPoint | HourlyTemperatureHistoryPoint)[],
+  history: TemperatureHistoryPoint[],
   chartWidth: number,
 ) {
   if (history.length < 2 || chartWidth <= 0) {
@@ -523,72 +424,312 @@ function getChartLineSegments(
 
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
+  const mountedAtRef = useRef(getPerformanceNow());
+  const initialTabRef = useRef<HistoryTab>("24h");
+  const firstRenderLoggedRef = useRef(false);
+  const firstContentLoggedRef = useRef(false);
+  const fetchCountRef = useRef(0);
+  const inFlightRef = useRef<Record<"24h", boolean>>({
+    "24h": false,
+  });
+  const inFlightDayKeysRef = useRef(new Set<string>());
   const [selectedTab, setSelectedTab] = useState<HistoryTab>("24h");
-  const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>([]);
-  const [history7d, setHistory7d] = useState<TemperatureHistoryPoint[]>([]);
+  const [selectedDayKey, setSelectedDayKey] = useState(() =>
+    getTodayHelsinkiDayKey(),
+  );
+  const selectedDayKeyRef = useRef(selectedDayKey);
+  const [history24h, setHistory24h] = useState<TemperatureHistoryPoint[]>(
+    temperatureHistory24hCache,
+  );
+  const [historyDay, setHistoryDay] = useState<TemperatureHistoryPoint[]>(
+    () =>
+      temperatureHistoryDayCache.get(
+        getTemperatureHistoryDayCacheKey({
+          dayKey: getTodayHelsinkiDayKey(),
+        }),
+      ) ?? [],
+  );
+  const [isInteractionComplete, setIsInteractionComplete] = useState(false);
+  const [isLoading24h, setIsLoading24h] = useState(false);
+  const [isLoadingDay, setIsLoadingDay] = useState(false);
+  const [backgroundRefreshingTab, setBackgroundRefreshingTab] =
+    useState<HistoryTab | null>(null);
   const [chartWidth, setChartWidth] = useState(0);
   const [selectedHistoryPoint, setSelectedHistoryPoint] =
     useState<SelectedHistoryPoint | null>(null);
 
-  const loadHistory = useCallback(async () => {
-    const h24Start = getHistoryRangeStart(24 * 60 * 60 * 1000);
-    const d7Start = getHistoryRangeStart(7 * 24 * 60 * 60 * 1000);
+  const loadHistoryTab = useCallback(async (tab: "24h", force = false) => {
+    if (inFlightRef.current[tab]) {
+      return;
+    }
+    if (!force && tab === "24h" && temperatureHistory24hLoaded) {
+      return;
+    }
+
+    inFlightRef.current[tab] = true;
+    fetchCountRef.current += 1;
+    const viewLoadStartedAt = getPerformanceNow();
+    const rangeStart = getHistoryRangeStart(24 * 60 * 60 * 1000);
+    const bucketMinutes = 10;
+    const mode = "latest";
+    const hasCachedData = temperatureHistory24hLoaded;
+
+    logTemperatureHistoryPerformance(tab, "query started", {
+      fetchCount: fetchCountRef.current,
+      force,
+      hasCachedData,
+    });
+
+    if (hasCachedData) {
+      setBackgroundRefreshingTab(tab);
+    } else {
+      setIsLoading24h(true);
+    }
 
     try {
-      const next24h = await fetchTankReadingsSince(h24Start, 2000);
-      const next7d = await fetchTankReadingsSince(d7Start, 12000);
+      const nextHistory = await fetchTemperatureHistoryPoints(
+        rangeStart,
+        tab,
+        bucketMinutes,
+        mode,
+      );
 
-      setHistory24h(next24h);
-      setHistory7d(next7d);
+      temperatureHistory24hCache = nextHistory;
+      temperatureHistory24hLoaded = true;
+      setHistory24h(nextHistory);
+
+      logTemperatureHistoryPerformance(tab, "query completed", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+        fetchCount: fetchCountRef.current,
+        rowCount: nextHistory.length,
+      });
+      logTemperatureHistoryPerformance(tab, "view load", {
+        durationMs: getPerformanceNow() - viewLoadStartedAt,
+        rowCount: nextHistory.length,
+      });
     } catch (error) {
       console.warn(
         "Lämpöhistorian haku epäonnistui",
         error instanceof Error ? error.message : error,
       );
-      setHistory24h([]);
-      setHistory7d([]);
+    } finally {
+      inFlightRef.current[tab] = false;
+      setBackgroundRefreshingTab((currentTab) =>
+        currentTab === tab ? null : currentTab,
+      );
+      setIsLoading24h(false);
     }
   }, []);
 
-  useEffect(() => {
-    void loadHistory();
+  const loadDayHistory = useCallback(
+    async (dayKey: string, force = false) => {
+      const cacheKey = getTemperatureHistoryDayCacheKey({
+        bucketMinutes: dayHistoryBucketMinutes,
+        dayKey,
+        view: "day",
+      });
 
+      if (inFlightDayKeysRef.current.has(dayKey)) {
+        return;
+      }
+      if (!force && temperatureHistoryDayCache.has(cacheKey)) {
+        setHistoryDay(temperatureHistoryDayCache.get(cacheKey) ?? []);
+        return;
+      }
+
+      const cachedHistory = temperatureHistoryDayCache.get(cacheKey);
+      const hasCachedData = cachedHistory !== undefined;
+
+      if (hasCachedData) {
+        setHistoryDay(cachedHistory);
+        setBackgroundRefreshingTab("day");
+      } else {
+        setIsLoadingDay(true);
+      }
+
+      inFlightDayKeysRef.current.add(dayKey);
+      fetchCountRef.current += 1;
+      const viewLoadStartedAt = getPerformanceNow();
+      const { endIso, startIso } = getHelsinkiDayRange(dayKey);
+
+      logTemperatureHistoryPerformance("day", "query started", {
+        dayKey,
+        endIso,
+        fetchCount: fetchCountRef.current,
+        force,
+        hasCachedData,
+        startIso,
+      });
+
+      try {
+        const fetchedHistory = await fetchTemperatureHistoryPoints(
+          startIso,
+          dayKey,
+          dayHistoryBucketMinutes,
+          "average",
+        );
+        const endTime = new Date(endIso).getTime();
+        const nextHistory = fetchedHistory.filter(
+          (point) => new Date(point.timestamp).getTime() < endTime,
+        );
+
+        temperatureHistoryDayCache.set(cacheKey, nextHistory);
+        if (selectedDayKeyRef.current === dayKey) {
+          setHistoryDay(nextHistory);
+        }
+
+        logTemperatureHistoryPerformance("day", "query completed", {
+          dayKey,
+          durationMs: getPerformanceNow() - viewLoadStartedAt,
+          rowCount: nextHistory.length,
+        });
+      } catch (error) {
+        console.warn(
+          "Lämpöhistorian haku epäonnistui",
+          error instanceof Error ? error.message : error,
+        );
+      } finally {
+        inFlightDayKeysRef.current.delete(dayKey);
+        if (selectedDayKeyRef.current === dayKey) {
+          setBackgroundRefreshingTab((currentTab) =>
+            currentTab === "day" ? null : currentTab,
+          );
+          setIsLoadingDay(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    logTemperatureHistoryPerformance(initialTabRef.current, "navigation mounted", {
+      fetchCount: fetchCountRef.current,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (firstRenderLoggedRef.current) {
+      return;
+    }
+    firstRenderLoggedRef.current = true;
+    const elapsedMs = getPerformanceNow() - mountedAtRef.current;
+
+    logTemperatureHistoryPerformance(initialTabRef.current, "first render", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 18,
+      targetUnderMs: 100,
+    });
+    logTemperatureHistoryPerformance(initialTabRef.current, "first content visible", {
+      durationMs: elapsedMs,
+      estimatedElementCount: 18,
+      targetUnderMs: 100,
+    });
+    firstContentLoggedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      setIsInteractionComplete(true);
+      logTemperatureHistoryPerformance(
+        initialTabRef.current,
+        "interaction completed",
+        {
+          durationMs: getPerformanceNow() - mountedAtRef.current,
+        },
+      );
+      if (selectedTab === "24h") {
+        void loadHistoryTab("24h");
+      } else {
+        void loadDayHistory(selectedDayKey);
+      }
+    });
+
+    return () => task.cancel();
+  }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (selectedTab === "24h") {
+        void loadHistoryTab("24h", true);
+        return;
+      }
+
+      if (isTodayHelsinkiDay(selectedDayKey)) {
+        void loadDayHistory(selectedDayKey, true);
+      }
+    }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]),
+  );
+
+  useEffect(() => {
     const intervalId = setInterval(() => {
-      void loadHistory();
+      if (selectedTab === "24h") {
+        void loadHistoryTab("24h", true);
+      }
     }, 60 * 1000);
 
     return () => clearInterval(intervalId);
-  }, [loadHistory, selectedTab]);
+  }, [loadHistoryTab, selectedTab]);
 
   useEffect(() => {
-    if (selectedTab === "7d") {
-      setSelectedHistoryPoint(null);
+    selectedDayKeyRef.current = selectedDayKey;
+  }, [selectedDayKey]);
+
+  useEffect(() => {
+    if (selectedTab !== "day" || !isInteractionComplete) {
+      return;
     }
 
+    const cachedHistory = temperatureHistoryDayCache.get(
+      getTemperatureHistoryDayCacheKey({
+        bucketMinutes: dayHistoryBucketMinutes,
+        dayKey: selectedDayKey,
+        view: "day",
+      }),
+    );
+    if (cachedHistory) {
+      setHistoryDay(cachedHistory);
+    }
+    void loadDayHistory(selectedDayKey);
+  }, [isInteractionComplete, loadDayHistory, selectedDayKey, selectedTab]);
+
+  useEffect(() => {
     return () => setSelectedHistoryPoint(null);
-  }, [selectedTab]);
+  }, [selectedDayKey, selectedTab]);
 
   useEffect(() => {
     debugLog("history loaded", {
+      day: historyDay.length,
+      dayKey: selectedDayKey,
+      firstDay: historyDay[0]?.timestamp,
       h24: history24h.length,
-      d7: history7d.length,
       first24h: history24h[0]?.timestamp,
       latest24h: history24h.at(-1)?.timestamp,
-      first7d: history7d[0]?.timestamp,
-      latest7d: history7d.at(-1)?.timestamp,
+      latestDay: historyDay.at(-1)?.timestamp,
     });
-  }, [history24h, history7d]);
+  }, [history24h, historyDay, selectedDayKey]);
 
-  const visibleHistory = useMemo(
-    () =>
-      selectedTab === "24h"
-        ? getVisibleHistory(history24h, selectedTab)
-        : getVisibleHistory(history7d, selectedTab),
-    [history24h, history7d, selectedTab],
-  );
+  const visibleHistory = useMemo(() => {
+    const trendStartedAt = getPerformanceNow();
+    const sourceHistory = selectedTab === "24h" ? history24h : historyDay;
+    const nextVisibleHistory = isInteractionComplete
+      ? getVisibleHistory(sourceHistory, selectedTab)
+      : [];
+
+    logTemperatureHistoryPerformance(selectedTab, "trend data build", {
+      durationMs: getPerformanceNow() - trendStartedAt,
+      sourceRowCount: sourceHistory.length,
+      visibleRowCount: nextVisibleHistory.length,
+    });
+
+    return nextVisibleHistory;
+  }, [history24h, historyDay, isInteractionComplete, selectedTab]);
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
-  const isSevenDayView = selectedTab === "7d";
+  const isDayView = selectedTab === "day";
+  const isSelectedDayToday = isTodayHelsinkiDay(selectedDayKey);
+  const isSelectedTabLoading =
+    (selectedTab === "24h" ? isLoading24h : isLoadingDay) ||
+    backgroundRefreshingTab === selectedTab;
   const selectedTooltipLeft = selectedHistoryPoint
     ? Math.min(
         Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
@@ -599,10 +740,30 @@ export default function TemperatureHistoryScreen() {
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
   );
-  const sevenDayXAxisLabels = useMemo(
-    () => (isSevenDayView ? getSevenDayXAxisLabels(visibleHistory) : null),
-    [isSevenDayView, visibleHistory],
+  const dayXAxisLabels = useMemo(
+    () => (isDayView ? getDayXAxisLabels(visibleHistory) : null),
+    [isDayView, visibleHistory],
   );
+
+  const selectPreviousDay = useCallback(() => {
+    setSelectedDayKey((currentDayKey) =>
+      addHelsinkiCalendarDays(currentDayKey, -1),
+    );
+  }, []);
+
+  const selectNextDay = useCallback(() => {
+    setSelectedDayKey((currentDayKey) => {
+      if (isTodayHelsinkiDay(currentDayKey)) {
+        return currentDayKey;
+      }
+
+      const nextDayKey = addHelsinkiCalendarDays(currentDayKey, 1);
+
+      return isTodayHelsinkiDay(nextDayKey) || nextDayKey < getTodayHelsinkiDayKey()
+        ? nextDayKey
+        : currentDayKey;
+    });
+  }, []);
 
   const updateSelectedHistoryPoint = useCallback(
     (event: GestureResponderEvent) => {
@@ -655,17 +816,17 @@ export default function TemperatureHistoryScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>📈 Lämpöhistoria</Text>
+          <Text style={styles.title}>Lämpöhistoria</Text>
           <Text style={styles.subtitle}>Varaajan ylä- ja ala-anturi</Text>
         </View>
 
         <View style={styles.tabSelector}>
-          {(["24h", "7d"] as const).map((tab) => {
+          {(["24h", "day"] as const).map((tab) => {
             const isActive = selectedTab === tab;
 
             return (
               <Pressable
-                accessibilityLabel={`Näytä ${tab === "24h" ? "24 tunnin" : "7 vuorokauden"} lämpöhistoria`}
+                accessibilityLabel={`Näytä ${tab === "24h" ? "24 tunnin" : "edellisten päivien"} lämpöhistoria`}
                 accessibilityRole="button"
                 key={tab}
                 onPress={() => setSelectedTab(tab)}
@@ -674,13 +835,28 @@ export default function TemperatureHistoryScreen() {
                 <Text
                   style={[styles.tabText, isActive && styles.activeTabText]}
                 >
-                  {tab === "24h" ? "24 h" : "7 vrk"}
+                  {tab === "24h" ? "24 h" : "Edelliset päivät"}
                 </Text>
               </Pressable>
             );
           })}
         </View>
+        {isSelectedTabLoading ? (
+          <View style={styles.tabLoader}>
+            <ActivityIndicator color="#36f4d4" size="small" />
+            <Text style={styles.tabLoaderText}>
+              {backgroundRefreshingTab === selectedTab
+                ? "Päivitetään..."
+                : `Ladataan ${selectedTab === "24h" ? "24 h" : "päivän"} historiaa...`}
+            </Text>
+          </View>
+        ) : null}
 
+        {!isInteractionComplete ? (
+          <View style={styles.placeholderCard}>
+            <Text style={styles.placeholderText}>Lämpöhistoria valmistuu...</Text>
+          </View>
+        ) : (
         <View style={styles.historyCard}>
           <View style={styles.summaryRow}>
             <View style={styles.summaryPill}>
@@ -736,7 +912,9 @@ export default function TemperatureHistoryScreen() {
 
           {visibleHistory.length === 0 ? (
             <Text style={styles.emptyHistoryText}>
-              Ei vielä lämpöhistoriaa.
+              {selectedTab === "day"
+                ? "Tältä päivältä ei ole lämpötilatietoja"
+                : "Ei vielä lämpöhistoriaa."}
             </Text>
           ) : (
             <>
@@ -803,8 +981,8 @@ export default function TemperatureHistoryScreen() {
                         ]}
                       >
                         <Text style={styles.historyTooltipTime}>
-                          {isSevenDayView
-                            ? formatTooltipDateTime(
+                          {isDayView
+                            ? formatDayTooltipTime(
                                 selectedHistoryPoint.point.timestamp,
                               )
                             : formatTooltipTime(
@@ -841,13 +1019,10 @@ export default function TemperatureHistoryScreen() {
                       const topTemperature = getTopTemperature(point);
                       const bottomTemperature = getBottomTemperature(point);
                       const averageTemperature = getAverageTemperature(point);
-                      const defaultXAxisLabel = isHourlyHistoryPoint(point)
-                        ? point.hourLabel
-                        : formatHour(point.timestamp);
-                      const sevenDayXAxisLabel =
-                        sevenDayXAxisLabels?.get(index);
+                      const defaultXAxisLabel = formatHour(point.timestamp);
+                      const dayXAxisLabel = dayXAxisLabels?.get(index);
                       const xAxisLabel =
-                        sevenDayXAxisLabel?.text ?? defaultXAxisLabel;
+                        dayXAxisLabel?.text ?? defaultXAxisLabel;
                       const { bottomBottom, topBottom } =
                         getAdjustedPointBottoms(
                           topTemperature,
@@ -857,11 +1032,7 @@ export default function TemperatureHistoryScreen() {
                       return (
                         <View
                           accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, painotettu lämpö ${averageTemperature} astetta`}
-                          key={
-                            isHourlyHistoryPoint(point)
-                              ? point.hourKey
-                              : point.timestamp
-                          }
+                          key={point.timestamp}
                           style={styles.historyColumn}
                         >
                           <View
@@ -885,8 +1056,8 @@ export default function TemperatureHistoryScreen() {
                               { bottom: getPointBottom(averageTemperature) },
                             ]}
                           />
-                          {(isSevenDayView
-                            ? sevenDayXAxisLabel
+                          {(isDayView
+                            ? dayXAxisLabel
                             : shouldShowXAxisLabel(
                                 index,
                                 visibleHistory.length,
@@ -894,9 +1065,9 @@ export default function TemperatureHistoryScreen() {
                             <Text
                               style={[
                                 styles.hourLabel,
-                                sevenDayXAxisLabel?.align === "left" &&
+                                dayXAxisLabel?.align === "left" &&
                                   styles.hourLabelLeft,
-                                sevenDayXAxisLabel?.align === "right" &&
+                                dayXAxisLabel?.align === "right" &&
                                   styles.hourLabelRight,
                               ]}
                             >
@@ -911,7 +1082,42 @@ export default function TemperatureHistoryScreen() {
               </View>
             </>
           )}
+          {selectedTab === "day" ? (
+            <View style={styles.daySelector}>
+              <Pressable
+                accessibilityLabel="Näytä edellinen päivä"
+                accessibilityRole="button"
+                onPress={selectPreviousDay}
+                style={styles.dayArrowButton}
+              >
+                <Text style={styles.dayArrowText}>‹</Text>
+              </Pressable>
+              <Text style={styles.daySelectorLabel}>
+                {formatHelsinkiDaySelectorLabel(selectedDayKey)}
+              </Text>
+              <Pressable
+                accessibilityLabel="Näytä seuraava päivä"
+                accessibilityRole="button"
+                disabled={isSelectedDayToday}
+                onPress={selectNextDay}
+                style={[
+                  styles.dayArrowButton,
+                  isSelectedDayToday && styles.dayArrowButtonDisabled,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.dayArrowText,
+                    isSelectedDayToday && styles.dayArrowTextDisabled,
+                  ]}
+                >
+                  ›
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -1000,6 +1206,62 @@ const styles = StyleSheet.create({
   },
   tabText: { color: "#8ea4cf", fontSize: 14, fontWeight: "900" },
   activeTabText: { color: "#f8fbff" },
+  daySelector: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "center",
+    marginTop: 14,
+    padding: 8,
+    width: "100%",
+  },
+  dayArrowButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(5,8,22,0.46)",
+    borderColor: "rgba(255,255,255,0.14)",
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  dayArrowButtonDisabled: {
+    opacity: 0.38,
+  },
+  dayArrowText: {
+    color: "#f7fbff",
+    fontSize: 30,
+    fontWeight: "900",
+    lineHeight: 32,
+  },
+  dayArrowTextDisabled: {
+    color: "#8190b5",
+  },
+  daySelectorLabel: {
+    color: "#f7fbff",
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  tabLoader: {
+    alignItems: "center",
+    backgroundColor: "rgba(54,244,212,0.1)",
+    borderColor: "rgba(54,244,212,0.24)",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    width: "100%",
+  },
+  tabLoaderText: { color: "#cfe9ff", fontSize: 13, fontWeight: "800" },
   historyCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
     borderColor: "rgba(255,255,255,0.12)",
