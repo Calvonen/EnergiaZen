@@ -1,0 +1,115 @@
+name: EAS Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "EAS Update -branch, jolle julkaistaan"
+        required: true
+        type: choice
+        options:
+          - production
+          - preview
+          - development
+        default: production
+      message:
+        description: "Julkaisuviesti (valinnainen - tyhjänä käytetään viimeisimmän commitin viestiä)"
+        required: false
+        type: string
+
+concurrency:
+  group: eas-update-${{ github.event.inputs.branch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Julkaise EAS Update
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: energiazen-mini
+    steps:
+      - name: Tarkista että EXPO_TOKEN on asetettu
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "EXPO_TOKEN-secret puuttuu tästä repositoriosta. Lisää se kohdasta"
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret."
+            echo "Katso README.md kohta 'EAS Update GitHub Actionsista'."
+            exit 1
+          fi
+
+      - name: Hae koodi
+        uses: actions/checkout@v4
+
+      - name: Asenna Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+
+      - name: Asenna riippuvuudet
+        run: npm ci
+
+      - name: Asenna EAS CLI ja kirjaudu Expo-tilille
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Julkaise EAS Update
+        env:
+          EAS_BRANCH: ${{ github.event.inputs.branch }}
+          EAS_MESSAGE: ${{ github.event.inputs.message }}
+        run: |
+          MESSAGE="$EAS_MESSAGE"
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="$(git log -1 --pretty=%s)"
+          fi
+
+          echo "Julkaistaan EAS Update branchille: $EAS_BRANCH"
+          echo "Viesti: $MESSAGE"
+
+          eas update \
+            --branch "$EAS_BRANCH" \
+            --message "$MESSAGE" \
+            --non-interactive \
+            --json > update-result.json
+
+          cat update-result.json
+
+      - name: Tulosta julkaistun update-ryhmän tiedot
+        if: always()
+        env:
+          EAS_BRANCH: ${{ github.event.inputs.branch }}
+        run: |
+          if [ ! -f update-result.json ]; then
+            echo "update-result.json puuttuu - eas update -komento ei todennäköisesti onnistunut."
+            exit 0
+          fi
+
+          # eas update --json palauttaa taulukon, yksi rivi per alusta
+          # (ios/android), samalla group-tunnuksella jokaisella rivillä.
+          GROUP_ID=$(jq -r '.[0].group // empty' update-result.json)
+          PLATFORM_LINKS=$(jq -r '.[] | "- \(.platform // "?"): \(.manifestPermalink // "ei saatavilla")"' update-result.json)
+
+          {
+            echo "## EAS Update julkaistu"
+            echo ""
+            echo "- **Branch:** \`$EAS_BRANCH\`"
+            if [ -n "$GROUP_ID" ]; then
+              echo "- **Update group ID:** \`$GROUP_ID\`"
+            fi
+            if [ -n "$PLATFORM_LINKS" ]; then
+              echo "- **Manifest-linkit:**"
+              echo "$PLATFORM_LINKS"
+            fi
+            echo ""
+            echo "### Täysi vastaus"
+            echo '```json'
+            cat update-result.json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
