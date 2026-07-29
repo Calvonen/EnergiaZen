@@ -677,6 +677,16 @@ export function optimizeHeatingPlan({
           rejectedSegmentCount: 0,
           sampleCount: 0,
           samples: [],
+          segmentDiscovery: {
+            acceptedSegmentCount: 0,
+            acceptedWithWarningsSegmentCount: 0,
+            discoveredSegmentCount: 0,
+            rejectedSegments: [],
+            rejectedSegmentCount: 0,
+            rejectionReasonCounts: {},
+            segments: [],
+            warningReasonCounts: {},
+          },
           topGainPerHour: null,
         }
       : estimateHeatingGainPerHour(

@@ -1386,7 +1386,12 @@ export default function HomeScreen() {
         historyRows: heatingGainHistoryFetch.fetchedRowCount,
         pagesFetched: heatingGainHistoryFetch.pageCount,
         segmentsAccepted: gainEstimate.acceptedSegmentCount,
+        segmentsAcceptedWithWarnings:
+          gainEstimate.segmentDiscovery.acceptedWithWarningsSegmentCount,
         segmentsFound: gainEstimate.discoveredSegmentCount,
+        segmentsRejected: gainEstimate.rejectedSegmentCount,
+        rejectionReasonCounts:
+          gainEstimate.segmentDiscovery.rejectionReasonCounts,
         source: gainEstimate.fallbackUsed ? "fallback" : "learned",
         topMedian: gainEstimate.topGainPerHour,
         weightedMedian: gainEstimate.fallbackUsed
@@ -1400,7 +1405,13 @@ export default function HomeScreen() {
         JSON.stringify({
           meanAbsoluteErrorCelsius: heatingGainBacktest.meanAbsoluteErrorCelsius,
           meanBiasCelsius: heatingGainBacktest.meanBiasCelsius,
+          rejectionReasonCounts:
+            heatingGainBacktest.segmentDiscovery.rejectionReasonCounts,
+          rejectedSegmentCount:
+            heatingGainBacktest.segmentDiscovery.rejectedSegmentCount,
           segmentCount: heatingGainBacktest.segmentCount,
+          warningReasonCounts:
+            heatingGainBacktest.segmentDiscovery.warningReasonCounts,
         }),
       );
     }

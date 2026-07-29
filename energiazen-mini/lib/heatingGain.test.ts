@@ -2,6 +2,7 @@ import {
   estimateHeatingGainPerHour,
   fallbackHeatingGainPerHour,
   fetchHeatingGainHistory,
+  findValidHeatingSegments,
   heatingGainLearningLimits,
 } from "./heatingGain";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
@@ -86,6 +87,76 @@ export async function runHeatingGainUnitTests() {
 
     assertEqual(estimate.acceptedSegmentCount, 0, "liian lyhyt jakso hylataan");
     assertEqual(estimate.rejectedSegmentCount, 1, "hylatty jakso diagnosoidaan");
+    assertEqual(
+      estimate.segmentDiscovery.rejectedSegments[0].reasons,
+      ["insufficient_readings", "insufficient_duration"],
+      "hylatylle jaksolle tallennetaan kaikki selkeat syyt",
+    );
+    assertEqual(
+      estimate.segmentDiscovery.rejectionReasonCounts,
+      { insufficient_readings: 1, insufficient_duration: 1 },
+      "hylkayssyiden jakauma lasketaan valmiiksi",
+    );
+  }
+
+  {
+    const negativeSegment = createHeatingSegment(
+      "2026-07-05T00:00:00.000Z",
+      -1,
+    );
+    const discovery = findValidHeatingSegments(negativeSegment);
+
+    assertEqual(discovery.rejectedSegmentCount, 1, "laskeva jakso hylataan");
+    assertEqual(
+      discovery.rejectedSegments[0].reasons,
+      ["negative_temperature_change"],
+      "laskeva jakso saa yksiselitteisen syyn",
+    );
+  }
+
+  {
+    const startTime = Date.parse("2026-07-06T00:00:00.000Z");
+    const temperatures = [40, 46, 40.7, 42];
+    const unstableSegment = temperatures.map((temperature, index) => ({
+      bottom_temp: temperature,
+      created_at: new Date(startTime + index * 10 * 60 * 1000).toISOString(),
+      heating: true,
+      top_temp: temperature,
+    }));
+    const discovery = findValidHeatingSegments(unstableSegment);
+
+    assertEqual(discovery.acceptedSegmentCount, 1, "epatasainen jakso hyvaksytaan");
+    assertEqual(
+      discovery.acceptedWithWarningsSegmentCount,
+      1,
+      "epatasainen jakso erotellaan varoituksella",
+    );
+    assertEqual(
+      discovery.segments[0].warnings,
+      ["sensor_anomaly", "unstable_curve"],
+      "kayran laatuongelmat ovat diagnostiikkaa",
+    );
+    assertEqual(
+      discovery.segments[0].status,
+      "accepted_with_warnings",
+      "varoitus ei muuta segmenttia hylatyksi",
+    );
+
+    const estimate = estimateHeatingGainPerHour([
+      ...unstableSegment,
+      ...createHeatingSegment("2026-07-07T00:00:00.000Z", 5),
+      ...createHeatingSegment("2026-07-08T00:00:00.000Z", 6),
+    ]);
+    assertClose(
+      estimate.gainPerHour,
+      5,
+      "varoituksellinen jakso osallistuu edelleen tuotannon mediaaniin",
+    );
+    assertEqual(
+      estimate.fallbackUsed,
+      false,
+      "kolme hyvaksyttya jaksoa riittaa myos varoituksen kanssa",
+    );
   }
 
   {
@@ -116,6 +187,11 @@ export async function runHeatingGainUnitTests() {
 
     assertEqual(estimate.acceptedSegmentCount, 3, "eparealistinen jakso hylataan");
     assertEqual(estimate.rejectedSegmentCount, 1, "rajanylitys diagnosoidaan");
+    assertEqual(
+      estimate.segmentDiscovery.rejectionReasonCounts,
+      { unrealistic_gain: 1 },
+      "eparealistisen gainin syy raportoidaan",
+    );
     assertEqual(
       estimate.gainPerHour <= heatingGainLearningLimits.maxWeightedGainPerHour,
       true,

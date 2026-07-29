@@ -57,8 +57,39 @@ export function runHeatingGainBacktestUnitTests() {
     const result = backtestHeatingGainEstimate([]);
 
     assertEqual(result.segmentCount, 0, "ei lukemia -> nolla segmenttia");
+    assertEqual(
+      result.segmentDiscovery.rejectedSegmentCount,
+      0,
+      "tyhja backtest raportoi myos tyhjan diagnostiikan",
+    );
     assertEqual(result.meanAbsoluteErrorCelsius, null, "MAE puuttuu ilman segmenttejä");
     assertEqual(result.meanBiasCelsius, null, "harha puuttuu ilman segmenttejä");
+  }
+
+  {
+    const accepted = createHeatingSegment(
+      "2026-08-01T00:00:00.000Z",
+      4,
+      60,
+    );
+    const rejected = createHeatingSegment(
+      "2026-08-02T00:00:00.000Z",
+      9,
+      60,
+    );
+    const result = backtestHeatingGainEstimate([...accepted, ...rejected]);
+
+    assertEqual(result.segmentCount, 1, "backtest kayttaa vain hyvaksytyn jakson");
+    assertEqual(
+      result.segmentDiscovery.rejectedSegmentCount,
+      1,
+      "backtest raportoi hylattyjen jaksojen maaran",
+    );
+    assertEqual(
+      result.segmentDiscovery.rejectionReasonCounts,
+      { unrealistic_gain: 1 },
+      "backtest raportoi hylkayssyiden jakauman",
+    );
   }
 
   {

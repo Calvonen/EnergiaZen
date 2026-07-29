@@ -4,6 +4,7 @@ import {
   getMedian,
   heatingGainLearningLimits,
   HeatingGainSegment,
+  HeatingGainSegmentDiscovery,
 } from "./heatingGain";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
 
@@ -23,6 +24,7 @@ export type HeatingGainBacktestSegment = {
 export type HeatingGainBacktestResult = {
   meanAbsoluteErrorCelsius: number | null;
   meanBiasCelsius: number | null;
+  segmentDiscovery: HeatingGainSegmentDiscovery;
   segmentCount: number;
   segments: HeatingGainBacktestSegment[];
 };
@@ -46,12 +48,14 @@ export function backtestHeatingGainEstimate(
   readings: TankTemperatureReading[],
   fallbackGainPerHour = fallbackHeatingGainPerHour,
 ): HeatingGainBacktestResult {
-  const { segments } = findValidHeatingSegments(readings);
+  const segmentDiscovery = findValidHeatingSegments(readings);
+  const { segments } = segmentDiscovery;
 
   if (segments.length === 0) {
     return {
       meanAbsoluteErrorCelsius: null,
       meanBiasCelsius: null,
+      segmentDiscovery,
       segmentCount: 0,
       segments: [],
     };
@@ -72,6 +76,7 @@ export function backtestHeatingGainEstimate(
   return {
     meanAbsoluteErrorCelsius,
     meanBiasCelsius,
+    segmentDiscovery,
     segmentCount: backtestSegments.length,
     segments: backtestSegments,
   };
