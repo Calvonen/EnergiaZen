@@ -60,7 +60,7 @@ type TimelinePrice = {
   starts_at: string;
 };
 
-type ActualTimelineSegment = {
+export type ActualTimelineSegment = {
   costEuros: number;
   endedAt: string;
   energyKwh: number;
@@ -84,6 +84,67 @@ function getHelsinkiHour(value: string) {
   return Number(helsinkiHourFormatter.format(new Date(value)));
 }
 
+// Hourly price segments (from calculateHeatedPriceHistory) split one
+// continuous heating run at every price-hour boundary, so a run that
+// spills 30-40s past the hour (Shelly's typical shutoff lag) shows up as
+// an extra near-instant segment. Segments this close together - including
+// perfectly back-to-back ones from several planned hours in a row - are
+// merged into a single displayed event; cost/energy are summed and the
+// price fields become duration-weighted averages across the merge.
+export const maxActualHeatingSegmentGapMinutes = 2;
+
+export function mergeAdjacentActualHeatingSegments(
+  segments: ActualTimelineSegment[],
+  maxGapMinutes = maxActualHeatingSegmentGapMinutes,
+): ActualTimelineSegment[] {
+  const sortedSegments = [...segments].sort(
+    (first, second) =>
+      Date.parse(first.startedAt) - Date.parse(second.startedAt),
+  );
+  const maxGapMs = maxGapMinutes * 60 * 1000;
+  const mergedSegments: ActualTimelineSegment[] = [];
+
+  for (const segment of sortedSegments) {
+    const previous = mergedSegments[mergedSegments.length - 1];
+    const gapMs = previous
+      ? Date.parse(segment.startedAt) - Date.parse(previous.endedAt)
+      : Infinity;
+
+    if (!previous || gapMs > maxGapMs) {
+      mergedSegments.push(segment);
+      continue;
+    }
+
+    const previousMinutes =
+      (Date.parse(previous.endedAt) - Date.parse(previous.startedAt)) /
+      60_000;
+    const segmentMinutes =
+      (Date.parse(segment.endedAt) - Date.parse(segment.startedAt)) / 60_000;
+    const totalMinutes = previousMinutes + segmentMinutes;
+
+    mergedSegments[mergedSegments.length - 1] = {
+      costEuros: previous.costEuros + segment.costEuros,
+      endedAt: segment.endedAt,
+      energyKwh: previous.energyKwh + segment.energyKwh,
+      priceCentsPerKwh:
+        totalMinutes > 0
+          ? (previous.priceCentsPerKwh * previousMinutes +
+              segment.priceCentsPerKwh * segmentMinutes) /
+            totalMinutes
+          : segment.priceCentsPerKwh,
+      spotPriceCentsPerKwh:
+        totalMinutes > 0
+          ? (previous.spotPriceCentsPerKwh * previousMinutes +
+              segment.spotPriceCentsPerKwh * segmentMinutes) /
+            totalMinutes
+          : segment.spotPriceCentsPerKwh,
+      startedAt: previous.startedAt,
+    };
+  }
+
+  return mergedSegments;
+}
+
 export function buildTodayHeatingTimeline({
   actualSegments,
   dateKey,
@@ -97,11 +158,14 @@ export function buildTodayHeatingTimeline({
   plannedHours: number[];
   prices: TimelinePrice[];
 }): HeatingTimelineItem[] {
-  const actualItems: HeatingTimelineItem[] = actualSegments.map((segment) => ({
-    ...segment,
-    marker: heatingMarkers.actual,
-    status: "actual",
-  }));
+  const mergedActualSegments = mergeAdjacentActualHeatingSegments(actualSegments);
+  const actualItems: HeatingTimelineItem[] = mergedActualSegments.map(
+    (segment) => ({
+      ...segment,
+      marker: heatingMarkers.actual,
+      status: "actual",
+    }),
+  );
   const plannedItems = normalizeStoredHeatingPlanHours(plannedHours).flatMap(
     (plannedHour): HeatingTimelineItem[] => {
       const hourPrices = prices.filter(
@@ -122,7 +186,7 @@ export function buildTodayHeatingTimeline({
       const endedAt = hourPrices.reduce((latest, price) =>
         Date.parse(price.ends_at) > Date.parse(latest) ? price.ends_at : latest,
       hourPrices[0].ends_at);
-      const overlapsActual = actualSegments.some(
+      const overlapsActual = mergedActualSegments.some(
         (segment) =>
           Date.parse(segment.startedAt) < Date.parse(endedAt) &&
           Date.parse(segment.endedAt) > Date.parse(startedAt),
