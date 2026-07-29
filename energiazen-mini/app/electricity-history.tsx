@@ -20,9 +20,11 @@ import {
   getHelsinkiDateStartIso,
   getHelsinkiElectricityDateKey,
   getHeatingDayEmptyLabel,
+  getRollingHistoryWindowRangeIso,
   getTotalPriceCentsPerKwh,
   groupElectricityPricesByHelsinkiDay,
   offsetDateKey,
+  summarizeElectricityPriceWindow,
 } from "@/lib/electricityPrices";
 import {
   buildElectricityPriceTrend,
@@ -36,6 +38,7 @@ import {
 import {
   buildTodayHeatingTimeline,
   normalizeStoredHeatingPlanHours,
+  PlannedHeatingHourEntry,
 } from "@/lib/heatingPlanMarkers";
 import { supabase } from "@/lib/supabase";
 
@@ -46,13 +49,14 @@ type ElectricityHistoryCacheEntry = {
   fetchedAt: number;
   heatingError: string | null;
   heatingPeriods: HeatingEnergyPeriod[];
-  plannedHeatingHours: number[];
+  plannedHeatingHours: PlannedHeatingHourEntry[];
   prices: ElectricityPriceRecord[];
 };
 
 const DEBUG_HISTORY_PERFORMANCE = false;
+const rollingWindowDateKey = "viimeiset-24h";
 const ranges: { label: string; value: ElectricityPriceRange }[] = [
-  { label: "Tänään", value: 1 },
+  { label: "Viimeiset 24 h", value: 1 },
   { label: "7 päivää", value: 7 },
   { label: "30 päivää", value: 30 },
 ];
@@ -62,7 +66,7 @@ function getPerformanceNow() {
 }
 
 function getRangeLogLabel(range: ElectricityPriceRange) {
-  return range === 1 ? "Tanaan" : `${range} paivaa`;
+  return range === 1 ? "Viimeiset24h" : `${range} paivaa`;
 }
 
 function logElectricityHistoryPerformance(
@@ -277,9 +281,9 @@ export default function ElectricityHistoryScreen() {
   const [heatingPeriods, setHeatingPeriods] = useState<HeatingEnergyPeriod[]>(
     electricityHistoryCache[1]?.heatingPeriods ?? [],
   );
-  const [plannedHeatingHours, setPlannedHeatingHours] = useState<number[]>(
-    electricityHistoryCache[1]?.plannedHeatingHours ?? [],
-  );
+  const [plannedHeatingHours, setPlannedHeatingHours] = useState<
+    PlannedHeatingHourEntry[]
+  >(electricityHistoryCache[1]?.plannedHeatingHours ?? []);
   const [isInteractionComplete, setIsInteractionComplete] = useState(false);
   const [isLoading, setIsLoading] = useState(!electricityHistoryCache[1]);
   const [isHeatingLoading, setIsHeatingLoading] = useState(
@@ -421,19 +425,33 @@ export default function ElectricityHistoryScreen() {
       }));
 
       const todayKey = getHelsinkiElectricityDateKey(new Date());
+      // The rolling 24 h window can reach back into yesterday's plan, so
+      // fetch both plan_date rows for range 1 instead of just today's.
+      const planDateKeys =
+        nextRange === 1 ? [todayKey, offsetDateKey(todayKey, -1)] : [todayKey];
       const planResult = await supabase
         .from("heating_plans")
-        .select("planned_hours")
-        .eq("plan_date", todayKey)
-        .limit(1);
+        .select("plan_date,planned_hours")
+        .in("plan_date", planDateKeys);
 
       if (planResult.error) {
         console.warn("Lämmityssuunnitelmaa ei saatu ladattua.", planResult.error);
       } else {
-        const plan = (planResult.data as { planned_hours?: unknown }[] | null)?.[0];
-        const nextPlannedHeatingHours = normalizeStoredHeatingPlanHours(
-          plan?.planned_hours,
-        );
+        const planRows =
+          (planResult.data as
+            | { plan_date?: string; planned_hours?: unknown }[]
+            | null) ?? [];
+        const nextPlannedHeatingHours: PlannedHeatingHourEntry[] =
+          planRows.flatMap((row) => {
+            if (!row.plan_date) {
+              return [];
+            }
+
+            const dateKey = row.plan_date;
+            return normalizeStoredHeatingPlanHours(row.planned_hours).map(
+              (hour) => ({ dateKey, hour }),
+            );
+          });
         setHeatingPeriods(nextHeatingPeriods);
         setPlannedHeatingHours(nextPlannedHeatingHours);
         updateCacheEntry(nextRange, (previousEntry) => ({
@@ -544,16 +562,44 @@ export default function ElectricityHistoryScreen() {
     [days],
   );
   const todayKey = getHelsinkiElectricityDateKey(new Date());
+  const rollingWindow = getRollingHistoryWindowRangeIso(new Date());
   const displayedDays = useMemo(
     () => {
+      if (range === 1) {
+        if (dataFilter === "all") {
+          const windowSummary = summarizeElectricityPriceWindow(
+            prices,
+            rollingWindow.startIso,
+            rollingWindow.endIso,
+          );
+
+          return windowSummary
+            ? [{ ...windowSummary, dateKey: rollingWindowDateKey }]
+            : [];
+        }
+
+        // The rolling 24 h timeline always renders as a single card - its
+        // content comes from todayHeatingTimeline, not from these fields.
+        return [
+          {
+            averageSpotPrice: 0,
+            averageTotalPrice: 0,
+            dateKey: rollingWindowDateKey,
+            highestSpotPrice: 0,
+            highestTotalPrice: 0,
+            isPartial: false,
+            lowestSpotPrice: 0,
+            lowestTotalPrice: 0,
+            prices: [],
+          },
+        ];
+      }
+
       if (dataFilter === "all") {
         return days;
       }
 
       const heatedDateKeys = new Set(heatedDays.map((day) => day.dateKey));
-      if (range === 1 && plannedHeatingHours.length > 0) {
-        heatedDateKeys.add(todayKey);
-      }
 
       return [...heatedDateKeys]
         .map(
@@ -577,9 +623,10 @@ export default function ElectricityHistoryScreen() {
       days,
       daysByKey,
       heatedDays,
-      plannedHeatingHours.length,
+      prices,
       range,
-      todayKey,
+      rollingWindow.endIso,
+      rollingWindow.startIso,
     ],
   );
   const heatingSummary = useMemo(
@@ -623,13 +670,21 @@ export default function ElectricityHistoryScreen() {
     () =>
       isInteractionComplete
         ? buildTodayHeatingTimeline({
-            actualSegments: heatedDaysByKey.get(todayKey)?.segments ?? [],
-            dateKey: todayKey,
+            actualSegments: heatedDays.flatMap((day) => day.segments),
             plannedHours: plannedHeatingHours,
             prices,
+            windowEndIso: rollingWindow.endIso,
+            windowStartIso: rollingWindow.startIso,
           })
         : [],
-    [heatedDaysByKey, isInteractionComplete, plannedHeatingHours, prices, todayKey],
+    [
+      heatedDays,
+      isInteractionComplete,
+      plannedHeatingHours,
+      prices,
+      rollingWindow.endIso,
+      rollingWindow.startIso,
+    ],
   );
   const priceTrend = useMemo(() => {
     const trendStartedAt = getPerformanceNow();
@@ -681,7 +736,9 @@ export default function ElectricityHistoryScreen() {
         <View style={styles.dayCard}>
           <View style={styles.dayHeader}>
             <Text style={styles.dayTitle}>
-              {formatFinnishHistoryDate(day.dateKey)}
+              {range === 1
+                ? "Viimeiset 24 tuntia"
+                : formatFinnishHistoryDate(day.dateKey)}
             </Text>
             {showPartial ? <Text style={styles.partial}>Osittainen</Text> : null}
           </View>
@@ -787,7 +844,7 @@ export default function ElectricityHistoryScreen() {
                 );
               })}
             </View>
-          ) : range === 1 && day.dateKey === todayKey ? (
+          ) : range === 1 ? (
             <View style={styles.heatedSegmentList}>
               {todayHeatingTimeline.map((segment) => (
                 <View
@@ -812,10 +869,6 @@ export default function ElectricityHistoryScreen() {
                 <Text style={styles.noHeatingText}>Ei lämmitystä</Text>
               ) : null}
             </View>
-          ) : range === 1 ? (
-            <Text style={styles.noHeatingText}>
-              {getHeatingDayEmptyLabel(heatedDay)}
-            </Text>
           ) : null}
         </View>
       );
@@ -827,7 +880,6 @@ export default function ElectricityHistoryScreen() {
       heatedDaysByKey,
       range,
       todayHeatingTimeline,
-      todayKey,
     ],
   );
 

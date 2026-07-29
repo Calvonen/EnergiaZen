@@ -145,20 +145,36 @@ export function mergeAdjacentActualHeatingSegments(
   return mergedSegments;
 }
 
+export type PlannedHeatingHourEntry = {
+  dateKey: string;
+  hour: number;
+};
+
 export function buildTodayHeatingTimeline({
   actualSegments,
-  dateKey,
   now = new Date(),
   plannedHours,
   prices,
+  windowEndIso,
+  windowStartIso,
 }: {
   actualSegments: ActualTimelineSegment[];
-  dateKey: string;
   now?: Date;
-  plannedHours: number[];
+  plannedHours: PlannedHeatingHourEntry[];
   prices: TimelinePrice[];
+  windowEndIso: string;
+  windowStartIso: string;
 }): HeatingTimelineItem[] {
-  const mergedActualSegments = mergeAdjacentActualHeatingSegments(actualSegments);
+  const windowStartMs = Date.parse(windowStartIso);
+  const windowEndMs = Date.parse(windowEndIso);
+  const windowActualSegments = actualSegments.filter(
+    (segment) =>
+      Date.parse(segment.endedAt) > windowStartMs &&
+      Date.parse(segment.startedAt) < windowEndMs,
+  );
+  const mergedActualSegments = mergeAdjacentActualHeatingSegments(
+    windowActualSegments,
+  );
   const actualItems: HeatingTimelineItem[] = mergedActualSegments.map(
     (segment) => ({
       ...segment,
@@ -166,8 +182,8 @@ export function buildTodayHeatingTimeline({
       status: "actual",
     }),
   );
-  const plannedItems = normalizeStoredHeatingPlanHours(plannedHours).flatMap(
-    (plannedHour): HeatingTimelineItem[] => {
+  const plannedItems = plannedHours.flatMap(
+    ({ dateKey, hour: plannedHour }): HeatingTimelineItem[] => {
       const hourPrices = prices.filter(
         (price) =>
           getHelsinkiElectricityDateKey(price.starts_at) === dateKey &&
@@ -186,6 +202,14 @@ export function buildTodayHeatingTimeline({
       const endedAt = hourPrices.reduce((latest, price) =>
         Date.parse(price.ends_at) > Date.parse(latest) ? price.ends_at : latest,
       hourPrices[0].ends_at);
+
+      if (
+        Date.parse(endedAt) <= windowStartMs ||
+        Date.parse(startedAt) >= windowEndMs
+      ) {
+        return [];
+      }
+
       const overlapsActual = mergedActualSegments.some(
         (segment) =>
           Date.parse(segment.startedAt) < Date.parse(endedAt) &&

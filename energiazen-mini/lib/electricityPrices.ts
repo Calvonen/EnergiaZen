@@ -137,10 +137,32 @@ export function offsetDateKey(dateKey: string, dayOffset: number) {
     .slice(0, 10);
 }
 
+const millisecondsPerHour = 3_600_000;
+
+// "Viimeiset 24 h" is a rolling, hour-aligned window - not the calendar day -
+// so a heating event from just before midnight is still visible the next
+// morning. The window covers exactly 24 whole hourly slots, ending with the
+// (possibly still ongoing) current hour.
+export function getRollingHistoryWindowRangeIso(now = new Date()) {
+  const currentHourStartMs =
+    Math.floor(now.getTime() / millisecondsPerHour) * millisecondsPerHour;
+
+  return {
+    endIso: new Date(currentHourStartMs + millisecondsPerHour).toISOString(),
+    startIso: new Date(
+      currentHourStartMs - 23 * millisecondsPerHour,
+    ).toISOString(),
+  };
+}
+
 export function getElectricityHistoryRangeStartIso(
   range: ElectricityPriceRange,
   now = new Date(),
 ) {
+  if (range === 1) {
+    return getRollingHistoryWindowRangeIso(now).startIso;
+  }
+
   const todayKey = getHelsinkiElectricityDateKey(now);
   return getHelsinkiDateStartIso(offsetDateKey(todayKey, -(range - 1)));
 }
@@ -240,6 +262,54 @@ export function groupElectricityPricesByHelsinkiDay(
       };
     })
     .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+}
+
+export type ElectricityPriceWindowSummary = Omit<ElectricityPriceDay, "dateKey">;
+
+// Same per-slot math as groupElectricityPricesByHelsinkiDay, but for an
+// arbitrary [startIso, endIso) window instead of a calendar day - used by
+// the "Viimeiset 24 h" rolling window view.
+export function summarizeElectricityPriceWindow(
+  prices: ElectricityPriceRecord[],
+  startIso: string,
+  endIso: string,
+): ElectricityPriceWindowSummary | null {
+  const startMs = Date.parse(startIso);
+  const endMs = Date.parse(endIso);
+  const windowPrices = deduplicateElectricityPrices(prices)
+    .filter((price) => {
+      const timestamp = Date.parse(price.starts_at);
+      return timestamp >= startMs && timestamp < endMs;
+    })
+    .sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+
+  if (windowPrices.length === 0) {
+    return null;
+  }
+
+  const values = windowPrices.map((price) => price.spot_price_cents_kwh);
+  const totalValues = values.map(getTotalPriceCentsPerKwh);
+  const windowMinutes = (endMs - startMs) / 60_000;
+  const availableMinutes = windowPrices.reduce(
+    (sum, price) => sum + price.resolution_minutes,
+    0,
+  );
+  const averageSpotPrice =
+    windowPrices.reduce(
+      (sum, price) => sum + price.spot_price_cents_kwh * price.resolution_minutes,
+      0,
+    ) / availableMinutes;
+
+  return {
+    averageSpotPrice,
+    averageTotalPrice: getTotalPriceCentsPerKwh(averageSpotPrice),
+    highestSpotPrice: Math.max(...values),
+    highestTotalPrice: Math.max(...totalValues),
+    isPartial: availableMinutes < windowMinutes,
+    lowestSpotPrice: Math.min(...values),
+    lowestTotalPrice: Math.min(...totalValues),
+    prices: windowPrices,
+  };
 }
 
 function splitHeatingPeriodsByHelsinkiDay(periods: HeatingEnergyPeriod[]) {

@@ -5,11 +5,14 @@ import {
   filterElectricityPricesByRange,
   filterHeatingPeriodsByRange,
   formatFinnishHistoryDate,
+  getElectricityHistoryRangeStartIso,
   getHelsinkiElectricityDateKey,
   getHeatingDayEmptyLabel,
   getResolutionMinutes,
+  getRollingHistoryWindowRangeIso,
   getTotalPriceCentsPerKwh,
   groupElectricityPricesByHelsinkiDay,
+  summarizeElectricityPriceWindow,
 } from "./electricityPrices";
 import type { HeatingEnergyPeriod } from "./heatingHistory";
 
@@ -243,5 +246,63 @@ export function runElectricityPricesUnitTests() {
     ],
     [2, 4],
     "7 ja 30 päivän rajaus toimii myös lämmitysdatalla",
+  );
+
+  assertEqual(
+    getRollingHistoryWindowRangeIso(new Date("2026-07-24T08:37:12.345Z")),
+    {
+      endIso: "2026-07-24T09:00:00.000Z",
+      startIso: "2026-07-23T09:00:00.000Z",
+    },
+    "viimeisen 24 h ikkuna pyoristyy nykyisen tunnin alkuun ja kattaa 24 tasatuntia",
+  );
+  assertEqual(
+    getRollingHistoryWindowRangeIso(new Date("2026-07-24T00:00:00.000Z")),
+    {
+      endIso: "2026-07-24T01:00:00.000Z",
+      startIso: "2026-07-23T01:00:00.000Z",
+    },
+    "ikkuna toimii myos tasan tunnin vaihtuessa keskiyolla",
+  );
+  assertEqual(
+    getElectricityHistoryRangeStartIso(1, new Date("2026-07-24T08:37:12.345Z")),
+    "2026-07-23T09:00:00.000Z",
+    "range 1 kayttaa liukuvaa 24 h ikkunaa, ei kalenteripaivan alkua",
+  );
+
+  const rollingWindowPrices = [
+    price("2026-07-23T08:00:00.000Z", 60, 0.5),
+    price("2026-07-23T10:00:00.000Z", 60, 0.6),
+    price("2026-07-24T08:00:00.000Z", 60, 0.8),
+    price("2026-07-24T10:00:00.000Z", 60, 0.9),
+  ];
+  const windowSummary = summarizeElectricityPriceWindow(
+    rollingWindowPrices,
+    "2026-07-23T09:00:00.000Z",
+    "2026-07-24T09:00:00.000Z",
+  );
+  assertEqual(
+    windowSummary?.prices.map((entry) => entry.starts_at),
+    ["2026-07-23T10:00:00.000Z", "2026-07-24T08:00:00.000Z"],
+    "ikkunayhteenveto sisaltaa vain ikkunan sisalla alkavat hinnat kahdelta kalenteripaivalta",
+  );
+  assertEqual(
+    [windowSummary?.lowestSpotPrice, windowSummary?.highestSpotPrice],
+    [0.6, 0.8],
+    "ikkunayhteenveto laskee alimman ja korkeimman spot-hinnan vain ikkunan sisalta",
+  );
+  assertEqual(
+    windowSummary?.isPartial,
+    true,
+    "ikkunayhteenveto merkitsee osittaiseksi kun kaikkia 24 tuntia ei ole katettu",
+  );
+  assertEqual(
+    summarizeElectricityPriceWindow(
+      rollingWindowPrices,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-02T00:00:00.000Z",
+    ),
+    null,
+    "ikkunayhteenveto on null kun ikkunassa ei ole yhtaan hintaa",
   );
 }

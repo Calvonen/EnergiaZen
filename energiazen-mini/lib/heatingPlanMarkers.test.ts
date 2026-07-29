@@ -58,9 +58,12 @@ export function runHeatingPlanMarkerUnitTests() {
         startedAt: "2026-07-23T23:00:00.000Z",
       },
     ],
-    dateKey: "2026-07-24",
     now,
-    plannedHours: [2, 5, 15],
+    plannedHours: [
+      { dateKey: "2026-07-24", hour: 2 },
+      { dateKey: "2026-07-24", hour: 5 },
+      { dateKey: "2026-07-24", hour: 15 },
+    ],
     prices: [
       {
         ends_at: "2026-07-24T00:00:00.000Z",
@@ -81,6 +84,8 @@ export function runHeatingPlanMarkerUnitTests() {
         starts_at: "2026-07-24T12:00:00.000Z",
       },
     ],
+    windowEndIso: "2026-07-25T00:00:00.000Z",
+    windowStartIso: "2026-07-23T00:00:00.000Z",
   });
 
   assertEqual(
@@ -97,6 +102,71 @@ export function runHeatingPlanMarkerUnitTests() {
     timeline.map((item) => item.energyKwh),
     [3, 3, 3],
     "suunnitelluille jaksoille lasketaan arvioitu energia erillisinä riveinä",
+  );
+
+  // "Viimeiset 24 h": ikkuna voi ulottua kahdelle kalenteripaivalle.
+  const rollingWindowTimeline = buildTodayHeatingTimeline({
+    actualSegments: [
+      {
+        costEuros: 0.1,
+        endedAt: "2026-07-23T07:00:00.000Z",
+        energyKwh: 1,
+        priceCentsPerKwh: 10,
+        spotPriceCentsPerKwh: 8,
+        startedAt: "2026-07-23T06:00:00.000Z",
+      },
+    ],
+    now: new Date("2026-07-24T08:30:00.000Z"),
+    // Tuntinumerot ovat Helsingin paikallisaikaa (kesalla UTC+3), samoin
+    // kuin buildTodayHeatingTimeline sisaisesti kayttaa.
+    plannedHours: [
+      { dateKey: "2026-07-23", hour: 11 },
+      { dateKey: "2026-07-23", hour: 13 },
+      { dateKey: "2026-07-24", hour: 11 },
+    ],
+    prices: [
+      {
+        ends_at: "2026-07-23T09:00:00.000Z",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: 5,
+        starts_at: "2026-07-23T08:00:00.000Z",
+      },
+      {
+        ends_at: "2026-07-23T11:00:00.000Z",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: 6,
+        starts_at: "2026-07-23T10:00:00.000Z",
+      },
+      {
+        ends_at: "2026-07-24T09:00:00.000Z",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: 7,
+        starts_at: "2026-07-24T08:00:00.000Z",
+      },
+    ],
+    windowEndIso: "2026-07-24T09:00:00.000Z",
+    windowStartIso: "2026-07-23T09:00:00.000Z",
+  });
+
+  assertEqual(
+    rollingWindowTimeline.some((item) => item.status === "actual"),
+    false,
+    "ikkunan ulkopuolelle jaava toteutunut segmentti ei nay aikajanalla",
+  );
+  assertEqual(
+    rollingWindowTimeline.length,
+    2,
+    "vain ikkunan sisalla olevat suunnitellut tunnit (eilinen ja tanaan) nakyvat",
+  );
+  assertEqual(
+    rollingWindowTimeline.map((item) => item.startedAt),
+    ["2026-07-23T10:00:00.000Z", "2026-07-24T08:00:00.000Z"],
+    "ikkuna kattaa kahden kalenteripaivan tunnit oikeassa jarjestyksessa",
+  );
+  assertEqual(
+    rollingWindowTimeline.map((item) => item.status),
+    ["missed", "planned"],
+    "eilinen ikkunan sisalla oleva toteutumaton tunti on missed, tamanpaivainen tuleva tunti planned",
   );
 
   assertEqual(
