@@ -53,12 +53,38 @@ TypeScriptiä, tyylejä tai assetteja – eikä mitään seuraavista ole muutett
 - `app.json`:n `android`/`ios`/`androidNavigationBar`-lohkot tai muut
   natiivikonfiguraatiota ohjaavat kentät
 - `eas.json`:n build-profiilit
-- uudet tai poistetut riippuvuudet, joilla on natiivikoodia (esim. uusi
-  Expo-moduuli)
+- riippuvuudet, joilla on natiivikoodia (ks. tarkennus alla)
 - Expo SDK -versio
 
 OTA on nopea (sekunneista minuutteihin) tapa saada muutos käyttäjille ilman
 uutta kauppajulkaisua tai APK:n uudelleenasennusta.
+
+### Riippuvuudet: milloin OTA ei riitä
+
+OTA **ei** riitä, jos jokin seuraavista tehdään `package.json`:iin:
+
+- **lisätään natiiviriippuvuus** – paketti, joka tuo mukanaan natiivikoodia
+  (esim. uusi Expo-moduuli, tai mikä tahansa kirjasto jolla on
+  `android/`/`ios`-natiivilähdekoodia). Sen natiivipuoli pitää kääntää
+  binääriin, eikä `eas update` koskaan päivitä binääriä.
+- **poistetaan natiiviriippuvuus** – vanha natiivikoodi jää käyttämättömäksi
+  mutta pysyy binäärissä, kunnes uusi build tehdään; toiminnallisuuden
+  poistuminen JS-puolelta ei itsessään vaadi buildia, mutta jos poisto
+  tarkoittaa ettei binääri enää tarvitse ko. natiivimoduulia, uusi build on
+  siltikin oikea tapa pitää binääri ja koodi synkassa.
+- **päivitetään natiiviriippuvuus versioon, joka vaatii uuden
+  natiivibinäärin** – esim. natiivikoodia sisältävän kirjaston major-
+  päivitys, tai minkä tahansa Expo-moduulin päivitys joka muuttaa sen
+  natiivipuolta. Tämä on projektissa jo nähty käytännössä
+  (`expo-system-ui` oli jo linkitetty binääriin ennen kuin sitä käytettiin
+  JS:stä – ks. esimerkki alla).
+
+Sen sijaan **puhtaasti JS/TS-riippuvuuden** (ei natiivikoodia lainkaan)
+lisäys, poisto tai versiopäivitys on OTA-kelpoinen, kunhan se ei nosta
+minimi-Expo-SDK-vaatimusta tai muuta muuta natiivikonfiguraatiota.
+Epävarmassa tapauksessa turvallisin oletus on tehdä uusi build – väärä
+OTA-julkaisu natiivimuutoksesta voi jättää käyttäjän asennuksen rikkinäiseen
+tilaan (JS odottaa natiivimoduulia jota asennetussa binäärissä ei ole).
 
 ## Milloin tarvitaan uusi Build
 
@@ -67,7 +93,7 @@ Tästä repositoriosta löytyy jo konkreettinen esimerkki: Android-
 navigointipalkin korjaus vaati kaksi erillistä muutosta, joista vain toinen
 oli OTA-kelpoinen –
 
-- `app/_layout.tsx`:n `SystemUI.setBackgroundColorAsync(...)`-kutsu on
+- `energiazen-mini/app/_layout.tsx`:n `SystemUI.setBackgroundColorAsync(...)`-kutsu on
   puhdasta JS:ää natiivimoduulia (`expo-system-ui`) vasten, joka oli jo
   linkitetty aiempaan buildiin → **julkaistiin OTA:na**.
 - `app.json`:n `androidNavigationBar.enforceContrast: false` muuttaa
@@ -80,7 +106,9 @@ Yleisemmin uusi build tarvitaan, kun jokin näistä muuttuu:
 
 - `app.json`:n `android`/`ios`-lohkot, `androidNavigationBar`, pluginit
 - `eas.json`
-- natiivimoduulia sisältävä riippuvuus lisätään/poistetaan/päivitetään
+- riippuvuusmuutos, joka koskee natiivikoodia (ks. tarkempi jaottelu
+  kohdassa ["Riippuvuudet: milloin OTA ei riitä"](#riippuvuudet-milloin-ota-ei-riitä)
+  yllä)
 - Expo SDK -versio
 
 ## EAS Channels

@@ -40,7 +40,7 @@ npm test
 ## 4. Käytä olemassa olevia ratkaisuja
 
 Ennen uuden apufunktion tai laskentalogiikan kirjoittamista, tarkista
-löytyykö vastaava jo `lib/`-kansiosta (esim. hintalaskenta
+löytyykö vastaava jo `energiazen-mini/lib/`-kansiosta (esim. hintalaskenta
 `electricityPrices.ts`:ssä, lämmitysoptimointi `heatingOptimizer.ts`:ssä,
 historialaskenta `heatingHistory.ts`/`temperatureHistory*.ts`:ssä). Älä
 duplikoi logiikkaa eri tiedostoihin – laajenna tai jaa olemassa olevaa

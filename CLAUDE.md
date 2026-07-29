@@ -24,8 +24,8 @@ EnergyZen-repossa. Ihmiskehittäjän vastaavat ohjeet ovat samassa
 6. **Tee pieniä PR:iä.** Yksi asiakokonaisuus per PR – älä yhdistä siihen
    liittymättömiä korjauksia samaan muutokseen.
 7. **Suosi olemassa olevia arkkitehtuuriratkaisuja.** Tarkista ensin
-   `lib/`-kansiosta, löytyykö vastaava logiikka jo olemassa, ennen kuin
-   kirjoitat uutta apufunktiota tai duplikoit laskentaa.
+   `energiazen-mini/lib/`-kansiosta, löytyykö vastaava logiikka jo olemassa,
+   ennen kuin kirjoitat uutta apufunktiota tai duplikoit laskentaa.
 8. **Päivitä dokumentaatio, jos muutat kehitystapaa**, julkaisuprosessia
    tai arkkitehtuuria – ks. `docs/PROJECT_RULES.md` kohta 5 mistä
    dokumentista mikäkin muutos kuuluu.
