@@ -42,6 +42,7 @@ import {
   fetchHeatingGainHistory,
   heatingGainHistoryDays,
 } from "@/lib/heatingGain";
+import { backtestHeatingGainEstimate } from "@/lib/heatingGainBacktest";
 import {
   getHeatingHourMarker,
   heatingMarkers,
@@ -1352,6 +1353,13 @@ export default function HomeScreen() {
     activeOptimizationRun.runId,
     heatingPlanPresentationSource,
   ]);
+  const heatingGainBacktest = useMemo(
+    () =>
+      DEBUG_HEATING_OPTIMIZATION
+        ? backtestHeatingGainEstimate(heatingGainHistory)
+        : null,
+    [heatingGainHistory],
+  );
   useEffect(() => {
     if (!DEBUG_HEATING_OPTIMIZATION || !heatingOptimization) {
       return;
@@ -1386,6 +1394,16 @@ export default function HomeScreen() {
           : gainEstimate.gainPerHour,
       }),
     );
+    if (heatingGainBacktest) {
+      console.log(
+        "[EnergyZen heating gain backtest]",
+        JSON.stringify({
+          meanAbsoluteErrorCelsius: heatingGainBacktest.meanAbsoluteErrorCelsius,
+          meanBiasCelsius: heatingGainBacktest.meanBiasCelsius,
+          segmentCount: heatingGainBacktest.segmentCount,
+        }),
+      );
+    }
     console.log(
       "[EnergyZen optimization]",
       JSON.stringify({
@@ -1415,6 +1433,7 @@ export default function HomeScreen() {
       }),
     );
   }, [
+    heatingGainBacktest,
     heatingGainHistoryFetch.fetchedRowCount,
     heatingGainHistoryFetch.pageCount,
     heatingOptimization,

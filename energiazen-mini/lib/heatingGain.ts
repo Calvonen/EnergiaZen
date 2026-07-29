@@ -33,6 +33,22 @@ export type HeatingGainEstimate = {
   topGainPerHour: number | null;
 };
 
+export type HeatingGainSegment = {
+  bottomGainPerHour: number;
+  durationHours: number;
+  endTime: string;
+  readingCount: number;
+  startTime: string;
+  topGainPerHour: number;
+  weightedGainPerHour: number;
+};
+
+export type HeatingGainSegmentDiscovery = {
+  discoveredSegmentCount: number;
+  rejectedSegmentCount: number;
+  segments: HeatingGainSegment[];
+};
+
 type ValidHeatingReading = {
   bottomTemperature: number;
   time: number;
@@ -45,7 +61,7 @@ type HeatingGainHistoryPage = {
   error: unknown | null;
 };
 
-function getMedian(values: number[]) {
+export function getMedian(values: number[]) {
   if (values.length === 0) {
     return null;
   }
@@ -90,18 +106,15 @@ function getValidHeatingReading(
   };
 }
 
-export function estimateHeatingGainPerHour(
+export function findValidHeatingSegments(
   readings: TankTemperatureReading[],
-  fallbackGainPerHour = fallbackHeatingGainPerHour,
-): HeatingGainEstimate {
+): HeatingGainSegmentDiscovery {
   const sortedReadings = [...readings].sort((first, second) =>
     String(first.created_at ?? "").localeCompare(
       String(second.created_at ?? ""),
     ),
   );
-  const weightedSamples: number[] = [];
-  const topSamples: number[] = [];
-  const bottomSamples: number[] = [];
+  const segments: HeatingGainSegment[] = [];
   let currentSegment: ValidHeatingReading[] = [];
   let discoveredSegmentCount = 0;
   let rejectedSegmentCount = 0;
@@ -139,9 +152,15 @@ export function estimateHeatingGainPerHour(
         heatingGainLearningLimits.maxComponentGainPerHour;
 
     if (valid) {
-      weightedSamples.push(weightedGainPerHour);
-      topSamples.push(topGainPerHour);
-      bottomSamples.push(bottomGainPerHour);
+      segments.push({
+        bottomGainPerHour,
+        durationHours,
+        endTime: new Date(last.time).toISOString(),
+        readingCount: currentSegment.length,
+        startTime: new Date(first.time).toISOString(),
+        topGainPerHour,
+        weightedGainPerHour,
+      });
     } else {
       rejectedSegmentCount += 1;
     }
@@ -175,6 +194,18 @@ export function estimateHeatingGainPerHour(
 
   closeSegment();
 
+  return { discoveredSegmentCount, rejectedSegmentCount, segments };
+}
+
+export function estimateHeatingGainPerHour(
+  readings: TankTemperatureReading[],
+  fallbackGainPerHour = fallbackHeatingGainPerHour,
+): HeatingGainEstimate {
+  const { discoveredSegmentCount, rejectedSegmentCount, segments } =
+    findValidHeatingSegments(readings);
+  const weightedSamples = segments.map((segment) => segment.weightedGainPerHour);
+  const topSamples = segments.map((segment) => segment.topGainPerHour);
+  const bottomSamples = segments.map((segment) => segment.bottomGainPerHour);
   const hasEnoughSegments =
     weightedSamples.length >= heatingGainLearningLimits.minValidSegments;
   const learnedGain = hasEnoughSegments
