@@ -1,6 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as SystemUI from 'expo-system-ui';
 import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 
@@ -11,6 +12,12 @@ import { supabase } from '@/lib/supabase';
 export const unstable_settings = {
   anchor: '(tabs)',
 };
+
+// Every screen uses this dark background regardless of system color scheme.
+// With edgeToEdgeEnabled the Android navigation bar is transparent, so
+// without this the root view (and therefore the nav bar area) defaults to
+// white instead of matching the app.
+SystemUI.setBackgroundColorAsync('#050816');
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
