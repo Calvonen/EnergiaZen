@@ -1324,6 +1324,17 @@ export default function SettingsScreen() {
 
         <Pressable
           accessibilityRole="button"
+          onPress={() => router.push("/heating-learning")}
+          style={styles.diagnosticsLink}
+        >
+          <Text style={styles.diagnosticsLinkText}>
+            Lämmitystehon oppiminen (diagnostiikka)
+          </Text>
+          <Text style={styles.diagnosticsLinkChevron}>›</Text>
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
           onPress={handleSignOut}
           style={styles.signOutButton}
         >
@@ -1812,6 +1823,26 @@ const styles = StyleSheet.create({
   },
   settingsActionPressed: {
     opacity: 0.72,
+  },
+  diagnosticsLink: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  diagnosticsLinkText: {
+    color: "#cfe9ff",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  diagnosticsLinkChevron: {
+    color: "#cfe9ff",
+    fontSize: 18,
+    fontWeight: "900",
   },
   signOutButton: {
     alignItems: "center",
