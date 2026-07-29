@@ -196,6 +196,16 @@ export default function HeatingLearningScreen() {
           </Text>
         </View>
 
+        <View style={styles.introCard}>
+          <Text style={styles.introText}>
+            Lämmitysteho kertoo, kuinka nopeasti varaajan lämpötila nousee
+            tunnissa lämmityksen aikana. Se opitaan automaattisesti
+            viimeisen {heatingGainHistoryDays} päivän onnistuneista
+            lämmitysjaksoista, ja opittua arvoa käytetään lämmitysennusteissa
+            ja -suunnitelmissa.
+          </Text>
+        </View>
+
         {error ? (
           <View style={styles.emptyCard}>
             <Text accessibilityRole="alert" style={styles.emptyText}>
@@ -227,6 +237,8 @@ const styles = StyleSheet.create({
   header: { alignItems: "center", marginBottom: 18 },
   title: { color: "#f7fbff", fontSize: 26, fontWeight: "900", textAlign: "center" },
   subtitle: { color: "#b9d7ff", fontSize: 14, fontWeight: "700", marginTop: 5 },
+  introCard: { backgroundColor: "rgba(90,167,255,0.09)", borderColor: "rgba(90,167,255,0.2)", borderRadius: 20, borderWidth: 1, marginBottom: 12, padding: 16 },
+  introText: { color: "#cfe9ff", fontSize: 13, fontWeight: "600", lineHeight: 19 },
   loadingCard: { alignItems: "center", backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, gap: 10, marginTop: 12, padding: 30 },
   loadingText: { color: "#cfe9ff", fontSize: 14, fontWeight: "800" },
   emptyCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginTop: 12, padding: 30 },

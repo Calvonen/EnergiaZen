@@ -1328,7 +1328,7 @@ export default function SettingsScreen() {
           style={styles.diagnosticsLink}
         >
           <Text style={styles.diagnosticsLinkText}>
-            Lämmitystehon oppiminen (diagnostiikka)
+            Lämmitystehon oppiminen
           </Text>
           <Text style={styles.diagnosticsLinkChevron}>›</Text>
         </Pressable>
