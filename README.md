@@ -1,5 +1,16 @@
-# EnergyZen Mini
+# EnergyZen
 
+## Kehittäjille
+
+Jos osallistut projektin kehittämiseen (ihminen tai tekoäly), tutustu ensin näihin dokumentteihin:
+
+1. CLAUDE.md
+2. docs/PROJECT_CONTEXT.md
+3. docs/DEVELOPMENT_WORKFLOW.md
+4. docs/PROJECT_RULES.md
+5. docs/RELEASE_PROCESS.md
+
+   
 Pörssisähkön ja lämminvesivaraajan ohjaussovellus.
 
 ## Käynnistys Codespacesissa
