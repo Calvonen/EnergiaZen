@@ -1,0 +1,125 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS Build -profiili (eas.json)"
+        required: true
+        type: choice
+        options:
+          - preview
+          - production
+          - development
+        default: preview
+
+concurrency:
+  group: eas-build-android-${{ github.event.inputs.profile }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Käynnistä Android-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tarkista että EXPO_TOKEN on asetettu
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "EXPO_TOKEN-secret puuttuu tästä repositoriosta. Lisää se kohdasta"
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret."
+            echo "Katso README.md kohta 'Android-buildit GitHub Actionsista'."
+            exit 1
+          fi
+
+      - name: Hae koodi
+        uses: actions/checkout@v4
+
+      - name: Asenna Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+
+      - name: Asenna riippuvuudet
+        working-directory: energiazen-mini
+        run: npm ci
+
+      - name: Asenna EAS CLI ja kirjaudu Expo-tilille
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Käynnistä EAS Build
+        working-directory: energiazen-mini
+        env:
+          EAS_PROFILE: ${{ github.event.inputs.profile }}
+        run: |
+          echo "Käynnistetään Android-build profiililla: $EAS_PROFILE"
+          echo "Tämä odottaa buildin valmistumista (yleensä n. 10-15 min)."
+
+          eas build \
+            --platform android \
+            --profile "$EAS_PROFILE" \
+            --non-interactive \
+            --wait \
+            --json > build-result.json
+
+          cat build-result.json
+
+      - name: Tulosta buildin tiedot
+        if: always()
+        working-directory: energiazen-mini
+        env:
+          EAS_PROFILE: ${{ github.event.inputs.profile }}
+        run: |
+          if [ ! -f build-result.json ]; then
+            echo "build-result.json puuttuu - eas build -komento ei todennäköisesti onnistunut."
+            exit 0
+          fi
+
+          # eas build --platform android --json palauttaa taulukon, jossa on
+          # tasan yksi build-olio (yksi alusta valittuna).
+          BUILD_ID=$(jq -r '.[0].id // empty' build-result.json)
+          STATUS=$(jq -r '.[0].status // empty' build-result.json)
+          GIT_COMMIT=$(jq -r '.[0].gitCommitHash // empty' build-result.json)
+          GIT_MESSAGE=$(jq -r '.[0].gitCommitMessage // empty' build-result.json)
+          ACCOUNT=$(jq -r '.[0].project.ownerAccount.name // empty' build-result.json)
+          SLUG=$(jq -r '.[0].project.slug // empty' build-result.json)
+          ARTIFACT_URL=$(jq -r '.[0].artifacts.buildUrl // empty' build-result.json)
+
+          DASHBOARD_URL=""
+          if [ -n "$ACCOUNT" ] && [ -n "$SLUG" ] && [ -n "$BUILD_ID" ]; then
+            DASHBOARD_URL="https://expo.dev/accounts/$ACCOUNT/projects/$SLUG/builds/$BUILD_ID"
+          fi
+
+          {
+            echo "## Android-build"
+            echo ""
+            echo "- **Build profile:** \`$EAS_PROFILE\`"
+            if [ -n "$GIT_COMMIT" ]; then
+              echo "- **Git commit:** \`${GIT_COMMIT:0:7}\` – ${GIT_MESSAGE:-(ei viestiä)}"
+            fi
+            if [ -n "$BUILD_ID" ]; then
+              echo "- **Build ID:** \`$BUILD_ID\`"
+            fi
+            if [ -n "$STATUS" ]; then
+              echo "- **Tila:** \`$STATUS\`"
+            fi
+            if [ -n "$DASHBOARD_URL" ]; then
+              echo "- **Expo Dashboard:** $DASHBOARD_URL"
+              echo "  (sivulla on QR-koodi ja asennuslinkki puhelimelle valmiille buildille)"
+            fi
+            if [ -n "$ARTIFACT_URL" ] && [ "$ARTIFACT_URL" != "null" ]; then
+              echo "- **Suora latauslinkki (APK):** $ARTIFACT_URL"
+            fi
+            echo ""
+            echo "### Täysi vastaus"
+            echo '```json'
+            cat build-result.json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

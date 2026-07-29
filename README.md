@@ -93,6 +93,48 @@ Ajon lopussa työnkulun **Summary**-välilehdellä (ja ajon lokissa) näkyy
 julkaistun update-ryhmän tunnus (`group`) sekä linkit jokaisen alustan
 manifestiin, jos EAS palautti ne.
 
+## Android-buildit GitHub Actionsista (EAS Build)
+
+Uuden Android-APK:n/AAB:n voi buildata suoraan GitHubin selainkäyttöliittymästä
+`.github/workflows/eas-build-android.yml`-workflow'lla — kotikonetta tai
+Codespacesia ei tarvita. Workflow käyttää samaa `EXPO_TOKEN`-secretiä kuin
+EAS Update yllä (katso kohdat 1-2), joten jos se on jo lisätty, mitään ei
+tarvitse tehdä uudelleen.
+
+### Käynnistä build Actions-välilehdeltä
+
+1. Avaa repon **Actions**-välilehti
+2. Valitse vasemmalta työnkulku **Android Build**
+3. Paina **Run workflow**
+4. Valitse **profile** (`preview`, `production` tai `development` — vastaa
+   `eas.json`:n build-profiileja)
+5. Paina **Run workflow**
+
+Ajo odottaa buildin valmistumista (tyypillisesti n. 10-15 minuuttia). Kun ajo
+on valmis, työnkulun **Summary**-välilehdellä näkyy käytetty build profile,
+git commit, EAS:n build ID, buildin tila, linkki Expo Dashboardin
+build-sivulle (josta löytyy myös QR-koodi puhelimelle) sekä suora
+latauslinkki, jos EAS palautti sen (`preview`/`development`-profiilit ovat
+internal-distribution-buildeja, joille latauslinkki on aina saatavilla;
+`production` on kauppajulkaisua varten, jolle Dashboard-linkki on
+ensisijainen).
+
+### Milloin OTA Update riittää, milloin tarvitaan uusi Build
+
+- **OTA Update** (`EAS Update` -workflow) riittää, kun muutokset ovat
+  pelkkää JavaScriptiä/TypeScriptiä, tyylejä tai assetteja — eli mikään
+  natiivipuolen konfiguraatio (`app.json`:n `android`/`ios`-lohkot,
+  pluginit, uudet natiivimoduulit/riippuvuudet) ei ole muuttunut. Tämä on
+  nopea (~sekunteja) tapa saada muutos käyttäjien puhelimiin ilman uutta
+  kauppajulkaisua.
+- **Uusi Build** (`Android Build` -workflow) tarvitaan aina, kun on
+  muutettu jotain natiivilla puolella käännettävää: `app.json`:n
+  `android`/`ios`/`androidNavigationBar`-konfiguraatiota, `eas.json`:n
+  build-profiileja, tai lisätty/poistettu paketti jolla on natiivikoodia
+  (esim. uusi Expo-moduuli). Tällaiset muutokset eivät koskaan mene OTA:n
+  mukana — `eas update` päivittää vain JS:n ja assetit, ei natiivia
+  binääriä.
+
 ## Tietolähteet
 
 ### Nykyinen sähkön hinta
