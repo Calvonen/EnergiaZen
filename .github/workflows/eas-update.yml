@@ -28,9 +28,6 @@ jobs:
   update:
     name: Julkaise EAS Update
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: energiazen-mini
     steps:
       - name: Tarkista että EXPO_TOKEN on asetettu
         run: |
@@ -52,6 +49,7 @@ jobs:
           cache-dependency-path: energiazen-mini/package-lock.json
 
       - name: Asenna riippuvuudet
+        working-directory: energiazen-mini
         run: npm ci
 
       - name: Asenna EAS CLI ja kirjaudu Expo-tilille
@@ -61,6 +59,7 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Julkaise EAS Update
+        working-directory: energiazen-mini
         env:
           EAS_BRANCH: ${{ github.event.inputs.branch }}
           EAS_MESSAGE: ${{ github.event.inputs.message }}
@@ -83,6 +82,7 @@ jobs:
 
       - name: Tulosta julkaistun update-ryhmän tiedot
         if: always()
+        working-directory: energiazen-mini
         env:
           EAS_BRANCH: ${{ github.event.inputs.branch }}
         run: |
