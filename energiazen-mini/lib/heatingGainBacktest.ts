@@ -1,6 +1,8 @@
 import {
+  fallbackHeatingGainPerHour,
   findValidHeatingSegments,
   getMedian,
+  heatingGainLearningLimits,
   HeatingGainSegment,
 } from "./heatingGain";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
@@ -12,6 +14,7 @@ export type HeatingGainBacktestSegment = {
   durationHours: number;
   endTime: string;
   errorCelsius: number;
+  predictedFromFallback: boolean;
   predictedGainPerHour: number;
   predictedRiseCelsius: number;
   startTime: string;
@@ -25,30 +28,37 @@ export type HeatingGainBacktestResult = {
 };
 
 // Backtests the heating-gain model against real heating segments: for each
-// segment, predicts its temperature rise using the median gainPerHour of
-// every OTHER accepted segment (leave-one-out), then compares that
-// prediction to what the tank actually did. Using the segment's own value to
-// predict itself would trivially minimize error, so it's excluded.
+// segment, predicts its temperature rise using EXACTLY the decision
+// estimateHeatingGainPerHour would have made from the OTHER accepted
+// segments alone (leave-one-out) - including falling back to
+// fallbackGainPerHour when fewer than
+// heatingGainLearningLimits.minValidSegments other segments are available,
+// the same threshold production uses. This makes the backtest evaluate the
+// model that would actually have been in use at that point in history, not
+// an idealized always-learned version of it. Using the segment's own value
+// to predict itself would trivially minimize error, so it's excluded from
+// "other segments" in every case.
 //
 // errorCelsius = actual - predicted. A positive meanBiasCelsius means the
 // model systematically UNDERpredicts the rise (actual runs hotter than
 // predicted); negative means it OVERpredicts.
 export function backtestHeatingGainEstimate(
   readings: TankTemperatureReading[],
+  fallbackGainPerHour = fallbackHeatingGainPerHour,
 ): HeatingGainBacktestResult {
   const { segments } = findValidHeatingSegments(readings);
 
-  if (segments.length < 2) {
+  if (segments.length === 0) {
     return {
       meanAbsoluteErrorCelsius: null,
       meanBiasCelsius: null,
-      segmentCount: segments.length,
+      segmentCount: 0,
       segments: [],
     };
   }
 
   const backtestSegments = segments.map((segment) =>
-    buildBacktestSegment(segment, segments),
+    buildBacktestSegment(segment, segments, fallbackGainPerHour),
   );
   const meanAbsoluteErrorCelsius =
     backtestSegments.reduce(
@@ -70,13 +80,17 @@ export function backtestHeatingGainEstimate(
 function buildBacktestSegment(
   segment: HeatingGainSegment,
   allSegments: HeatingGainSegment[],
+  fallbackGainPerHour: number,
 ): HeatingGainBacktestSegment {
   const otherGains = allSegments
     .filter((other) => other !== segment)
     .map((other) => other.weightedGainPerHour);
-  // allSegments.length >= 2 is guaranteed by the caller, so otherGains is
-  // always non-empty and getMedian never returns null here.
-  const predictedGainPerHour = getMedian(otherGains) as number;
+  const hasEnoughOtherSegments =
+    otherGains.length >= heatingGainLearningLimits.minValidSegments;
+  const predictedFromFallback = !hasEnoughOtherSegments;
+  const predictedGainPerHour = hasEnoughOtherSegments
+    ? (getMedian(otherGains) as number)
+    : fallbackGainPerHour;
   const predictedRiseCelsius = predictedGainPerHour * segment.durationHours;
   const actualRiseCelsius =
     segment.weightedGainPerHour * segment.durationHours;
@@ -89,6 +103,7 @@ function buildBacktestSegment(
     durationHours: segment.durationHours,
     endTime: segment.endTime,
     errorCelsius,
+    predictedFromFallback,
     predictedGainPerHour,
     predictedRiseCelsius,
     startTime: segment.startTime,

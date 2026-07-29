@@ -1,4 +1,5 @@
 import { backtestHeatingGainEstimate } from "./heatingGainBacktest";
+import { fallbackHeatingGainPerHour, heatingGainLearningLimits } from "./heatingGain";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -39,6 +40,18 @@ function createHeatingSegment(
   });
 }
 
+function createSegmentsOnConsecutiveDays(
+  gainsAndDurations: [gainPerHour: number, durationMinutes: number][],
+): TankTemperatureReading[] {
+  return gainsAndDurations.flatMap(([gainPerHour, durationMinutes], index) =>
+    createHeatingSegment(
+      `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+      gainPerHour,
+      durationMinutes,
+    ),
+  );
+}
+
 export function runHeatingGainBacktestUnitTests() {
   {
     const result = backtestHeatingGainEstimate([]);
@@ -49,79 +62,121 @@ export function runHeatingGainBacktestUnitTests() {
   }
 
   {
+    // Yksi segmentti: ei yhtään "muuta" segmenttiä verrattavaksi, joten
+    // tuotantokoodikin olisi käyttänyt fallbackia (0 < minValidSegments).
     const readings = createHeatingSegment("2026-08-01T00:00:00.000Z", 4, 60);
     const result = backtestHeatingGainEstimate(readings);
 
+    assertEqual(result.segmentCount, 1, "yksi segmentti loytyy");
+    assertEqual(result.segments.length, 1, "yhtakin segmenttia voi verrata fallbackiin");
     assertEqual(
-      result.segmentCount,
-      1,
-      "yksi segmentti ei riitä ristiinvalidointiin",
+      result.segments[0].predictedFromFallback,
+      true,
+      "0 muuta segmenttia < minValidSegments -> fallback",
     );
-    assertEqual(result.segments.length, 0, "yhtä segmenttiä ei voi verrata muihin");
-    assertEqual(result.meanAbsoluteErrorCelsius, null, "MAE puuttuu yhdellä segmentillä");
-  }
-
-  {
-    // Kaksi segmenttiä: kumpikin ennustaa toisensa perusteella (jätä oma
-    // arvo pois - leave-one-out).
-    const readings = [
-      ...createHeatingSegment("2026-08-01T00:00:00.000Z", 2, 60),
-      ...createHeatingSegment("2026-08-02T00:00:00.000Z", 8, 60),
-    ];
-    const result = backtestHeatingGainEstimate(readings);
-
-    assertEqual(result.segmentCount, 2, "kaksi segmenttia loytyy");
     assertClose(
       result.segments[0].predictedGainPerHour,
-      8,
-      "segmentti A:n ennuste tulee yksinomaan segmentista B",
+      fallbackHeatingGainPerHour,
+      "ennuste on fallback-arvo",
     );
+    assertClose(result.segments[0].actualRiseCelsius, 4, "toteutunut nousu");
     assertClose(
-      result.segments[1].predictedGainPerHour,
-      2,
-      "segmentti B:n ennuste tulee yksinomaan segmentista A",
+      result.segments[0].predictedRiseCelsius,
+      fallbackHeatingGainPerHour,
+      "ennustettu nousu 1h jaksolla on fallback sellaisenaan",
     );
-    assertClose(result.meanAbsoluteErrorCelsius as number, 6, "MAE kahdella segmentilla");
-    assertClose(result.meanBiasCelsius as number, 0, "symmetrinen tapaus tuottaa nollaharhan");
   }
 
   {
-    // Kolme segmenttiä eri kestoilla: varmistaa että NOUSU (gain * kesto)
-    // vertaillaan, ei pelkkä °C/h-nopeus, ja että harha ei aina nollaudu.
-    const readings = [
-      ...createHeatingSegment("2026-08-01T00:00:00.000Z", 2, 60), // A: nousu 2 °C, 1 h
-      ...createHeatingSegment("2026-08-02T00:00:00.000Z", 4, 60), // B: nousu 4 °C, 1 h
-      ...createHeatingSegment("2026-08-03T00:00:00.000Z", 4, 120), // C: nousu 8 °C, 2 h
-    ];
-    const result = backtestHeatingGainEstimate(readings);
-    const [segmentA, segmentB, segmentC] = result.segments;
+    // Kolme segmenttiä: jokaisen leave-one-out-vertailu jättää vain 2 MUUTA
+    // segmenttiä, mikä on alle minValidSegments (3) - tuotantokoodi olisi
+    // käyttänyt fallbackia tässä historiatilanteessa jokaiselle, joten
+    // backtestin pitää tehdä sama, EI laskea mediaania niistä 2:sta.
+    if (heatingGainLearningLimits.minValidSegments !== 3) {
+      throw new Error(
+        "Testi olettaa minValidSegments=3 - päivitä testi jos raja muuttuu",
+      );
+    }
+
+    const readings = createSegmentsOnConsecutiveDays([
+      [2, 60],
+      [4, 60],
+      [6, 60],
+    ]);
+    const customFallback = 4.5;
+    const result = backtestHeatingGainEstimate(readings, customFallback);
 
     assertEqual(result.segmentCount, 3, "kolme segmenttia loytyy");
+    for (const segment of result.segments) {
+      assertEqual(
+        segment.predictedFromFallback,
+        true,
+        "2 muuta segmenttia < minValidSegments -> fallback jokaiselle",
+      );
+      assertClose(
+        segment.predictedGainPerHour,
+        customFallback,
+        "annettu fallback-arvo valittyy lapi, ei 2 muun segmentin mediaani",
+      );
+    }
+  }
 
-    assertClose(segmentA.actualRiseCelsius, 2, "A:n toteutunut nousu");
-    assertClose(segmentA.predictedGainPerHour, 4, "A:n ennustettu nopeus (mediaani B:sta ja C:sta)");
-    assertClose(segmentA.predictedRiseCelsius, 4, "A:n ennustettu nousu");
-    assertClose(segmentA.errorCelsius, -2, "A: toteuma alle ennusteen");
+  {
+    // Neljä segmenttiä: leave-one-out jättää täsmälleen 3 muuta segmenttiä =
+    // minValidSegments, joten tuotantokoodi olisi käyttänyt opittua
+    // mediaania - backtestin pitää tehdä sama.
+    if (heatingGainLearningLimits.minValidSegments !== 3) {
+      throw new Error(
+        "Testi olettaa minValidSegments=3 - päivitä testi jos raja muuttuu",
+      );
+    }
 
-    assertClose(segmentB.actualRiseCelsius, 4, "B:n toteutunut nousu");
-    assertClose(segmentB.predictedGainPerHour, 3, "B:n ennustettu nopeus (mediaani A:sta ja C:sta)");
-    assertClose(segmentB.predictedRiseCelsius, 3, "B:n ennustettu nousu");
-    assertClose(segmentB.errorCelsius, 1, "B: toteuma yli ennusteen");
+    const readings = createSegmentsOnConsecutiveDays([
+      [2, 60], // A: nousu 2 °C, 1 h
+      [4, 60], // B: nousu 4 °C, 1 h
+      [6, 60], // C: nousu 6 °C, 1 h
+      [8, 120], // D: nousu 16 °C, 2 h
+    ]);
+    const result = backtestHeatingGainEstimate(readings);
+    const [segmentA, segmentB, segmentC, segmentD] = result.segments;
 
-    assertClose(segmentC.actualRiseCelsius, 8, "C:n toteutunut nousu");
-    assertClose(segmentC.predictedGainPerHour, 3, "C:n ennustettu nopeus (mediaani A:sta ja B:sta)");
-    assertClose(segmentC.predictedRiseCelsius, 6, "C:n ennustettu nousu (nopeus x 2 h kesto)");
+    assertEqual(result.segmentCount, 4, "nelja segmenttia loytyy");
+    for (const segment of result.segments) {
+      assertEqual(
+        segment.predictedFromFallback,
+        false,
+        "3 muuta segmenttia == minValidSegments -> opittu mediaani, ei fallback",
+      );
+    }
+
+    assertClose(segmentA.predictedGainPerHour, 6, "A: mediaani B:sta, C:sta ja D:sta");
+    assertClose(segmentA.predictedRiseCelsius, 6, "A: ennustettu nousu");
+    assertClose(segmentA.errorCelsius, -4, "A: toteuma alle ennusteen");
+
+    assertClose(segmentB.predictedGainPerHour, 6, "B: mediaani A:sta, C:sta ja D:sta");
+    assertClose(segmentB.errorCelsius, -2, "B: toteuma alle ennusteen");
+
+    assertClose(segmentC.predictedGainPerHour, 4, "C: mediaani A:sta, B:sta ja D:sta");
     assertClose(segmentC.errorCelsius, 2, "C: toteuma yli ennusteen");
+
+    assertClose(segmentD.predictedGainPerHour, 4, "D: mediaani A:sta, B:sta ja C:sta");
+    assertClose(
+      segmentD.predictedRiseCelsius,
+      8,
+      "D: ennustettu nousu skaalautuu 2h kestolla, ei pelkka nopeus",
+    );
+    assertClose(segmentD.actualRiseCelsius, 16, "D: toteutunut nousu (8 C/h * 2h)");
+    assertClose(segmentD.errorCelsius, 8, "D: toteuma selvasti yli ennusteen");
 
     assertClose(
       result.meanAbsoluteErrorCelsius as number,
-      5 / 3,
-      "MAE on virheiden itseisarvojen keskiarvo",
+      4,
+      "MAE nelja segmentin joukolla",
     );
     assertClose(
       result.meanBiasCelsius as number,
-      1 / 3,
-      "keskimääräinen harha on virheiden (etumerkillinen) keskiarvo",
+      1,
+      "epasymmetrinen kesto tuottaa nollasta poikkeavan harhan",
     );
   }
 }
