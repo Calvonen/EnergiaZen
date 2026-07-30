@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 function getWarmWaterCardTheme() {
@@ -12,9 +13,62 @@ function getWarmWaterCardTheme() {
   };
 }
 
+// Säiliön mitat (täytyy täsmätä styles.tankVisual-tyyliin): koska
+// absoluuttisesti sijoitetut lapset (esim. tankScaleLines) asemoituvat
+// säiliön reunuksen SISÄPUOLELLE, asteikon numeroiden oma "rivikorkeus"
+// pitää laskea samasta sisäkorkeudesta, jotta viivat ja numerot osuvat
+// täsmälleen samalle korkeudelle.
+const TANK_HEIGHT = 112;
+const TANK_BORDER_WIDTH = 2;
+const TANK_INNER_HEIGHT = TANK_HEIGHT - TANK_BORDER_WIDTH * 2;
+const SCALE_LABEL_LINE_HEIGHT = 10;
+
+// Kevyt, pelkästään näytettävä asteikko säiliögrafiikan päälle. Käyttää
+// samaa lineaarista lämpötila <-> suihkut-muunnosta kuin
+// estimateShowersLeftFromWeightedTemperature (lib/heatingOptimizer.ts):
+// suihkut jaetaan tasavälein 0..fullTankShowers, ja jokaista suihkumäärää
+// vastaava lämpötila lasketaan samalla lineaarisella asteikolla
+// minTankTemperature..fullTankAverageTemperature. Ei vaikuta eikä liity
+// varsinaiseen (epälineaariseen) täyttöasteen laskentaan - pelkkä visuaalinen
+// apuasteikko.
+type TankScaleTick = {
+  heightPercent: number;
+  showers: number;
+  temperature: number;
+};
+
+function buildTankScaleTicks({
+  fullTankAverageTemperature,
+  fullTankShowers,
+  minTankTemperature,
+}: {
+  fullTankAverageTemperature: number;
+  fullTankShowers: number;
+  minTankTemperature: number;
+}): TankScaleTick[] {
+  const tickCount = Math.max(1, Math.round(fullTankShowers));
+
+  return Array.from({ length: tickCount + 1 }, (_, index) => {
+    const showers = tickCount - index;
+    const ratio = showers / tickCount;
+    const temperature =
+      minTankTemperature +
+      ratio * (fullTankAverageTemperature - minTankTemperature);
+
+    return {
+      heightPercent: (index / tickCount) * 100,
+      showers,
+      temperature: Math.round(temperature),
+    };
+  });
+}
+
 export type WarmWaterCardProps = {
   averageTempLabel: string;
   fillPercent: number;
+  fullTankAverageTemperature: number;
+  fullTankShowers: number;
+  minTankTemperature: number;
   onPress: () => void;
   showersAccessibilityLabel: string;
   showersLabel: string;
@@ -23,11 +77,19 @@ export type WarmWaterCardProps = {
 export function WarmWaterCard({
   averageTempLabel,
   fillPercent,
+  fullTankAverageTemperature,
+  fullTankShowers,
+  minTankTemperature,
   onPress,
   showersAccessibilityLabel,
   showersLabel,
 }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
+  const scaleTicks = buildTankScaleTicks({
+    fullTankAverageTemperature,
+    fullTankShowers,
+    minTankTemperature,
+  });
 
   return (
     <View
@@ -57,32 +119,85 @@ export function WarmWaterCard({
         </View>
         <View style={styles.warmWaterContent}>
           <View style={styles.warmWaterTankArea}>
-            <View style={styles.tankVisual}>
-              <View
-                style={[
-                  styles.tankFill,
-                  {
-                    backgroundColor: theme.fillColor,
-                    height: `${fillPercent}%`,
-                    shadowColor: theme.shadowColor,
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.tankSurface,
-                  {
-                    backgroundColor: theme.surfaceColor,
-                    bottom: `${fillPercent}%`,
-                  },
-                ]}
-              />
-              <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-              <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-              <View style={[styles.tankBubble, styles.tankBubbleThree]} />
-              <Text style={styles.tankAverageTemperature}>
-                {averageTempLabel}
-              </Text>
+            <View style={styles.tankScaleRow}>
+              <View style={styles.scaleColumnLeft}>
+                <View style={styles.scaleNumbers}>
+                  {scaleTicks.map((tick) => (
+                    <Text
+                      key={tick.showers}
+                      style={[
+                        styles.scaleNumberLeft,
+                        { top: `${tick.heightPercent}%` },
+                      ]}
+                    >
+                      {tick.showers}
+                    </Text>
+                  ))}
+                </View>
+                <Text style={styles.scaleShowerIcon}>🚿</Text>
+              </View>
+              <View style={styles.tankVisual}>
+                <View
+                  style={[
+                    styles.tankFill,
+                    {
+                      backgroundColor: theme.fillColor,
+                      height: `${fillPercent}%`,
+                      shadowColor: theme.shadowColor,
+                    },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.tankSurface,
+                    {
+                      backgroundColor: theme.surfaceColor,
+                      bottom: `${fillPercent}%`,
+                    },
+                  ]}
+                />
+                <View pointerEvents="none" style={styles.tankScaleLines}>
+                  {scaleTicks.map((tick) => (
+                    <Fragment key={tick.showers}>
+                      <View
+                        style={[
+                          styles.tankScaleLineSegment,
+                          styles.tankScaleLineLeft,
+                          { top: `${tick.heightPercent}%` },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.tankScaleLineSegment,
+                          styles.tankScaleLineRight,
+                          { top: `${tick.heightPercent}%` },
+                        ]}
+                      />
+                    </Fragment>
+                  ))}
+                </View>
+                <View style={[styles.tankBubble, styles.tankBubbleOne]} />
+                <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
+                <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                <Text style={styles.tankAverageTemperature}>
+                  {averageTempLabel}
+                </Text>
+              </View>
+              <View style={styles.scaleColumnRight}>
+                <View style={styles.scaleNumbers}>
+                  {scaleTicks.map((tick) => (
+                    <Text
+                      key={tick.showers}
+                      style={[
+                        styles.scaleNumberRight,
+                        { top: `${tick.heightPercent}%` },
+                      ]}
+                    >
+                      {tick.temperature}°
+                    </Text>
+                  ))}
+                </View>
+              </View>
             </View>
           </View>
           <View style={styles.waterShowersInfo}>
@@ -160,15 +275,82 @@ const styles = StyleSheet.create({
     textAlign: "center",
     textTransform: "uppercase",
   },
+  tankScaleRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+  },
+  scaleColumnLeft: {
+    alignItems: "flex-end",
+    marginRight: 4,
+    width: 20,
+  },
+  scaleColumnRight: {
+    alignItems: "flex-start",
+    marginLeft: 4,
+    width: 26,
+  },
+  scaleNumbers: {
+    // Alkaa TANK_BORDER_WIDTHin verran alempaa ja on TANK_INNER_HEIGHTin
+    // korkuinen, jotta 0-100% -pohjaiset top-arvot osuvat samalle
+    // korkeudelle kuin tankScaleLines (joka on säiliön reunuksen sisällä).
+    height: TANK_INNER_HEIGHT,
+    marginTop: TANK_BORDER_WIDTH,
+    position: "relative",
+    width: "100%",
+  },
+  scaleNumberLeft: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 9,
+    fontWeight: "800",
+    lineHeight: SCALE_LABEL_LINE_HEIGHT,
+    position: "absolute",
+    right: 0,
+    transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
+  },
+  scaleNumberRight: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 9,
+    fontWeight: "800",
+    left: 0,
+    lineHeight: SCALE_LABEL_LINE_HEIGHT,
+    position: "absolute",
+    transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
+  },
+  scaleShowerIcon: {
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: "center",
+    width: "100%",
+  },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
     borderColor: "rgba(221,247,255,0.72)",
     borderRadius: 26,
-    borderWidth: 2,
-    height: 112,
+    borderWidth: TANK_BORDER_WIDTH,
+    height: TANK_HEIGHT,
     overflow: "hidden",
     position: "relative",
     width: 82,
+  },
+  tankScaleLines: {
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  tankScaleLineSegment: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+    height: 1,
+    position: "absolute",
+  },
+  tankScaleLineLeft: {
+    left: 0,
+    width: "26%",
+  },
+  tankScaleLineRight: {
+    right: 0,
+    width: "26%",
   },
   tankFill: {
     backgroundColor: "#40d9ff",
