@@ -124,6 +124,7 @@ export function WarmWaterCard({
                 <View style={styles.scaleNumbers}>
                   {scaleTicks.map((tick) => (
                     <Text
+                      allowFontScaling={false}
                       key={tick.showers}
                       style={[
                         styles.scaleNumberLeft,
@@ -134,7 +135,9 @@ export function WarmWaterCard({
                     </Text>
                   ))}
                 </View>
-                <Text style={styles.scaleShowerIcon}>🚿</Text>
+                <Text allowFontScaling={false} style={styles.scaleShowerIcon}>
+                  🚿
+                </Text>
               </View>
               <View style={styles.tankVisual}>
                 <View
@@ -187,6 +190,7 @@ export function WarmWaterCard({
                 <View style={styles.scaleNumbers}>
                   {scaleTicks.map((tick) => (
                     <Text
+                      allowFontScaling={false}
                       key={tick.showers}
                       style={[
                         styles.scaleNumberRight,
