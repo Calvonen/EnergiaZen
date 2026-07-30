@@ -70,15 +70,70 @@ ellei muutos nimenomaan jatka keskeneräistä työtä samalla branchilla.
 4. `git push -u origin <branch>`.
 5. Avaa Pull Request `main`-haaraa vasten. Jos repossa on
    PR-templaatti, käytä sitä (Summary / Test plan -tyylinen jäsennys on
-   ollut käytössä).
+   ollut käytössä). Lisää kuvauksen loppuun tilarivi (ks. "PR:n
+   tilarivi" alla) – näin ei tarvitse muistaa ulkoa mikä branch, mikä
+   PR ja mikä seuraava askel.
 6. Käsittele katselmointikommentit. Repossa on nähty automaattista
    koodikatselmointia (esim. `chatgpt-codex-connector`-botti, joka jättää
    P1-tason huomioita), joiden korjaukset committoidaan samalle branchille
    ja vastataan kommenttiketjussa.
-7. Kun CI/katselmointi on kunnossa, mergeä PR päähaaraan (historiassa
-   käytetty GitHubin oletusmerge, "Merge pull request #N" – ei squash).
+7. Kun CI/katselmointi on kunnossa, mergeä PR päähaaraan. Sekä tavallista
+   GitHub-mergeä ("Merge pull request #N") että squash-mergeä on nähty
+   käytössä – kumpi tahansa käy, kunhan pysyy samana koko ketjun ajan
+   jos PR:iä on pinottu (ks. varoitus alla).
 8. Jos muutos vaatii OTA-julkaisun tai uuden buildin, käynnistä se
    GitHub Actionsista mergen jälkeen (ks. `docs/RELEASE_PROCESS.md`).
+
+### PR:n tilarivi
+
+Jokaisen PR-kuvauksen loppuun lisätään lyhyt, koneellisesti skannattava
+tilarivi. Tarkoitus: kuka tahansa (ihminen tai toinen istunto) näkee
+yhdellä silmäyksellä minkä branchin pitää valita, mistä PR:stä on kyse,
+onko se jo mergetty, ja mikä on seuraava askel – ilman että täytyy
+selata koko keskusteluhistoriaa.
+
+```
+---
+PR: #123
+Branch: claude/feature-name
+
+Testaa EAS Update -workflow'lla ennen mergeä:
+1. Actions -> EAS Update -> Run workflow
+2. "Use workflow from": claude/feature-name
+3. branch-valinta: development (EI production)
+
+Mergetty: Ei
+
+Seuraava vaihe:
+- Testaa puhelimella development-kanavalta
+- Jos OK -> mergeä PR mainiin
+- Julkaise tuotanto-OTA (EAS Update, branch: production) main-haarasta
+```
+
+Huom. `EAS Update`-workflow'n **kaksi eri "branchia" eivät ole sama
+asia**:
+
+- Run workflow -dialogin **"Use workflow from"** valitsee, minkä
+  git-branchin koodi julkaistaan.
+- Dialogin **`branch`-input-parametri** (production/preview/development)
+  valitsee EAS-kanavan (ks. `docs/RELEASE_PROCESS.md`), ei git-branchia.
+
+Feature-branchin testaus tarkoittaa siis: "Use workflow from" = oma
+feature-branch, `branch`-input = `development` tai `preview` (**ei
+koskaan `production`** ennen kuin PR on mergetty main-haaraan).
+
+### Varoitus: pinotut PR:t (stacked PRs) ja squash-merge
+
+Jos PR B on avattu PR A:n (vielä mergetyn) branchia vasten (esim. jatkuu
+suoraan siitä), ja A **squash**-mergetään, A:n commit-SHA vaihtuu –
+B:n branch näyttää tämän jälkeen GitHubissa turhaan konfliktoivalta tai
+paisuneelta diffiltä, vaikka sisältö olisi identtinen. Korjaus: kun A on
+mergetty, `git fetch origin main`, sitten B:n branchille joko
+`git rebase origin/main` (ratkaise mahdolliset – yleensä näennäiset –
+konfliktit) tai yksinkertaisempi tapa: nollaa B tuoreesta mainista ja
+tuo vain B:n omat tiedostomuutokset takaisin (`git checkout <B:n vanha
+tip> -- <tiedostot>`), committoi yhtenä committina, `--force-with-lease`
+push. Tarkista aina PR:n `mergeable_state` ja diffin koko ennen mergeä.
 
 ## Commit-käytännöt
 

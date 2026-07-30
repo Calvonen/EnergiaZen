@@ -24,6 +24,18 @@ Julkaisee sovelluksen JS/asset-muutokset olemassa oleviin asennuksiin
 Ajon **Summary**-välilehdellä näkyy julkaistun update-ryhmän tunnus
 (`group`) ja linkit jokaisen alustan manifestiin, jos EAS palautti ne.
 
+**Feature-branchin testaus ennen mergeä:** Run workflow -dialogissa on
+kaksi eri "branchia", joita ei pidä sekoittaa keskenään. Dialogin oma
+**"Use workflow from"** -valinta (dialogin yläreunassa) määrää, minkä
+git-branchin koodi todellisuudessa julkaistaan – tämä voi olla mikä
+tahansa branch, myös vielä mergeämätön feature-branch. Kohdassa 4
+kuvattu **`branch`-input** taas valitsee vain EAS-kanavan
+(production/preview/development), ei git-branchia. Feature-branchin
+testaamiseksi ennen PR:n mergeä: "Use workflow from" = feature-branch,
+`branch`-input = `development` tai `preview` – **ei koskaan
+`production`**, koska se menisi suoraan tuotantokäyttäjille. Ks. myös
+`docs/DEVELOPMENT_WORKFLOW.md`:n PR:n tilarivi -käytäntö.
+
 ## Android Build GitHub Actionsilla
 
 **Workflow:** `.github/workflows/eas-build-android.yml` ("Android Build")
