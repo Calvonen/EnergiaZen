@@ -1991,7 +1991,6 @@ export default function HomeScreen() {
   const warmWaterShowersValue = warmWaterEstimate
     ? formatFinnishDecimal(warmWaterEstimate.showersLeft)
     : "--";
-  const warmWaterShowersLabel = `${warmWaterShowersValue} 🚿`;
   const warmWaterAverageTempLabel = warmWaterEstimate
     ? `${Math.round(warmWaterEstimate.weightedTemperature)}°`
     : "--°";
@@ -2558,14 +2557,14 @@ export default function HomeScreen() {
           />
 
           <WarmWaterCard
-            averageTempLabel={warmWaterAverageTempLabel}
             fillPercent={warmWaterFillPercent}
             fullTankAverageTemperature={settings.fullTankAverageTemperature}
             fullTankShowers={settings.fullTankShowers}
             minTankTemperature={settings.minTankTemperature}
             onPress={() => router.push("/settings")}
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
-            showersLabel={warmWaterShowersLabel}
+            showersValueLabel={warmWaterShowersValue}
+            temperatureLabel={warmWaterAverageTempLabel}
           />
         </View>
 
