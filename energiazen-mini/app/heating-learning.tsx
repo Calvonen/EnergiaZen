@@ -272,8 +272,7 @@ function DebugSegmentCard({ row }: { row: DebugSegmentRow }) {
       ) : null}
 
       <Text style={styles.debugSegmentMeta}>
-        Jakso valmistui (tuli mukaan {heatingGainHistoryDays} pv:n
-        tarkasteluikkunaan): {formatDebugDateTime(row.endTime)}
+        Lämmitys päättyi: {formatDebugDateTime(row.endTime)}
       </Text>
     </View>
   );
