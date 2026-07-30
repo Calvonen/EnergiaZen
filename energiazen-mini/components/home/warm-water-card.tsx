@@ -18,10 +18,12 @@ function getWarmWaterCardTheme() {
 // säiliön reunuksen SISÄPUOLELLE, asteikon numeroiden oma "rivikorkeus"
 // pitää laskea samasta sisäkorkeudesta, jotta viivat ja numerot osuvat
 // täsmälleen samalle korkeudelle.
-const TANK_HEIGHT = 112;
+const TANK_WIDTH = 86;
+const TANK_HEIGHT = 168;
 const TANK_BORDER_WIDTH = 2;
 const TANK_INNER_HEIGHT = TANK_HEIGHT - TANK_BORDER_WIDTH * 2;
-const SCALE_LABEL_LINE_HEIGHT = 10;
+const SCALE_LABEL_LINE_HEIGHT = 11;
+const PRIMARY_VALUE_LINE_HEIGHT = 34;
 
 // Kevyt, pelkästään näytettävä asteikko säiliögrafiikan päälle. Käyttää
 // samaa lineaarista lämpötila <-> suihkut-muunnosta kuin
@@ -64,25 +66,25 @@ function buildTankScaleTicks({
 }
 
 export type WarmWaterCardProps = {
-  averageTempLabel: string;
   fillPercent: number;
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   minTankTemperature: number;
   onPress: () => void;
   showersAccessibilityLabel: string;
-  showersLabel: string;
+  showersValueLabel: string;
+  temperatureLabel: string;
 };
 
 export function WarmWaterCard({
-  averageTempLabel,
   fillPercent,
   fullTankAverageTemperature,
   fullTankShowers,
   minTankTemperature,
   onPress,
   showersAccessibilityLabel,
-  showersLabel,
+  showersValueLabel,
+  temperatureLabel,
 }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
   const scaleTicks = buildTankScaleTicks({
@@ -114,8 +116,7 @@ export function WarmWaterCard({
         ]}
       >
         <View style={styles.cardLabelRow}>
-          <Text style={styles.cardIcon}>💧</Text>
-          <Text style={styles.cardLabel}>Lämmin vesi</Text>
+          <Text style={styles.cardLabel}>Lämpimät suihkut</Text>
         </View>
         <View style={styles.warmWaterContent}>
           <View style={styles.warmWaterTankArea}>
@@ -182,9 +183,7 @@ export function WarmWaterCard({
                 <View style={[styles.tankBubble, styles.tankBubbleOne]} />
                 <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
                 <View style={[styles.tankBubble, styles.tankBubbleThree]} />
-                <Text style={styles.tankAverageTemperature}>
-                  {averageTempLabel}
-                </Text>
+                <Text style={styles.tankPrimaryValue}>{showersValueLabel}</Text>
               </View>
               <View style={styles.scaleColumnRight}>
                 <View style={styles.scaleNumbers}>
@@ -204,12 +203,9 @@ export function WarmWaterCard({
               </View>
             </View>
           </View>
-          <View style={styles.waterShowersInfo}>
-            <Text style={styles.waterValue}>{showersLabel}</Text>
-            <Text numberOfLines={1} style={styles.waterDescriptionText}>
-              Lämmintä suihkua jäljellä
-            </Text>
-          </View>
+          <Text style={styles.secondaryTemperatureValue}>
+            {temperatureLabel}
+          </Text>
         </View>
       </Pressable>
     </View>
@@ -226,7 +222,7 @@ const styles = StyleSheet.create({
     minHeight: 160,
     overflow: "hidden",
     paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingVertical: 11,
     shadowOpacity: 0.38,
     shadowRadius: 24,
   },
@@ -245,7 +241,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     flex: 1,
     justifyContent: "center",
-    marginTop: 10,
+    marginTop: 6,
     width: "100%",
   },
   warmWaterTankArea: {
@@ -262,14 +258,8 @@ const styles = StyleSheet.create({
   cardLabelRow: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 6,
     justifyContent: "center",
-    minHeight: 24,
-  },
-  cardIcon: {
-    fontSize: 18,
-    lineHeight: 22,
-    textAlign: "center",
+    minHeight: 18,
   },
   cardLabel: {
     color: "rgba(247,251,255,0.82)",
@@ -285,12 +275,12 @@ const styles = StyleSheet.create({
   },
   scaleColumnLeft: {
     alignItems: "flex-end",
-    marginRight: 4,
+    marginRight: 10,
     width: 20,
   },
   scaleColumnRight: {
     alignItems: "flex-start",
-    marginLeft: 4,
+    marginLeft: 10,
     width: 26,
   },
   scaleNumbers: {
@@ -304,7 +294,7 @@ const styles = StyleSheet.create({
   },
   scaleNumberLeft: {
     color: "rgba(255,255,255,0.55)",
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: "800",
     lineHeight: SCALE_LABEL_LINE_HEIGHT,
     position: "absolute",
@@ -313,7 +303,7 @@ const styles = StyleSheet.create({
   },
   scaleNumberRight: {
     color: "rgba(255,255,255,0.55)",
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: "800",
     left: 0,
     lineHeight: SCALE_LABEL_LINE_HEIGHT,
@@ -334,7 +324,7 @@ const styles = StyleSheet.create({
     height: TANK_HEIGHT,
     overflow: "hidden",
     position: "relative",
-    width: 82,
+    width: TANK_WIDTH,
   },
   tankScaleLines: {
     bottom: 0,
@@ -344,7 +334,7 @@ const styles = StyleSheet.create({
     top: 0,
   },
   tankScaleLineSegment: {
-    backgroundColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.27)",
     height: 1,
     position: "absolute",
   },
@@ -397,43 +387,27 @@ const styles = StyleSheet.create({
     left: 25,
     opacity: 0.72,
   },
-  tankAverageTemperature: {
+  tankPrimaryValue: {
     color: "#ffffff",
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "900",
     left: 0,
     letterSpacing: -0.4,
-    lineHeight: 32,
+    lineHeight: PRIMARY_VALUE_LINE_HEIGHT,
     position: "absolute",
     right: 0,
     textAlign: "center",
     textShadowColor: "rgba(0,0,0,0.34)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
-    top: 39,
+    top: (TANK_HEIGHT - PRIMARY_VALUE_LINE_HEIGHT) / 2,
   },
-  waterShowersInfo: {
-    alignItems: "center",
-    alignSelf: "stretch",
-    marginTop: 8,
-    width: "100%",
-  },
-  waterValue: {
-    alignSelf: "stretch",
-    color: "#f8fbff",
+  secondaryTemperatureValue: {
+    color: "rgba(247,251,255,0.7)",
     fontSize: 18,
     fontWeight: "900",
     letterSpacing: -0.2,
-    lineHeight: 22,
-    textAlign: "center",
-  },
-  waterDescriptionText: {
-    alignSelf: "stretch",
-    color: "rgba(247,251,255,0.66)",
-    fontSize: 9,
-    fontWeight: "800",
-    lineHeight: 11,
-    marginTop: 1,
+    marginTop: 5,
     textAlign: "center",
   },
 });
