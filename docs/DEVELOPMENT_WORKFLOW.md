@@ -77,10 +77,15 @@ ellei muutos nimenomaan jatka keskeneräistä työtä samalla branchilla.
    koodikatselmointia (esim. `chatgpt-codex-connector`-botti, joka jättää
    P1-tason huomioita), joiden korjaukset committoidaan samalle branchille
    ja vastataan kommenttiketjussa.
-7. Kun CI/katselmointi on kunnossa, mergeä PR päähaaraan. Sekä tavallista
-   GitHub-mergeä ("Merge pull request #N") että squash-mergeä on nähty
-   käytössä – kumpi tahansa käy, kunhan pysyy samana koko ketjun ajan
-   jos PR:iä on pinottu (ks. varoitus alla).
+7. Kun CI/katselmointi on kunnossa, mergeä PR päähaaraan.
+   **Squash-merge on oletusstrategia** (koko PR yhdeksi committiksi
+   mainiin). Jos PR:iä on pinottu (PR B on avattu PR A:n, vielä
+   mergetyn, branchin päälle), A:n squash-mergaus **vaihtaa aina A:n
+   commit-SHA:n** – tämä ei ole valinnainen riski jota merge-metodin
+   valinnalla voisi välttää, vaan squash-mergen luonne. B:n branch pitää
+   siis **aina restacking** A:n mergen jälkeen, ei vain joskus (ks.
+   varoitus alla – väärä, liian yksinkertainen ohje oli aiemmin tässä
+   dokumentissa).
 8. Jos muutos vaatii OTA-julkaisun tai uuden buildin, käynnistä se
    GitHub Actionsista mergen jälkeen (ks. `docs/RELEASE_PROCESS.md`).
 
@@ -110,30 +115,100 @@ Seuraava vaihe:
 - Julkaise tuotanto-OTA (EAS Update, branch: production) main-haarasta
 ```
 
-Huom. `EAS Update`-workflow'n **kaksi eri "branchia" eivät ole sama
-asia**:
+Huom. tässä on **kolme eri käsitettä**, ei kaksi, ja niitä ei pidä
+sekoittaa keskenään:
 
-- Run workflow -dialogin **"Use workflow from"** valitsee, minkä
-  git-branchin koodi julkaistaan.
-- Dialogin **`branch`-input-parametri** (production/preview/development)
-  valitsee EAS-kanavan (ks. `docs/RELEASE_PROCESS.md`), ei git-branchia.
+1. **Git-branch/ref** – Run workflow -dialogin **"Use workflow from"**
+   valitsee, minkä git-branchin koodi checkoutataan ja julkaistaan.
+2. **EAS Update -branch** – dialogin **`branch`-input-parametri**
+   välitetään suoraan komennolle `eas update --branch <arvo>`
+   (`.github/workflows/eas-update.yml`). Tämä on EAS:n oma käsite:
+   nimetty julkaisuvirta EAS:n puolella, **ei** git-branch eikä
+   suoraan sama asia kuin kanava.
+3. **EAS-kanava (channel)** – määritelty `eas.json`:n build-
+   profiileissa (`channel: "development"` jne., ks.
+   `docs/RELEASE_PROCESS.md`). Kanava on se, mihin asennettu build on
+   kytketty ja mistä se hakee OTA-päivityksensä.
 
-Feature-branchin testaus tarkoittaa siis: "Use workflow from" = oma
-feature-branch, `branch`-input = `development` tai `preview` (**ei
-koskaan `production`** ennen kuin PR on mergetty main-haaraan).
+Tässä repossa EAS Update -branchien nimet (`production`/`preview`/
+`development`) **sattuvat olemaan samat** kuin kanavien nimet, minkä
+takia ero (2) ja (3) välillä ei ole näkynyt käytännössä. Tämä ei
+kuitenkaan ole taattu jatkossakin – EAS:ssa kanava voidaan linkittää
+mihin tahansa nimettyyn branchiin (`eas channel:edit`) riippumatta
+nimestä. Jos tämä linkitys joskus muutetaan, `branch`-input ei enää
+suoraan kerro mitä kanavaa julkaisu koskee – tarkista silloin
+todellinen linkitys `eas channel:view <kanava>`-komennolla ennen
+julkaisua.
 
-### Varoitus: pinotut PR:t (stacked PRs) ja squash-merge
+Feature-branchin testaus tarkoittaa siis käytännössä: "Use workflow
+from" = oma feature-branch (1), `branch`-input = `development` tai
+`preview` (2) (**ei koskaan `production`** ennen kuin PR on mergetty
+main-haaraan) – ja luota siihen, että se osuu oikeaan kanavaan (3)
+vain niin kauan kuin branch- ja kanavanimet täsmäävät nykyistä
+konfiguraatiota vastaavasti.
+
+### Varoitus: pinotut PR:t (stacked PRs) vaativat aina restackingin
 
 Jos PR B on avattu PR A:n (vielä mergetyn) branchia vasten (esim. jatkuu
-suoraan siitä), ja A **squash**-mergetään, A:n commit-SHA vaihtuu –
-B:n branch näyttää tämän jälkeen GitHubissa turhaan konfliktoivalta tai
-paisuneelta diffiltä, vaikka sisältö olisi identtinen. Korjaus: kun A on
-mergetty, `git fetch origin main`, sitten B:n branchille joko
-`git rebase origin/main` (ratkaise mahdolliset – yleensä näennäiset –
-konfliktit) tai yksinkertaisempi tapa: nollaa B tuoreesta mainista ja
-tuo vain B:n omat tiedostomuutokset takaisin (`git checkout <B:n vanha
-tip> -- <tiedostot>`), committoi yhtenä committina, `--force-with-lease`
-push. Tarkista aina PR:n `mergeable_state` ja diffin koko ennen mergeä.
+suoraan siitä), ja A **squash**-mergetään, A:n alkuperäiset commitit
+katoavat mainista ja korvautuvat yhdellä uudella squash-committilla, jolla
+on eri SHA. B:n branch sisältää kuitenkin edelleen A:n **alkuperäiset**
+commitit esivanhempinaan. Tämä ei ole vain kosmeettinen ero: se
+tarkoittaa, että B:tä pitää **aina restackata** A:n mergen jälkeen, ennen
+kuin B:tä voi mergeta – tämä ei ole valinnainen eikä riipu siitä onko
+merge-metodi ollut "johdonmukainen".
+
+**Miksi pelkkä `git rebase origin/main` ei riitä:** tavallinen
+`git rebase origin/main` päättelee yhteisen esi-isän (`git merge-base`)
+B:n ja vanhan `origin/main`:n väliltä. Koska B:n branch haarautui A:n
+branchista (ei suoraan vanhasta mainista), tämä yhteinen esi-isä on
+**ennen** A:n commiteja – rebase yrittää siis toistaa sekä A:n
+alkuperäiset commitit **että** B:n omat commitit uuden, jo A:n
+muutokset sisältävän squash-committin päälle. A:n commitit yritetään
+näin soveltaa toiseen kertaan sisältöön, jossa ne on jo olemassa, mikä
+tyypillisesti pysähtyy heti ensimmäiseen A:n committiin konfliktiin
+(täsmälleen näin kävi PR #117 → #118 -ketjussa).
+
+**Oikea tapa – rebase vain B:n omat commitit `--onto`-lipulla:**
+
+```bash
+git fetch origin main
+
+# 1. Selvitä OLD_A_TIP: se commit-SHA josta B alun perin haarautui, eli
+#    A:n branchin tip ENNEN squash-mergea. Kaksi luotettavaa lähdettä:
+#    - PR B:n oma "base" (GitHub API/UI näyttää tämän PR:n sivulla, tai
+#      pull_request_read-työkalun `base.sha`-kenttä) - jos B avattiin
+#      suoraan A:n branchia vasten, tämä ON A:n vanha tip.
+#    - Jos A:n branch on yhä paikallisesti/etänä tallessa (ei vielä
+#      poistettu): `git merge-base B <A:n-branch>`.
+OLD_A_TIP=<PR B:n base.sha ennen retargetointia, tai merge-base>
+
+git checkout B
+
+# 2. Toista UUDESTA main-haarasta VAIN ne commitit, jotka ovat B:ssä
+#    OLD_A_TIP:n jälkeen (eli B:n omat commitit) - A:n alkuperäisiä
+#    commiteja ei toisteta lainkaan.
+git rebase --onto origin/main "$OLD_A_TIP" B
+
+# 3. Ratkaise konfliktit vain jos B:n OMAT commitit oikeasti koskevat
+#    samoja rivejä kuin jokin toinen samaan aikaan mainiin mennyt muutos
+#    - ei A:n oman sisällön takia, koska A:ta ei enää toisteta.
+git push --force-with-lease origin B
+```
+
+`git rebase --onto <uusi-base> <vanha-base> <branch>` tarkoittaa: "ota
+branchilta `<branch>` kaikki commitit jotka ovat sen ja `<vanha-base>`:n
+välissä, ja toista ne `<uusi-base>`:n päälle" – eli täsmälleen B:n omat
+commitit, ei A:n. Jos A:n vanhaa branchia ei enää ole tallessa mistään
+(esim. paikallinen kopio poistettu), vaihtoehto on nollata B tuoreesta
+mainista ja tuoda vain B:n lopulliset tiedostomuutokset takaisin yhtenä
+committina (`git checkout <B:n vanha tip> -- <tiedostot>`) – tämä ei
+säilytä B:n commit-historiaa erillisinä committeina mutta antaa saman
+lopputuloksen sisällön suhteen.
+
+Tarkista aina PR:n `mergeable_state` ja diffin koko (`additions`/
+`deletions`/`changed_files`) restackingin jälkeen ennen mergeä – diffin
+pitää vastata vain B:n omia muutoksia, ei A:n muutoksia uudelleen.
 
 ## Commit-käytännöt
 

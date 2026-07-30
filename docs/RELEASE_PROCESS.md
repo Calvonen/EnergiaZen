@@ -16,25 +16,44 @@ Julkaisee sovelluksen JS/asset-muutokset olemassa oleviin asennuksiin
 1. Avaa repon **Actions**-välilehti.
 2. Valitse työnkulku **EAS Update**.
 3. Paina **Run workflow**.
-4. Valitse **branch** (`production`, `preview` tai `development` – vastaa
-   `eas.json`:n build-profiilien `channel`-arvoja) ja halutessasi oma
-   julkaisuviesti (tyhjänä käytetään viimeisimmän commitin viestiä).
+4. Valitse **branch** (`production`, `preview` tai `development`) ja
+   halutessasi oma julkaisuviesti (tyhjänä käytetään viimeisimmän
+   commitin viestiä). Tämä on **EAS Update -branch**, joka välitetään
+   suoraan komennolle `eas update --branch <arvo>`
+   (`.github/workflows/eas-update.yml`) – ei sama käsite kuin
+   `eas.json`:n build-profiilien `channel`, vaikka nimet tässä repossa
+   tällä hetkellä täsmäävätkin (ks. tarkennus alla).
 5. Paina **Run workflow**.
 
 Ajon **Summary**-välilehdellä näkyy julkaistun update-ryhmän tunnus
 (`group`) ja linkit jokaisen alustan manifestiin, jos EAS palautti ne.
 
 **Feature-branchin testaus ennen mergeä:** Run workflow -dialogissa on
-kaksi eri "branchia", joita ei pidä sekoittaa keskenään. Dialogin oma
-**"Use workflow from"** -valinta (dialogin yläreunassa) määrää, minkä
-git-branchin koodi todellisuudessa julkaistaan – tämä voi olla mikä
-tahansa branch, myös vielä mergeämätön feature-branch. Kohdassa 4
-kuvattu **`branch`-input** taas valitsee vain EAS-kanavan
-(production/preview/development), ei git-branchia. Feature-branchin
-testaamiseksi ennen PR:n mergeä: "Use workflow from" = feature-branch,
-`branch`-input = `development` tai `preview` – **ei koskaan
-`production`**, koska se menisi suoraan tuotantokäyttäjille. Ks. myös
-`docs/DEVELOPMENT_WORKFLOW.md`:n PR:n tilarivi -käytäntö.
+**kolme** eri käsitettä, joita ei pidä sekoittaa keskenään:
+
+1. **Git-branch** – dialogin **"Use workflow from"** -valinta (dialogin
+   yläreunassa) määrää, minkä git-branchin koodi todellisuudessa
+   checkoutataan ja julkaistaan. Tämä voi olla mikä tahansa branch,
+   myös vielä mergeämätön feature-branch.
+2. **EAS Update -branch** – kohdassa 4 kuvattu `branch`-input. EAS:n
+   oma nimetty julkaisuvirta, ei git-branch.
+3. **EAS-kanava (channel)** – `eas.json`:n build-profiilien
+   `channel`-arvo. Määrää, mistä asennettu build hakee OTA-
+   päivityksensä.
+
+Tässä repossa (2):n ja (3):n nimet sattuvat täsmäämään
+(`production`/`preview`/`development` molemmissa), joten ne on
+käytännössä voinut aina niputtaa yhdeksi valinnaksi. Tämä linkitys on
+kuitenkin EAS:ssa itsenäisesti muutettavissa (`eas channel:edit`) – jos
+se joskus muuttuu, `branch`-input ei enää suoraan kerro mitä kanavaa
+julkaisu koskee. Tarkista epäselvässä tilanteessa `eas channel:view
+<kanava>`.
+
+Feature-branchin testaamiseksi ennen PR:n mergeä: "Use workflow from"
+(1) = feature-branch, `branch`-input (2) = `development` tai `preview`
+– **ei koskaan `production`**, koska se menisi suoraan
+tuotantokäyttäjille. Ks. myös `docs/DEVELOPMENT_WORKFLOW.md`:n PR:n
+tilarivi -käytäntö ja pinottujen PR:ien restacking-ohje.
 
 ## Android Build GitHub Actionsilla
 
