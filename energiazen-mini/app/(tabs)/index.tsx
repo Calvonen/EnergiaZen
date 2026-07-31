@@ -2099,11 +2099,31 @@ export default function HomeScreen() {
                 pageCount: 0,
                 readings: [] as TankTemperatureReading[],
               })),
-              supabase
-                .from("tank_readings")
-                .select("created_at,top_temp,bottom_temp,heating")
-                .gte("created_at", sevenDaysAgoIso)
-                .order("created_at", { ascending: true }),
+              // Must stay paginated: this is unfiltered (both heating
+              // states), and at one reading/minute a 7-day window holds
+              // ~10,000 rows - PostgREST's default response cap is 1,000
+              // rows per request, so an unbounded .select() here would
+              // silently return only the oldest slice of the window, not a
+              // rolling 7 days. Verified directly against the database
+              // before this was fixed - see PR #125.
+              fetchHeatingGainHistory(async (from, to) => {
+                const { data, error } = await supabase
+                  .from("tank_readings")
+                  .select("created_at,top_temp,bottom_temp,heating")
+                  .gte("created_at", sevenDaysAgoIso)
+                  .order("created_at", { ascending: true })
+                  .range(from, to);
+
+                return {
+                  data: (data ?? []) as TankTemperatureReading[],
+                  error,
+                };
+              }).catch((error) => ({
+                error,
+                fetchedRowCount: 0,
+                pageCount: 0,
+                readings: [] as TankTemperatureReading[],
+              })),
               fetchLatestTemperatureDropProfile(supabase).catch((error) => {
                 console.warn("Failed to load temperature drop profile", error);
                 return null;
@@ -2168,13 +2188,14 @@ export default function HomeScreen() {
             });
           }
 
-          if (temperatureHistoryResult.error) {
-            console.error(temperatureHistoryResult.error);
+          if ("error" in temperatureHistoryResult) {
+            console.warn(
+              "Failed to load paginated tank temperature history",
+              temperatureHistoryResult.error,
+            );
             setTankTemperatureHistory([]);
           } else {
-            setTankTemperatureHistory(
-              (temperatureHistoryResult.data ?? []) as TankTemperatureReading[],
-            );
+            setTankTemperatureHistory(temperatureHistoryResult.readings);
           }
         } catch {
           if (!isActive) {
