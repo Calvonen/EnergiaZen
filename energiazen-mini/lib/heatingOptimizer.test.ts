@@ -1758,4 +1758,55 @@ export function runHeatingOptimizerUnitTests() {
       "toinen perakkainen lammitystunti ei tuota lisaa suihkuja kun tankki on jo katossa",
     );
   }
+
+  // Codexin PR #128 -katselmoinnissa loytama regressio: yllaoleva clamppi ei
+  // saa alentaa lampotilaa LAMMITTAMATTOMALLA tunnilla, vaikka lukema on jo
+  // fullTankAverageTemperature-referenssin ylapuolella. maxTankTemperature
+  // ja fullTankAverageTemperature ovat toisistaan riippumattomia asetuksia
+  // (lib/settings.ts), joten esim. 80 asteen fyysinen maksimi ja 70 asteen
+  // "taysi tankki" -referenssi ovat molemmat kelvollinen yhdistelma, ja
+  // todellinen lukema (75) voi perustellusti olla referenssin ylapuolella.
+  {
+    const settings = defaultSettings();
+    const hour = optimizationHour("2026-07-22", 10, 3);
+    const result = simulateHeatingPlan({
+      currentBottomTemperature: 75,
+      currentTopTemperature: 75,
+      currentWeightedTemperature: 75,
+      heatingGainPerHour: 50,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [hour],
+      selectedHeatingHourIds: [],
+      settings,
+    });
+
+    assertEqual(
+      result.forecast[0].temperatureAfter,
+      75,
+      "lammittamattoman tunnin lampotilaa ei alenneta taydan tankin referenssiin, vaikka lukema on jo sen ylapuolella",
+    );
+  }
+
+  // Sama asetelma, mutta tunti ON valittu lammitykseen: clampin pitaa yha
+  // vain rajoittaa mita lammitys LISAA, ei koskaan alentaa lahtoarvoa.
+  {
+    const settings = defaultSettings();
+    const hour = optimizationHour("2026-07-22", 10, 3);
+    const result = simulateHeatingPlan({
+      currentBottomTemperature: 75,
+      currentTopTemperature: 75,
+      currentWeightedTemperature: 75,
+      heatingGainPerHour: 5,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [hour],
+      selectedHeatingHourIds: ["2026-07-22:10"],
+      settings,
+    });
+
+    assertEqual(
+      result.forecast[0].temperatureAfter >= 75,
+      true,
+      "lammitetyn tunnin lampotila ei laske alle referenssin ylapuolella olleen lahtoarvon",
+    );
+  }
 }
