@@ -18,6 +18,10 @@ export type HeatingOptimizationInputSnapshot = {
   manualRefreshRevision: number;
   mode: string;
   readingCreatedAt: string | null;
+  // Unfiltered (both heating states) readings used only for the opt-in
+  // RecoveryDrop estimate - see recoveryDropEnvironment.ts. Optional so
+  // existing snapshots/tests that predate RecoveryDrop stay valid.
+  recoveryReadings?: TankTemperatureReading[];
   settings: HeatingOptimizationSettings;
 };
 
@@ -66,6 +70,14 @@ export function createHeatingOptimizationInputKey(
     manualRefreshRevision: snapshot.manualRefreshRevision,
     mode: snapshot.mode,
     readingCreatedAt: snapshot.readingCreatedAt,
+    // Cheap fingerprint rather than mapping every reading like
+    // heatingHistory above - this array can be much larger since it isn't
+    // filtered to heating=true only.
+    recoveryReadingsFingerprint: [
+      snapshot.recoveryReadings?.length ?? 0,
+      snapshot.recoveryReadings?.[snapshot.recoveryReadings.length - 1]
+        ?.created_at ?? null,
+    ],
     settings: snapshot.settings,
   });
 }
