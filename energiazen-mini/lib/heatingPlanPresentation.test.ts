@@ -223,6 +223,21 @@ export function runHeatingPlanPresentationUnitTests() {
     "tänään klo 14:00",
     "minimin ajankohta valittyy rakenteiseen esitykseen kun se on saatavilla",
   );
+  const withMinimumBeforeNextHeating = buildHeatingPlanPresentation({
+    ...baseInput,
+    minimumShowersBeforeNextHeating: 3.7,
+    minimumShowersTimeLabel: "tänään klo 14:00",
+  });
+  assertEqual(
+    withMinimumBeforeNextHeating.forecastDetails?.minimumShowersLabel,
+    "3,7",
+    "'alimmillaan' nayttaa pohjan ennen seuraavaa lammitysta, ei koko jakson minimia",
+  );
+  assertEqual(
+    withMinimumBeforeNextHeating.statusSummary,
+    standard.statusSummary,
+    "turvarajan tayttyminen lasketaan yha koko jakson minimista (minimumShowers), ei lahiajan pohjasta",
+  );
   assertEqual(
     stored.forecastDetails,
     null,

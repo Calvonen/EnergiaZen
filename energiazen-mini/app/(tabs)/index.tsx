@@ -374,33 +374,48 @@ function getPointInTimeLabel({
   return `klo ${time}`;
 }
 
-// Etsii ensimmaisen (aikajarjestyksessa varhaisimman) hetken, jolloin
-// ennuste saavuttaa optimoinnin ilmoittaman minimin - joko tunnin alussa
-// (showersLeftBefore) tai lopussa (showersLeftAfter). minimumPredictedShowersLeft
-// on Math.min-kierroksen sama liukuluku kuin jompikumpi naista, joten
-// tasmallinen vertailu riittaa eika tarvita toleranssia.
-function findMinimumShowersDate(
+// "Alimmillaan"-lukeman pitaa kuvata lahiaikaista pohjaa - alinta
+// ennustettua suihkumaaraa ennen SEURAAVAA suunniteltua lammitysta - eika
+// koko ennustejakson minimia. Koko jakson minimi osuu usein jakson
+// viimeiseen tuntiin (nayttaen samalta kuin "lopussa"-rivi), varsinkin
+// kun tulevaisuudessa ei viela ole toista lammityskertaa naissa. Siksi
+// haku pysahtyy ensimmaiseen valittuun lammitystuntiin: sen showersLeftBefore
+// otetaan viela mukaan (pohja juuri ennen lammityksen alkua), mutta
+// showersLeftAfter (lammityksen jalkeinen, jo noussut arvo) ei enaa.
+function findMinimumShowersBeforeNextHeating(
   forecast: Pick<
     HourlyHeatingForecast,
-    "showersLeftAfter" | "showersLeftBefore" | "segmentHours" | "startDate"
+    | "isHeatingSelected"
+    | "showersLeftAfter"
+    | "showersLeftBefore"
+    | "segmentHours"
+    | "startDate"
   >[],
-  minimumShowers: number,
-): Date | null {
+): { date: Date; value: number } | null {
+  let minimum: { date: Date; value: number } | null = null;
+
+  const updateMinimum = (value: number, date: Date) => {
+    if (!minimum || value < minimum.value) {
+      minimum = { date, value };
+    }
+  };
+
   for (const hour of forecast) {
     const startDate = new Date(hour.startDate);
 
-    if (hour.showersLeftBefore === minimumShowers) {
-      return startDate;
+    updateMinimum(hour.showersLeftBefore, startDate);
+
+    if (hour.isHeatingSelected) {
+      break;
     }
 
-    if (hour.showersLeftAfter === minimumShowers) {
-      return new Date(
-        startDate.getTime() + hour.segmentHours * 60 * 60 * 1000,
-      );
-    }
+    updateMinimum(
+      hour.showersLeftAfter,
+      new Date(startDate.getTime() + hour.segmentHours * 60 * 60 * 1000),
+    );
   }
 
-  return null;
+  return minimum;
 }
 
 function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
@@ -768,13 +783,12 @@ function buildOptimizerHeatingPlanPresentation({
         period: "Tänään" as const,
       }))
     : optimizerSelectedHourLabels;
-  const minimumShowersDate = findMinimumShowersDate(
+  const minimumBeforeNextHeating = findMinimumShowersBeforeNextHeating(
     optimizationResult.forecast,
-    optimizationResult.minimumPredictedShowersLeft,
   );
-  const minimumShowersTimeLabel = minimumShowersDate
+  const minimumShowersTimeLabel = minimumBeforeNextHeating
     ? getPointInTimeLabel({
-        date: minimumShowersDate,
+        date: minimumBeforeNextHeating.date,
         todayDateKey: todayPlanDate,
         tomorrowDateKey: tomorrowPlanDate,
       })
@@ -790,6 +804,9 @@ function buildOptimizerHeatingPlanPresentation({
     fixedHeatingHoursPerDay: runSettings.fixedHeatingHoursPerDay,
     heatingNeedMode: runSettings.heatingNeedMode,
     minimumShowers: optimizationResult.minimumPredictedShowersLeft,
+    minimumShowersBeforeNextHeating:
+      minimumBeforeNextHeating?.value ??
+      optimizationResult.minimumPredictedShowersLeft,
     minimumShowersTimeLabel,
     planValid: optimizationResult.valid,
     safetyShowerReserve: runSettings.safetyShowerReserve,
