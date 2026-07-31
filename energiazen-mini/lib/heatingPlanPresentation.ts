@@ -6,8 +6,17 @@ export type HeatingPlanReasonKind =
   | "no-heating"
   | "standard";
 
+export type HeatingPlanForecastDetails = {
+  currentShowersLabel: string;
+  finalShowersLabel: string;
+  finalShowersTimeLabel: string;
+  minimumShowersLabel: string;
+  minimumShowersTimeLabel: string | null;
+};
+
 export type HeatingPlanPresentation = {
   emptyPlanLabel: string | null;
+  forecastDetails: HeatingPlanForecastDetails | null;
   forecastSummary: string;
   heatingSummary: string | null;
   limitsSummary: string;
@@ -57,6 +66,7 @@ export function buildHeatingPlanPresentation({
   fixedHeatingHoursPerDay,
   heatingNeedMode,
   minimumShowers,
+  minimumShowersTimeLabel = null,
   planValid,
   safetyShowerReserve,
   selectedHours,
@@ -71,6 +81,7 @@ export function buildHeatingPlanPresentation({
   forecastEndLabel: string;
   heatingNeedMode: "automatic" | "fixed";
   minimumShowers: number;
+  minimumShowersTimeLabel?: string | null;
   planValid: boolean;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
@@ -133,6 +144,13 @@ export function buildHeatingPlanPresentation({
   return {
     emptyPlanLabel:
       selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
+    forecastDetails: {
+      currentShowersLabel,
+      finalShowersLabel: formatFinnishDecimal(finalShowers),
+      finalShowersTimeLabel: forecastEndLabel,
+      minimumShowersLabel: formatFinnishDecimal(minimumShowers),
+      minimumShowersTimeLabel,
+    },
     forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowers)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
     heatingSummary:
       selectedHours.length === 0
@@ -190,6 +208,7 @@ export function buildStoredHeatingPlanPresentation({
 
   return {
     ...presentation,
+    forecastDetails: null,
     forecastSummary: "Ennustetta päivitetään uusilla lämpötilatiedoilla.",
     reason: "Näytetään viimeksi tallennettu lämmityssuunnitelma.",
     statusSummary: "Viimeksi tallennettu suunnitelma",

@@ -52,6 +52,7 @@ import {
   calculateStratifiedShowersLeft,
   HeatingOptimizationHour,
   HeatingOptimizationResult,
+  HourlyHeatingForecast,
 } from "@/lib/heatingOptimizer";
 import { useHeatingOptimizationRun } from "@/lib/useHeatingOptimizationRun";
 import {
@@ -253,6 +254,10 @@ function formatSignedFinnishDecimal(value: number) {
   return formatFinnishDecimal(value);
 }
 
+function capitalizeFirstLetter(text: string) {
+  return text.length > 0 ? text[0].toLocaleUpperCase("fi-FI") + text.slice(1) : text;
+}
+
 function splitHeatingHourLabel(label: string) {
   const [timeLabel, priceLabel, costLabel] = label.split(" · ");
 
@@ -265,21 +270,6 @@ function splitPlanCostSummary(summary: string) {
   return match
     ? { label: match[1], value: match[2] }
     : { label: summary, value: null };
-}
-
-function splitForecastSummary(summary: string) {
-  const match = summary.match(
-    /^Nyt ([^ ]+) · alimmillaan ([^ ]+) · (.+) ([^ ]+) suihkua$/,
-  );
-
-  return match
-    ? {
-        currentShowers: match[1],
-        endLabel: match[3],
-        finalShowers: match[4],
-        minimumShowers: match[2],
-      }
-    : null;
 }
 
 function splitLimitsSummary(summary: string) {
@@ -359,6 +349,58 @@ function getForecastEndLabel({
   }
 
   return `suunnittelujakson päättyessä klo ${endTime}`;
+}
+
+function getPointInTimeLabel({
+  date,
+  todayDateKey,
+  tomorrowDateKey,
+}: {
+  date: Date;
+  todayDateKey: string;
+  tomorrowDateKey: string;
+}) {
+  const dateKey = getFinnishDateKey(date.toISOString());
+  const time = helsinkiTimeFormatter.format(date).replace(".", ":");
+
+  if (dateKey === todayDateKey) {
+    return `tänään klo ${time}`;
+  }
+
+  if (dateKey === tomorrowDateKey) {
+    return `huomenna klo ${time}`;
+  }
+
+  return `klo ${time}`;
+}
+
+// Etsii ensimmaisen (aikajarjestyksessa varhaisimman) hetken, jolloin
+// ennuste saavuttaa optimoinnin ilmoittaman minimin - joko tunnin alussa
+// (showersLeftBefore) tai lopussa (showersLeftAfter). minimumPredictedShowersLeft
+// on Math.min-kierroksen sama liukuluku kuin jompikumpi naista, joten
+// tasmallinen vertailu riittaa eika tarvita toleranssia.
+function findMinimumShowersDate(
+  forecast: Pick<
+    HourlyHeatingForecast,
+    "showersLeftAfter" | "showersLeftBefore" | "segmentHours" | "startDate"
+  >[],
+  minimumShowers: number,
+): Date | null {
+  for (const hour of forecast) {
+    const startDate = new Date(hour.startDate);
+
+    if (hour.showersLeftBefore === minimumShowers) {
+      return startDate;
+    }
+
+    if (hour.showersLeftAfter === minimumShowers) {
+      return new Date(
+        startDate.getTime() + hour.segmentHours * 60 * 60 * 1000,
+      );
+    }
+  }
+
+  return null;
 }
 
 function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
@@ -726,6 +768,17 @@ function buildOptimizerHeatingPlanPresentation({
         period: "Tänään" as const,
       }))
     : optimizerSelectedHourLabels;
+  const minimumShowersDate = findMinimumShowersDate(
+    optimizationResult.forecast,
+    optimizationResult.minimumPredictedShowersLeft,
+  );
+  const minimumShowersTimeLabel = minimumShowersDate
+    ? getPointInTimeLabel({
+        date: minimumShowersDate,
+        todayDateKey: todayPlanDate,
+        tomorrowDateKey: tomorrowPlanDate,
+      })
+    : null;
 
   return buildHeatingPlanPresentation({
     automaticMaxHeatingHours: runSettings.automaticMaxHeatingHours,
@@ -737,6 +790,7 @@ function buildOptimizerHeatingPlanPresentation({
     fixedHeatingHoursPerDay: runSettings.fixedHeatingHoursPerDay,
     heatingNeedMode: runSettings.heatingNeedMode,
     minimumShowers: optimizationResult.minimumPredictedShowersLeft,
+    minimumShowersTimeLabel,
     planValid: optimizationResult.valid,
     safetyShowerReserve: runSettings.safetyShowerReserve,
     selectedHours,
@@ -2771,34 +2825,49 @@ export default function HomeScreen() {
                     <Text style={styles.heatingPlanForecastSubtitle}>
                       Ennuste
                     </Text>
-                    {(() => {
-                      const forecastParts = splitForecastSummary(
-                        heatingPlanPresentation.forecastSummary,
-                      );
-
-                      return forecastParts ? (
+                    {heatingPlanPresentation.forecastDetails ? (
+                      <>
                         <Text style={styles.heatingPlanForecastText}>
                           Nyt{" "}
                           <Text style={styles.heatingPlanForecastValue}>
-                            {forecastParts.currentShowers}
+                            {
+                              heatingPlanPresentation.forecastDetails
+                                .currentShowersLabel
+                            }
                           </Text>
-                          {" · alimmillaan "}
-                          <Text style={styles.heatingPlanForecastMinimumValue}>
-                            {forecastParts.minimumShowers}
-                          </Text>
-                          {" · "}
-                          {forecastParts.endLabel}{" "}
+                        </Text>
+                        <Text style={styles.heatingPlanForecastText}>
+                          Alimmillaan{" "}
                           <Text style={styles.heatingPlanForecastValue}>
-                            {forecastParts.finalShowers}
+                            {
+                              heatingPlanPresentation.forecastDetails
+                                .minimumShowersLabel
+                            }
+                          </Text>
+                          {heatingPlanPresentation.forecastDetails
+                            .minimumShowersTimeLabel
+                            ? ` (${heatingPlanPresentation.forecastDetails.minimumShowersTimeLabel})`
+                            : ""}
+                        </Text>
+                        <Text style={styles.heatingPlanForecastText}>
+                          {capitalizeFirstLetter(
+                            heatingPlanPresentation.forecastDetails
+                              .finalShowersTimeLabel,
+                          )}{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {
+                              heatingPlanPresentation.forecastDetails
+                                .finalShowersLabel
+                            }
                           </Text>{" "}
                           suihkua
                         </Text>
-                      ) : (
-                        <Text style={styles.heatingPlanForecastText}>
-                          {heatingPlanPresentation.forecastSummary}
-                        </Text>
-                      );
-                    })()}
+                      </>
+                    ) : (
+                      <Text style={styles.heatingPlanForecastText}>
+                        {heatingPlanPresentation.forecastSummary}
+                      </Text>
+                    )}
 
                     <Text style={styles.heatingPlanLimitsSubtitle}>
                       Käytetyt rajat
@@ -3114,11 +3183,6 @@ const styles = StyleSheet.create({
   },
   heatingPlanForecastValue: {
     color: "#72ff9d",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  heatingPlanForecastMinimumValue: {
-    color: "#9df5d5",
     fontSize: 14,
     fontWeight: "700",
   },
