@@ -2,6 +2,7 @@ import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
   estimateHeatingGainPerHour,
+  getEffectiveDrop,
   getHeatingOptimizationSegmentHours,
   HeatingOptimizationHour,
   HeatingOptimizationSettings,
@@ -1424,5 +1425,283 @@ export function runHeatingOptimizerUnitTests() {
       96 / 35,
       "tavoitehetken arvo lasketaan viimeisen valitun lammitystunnin jalkeisesta tilasta, ei horisontin lopusta",
     );
+  }
+
+  // effectiveDrop / palautumisvaihe (feature flag: recoveryDropEnabled)
+
+  {
+    assertClose(
+      getEffectiveDrop({
+        hourlyDrop: 0.6,
+        isRecoveryHour: true,
+        recoveryDropEnabled: false,
+        recoveryDropPerHour: 0.05,
+      }),
+      0.6,
+      "getEffectiveDrop palauttaa hourlyDrop:n kun flag on pois paalta",
+    );
+    assertClose(
+      getEffectiveDrop({
+        hourlyDrop: 0.6,
+        isRecoveryHour: true,
+        recoveryDropEnabled: true,
+        recoveryDropPerHour: 0.05,
+      }),
+      0.05,
+      "getEffectiveDrop palauttaa recoveryDropPerHour:n kun flag on paalla ja tunti on palautumistunti",
+    );
+    assertClose(
+      getEffectiveDrop({
+        hourlyDrop: 0.6,
+        isRecoveryHour: false,
+        recoveryDropEnabled: true,
+        recoveryDropPerHour: 0.05,
+      }),
+      0.6,
+      "getEffectiveDrop palauttaa hourlyDrop:n kun tunti ei ole palautumistunti",
+    );
+    assertClose(
+      getEffectiveDrop({
+        hourlyDrop: 0.6,
+        isRecoveryHour: true,
+        recoveryDropEnabled: true,
+        recoveryDropPerHour: undefined,
+      }),
+      0.6,
+      "getEffectiveDrop palautuu hourlyDrop:iin jos recoveryDropPerHour puuttuu",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 12, 1),
+      optimizationHour("2026-07-22", 13, 2),
+      optimizationHour("2026-07-22", 14, 3),
+    ];
+    const baseArgs = {
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(0.6),
+      hours,
+      selectedHeatingHourIds: ["2026-07-22:12"],
+      settings: defaultSettings(),
+    };
+    const baseline = simulateHeatingPlan(baseArgs);
+    const sameFlagOff = simulateHeatingPlan({
+      ...baseArgs,
+      recoveryDropPerHour: 0.05,
+    });
+
+    assertEqual(
+      JSON.stringify(sameFlagOff),
+      JSON.stringify(baseline),
+      "recoveryDropEnabled:n oletusarvo (pois paalta) pitaa koko simulaation tuloksen tismalleen samana, vaikka recoveryDropPerHour annettaisiin",
+    );
+    assertEqual(
+      baseline.forecast[1].isRecoveryHour,
+      true,
+      "lammitysta valittomasti seuraava tunti tunnistetaan palautumistunniksi riippumatta flagista",
+    );
+    assertClose(
+      baseline.forecast[1].effectiveDrop,
+      baseline.forecast[1].hourlyDrop,
+      "ilman flagia effectiveDrop kayttaa hourlyDrop-arvoa myos palautumistunnilla",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 12, 1),
+      optimizationHour("2026-07-22", 13, 2),
+      optimizationHour("2026-07-22", 14, 3),
+    ];
+    const result = simulateHeatingPlan({
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(0.6),
+      hours,
+      recoveryDropEnabled: true,
+      recoveryDropPerHour: 0.05,
+      selectedHeatingHourIds: ["2026-07-22:12"],
+      settings: defaultSettings(),
+    });
+    const [heatingHour, recoveryHour, laterHour] = result.forecast;
+
+    assertEqual(heatingHour.isRecoveryHour, false, "lammitystunti itse ei ole palautumistunti");
+    assertClose(heatingHour.effectiveDrop, 0.6, "lammitystunti kayttaa yha normaalia hourlyDrop-arvoa");
+
+    assertEqual(recoveryHour.isRecoveryHour, true, "lammitysta seuraava tunti on palautumistunti");
+    assertClose(
+      recoveryHour.effectiveDrop,
+      0.05,
+      "palautumistunti kayttaa recoveryDropPerHour-arvoa hourlyDrop:n sijaan",
+    );
+    assertClose(
+      recoveryHour.appliedDrop,
+      0.05,
+      "palautumistunnin appliedDrop skaalautuu effectiveDrop:sta",
+    );
+
+    assertEqual(
+      laterHour.isRecoveryHour,
+      false,
+      "toinen tunti lammityksen jalkeen ei ole enaa palautumistunti kun recoveryHours on kiinteasti yksi",
+    );
+    assertClose(
+      laterHour.effectiveDrop,
+      0.6,
+      "palautumistunnin jalkeen palataan normaaliin hourlyDrop-arvoon",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 12, 1),
+      optimizationHour("2026-07-22", 13, 2),
+      optimizationHour("2026-07-22", 14, 3),
+    ];
+    const result = simulateHeatingPlan({
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(0.6),
+      hours,
+      recoveryDropEnabled: true,
+      recoveryDropPerHour: 0.05,
+      selectedHeatingHourIds: ["2026-07-22:12", "2026-07-22:13"],
+      settings: defaultSettings(),
+    });
+    const [, secondHeatingHour, recoveryHour] = result.forecast;
+
+    assertEqual(
+      secondHeatingHour.isRecoveryHour,
+      false,
+      "perakkainen lammitystunti ei ole palautumistunti vaikka edellinenkin oli lammitys",
+    );
+    assertClose(
+      secondHeatingHour.effectiveDrop,
+      0.6,
+      "perakkainen lammitystunti kayttaa normaalia hourlyDrop-arvoa",
+    );
+    assertEqual(
+      recoveryHour.isRecoveryHour,
+      true,
+      "kahden perakkaisen lammitystunnin jalkeinen tunti on palautumistunti",
+    );
+    assertClose(
+      recoveryHour.effectiveDrop,
+      0.05,
+      "kahden perakkaisen lammitystunnin jalkeen kaytetaan yha recoveryDropPerHour-arvoa yhden tunnin ajan",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 12, 1),
+      optimizationHour("2026-07-22", 14, 3),
+    ];
+    const result = simulateHeatingPlan({
+      ...stratifiedTemperatureInput(50),
+      heatingGainPerHour: 8,
+      hourlyDrops: createHourlyDrops(0.6),
+      hours,
+      recoveryDropEnabled: true,
+      recoveryDropPerHour: 0.05,
+      selectedHeatingHourIds: ["2026-07-22:12"],
+      settings: defaultSettings(),
+    });
+    const [, gapHour] = result.forecast;
+
+    assertEqual(
+      gapHour.isRecoveryHour,
+      false,
+      "aukko tuntien valissa estaa palautumistunnin tunnistamisen",
+    );
+    assertClose(
+      gapHour.effectiveDrop,
+      0.6,
+      "aukon jalkeen kaytetaan normaalia hourlyDrop-arvoa",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 21, 9),
+      optimizationHour("2026-07-22", 22, 8),
+      optimizationHour("2026-07-22", 23, 7),
+      optimizationHour("2026-07-23", 0, 6),
+      optimizationHour("2026-07-23", 1, 5),
+      optimizationHour("2026-07-23", 2, 1),
+    ];
+    const settings = defaultSettings({
+      safetyShowerReserve: 3.1,
+      targetShowerReserve: 3.1,
+    });
+    const baselineArgs = {
+      ...stratifiedTemperatureInput(46),
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(1),
+      hours,
+      settings,
+    };
+    const baseline = optimizeHeatingPlan(baselineArgs);
+    const withDisabledRecovery = optimizeHeatingPlan({
+      ...baselineArgs,
+      recoveryDropEnabled: false,
+      recoveryDropPerHour: 0.05,
+    });
+
+    assertEqual(
+      withDisabledRecovery.selectedHeatingHourIds,
+      baseline.selectedHeatingHourIds,
+      "optimizeHeatingPlan valitsee saman suunnitelman riippumatta recoveryDropPerHour-arvosta kun flag on pois paalta",
+    );
+    assertEqual(
+      JSON.stringify(withDisabledRecovery.diagnostics.forecast),
+      JSON.stringify(baseline.diagnostics.forecast),
+      "optimizeHeatingPlan:n koko ennuste pysyy tismalleen samana kun palautumisominaisuus on pois paalta",
+    );
+  }
+
+  {
+    const hours = [
+      optimizationHour("2026-07-22", 21, 9),
+      optimizationHour("2026-07-22", 22, 8),
+      optimizationHour("2026-07-22", 23, 7),
+      optimizationHour("2026-07-23", 0, 6),
+      optimizationHour("2026-07-23", 1, 5),
+      optimizationHour("2026-07-23", 2, 1),
+    ];
+    const settings = defaultSettings({
+      safetyShowerReserve: 3.1,
+      targetShowerReserve: 3.1,
+    });
+    const result = optimizeHeatingPlan({
+      ...stratifiedTemperatureInput(46),
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(1),
+      hours,
+      recoveryDropEnabled: true,
+      recoveryDropPerHour: 0.05,
+      settings,
+    });
+    const followingHour = result.diagnostics.forecast.find(
+      (hour) => hour.startDate === optimizationHour("2026-07-22", 23, 7).startDate,
+    );
+
+    if (!followingHour) {
+      throw new Error("lammitysta seuraavaa tuntia ei loytynyt diagnostiikasta");
+    }
+    if (result.selectedHeatingHourIds[0] === "2026-07-22:22") {
+      assertEqual(
+        followingHour.isRecoveryHour,
+        true,
+        "valittua lammitysta seuraava tunti merkitaan palautumistunniksi",
+      );
+      assertClose(
+        followingHour.effectiveDrop,
+        0.05,
+        "optimizeHeatingPlan valittaa recoveryDropPerHour-arvon lopulliseen diagnostiikkaan",
+      );
+    }
   }
 }

@@ -4,6 +4,7 @@ import { runHeatingOptimizerUnitTests } from "../lib/heatingOptimizer.test";
 import { runHeatingOptimizationRunUnitTests } from "../lib/heatingOptimizationRun.test";
 import { runHeatingGainUnitTests } from "../lib/heatingGain.test";
 import { runHeatingGainBacktestUnitTests } from "../lib/heatingGainBacktest.test";
+import { runHeatingRecoveryDropUnitTests } from "../lib/heatingRecoveryDrop.test";
 import { runTemperatureDropProfileUnitTests } from "../lib/temperatureDropProfile.test";
 import { runColorMixingUnitTests } from "../lib/colorMixing.test";
 import { runTemperatureColorsUnitTests } from "../lib/temperatureColors.test";
@@ -51,6 +52,7 @@ async function runTests() {
   runHeatingOptimizationStatusSourceTests();
   await runHeatingGainUnitTests();
   runHeatingGainBacktestUnitTests();
+  runHeatingRecoveryDropUnitTests();
   runHeatingPlanPresentationUnitTests();
   runHeatingPlanPublicationUnitTests();
   runHeatingSettingsUnitTests();
@@ -64,7 +66,7 @@ async function runTests() {
   runPriceUtilsUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation and priceUtils tests passed",
+    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation and priceUtils tests passed",
   );
 }
 
