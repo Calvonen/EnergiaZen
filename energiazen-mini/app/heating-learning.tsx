@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import * as Updates from "expo-updates";
 
 import {
   estimateHeatingGainPerHour,
@@ -16,8 +17,14 @@ import {
   estimateRecoveryDropPerHour,
   type RecoveryDropEstimate,
 } from "@/lib/heatingRecoveryDrop";
+import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
+
+// Sama portti jota lib/useHeatingOptimizationRun.ts käyttää oikeassa
+// lämmityssuunnitelmassa - ei kovakoodattu arvo, jottei tämä rivi jää
+// jälkeen todellisesta tilasta.
+const recoveryDropEnabled = isRecoveryDropEnabledForChannel(Updates.channel);
 
 // Kevyt, laajennettava rivi diagnostiikkanäkymää varten. Uusia rivejä
 // voi lisätä myöhemmin (esim. hylkäyssyyt) vain lisäämällä niitä
@@ -111,11 +118,11 @@ function buildLearningInfoRows(
   return rows;
 }
 
-// recoveryDrop ei ole vielä kytketty tuotannon lämmityssuunnitelmaan
-// (lib/useHeatingOptimizationRun.ts ei välitä recoveryDropEnabled/
-// recoveryDropPerHour-parametreja optimizeHeatingPlan-kutsuun) - nämä rivit
-// näyttävät vain mitä RecoveryDrop v1 on oppinut historiadatasta, eivät
-// väitä ominaisuuden vaikuttavan nykyiseen lämmityssuunnitelmaan.
+// RecoveryDrop on kytketty päälle development-/preview-kanavilla
+// (lib/useHeatingOptimizationRun.ts, lib/recoveryDropEnvironment.ts) mutta
+// pysyy pois päältä tuotannossa. "recoveryDropEnabled" yllä käyttää samaa
+// isRecoveryDropEnabledForChannel-porttia, joten tämä rivi ei voi jäädä
+// jälkeen todellisesta tilasta.
 function buildRecoveryDebugRows(
   recoveryEstimate: RecoveryDropEstimate | null,
 ): LearningInfoRow[] {
@@ -124,9 +131,10 @@ function buildRecoveryDebugRows(
   rows.push({
     id: "recoveryEnabled",
     label: "RecoveryDrop käytössä",
-    value: "Ei",
-    description:
-      "RecoveryDrop-ominaisuus on toteutettu feature flagin taakse, mutta sitä ei ole vielä kytketty tuotannon lämmityssuunnitelmaan. Alla näkyvät luvut kuvaavat vain mitä historiadatasta on opittu.",
+    value: recoveryDropEnabled ? "Kyllä" : "Ei",
+    description: recoveryDropEnabled
+      ? "RecoveryDrop on käytössä tässä ympäristössä (development/preview-kanava) ja vaikuttaa oikeaan lämmityssuunnitelmaan."
+      : "RecoveryDrop on toteutettu feature flagin taakse, mutta se on käytössä vain development-/preview-kanavilla. Tässä ympäristössä (esim. tuotanto) se pysyy pois päältä.",
   });
 
   rows.push({
@@ -157,7 +165,7 @@ function buildRecoveryDebugRows(
     label: "RecoveryDrop aktiivinen tässä simulaatiotunnissa",
     value: "Ei sovellettavissa",
     description:
-      "Koska RecoveryDrop ei ole vielä kytketty tuotannon lämmityssuunnitelmaan, mikään simulaatiotunti ei tällä hetkellä käytä sitä.",
+      "Tämä näkymä ei näytä elävää lämmityssuunnitelmaa eikä siis tiedä mikä simulaatiotunti on käynnissä - se lasketaan erikseen etusivun lämmitysoptimoinnissa.",
   });
 
   return rows;
@@ -443,10 +451,17 @@ export default function HeatingLearningScreen() {
 
         if (isActive) {
           setRecoveryReadings(result.readings);
+        } else {
+          // Debug-osio suljettiin ennen kuin haku ehti valmistua - vapauta
+          // lippu, jotta seuraava avaus yrittaa hakea uudelleen sen sijaan
+          // etta jaisi pysyvasti "Ladataan..."-tilaan.
+          hasRequestedRecoveryReadings.current = false;
         }
       } catch {
         if (isActive) {
           setRecoveryReadings([]);
+        } else {
+          hasRequestedRecoveryReadings.current = false;
         }
       }
     };
