@@ -197,6 +197,54 @@ export function runHeatingOptimizationRunUnitTests() {
   }
 
   {
+    assertEqual(
+      createHeatingOptimizationInputKey(createSnapshot()),
+      baseKey,
+      "puuttuva recoveryReadings ei muuta avainta olemassa olevaan snapshottiin verrattuna",
+    );
+
+    const changedRecoveryReadings = createSnapshot();
+    changedRecoveryReadings.recoveryReadings = [
+      {
+        bottom_temp: 41,
+        created_at: "2026-07-26T06:05:00.000Z",
+        heating: false,
+        top_temp: 51,
+      },
+    ];
+    assertEqual(
+      createHeatingOptimizationInputKey(changedRecoveryReadings) !== baseKey,
+      true,
+      "uusi recoveryReadings-lukema kaynnistaa uuden ajon",
+    );
+
+    const sameLengthDifferentLatestReading = createSnapshot();
+    sameLengthDifferentLatestReading.recoveryReadings = [
+      {
+        bottom_temp: 41,
+        created_at: "2026-07-26T06:05:00.000Z",
+        heating: false,
+        top_temp: 51,
+      },
+    ];
+    const laterRecoveryReading = createSnapshot();
+    laterRecoveryReading.recoveryReadings = [
+      {
+        bottom_temp: 41,
+        created_at: "2026-07-26T06:10:00.000Z",
+        heating: false,
+        top_temp: 51,
+      },
+    ];
+    assertEqual(
+      createHeatingOptimizationInputKey(sameLengthDifferentLatestReading) !==
+        createHeatingOptimizationInputKey(laterRecoveryReading),
+      true,
+      "uusin recoveryReadings-aikaleima erottaa avaimet vaikka pituus pysyy samana",
+    );
+  }
+
+  {
     const controller = createHeatingOptimizationRunController();
     const runId = controller.start(baseKey);
     const optimizationResult = { plannedHours: [], projectedShowers: 3.4 };

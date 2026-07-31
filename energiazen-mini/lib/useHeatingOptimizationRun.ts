@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as Updates from "expo-updates";
 
+import { estimateRecoveryDropPerHour } from "./heatingRecoveryDrop";
 import {
   createHeatingOptimizationSettings,
   HeatingOptimizationHour,
@@ -15,7 +17,15 @@ import {
 } from "./heatingOptimizationRun";
 import { publishLatestHeatingPlan } from "./heatingPlanPublication";
 import type { PublishedHeatingPlanState } from "./heatingPlanPublication";
+import { isRecoveryDropEnabledForChannel } from "./recoveryDropEnvironment";
 import type { EnergiaZenSettings } from "./settings";
+
+// Development/preview-only rollout while RecoveryDrop is being validated
+// with real production data - see docs/PROJECT_CONTEXT.md's heating-gain
+// notes and GitHub issue "RecoveryDrop v2". Stays false on every production
+// build regardless of this value, because Updates.channel there is
+// "production", which isRecoveryDropEnabledForChannel never allows.
+const recoveryDropEnabled = isRecoveryDropEnabledForChannel(Updates.channel);
 
 export type HeatingOptimizationRunState = PublishedHeatingPlanState<
   HeatingOptimizationResult,
@@ -51,6 +61,7 @@ export function useHeatingOptimizationRun({
   manualRefreshRevision,
   mode,
   readingCreatedAt,
+  recoveryReadings,
   todayPlanDate,
   tomorrowPlanDate,
 }: UseHeatingOptimizationRunOptions): HeatingOptimizationRunState & {
@@ -73,6 +84,7 @@ export function useHeatingOptimizationRun({
       manualRefreshRevision,
       mode,
       readingCreatedAt,
+      recoveryReadings,
       settings: optimizationSettings,
     }),
     [
@@ -87,6 +99,7 @@ export function useHeatingOptimizationRun({
       mode,
       optimizationSettings,
       readingCreatedAt,
+      recoveryReadings,
     ],
   );
   const inputKey = useMemo(
@@ -131,8 +144,13 @@ export function useHeatingOptimizationRun({
           mode: snapshot.mode,
         })
       ) {
-        result = await Promise.resolve().then(() =>
-          optimizeHeatingPlan({
+        result = await Promise.resolve().then(() => {
+          const recoveryDropPerHour = recoveryDropEnabled
+            ? estimateRecoveryDropPerHour(snapshot.recoveryReadings ?? [])
+                .dropPerHour
+            : undefined;
+
+          return optimizeHeatingPlan({
             currentBottomTemperature: snapshot.currentBottomTemperature as number,
             currentTopTemperature: snapshot.currentTopTemperature as number,
             currentWeightedTemperature:
@@ -140,10 +158,12 @@ export function useHeatingOptimizationRun({
             hourlyDrops: snapshot.hourlyDrops,
             hours: runHours,
             isCurrentlyHeating: snapshot.isCurrentlyHeating,
+            recoveryDropEnabled,
+            recoveryDropPerHour,
             settings: snapshot.settings,
             tankReadings: snapshot.heatingHistory,
-          }),
-        );
+          });
+        });
       }
 
       if (!controller.canCommit(acceptedRunId)) {

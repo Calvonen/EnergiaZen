@@ -1139,6 +1139,7 @@ export default function HomeScreen() {
     manualRefreshRevision: manualOptimizationRevision,
     mode: activeSettings.heatingNeedMode,
     readingCreatedAt: tankUpdatedAt,
+    recoveryReadings: tankTemperatureHistory,
     todayPlanDate,
     tomorrowPlanDate,
   });
@@ -1156,6 +1157,7 @@ export default function HomeScreen() {
     manualRefreshRevision: manualOptimizationRevision,
     mode: scenarioSettings.heatingNeedMode,
     readingCreatedAt: tankUpdatedAt,
+    recoveryReadings: tankTemperatureHistory,
     todayPlanDate,
     tomorrowPlanDate,
   });
