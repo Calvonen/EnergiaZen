@@ -1302,7 +1302,14 @@ export function runHeatingOptimizerUnitTests() {
 
   // Testi B: kaksi huomisen halpaa peräkkäistä tuntia palauttavat tavoitteen
   // niiden jalkeen, vaikka horisontin lopussa (viela myohemman erillisen
-  // hukkatunnin jalkeen) varaus on alle tavoitteen.
+  // hukkatunnin jalkeen) varaus on alle tavoitteen. Lammitysteho (15) ja
+  // lahtolampotila (40, tyhja tankki) on valittu niin etta yksi tunti ei
+  // riita tavoitteeseen (55 astetta -> alle tavoitteen), mutta kaksi
+  // perakkaista tuntia riittaa (70 astetta, kattolampotilan mukaan
+  // clampattuna - ks. temperature-clamp fullTankAverageTemperature-arvoon
+  // simulateHeatingPlan:ssa). Hukkatunnin (15) pudotus (30) ei yksinaan riko
+  // turvarajaa clampatusta 70 asteesta, jotta testi ei enaa nojaa
+  // fysikaalisesti mahdottomaan yli taydan tankin lampotilaan.
   {
     const todayExpensive = optimizationHour("2026-07-22", 21, 9);
     const tomorrowCheapA = optimizationHour("2026-07-23", 13, 2);
@@ -1314,11 +1321,11 @@ export function runHeatingOptimizerUnitTests() {
       targetShowerReserve: 4,
     });
     const result = optimizeHeatingPlan({
-      currentBottomTemperature: 70,
-      currentTopTemperature: 70,
-      currentWeightedTemperature: 70,
-      heatingGainPerHour: 100,
-      hourlyDrops: createHourlyDrops(0, { 21: 30, 13: 10, 14: 10, 15: 200 }),
+      currentBottomTemperature: 40,
+      currentTopTemperature: 40,
+      currentWeightedTemperature: 40,
+      heatingGainPerHour: 15,
+      hourlyDrops: createHourlyDrops(0, { 15: 30 }),
       hours: [todayExpensive, tomorrowCheapA, tomorrowCheapB, tomorrowAfter],
       settings,
     });
@@ -1347,6 +1354,11 @@ export function runHeatingOptimizerUnitTests() {
 
   // Testi C: horisontin lopussa varaus on alle tavoitteen, mutta turvaraja ei
   // alitu yhdellakaan tunnilla koko horisontin aikana - suunnitelma on valid.
+  // Tunnin 11 pudotus (30) riittaa reilusti viemaan varauksen alle
+  // tavoitteen clampatusta 70 asteesta, mutta ei riko absoluuttista
+  // minimilampotilaa (10) - alkuperainen 120 asteen pudotus oli suurempi
+  // kuin koko tankin fysikaalinen lampotilavali (10-70) ja nojasi siis
+  // samaan yli taydan tankin lampotilan clamppaamattomuuteen kuin testi B.
   {
     const heatedHour = optimizationHour("2026-07-22", 10, 3);
     const afterHour = optimizationHour("2026-07-22", 11, 7);
@@ -1360,7 +1372,7 @@ export function runHeatingOptimizerUnitTests() {
       currentTopTemperature: 50,
       currentWeightedTemperature: 50,
       heatingGainPerHour: 100,
-      hourlyDrops: createHourlyDrops(0, { 10: 5, 11: 120 }),
+      hourlyDrops: createHourlyDrops(0, { 10: 5, 11: 30 }),
       hours: [heatedHour, afterHour],
       settings,
     });
@@ -1703,5 +1715,47 @@ export function runHeatingOptimizerUnitTests() {
         "optimizeHeatingPlan valittaa recoveryDropPerHour-arvon lopulliseen diagnostiikkaan",
       );
     }
+  }
+
+  // Kaksi perakkaista lammitystuntia tankin ollessa jo lahes taynna: toinen
+  // tunti ei saa nostaa simuloitua lampotilaa yli fysikaalisesti mahdollisen
+  // (fullTankAverageTemperature) katon, vaikka lammitysteho yksinaan
+  // riittaisi ylittamaan sen reilusti. Ilman clamppausta lampotila kertyisi
+  // rajattomasti (65 -> 115 -> 165), mika naennaisesti "pelastaisi" suunnitelman
+  // myohemmilta, fysikaalisesti mahdottomilta pudotuksilta - katso PR:n
+  // kuvaus. showersLeft pysyi jo entuudestaan oikein clampattuna
+  // (calculateStratifiedShowersLeft), joten tama testaa nimenomaan
+  // temperature-muuttujan, joka kulkee sellaisenaan seuraaviin tunteihin.
+  {
+    const settings = defaultSettings();
+    const firstHour = optimizationHour("2026-07-22", 10, 3);
+    const secondHour = optimizationHour("2026-07-22", 11, 3);
+    const result = simulateHeatingPlan({
+      currentBottomTemperature: 65,
+      currentTopTemperature: 65,
+      currentWeightedTemperature: 65,
+      heatingGainPerHour: 50,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [firstHour, secondHour],
+      selectedHeatingHourIds: ["2026-07-22:10", "2026-07-22:11"],
+      settings,
+    });
+    const [firstForecast, secondForecast] = result.forecast;
+
+    assertEqual(
+      firstForecast.temperatureAfter <= settings.fullTankAverageTemperature,
+      true,
+      "ensimmainen lammitystunti ei nosta lampotilaa yli taydan tankin katon",
+    );
+    assertEqual(
+      secondForecast.temperatureAfter <= settings.fullTankAverageTemperature,
+      true,
+      "toinen perakkainen lammitystunti ei nosta lampotilaa yli taydan tankin katon, vaikka lammitysteho riittaisi siihen",
+    );
+    assertEqual(
+      secondForecast.showersLeftAfter,
+      firstForecast.showersLeftAfter,
+      "toinen perakkainen lammitystunti ei tuota lisaa suihkuja kun tankki on jo katossa",
+    );
   }
 }
