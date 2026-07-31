@@ -203,6 +203,31 @@ export function runHeatingPlanPresentationUnitTests() {
     false,
     "loppuarvion ajankohta ei ole pelkka lopussa",
   );
+  assertEqual(
+    standard.forecastDetails,
+    {
+      currentShowersLabel: "3,1",
+      finalShowersLabel: "4,4",
+      finalShowersTimeLabel: "huomenna vuorokauden lopussa",
+      minimumShowersLabel: "2,3",
+      minimumShowersTimeLabel: null,
+    },
+    "ennusteen tiedot tarjotaan myos rakenteisena ilman minimin ajankohtaa",
+  );
+  const withMinimumTime = buildHeatingPlanPresentation({
+    ...baseInput,
+    minimumShowersTimeLabel: "tänään klo 14:00",
+  });
+  assertEqual(
+    withMinimumTime.forecastDetails?.minimumShowersTimeLabel,
+    "tänään klo 14:00",
+    "minimin ajankohta valittyy rakenteiseen esitykseen kun se on saatavilla",
+  );
+  assertEqual(
+    stored.forecastDetails,
+    null,
+    "tallennetulla suunnitelmalla ei ole tuoretta tuntikohtaista ennustetta minimin ajankohdalle",
+  );
   const visibleContent = JSON.stringify(standard);
   assertEqual(
     visibleContent.includes("nousuarvio") || visibleContent.includes("fallback-arvo"),
