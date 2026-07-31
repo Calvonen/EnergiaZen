@@ -58,10 +58,12 @@ export type HourlyHeatingForecast = {
   bottomTemperatureAfter: number;
   bottomTemperatureBeforeHeating: number;
   appliedDrop: number;
+  effectiveDrop: number;
   heatingGain: number;
   helsinkiHour: number;
   hourlyDrop: number;
   isHeatingSelected: boolean;
+  isRecoveryHour: boolean;
   showersLeftAfter: number;
   showersLeftBefore: number;
   segmentHours: number;
@@ -392,6 +394,33 @@ export function detectConsumptionSpikes(
     .sort((first, second) => second.drop - first.drop);
 }
 
+// A minimal, opt-in override for the hour immediately following a heating
+// hour: when recovery is off (the default), this always returns hourlyDrop,
+// so simulateHeatingPlan's output is unchanged. See docs/PROJECT_CONTEXT.md's
+// heating-gain notes for why this hour behaves differently from a resting hour.
+export function getEffectiveDrop({
+  hourlyDrop,
+  isRecoveryHour,
+  recoveryDropEnabled,
+  recoveryDropPerHour,
+}: {
+  hourlyDrop: number;
+  isRecoveryHour: boolean;
+  recoveryDropEnabled: boolean;
+  recoveryDropPerHour?: number;
+}) {
+  if (
+    !recoveryDropEnabled ||
+    !isRecoveryHour ||
+    typeof recoveryDropPerHour !== "number" ||
+    !Number.isFinite(recoveryDropPerHour)
+  ) {
+    return hourlyDrop;
+  }
+
+  return recoveryDropPerHour;
+}
+
 export function simulateHeatingPlan({
   currentBottomTemperature,
   currentTopTemperature,
@@ -400,6 +429,8 @@ export function simulateHeatingPlan({
   hourlyDrops,
   hours,
   isCurrentlyHeating = false,
+  recoveryDropEnabled = false,
+  recoveryDropPerHour,
   selectedHeatingHourIds,
   settings,
   spikes = detectConsumptionSpikes(hourlyDrops, settings),
@@ -411,6 +442,8 @@ export function simulateHeatingPlan({
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
   isCurrentlyHeating?: boolean;
+  recoveryDropEnabled?: boolean;
+  recoveryDropPerHour?: number;
   selectedHeatingHourIds: string[];
   settings: HeatingOptimizationSettings;
   spikes?: ConsumptionSpike[];
@@ -478,7 +511,20 @@ export function simulateHeatingPlan({
       !alreadyHeatingAtSegmentStart;
     const heatingApplied: boolean =
       isHeatingSelected && !blockedByStartFillRatio;
-    const appliedDrop = hourlyDrop * segmentHours;
+    // Recovery only covers the one hour immediately after a selected heating
+    // hour ends, not a hour that is itself heating - reuses the same
+    // contiguity check as alreadyHeatingAtSegmentStart above.
+    const isRecoveryHour: boolean =
+      !heatingApplied &&
+      wasHeatingAtPreviousSegmentEnd &&
+      previousHourEndTime === hour.date.getTime();
+    const effectiveDrop = getEffectiveDrop({
+      hourlyDrop,
+      isRecoveryHour,
+      recoveryDropEnabled,
+      recoveryDropPerHour,
+    });
+    const appliedDrop = effectiveDrop * segmentHours;
     const heatingGain = heatingApplied
       ? heatingGainPerHour * segmentHours
       : 0;
@@ -585,10 +631,12 @@ export function simulateHeatingPlan({
       appliedDrop,
       bottomTemperatureAfter,
       bottomTemperatureBeforeHeating,
+      effectiveDrop,
       heatingGain,
       helsinkiHour,
       hourlyDrop,
       isHeatingSelected,
+      isRecoveryHour,
       showersLeftAfter,
       showersLeftBefore,
       segmentHours,
@@ -650,6 +698,8 @@ export function optimizeHeatingPlan({
   hourlyDrops,
   hours,
   isCurrentlyHeating = false,
+  recoveryDropEnabled = false,
+  recoveryDropPerHour,
   settings,
   tankReadings = [],
 }: {
@@ -660,6 +710,8 @@ export function optimizeHeatingPlan({
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
   isCurrentlyHeating?: boolean;
+  recoveryDropEnabled?: boolean;
+  recoveryDropPerHour?: number;
   settings: HeatingOptimizationSettings;
   tankReadings?: TankTemperatureReading[];
 }): HeatingOptimizationResult {
@@ -756,6 +808,8 @@ export function optimizeHeatingPlan({
         hourlyDrops,
         hours: sortedHours,
         isCurrentlyHeating,
+        recoveryDropEnabled,
+        recoveryDropPerHour,
         selectedHeatingHourIds,
         settings,
         spikes,
@@ -824,6 +878,8 @@ export function optimizeHeatingPlan({
       hourlyDrops,
       hours: sortedHours,
       isCurrentlyHeating,
+      recoveryDropEnabled,
+      recoveryDropPerHour,
       selectedHeatingHourIds: lockedHourIds,
       settings,
       spikes,
