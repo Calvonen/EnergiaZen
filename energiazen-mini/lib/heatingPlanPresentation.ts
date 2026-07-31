@@ -66,6 +66,7 @@ export function buildHeatingPlanPresentation({
   fixedHeatingHoursPerDay,
   heatingNeedMode,
   minimumShowers,
+  minimumShowersBeforeNextHeating = minimumShowers,
   minimumShowersTimeLabel = null,
   planValid,
   safetyShowerReserve,
@@ -80,7 +81,15 @@ export function buildHeatingPlanPresentation({
   fixedHeatingHoursPerDay: number;
   forecastEndLabel: string;
   heatingNeedMode: "automatic" | "fixed";
+  // Koko ennustejakson minimi - kaytetaan turvarajan tayttymisen
+  // (statusSummary) laskentaan, joka koskee koko jaksoa.
   minimumShowers: number;
+  // Alin ennustettu suihkumaara ennen seuraavaa suunniteltua lammitysta -
+  // nain "Alimmillaan"-lukema nayttaa kayttajalle merkityksellisen,
+  // lahiaikaisen pohjan sen sijaan etta se toistaisi koko jakson minimin
+  // (joka voi osua esim. seuraavan paivan loppuun eika kerro mitaan
+  // seuraavaa lammityskertaa edeltavasta pohjasta).
+  minimumShowersBeforeNextHeating?: number;
   minimumShowersTimeLabel?: string | null;
   planValid: boolean;
   safetyShowerReserve: number;
@@ -148,10 +157,10 @@ export function buildHeatingPlanPresentation({
       currentShowersLabel,
       finalShowersLabel: formatFinnishDecimal(finalShowers),
       finalShowersTimeLabel: forecastEndLabel,
-      minimumShowersLabel: formatFinnishDecimal(minimumShowers),
+      minimumShowersLabel: formatFinnishDecimal(minimumShowersBeforeNextHeating),
       minimumShowersTimeLabel,
     },
-    forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowers)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
+    forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowersBeforeNextHeating)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
     heatingSummary:
       selectedHours.length === 0
         ? null
