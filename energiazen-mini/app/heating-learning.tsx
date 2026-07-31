@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
@@ -12,6 +12,10 @@ import {
   HeatingGainWarningReason,
 } from "@/lib/heatingGain";
 import { backtestHeatingGainEstimate } from "@/lib/heatingGainBacktest";
+import {
+  estimateRecoveryDropPerHour,
+  type RecoveryDropEstimate,
+} from "@/lib/heatingRecoveryDrop";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
 
@@ -102,6 +106,58 @@ function buildLearningInfoRows(
     label: "Taustatestin jaksomäärä",
     value: `${backtest.segmentCount} kpl`,
     description: "Kuinka moneen todelliseen lämmitysjaksoon tarkkuusarvio (yllä) perustuu.",
+  });
+
+  return rows;
+}
+
+// recoveryDrop ei ole vielä kytketty tuotannon lämmityssuunnitelmaan
+// (lib/useHeatingOptimizationRun.ts ei välitä recoveryDropEnabled/
+// recoveryDropPerHour-parametreja optimizeHeatingPlan-kutsuun) - nämä rivit
+// näyttävät vain mitä RecoveryDrop v1 on oppinut historiadatasta, eivät
+// väitä ominaisuuden vaikuttavan nykyiseen lämmityssuunnitelmaan.
+function buildRecoveryDebugRows(
+  recoveryEstimate: RecoveryDropEstimate | null,
+): LearningInfoRow[] {
+  const rows: LearningInfoRow[] = [];
+
+  rows.push({
+    id: "recoveryEnabled",
+    label: "RecoveryDrop käytössä",
+    value: "Ei",
+    description:
+      "RecoveryDrop-ominaisuus on toteutettu feature flagin taakse, mutta sitä ei ole vielä kytketty tuotannon lämmityssuunnitelmaan. Alla näkyvät luvut kuvaavat vain mitä historiadatasta on opittu.",
+  });
+
+  rows.push({
+    id: "recoveryDropPerHour",
+    label: "Opittu recoveryDropPerHour",
+    value: !recoveryEstimate
+      ? "Ladataan…"
+      : `${recoveryEstimate.dropPerHour >= 0 ? "+" : ""}${recoveryEstimate.dropPerHour
+          .toFixed(2)
+          .replace(".", ",")} °C/h`,
+    description: !recoveryEstimate
+      ? "Lasketaan historiadatasta."
+      : recoveryEstimate.fallbackUsed
+        ? "Hyväksyttyjä lämmitysjaksoja, joilla on siisti palautumisikkuna, on vielä liian vähän, joten arvo on kiinteä oletusarvo."
+        : "Negatiivinen arvo tarkoittaa, että painotettu lämpötila keskimäärin vielä nousee tunnin sisällä lämmityksen päättymisestä.",
+  });
+
+  rows.push({
+    id: "recoverySampleCount",
+    label: "RecoveryDrop-opetukseen käytetyt jaksot",
+    value: !recoveryEstimate ? "Ladataan…" : `${recoveryEstimate.sampleCount} kpl`,
+    description:
+      "Kuinka moni hyväksytty lämmitysjakso tuotti kelvollisen, häiriöttömän tunnin mittaisen näytteen lämmityksen jälkeisestä lämpötilakehityksestä.",
+  });
+
+  rows.push({
+    id: "recoveryActiveThisHour",
+    label: "RecoveryDrop aktiivinen tässä simulaatiotunnissa",
+    value: "Ei sovellettavissa",
+    description:
+      "Koska RecoveryDrop ei ole vielä kytketty tuotannon lämmityssuunnitelmaan, mikään simulaatiotunti ei tällä hetkellä käytä sitä.",
   });
 
   return rows;
@@ -283,6 +339,14 @@ export default function HeatingLearningScreen() {
   const [readings, setReadings] = useState<TankTemperatureReading[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDebugSectionOpen, setIsDebugSectionOpen] = useState(false);
+  // RecoveryDrop-opetus tarvitsee myös heating=false-lukemat (löytääkseen
+  // lämmityksen jälkeisen siirtymän), toisin kuin lämmitystehon oppiminen
+  // yllä - siksi tämä on oma, kevyempi haku joka käynnistyy vasta kun
+  // kehittäjän debug-osio avataan ensimmäistä kertaa.
+  const [recoveryReadings, setRecoveryReadings] = useState<
+    TankTemperatureReading[] | null
+  >(null);
+  const hasRequestedRecoveryReadings = useRef(false);
 
   useEffect(() => {
     let isActive = true;
@@ -349,6 +413,63 @@ export default function HeatingLearningScreen() {
 
     return buildDebugSegmentRows(estimateHeatingGainPerHour(readings));
   }, [readings]);
+
+  useEffect(() => {
+    if (!isDebugSectionOpen || hasRequestedRecoveryReadings.current) {
+      return;
+    }
+
+    hasRequestedRecoveryReadings.current = true;
+    let isActive = true;
+
+    const load = async () => {
+      try {
+        const startIso = new Date(
+          Date.now() - heatingGainHistoryDays * 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const endIso = new Date().toISOString();
+
+        const result = await fetchHeatingGainHistory(async (from, to) => {
+          const { data, error: queryError } = await supabase
+            .from("tank_readings")
+            .select("created_at,top_temp,bottom_temp,heating")
+            .gte("created_at", startIso)
+            .lte("created_at", endIso)
+            .order("created_at", { ascending: true })
+            .range(from, to);
+
+          return { data: (data ?? []) as TankTemperatureReading[], error: queryError };
+        });
+
+        if (isActive) {
+          setRecoveryReadings(result.readings);
+        }
+      } catch {
+        if (isActive) {
+          setRecoveryReadings([]);
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      isActive = false;
+    };
+  }, [isDebugSectionOpen]);
+
+  const recoveryEstimate = useMemo(() => {
+    if (!recoveryReadings) {
+      return null;
+    }
+
+    return estimateRecoveryDropPerHour(recoveryReadings);
+  }, [recoveryReadings]);
+
+  const recoveryDebugRows = useMemo(
+    () => buildRecoveryDebugRows(recoveryEstimate),
+    [recoveryEstimate],
+  );
 
   return (
     <View style={styles.screen}>
@@ -420,6 +541,16 @@ export default function HeatingLearningScreen() {
 
             {isDebugSectionOpen ? (
               <View style={styles.debugSection}>
+                <Text style={styles.debugSectionSubheading}>
+                  RecoveryDrop (lämmityksen jälkeinen palautumisvaihe)
+                </Text>
+                {recoveryDebugRows.map((row) => (
+                  <LearningInfoCard key={row.id} row={row} />
+                ))}
+
+                <Text style={[styles.debugSectionSubheading, styles.debugSectionSubheadingSpaced]}>
+                  Lämmitysjaksot
+                </Text>
                 <Text style={styles.debugSectionIntro}>
                   Kaikki viimeisen {heatingGainHistoryDays} päivän aikana
                   löydetyt lämmitysjaksot, hyväksytyt ja hylätyt, uusin
@@ -470,6 +601,8 @@ const styles = StyleSheet.create({
   debugToggleText: { color: "#9fc7df", fontSize: 13, fontWeight: "800" },
   debugToggleChevron: { color: "#9fc7df", fontSize: 16, fontWeight: "900" },
   debugSection: { marginTop: 10 },
+  debugSectionSubheading: { color: "#9fc7df", fontSize: 12, fontWeight: "800", marginBottom: 8, textTransform: "uppercase" },
+  debugSectionSubheadingSpaced: { marginTop: 14 },
   debugSectionIntro: { color: "#8190b5", fontSize: 12, fontWeight: "600", lineHeight: 17, marginBottom: 10 },
   debugEmptyText: { color: "#8190b5", fontSize: 13, fontWeight: "700", paddingVertical: 12, textAlign: "center" },
   debugSegmentCard: { borderRadius: 14, borderWidth: 1, marginBottom: 8, padding: 12 },
