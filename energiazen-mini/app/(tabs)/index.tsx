@@ -2788,7 +2788,7 @@ export default function HomeScreen() {
                                 {costLabel ? (
                                   <>
                                     {" · "}
-                                    <Text style={styles.heatingPlanHourCost}>
+                                    <Text style={styles.heatingPlanHourPrice}>
                                       {costLabel}
                                     </Text>
                                   </>
@@ -3139,10 +3139,6 @@ const styles = StyleSheet.create({
   },
   heatingPlanHourPrice: {
     color: "#72ff9d",
-    fontWeight: "800",
-  },
-  heatingPlanHourCost: {
-    color: "#9df5d5",
     fontWeight: "800",
   },
   heatingPlanInfoText: {
