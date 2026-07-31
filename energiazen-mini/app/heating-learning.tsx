@@ -6,6 +6,10 @@ import {
   estimateHeatingGainPerHour,
   fetchHeatingGainHistory,
   heatingGainHistoryDays,
+  HeatingGainRejectedSegment,
+  HeatingGainRejectionReason,
+  HeatingGainSegment,
+  HeatingGainWarningReason,
 } from "@/lib/heatingGain";
 import { backtestHeatingGainEstimate } from "@/lib/heatingGainBacktest";
 import { supabase } from "@/lib/supabase";
@@ -113,10 +117,172 @@ function LearningInfoCard({ row }: { row: LearningInfoRow }) {
   );
 }
 
+// Kehittäjän debug-loki: kaikki 30 päivän ikkunassa löydetyt
+// lämmitysjaksot (hyväksytyt ja hylätyt) samassa, aikajärjestykseen
+// lajitellussa listassa. Lukee vain jo lasketut kentät
+// findValidHeatingSegments-funktion palauttamista segmenteistä -
+// ei omaa laskentaa eikä vaikutusta tuotannon hyväksymispäätökseen.
+type DebugSegmentRow = {
+  accepted: boolean;
+  bottomGainPerHour: number | null;
+  endTime: string;
+  endWeightedTemperature: number;
+  id: string;
+  reasons: HeatingGainRejectionReason[];
+  startTime: string;
+  startWeightedTemperature: number;
+  status: HeatingGainSegment["status"] | HeatingGainRejectedSegment["status"];
+  topGainPerHour: number | null;
+  warnings: HeatingGainWarningReason[];
+  weightedGainPerHour: number | null;
+};
+
+const rejectionReasonLabels: Record<HeatingGainRejectionReason, string> = {
+  component_gain_out_of_range: "Ylä- tai alasensorin nousu epärealistinen",
+  excessive_duration: "Jakso liian pitkä",
+  insufficient_duration: "Jakso liian lyhyt",
+  insufficient_gain: "Nousu liian pieni",
+  insufficient_readings: "Liian vähän mittauksia",
+  negative_temperature_change: "Lämpötila laski jakson aikana",
+  non_finite_gain: "Nousua ei voitu laskea",
+  unrealistic_gain: "Nousu epärealistisen suuri",
+};
+
+const warningReasonLabels: Record<HeatingGainWarningReason, string> = {
+  sensor_anomaly: "Anturipoikkeama havaittu",
+  unstable_curve: "Epävakaa lämpötilakäyrä",
+};
+
+function buildDebugSegmentRows(
+  gainEstimate: ReturnType<typeof estimateHeatingGainPerHour>,
+): DebugSegmentRow[] {
+  const { rejectedSegments, segments } = gainEstimate.segmentDiscovery;
+
+  const acceptedRows: DebugSegmentRow[] = segments.map((segment) => ({
+    accepted: true,
+    bottomGainPerHour: segment.bottomGainPerHour,
+    endTime: segment.endTime,
+    endWeightedTemperature: segment.endWeightedTemperature,
+    id: `accepted-${segment.startTime}`,
+    reasons: [],
+    startTime: segment.startTime,
+    startWeightedTemperature: segment.startWeightedTemperature,
+    status: segment.status,
+    topGainPerHour: segment.topGainPerHour,
+    warnings: segment.warnings,
+    weightedGainPerHour: segment.weightedGainPerHour,
+  }));
+
+  const rejectedRows: DebugSegmentRow[] = rejectedSegments.map((segment) => ({
+    accepted: false,
+    bottomGainPerHour: segment.bottomGainPerHour,
+    endTime: segment.endTime,
+    endWeightedTemperature: segment.endWeightedTemperature,
+    id: `rejected-${segment.startTime}`,
+    reasons: segment.reasons,
+    startTime: segment.startTime,
+    startWeightedTemperature: segment.startWeightedTemperature,
+    status: segment.status,
+    topGainPerHour: segment.topGainPerHour,
+    warnings: segment.warnings,
+    weightedGainPerHour: segment.weightedGainPerHour,
+  }));
+
+  return [...acceptedRows, ...rejectedRows].sort((first, second) =>
+    second.startTime.localeCompare(first.startTime),
+  );
+}
+
+const debugDateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+});
+
+function formatDebugDateTime(iso: string) {
+  return debugDateTimeFormatter.format(new Date(iso)).replace(",", " klo");
+}
+
+function formatDebugTemperature(value: number) {
+  return `${value.toFixed(1).replace(".", ",")} °C`;
+}
+
+function formatDebugGain(value: number | null) {
+  return value === null ? "—" : `${value.toFixed(2).replace(".", ",")} °C/h`;
+}
+
+function getDebugStatusLabel(status: DebugSegmentRow["status"]) {
+  if (status === "accepted") {
+    return "Hyväksytty";
+  }
+  if (status === "accepted_with_warnings") {
+    return "Hyväksytty (varoituksia)";
+  }
+  return "Hylätty";
+}
+
+function DebugSegmentCard({ row }: { row: DebugSegmentRow }) {
+  return (
+    <View
+      style={[
+        styles.debugSegmentCard,
+        row.accepted
+          ? styles.debugSegmentCardAccepted
+          : styles.debugSegmentCardRejected,
+      ]}
+    >
+      <View style={styles.debugSegmentHeaderRow}>
+        <Text style={styles.debugSegmentTime}>
+          {formatDebugDateTime(row.startTime)} – {formatDebugDateTime(row.endTime)}
+        </Text>
+        <Text
+          style={[
+            styles.debugSegmentStatus,
+            row.accepted
+              ? styles.debugSegmentStatusAccepted
+              : styles.debugSegmentStatusRejected,
+          ]}
+        >
+          {getDebugStatusLabel(row.status)}
+        </Text>
+      </View>
+
+      <View style={styles.debugSegmentValuesRow}>
+        <Text style={styles.debugSegmentValue}>
+          {formatDebugTemperature(row.startWeightedTemperature)} {"->"}{" "}
+          {formatDebugTemperature(row.endWeightedTemperature)}
+        </Text>
+        <Text style={styles.debugSegmentValue}>
+          {formatDebugGain(row.weightedGainPerHour)}
+        </Text>
+      </View>
+
+      {row.reasons.length > 0 ? (
+        <Text style={styles.debugSegmentReasonText}>
+          Hylkäyksen syy: {row.reasons.map((reason) => rejectionReasonLabels[reason]).join(", ")}
+        </Text>
+      ) : null}
+
+      {row.warnings.length > 0 ? (
+        <Text style={styles.debugSegmentWarningText}>
+          Varoitukset: {row.warnings.map((warning) => warningReasonLabels[warning]).join(", ")}
+        </Text>
+      ) : null}
+
+      <Text style={styles.debugSegmentMeta}>
+        Lämmitys päättyi: {formatDebugDateTime(row.endTime)}
+      </Text>
+    </View>
+  );
+}
+
 export default function HeatingLearningScreen() {
   const router = useRouter();
   const [readings, setReadings] = useState<TankTemperatureReading[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isDebugSectionOpen, setIsDebugSectionOpen] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -176,6 +342,14 @@ export default function HeatingLearningScreen() {
     return buildLearningInfoRows(gainEstimate, backtest);
   }, [readings]);
 
+  const debugSegmentRows = useMemo(() => {
+    if (!readings) {
+      return null;
+    }
+
+    return buildDebugSegmentRows(estimateHeatingGainPerHour(readings));
+  }, [readings]);
+
   return (
     <View style={styles.screen}>
       <View style={[styles.glow, styles.greenGlow]} />
@@ -218,7 +392,52 @@ export default function HeatingLearningScreen() {
             <Text style={styles.loadingText}>Ladataan lämmitysdataa...</Text>
           </View>
         ) : (
-          rows.map((row) => <LearningInfoCard key={row.id} row={row} />)
+          <>
+            {rows.map((row) => (
+              <LearningInfoCard key={row.id} row={row} />
+            ))}
+
+            <Pressable
+              accessibilityLabel={
+                isDebugSectionOpen
+                  ? "Piilota kehittäjän debug-tiedot"
+                  : "Näytä kehittäjän debug-tiedot"
+              }
+              accessibilityRole="button"
+              onPress={() => setIsDebugSectionOpen((current) => !current)}
+              style={({ pressed }) => [
+                styles.debugToggle,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.debugToggleText}>
+                Kehittäjän debug-tiedot ({debugSegmentRows?.length ?? 0} jaksoa)
+              </Text>
+              <Text style={styles.debugToggleChevron}>
+                {isDebugSectionOpen ? "⌃" : "⌄"}
+              </Text>
+            </Pressable>
+
+            {isDebugSectionOpen ? (
+              <View style={styles.debugSection}>
+                <Text style={styles.debugSectionIntro}>
+                  Kaikki viimeisen {heatingGainHistoryDays} päivän aikana
+                  löydetyt lämmitysjaksot, hyväksytyt ja hylätyt, uusin
+                  ensin. Tarkoitus on tehdä oppimisalgoritmin päätöksistä
+                  jäljitettäviä.
+                </Text>
+                {debugSegmentRows && debugSegmentRows.length > 0 ? (
+                  debugSegmentRows.map((row) => (
+                    <DebugSegmentCard key={row.id} row={row} />
+                  ))
+                ) : (
+                  <Text style={styles.debugEmptyText}>
+                    Ei lämmitysjaksoja tarkasteluikkunassa.
+                  </Text>
+                )}
+              </View>
+            ) : null}
+          </>
         )}
       </ScrollView>
     </View>
@@ -247,4 +466,23 @@ const styles = StyleSheet.create({
   infoLabel: { color: "#9fc7df", fontSize: 12, fontWeight: "800" },
   infoValue: { color: "#f7fbff", fontSize: 24, fontWeight: "900", marginTop: 4 },
   infoDescription: { color: "#b9d7ff", fontSize: 13, fontWeight: "600", lineHeight: 19, marginTop: 8 },
+  debugToggle: { alignItems: "center", backgroundColor: "rgba(255,255,255,0.05)", borderRadius: 16, flexDirection: "row", justifyContent: "space-between", marginTop: 8, paddingHorizontal: 16, paddingVertical: 13 },
+  debugToggleText: { color: "#9fc7df", fontSize: 13, fontWeight: "800" },
+  debugToggleChevron: { color: "#9fc7df", fontSize: 16, fontWeight: "900" },
+  debugSection: { marginTop: 10 },
+  debugSectionIntro: { color: "#8190b5", fontSize: 12, fontWeight: "600", lineHeight: 17, marginBottom: 10 },
+  debugEmptyText: { color: "#8190b5", fontSize: 13, fontWeight: "700", paddingVertical: 12, textAlign: "center" },
+  debugSegmentCard: { borderRadius: 14, borderWidth: 1, marginBottom: 8, padding: 12 },
+  debugSegmentCardAccepted: { backgroundColor: "rgba(84,234,160,0.07)", borderColor: "rgba(84,234,160,0.22)" },
+  debugSegmentCardRejected: { backgroundColor: "rgba(255,95,109,0.06)", borderColor: "rgba(255,95,109,0.2)" },
+  debugSegmentHeaderRow: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  debugSegmentTime: { color: "#cfe9ff", fontSize: 11, fontWeight: "800" },
+  debugSegmentStatus: { borderRadius: 999, fontSize: 10, fontWeight: "900", overflow: "hidden", paddingHorizontal: 8, paddingVertical: 3 },
+  debugSegmentStatusAccepted: { backgroundColor: "rgba(84,234,160,0.16)", color: "#8ff0bd" },
+  debugSegmentStatusRejected: { backgroundColor: "rgba(255,95,109,0.16)", color: "#ff9aa4" },
+  debugSegmentValuesRow: { flexDirection: "row", gap: 14, marginTop: 6 },
+  debugSegmentValue: { color: "#f7fbff", fontSize: 13, fontWeight: "800" },
+  debugSegmentReasonText: { color: "#ff9aa4", fontSize: 11, fontWeight: "700", marginTop: 6 },
+  debugSegmentWarningText: { color: "#ffcf7a", fontSize: 11, fontWeight: "700", marginTop: 4 },
+  debugSegmentMeta: { color: "#5f7093", fontSize: 10, fontWeight: "600", marginTop: 6 },
 });

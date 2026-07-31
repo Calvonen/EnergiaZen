@@ -63,8 +63,10 @@ export type HeatingGainSegment = {
   bottomGainPerHour: number;
   durationHours: number;
   endTime: string;
+  endWeightedTemperature: number;
   readingCount: number;
   startTime: string;
+  startWeightedTemperature: number;
   status: "accepted" | "accepted_with_warnings";
   topGainPerHour: number;
   weightedGainPerHour: number;
@@ -76,9 +78,11 @@ export type HeatingGainRejectedSegment = {
   bottomGainPerHour: number | null;
   durationHours: number;
   endTime: string;
+  endWeightedTemperature: number;
   readingCount: number;
   reasons: HeatingGainRejectionReason[];
   startTime: string;
+  startWeightedTemperature: number;
   status: "rejected";
   topGainPerHour: number | null;
   weightedGainPerHour: number | null;
@@ -208,8 +212,10 @@ export function findValidHeatingSegments(
         bottomGainPerHour,
         durationHours,
         endTime: new Date(last.time).toISOString(),
+        endWeightedTemperature: last.weightedTemperature,
         readingCount: currentSegment.length,
         startTime: new Date(first.time).toISOString(),
+        startWeightedTemperature: first.weightedTemperature,
         status: warnings.length > 0 ? "accepted_with_warnings" : "accepted",
         topGainPerHour,
         weightedGainPerHour,
@@ -226,9 +232,11 @@ export function findValidHeatingSegments(
         bottomGainPerHour: finiteOrNull(bottomGainPerHour),
         durationHours,
         endTime: new Date(last.time).toISOString(),
+        endWeightedTemperature: last.weightedTemperature,
         readingCount: currentSegment.length,
         reasons,
         startTime: new Date(first.time).toISOString(),
+        startWeightedTemperature: first.weightedTemperature,
         status: "rejected",
         topGainPerHour: finiteOrNull(topGainPerHour),
         weightedGainPerHour: finiteOrNull(weightedGainPerHour),
