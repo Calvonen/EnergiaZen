@@ -29,6 +29,7 @@ function createSettings(
     fixedHeatingHoursPerDay: 2,
     fullTankAverageTemperature: 65,
     fullTankShowers: 6,
+    heatingGainSource: "learned",
     heatingNeedMode: "automatic",
     maxTankTemperature: 70,
     minTankTemperature: 10,

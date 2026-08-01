@@ -3,6 +3,7 @@ import {
   type HeatingOptimizationHour,
   type HeatingOptimizationSettings,
 } from "./heatingOptimizer";
+import type { HeatingGainSource } from "./settings";
 import type {
   TankTemperatureReading,
 } from "./tankTemperatureForecast";
@@ -11,6 +12,7 @@ export type HeatingOptimizationInputSnapshot = {
   currentBottomTemperature: number | null;
   currentTopTemperature: number | null;
   currentWeightedTemperature: number | null;
+  heatingGainSource: HeatingGainSource;
   heatingHistory: TankTemperatureReading[];
   hourlyDrops: Record<number, number>;
   hours: HeatingOptimizationHour[];
@@ -49,6 +51,12 @@ export function createHeatingOptimizationInputKey(
     currentBottomTemperature: snapshot.currentBottomTemperature,
     currentTopTemperature: snapshot.currentTopTemperature,
     currentWeightedTemperature: snapshot.currentWeightedTemperature,
+    // heatingGainSource itself isn't part of snapshot.settings (the
+    // "fixed" override is applied separately - see
+    // useHeatingOptimizationRun.ts) so it must be listed explicitly here,
+    // or toggling it wouldn't change this key and the run controller
+    // would treat it as "no change" and skip re-optimizing.
+    heatingGainSource: snapshot.heatingGainSource,
     heatingHistory: snapshot.heatingHistory.map((reading) => [
       reading.created_at ?? null,
       reading.top_temp ?? null,

@@ -25,6 +25,7 @@ function createSnapshot(): HeatingOptimizationInputSnapshot {
     currentBottomTemperature: 51,
     currentTopTemperature: 64,
     currentWeightedTemperature: 60.1,
+    heatingGainSource: "learned",
     heatingHistory: [
       {
         bottom_temp: 40,
@@ -101,6 +102,17 @@ export function runHeatingOptimizationRunUnitTests() {
       createHeatingOptimizationInputKey(changedSettings) !== baseKey,
       true,
       "muuttuneet asetukset kaynnistavat uuden ajon",
+    );
+  }
+
+  {
+    const changedGainSource = createSnapshot();
+    changedGainSource.heatingGainSource = "fixed";
+
+    assertEqual(
+      createHeatingOptimizationInputKey(changedGainSource) !== baseKey,
+      true,
+      "lämmitystehon lähteen vaihtaminen kaynnistaa uuden ajon",
     );
   }
 

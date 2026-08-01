@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import * as Updates from "expo-updates";
 
 import {
   estimateHeatingGainPerHour,
+  fallbackHeatingGainPerHour,
   fetchHeatingGainHistory,
   heatingGainHistoryDays,
   HeatingGainRejectedSegment,
@@ -18,6 +19,12 @@ import {
   type RecoveryDropEstimate,
 } from "@/lib/heatingRecoveryDrop";
 import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
+import {
+  saveSettings,
+  type EnergiaZenSettings,
+  type HeatingGainSource,
+} from "@/lib/settings";
+import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
 
@@ -45,25 +52,44 @@ function formatCelsius(value: number, options: { forceSign?: boolean } = {}) {
 function buildLearningInfoRows(
   gainEstimate: ReturnType<typeof estimateHeatingGainPerHour>,
   backtest: ReturnType<typeof backtestHeatingGainEstimate>,
+  heatingGainSource: HeatingGainSource,
 ): LearningInfoRow[] {
   const rows: LearningInfoRow[] = [];
+  // "Nykyinen lämmitysteho"/"Arvon lähde" kuvaavat aina sitä arvoa jota
+  // oikea lämmityssuunnitelma OIKEASTI käyttää juuri nyt
+  // (lib/useHeatingOptimizationRun.ts), ei pelkkää tämän näytön omaa,
+  // riippumatonta arviota - jos käyttäjä on pakottanut kiinteän arvon alla
+  // olevasta valinnasta, se näkyy tässä eikä opittua arvoa näytetä
+  // harhaanjohtavasti käytössä olevana.
+  const isForcedFixed = heatingGainSource === "fixed";
+  const effectiveGainPerHour = isForcedFixed
+    ? fallbackHeatingGainPerHour
+    : gainEstimate.gainPerHour;
 
   rows.push({
     id: "gainPerHour",
     label: "Nykyinen lämmitysteho",
-    value: `${gainEstimate.gainPerHour.toFixed(1).replace(".", ",")} °C/h`,
-    description: gainEstimate.fallbackUsed
-      ? "Arvio siitä, kuinka paljon varaajan lämpötila nousee tunnissa lämmityksen aikana. Dataa ei vielä ole riittävästi, joten käytössä on kiinteä oletusarvo."
-      : `Arvio siitä, kuinka paljon varaajan lämpötila nousee tunnissa lämmityksen aikana. Opittu ${gainEstimate.acceptedSegmentCount} lämmitysjaksosta viimeisen ${heatingGainHistoryDays} päivän ajalta.`,
+    value: `${effectiveGainPerHour.toFixed(1).replace(".", ",")} °C/h`,
+    description: isForcedFixed
+      ? "Arvio siitä, kuinka paljon varaajan lämpötila nousee tunnissa lämmityksen aikana. Käytössä on manuaalisesti valittu kiinteä oletusarvo - vaihda tämä yllä olevasta valinnasta."
+      : gainEstimate.fallbackUsed
+        ? "Arvio siitä, kuinka paljon varaajan lämpötila nousee tunnissa lämmityksen aikana. Dataa ei vielä ole riittävästi, joten käytössä on kiinteä oletusarvo."
+        : `Arvio siitä, kuinka paljon varaajan lämpötila nousee tunnissa lämmityksen aikana. Opittu ${gainEstimate.acceptedSegmentCount} lämmitysjaksosta viimeisen ${heatingGainHistoryDays} päivän ajalta.`,
   });
 
   rows.push({
     id: "source",
     label: "Arvon lähde",
-    value: gainEstimate.fallbackUsed ? "Kiinteä oletusarvo" : "Opittu datasta",
-    description: gainEstimate.fallbackUsed
-      ? "Hyväksyttyjä lämmitysjaksoja on vielä liian vähän, joten laskennassa käytetään kiinteää oletusarvoa opitun arvon sijaan."
-      : "Lämmitysteho on opittu mitatusta datasta, ei kiinteästä oletusarvosta.",
+    value: isForcedFixed
+      ? "Kiinteä (valittu asetuksista)"
+      : gainEstimate.fallbackUsed
+        ? "Kiinteä oletusarvo"
+        : "Opittu datasta",
+    description: isForcedFixed
+      ? "Olet valinnut käytettäväksi kiinteän oletusarvon opitun arvon sijaan, kunnes dataa on enemmän."
+      : gainEstimate.fallbackUsed
+        ? "Hyväksyttyjä lämmitysjaksoja on vielä liian vähän, joten laskennassa käytetään kiinteää oletusarvoa opitun arvon sijaan."
+        : "Lämmitysteho on opittu mitatusta datasta, ei kiinteästä oletusarvosta.",
   });
 
   rows.push({
@@ -355,6 +381,42 @@ export default function HeatingLearningScreen() {
     TankTemperatureReading[] | null
   >(null);
   const hasRequestedRecoveryReadings = useRef(false);
+  const { areSettingsLoaded, commitPersistedSettings, persistedSettings } =
+    useSettingsScenario();
+  const [isSavingGainSource, setIsSavingGainSource] = useState(false);
+  const [gainSourceSaveError, setGainSourceSaveError] = useState<string | null>(
+    null,
+  );
+
+  const handleGainSourceChange = async (useLearnedValue: boolean) => {
+    const nextSource: HeatingGainSource = useLearnedValue ? "learned" : "fixed";
+    const previousSettings = persistedSettings;
+    const nextSettings: EnergiaZenSettings = {
+      ...previousSettings,
+      heatingGainSource: nextSource,
+    };
+
+    setGainSourceSaveError(null);
+    setIsSavingGainSource(true);
+    // Julkaise valinta heti jaettuun asetuskontekstiin, jotta etusivun
+    // elävä lämmitysoptimointi (SettingsScenarioProvider, ei tämän ruudun
+    // omaa paikallista tilaa) huomioi sen ilman sovelluksen uudelleenkäynnistystä.
+    commitPersistedSettings(nextSettings, previousSettings);
+
+    try {
+      await saveSettings(nextSettings);
+    } catch {
+      // AsyncStorage-tallennus epäonnistui - peruuta julkaistu muutos, jotta
+      // näytetty tila ei väitä valintaa voimassa olevaksi kun sitä ei
+      // todellisuudessa tallennettu.
+      commitPersistedSettings(previousSettings, nextSettings);
+      setGainSourceSaveError(
+        "Valinnan tallennus epäonnistui. Yritä uudelleen.",
+      );
+    } finally {
+      setIsSavingGainSource(false);
+    }
+  };
 
   useEffect(() => {
     let isActive = true;
@@ -411,8 +473,12 @@ export default function HeatingLearningScreen() {
     const gainEstimate = estimateHeatingGainPerHour(readings);
     const backtest = backtestHeatingGainEstimate(readings);
 
-    return buildLearningInfoRows(gainEstimate, backtest);
-  }, [readings]);
+    return buildLearningInfoRows(
+      gainEstimate,
+      backtest,
+      persistedSettings.heatingGainSource,
+    );
+  }, [persistedSettings.heatingGainSource, readings]);
 
   const debugSegmentRows = useMemo(() => {
     if (!readings) {
@@ -504,6 +570,38 @@ export default function HeatingLearningScreen() {
           <Text style={styles.subtitle}>
             Viimeisen {heatingGainHistoryDays} päivän lämmitysjaksot
           </Text>
+        </View>
+
+        <View style={styles.gainSourceCard}>
+          <View style={styles.gainSourceRow}>
+            <View style={styles.settingTextGroup}>
+              <Text style={styles.settingLabel}>Käytä opittua lämmitystehoa</Text>
+              <Text style={styles.settingDescription}>
+                {persistedSettings.heatingGainSource === "fixed"
+                  ? `Pois päältä: käytössä on kiinteä ${fallbackHeatingGainPerHour
+                      .toFixed(1)
+                      .replace(".", ",")} °C/h -oletusarvo, ei opittua arvoa.`
+                  : "Päällä: opittua arvoa käytetään heti kun dataa on tarpeeksi, muuten kiinteää oletusarvoa."}
+              </Text>
+              {gainSourceSaveError ? (
+                <Text accessibilityRole="alert" style={styles.settingErrorText}>
+                  {gainSourceSaveError}
+                </Text>
+              ) : null}
+            </View>
+            <Switch
+              accessibilityLabel="Käytä opittua lämmitystehoa"
+              disabled={!areSettingsLoaded || isSavingGainSource}
+              onValueChange={(value) => void handleGainSourceChange(value)}
+              thumbColor={
+                persistedSettings.heatingGainSource !== "fixed"
+                  ? "#36f4d4"
+                  : "#9aaaca"
+              }
+              trackColor={{ false: "#39445d", true: "#238b7c" }}
+              value={persistedSettings.heatingGainSource !== "fixed"}
+            />
+          </View>
         </View>
 
         <View style={styles.introCard}>
@@ -604,6 +702,12 @@ const styles = StyleSheet.create({
   subtitle: { color: "#b9d7ff", fontSize: 14, fontWeight: "700", marginTop: 5 },
   introCard: { backgroundColor: "rgba(90,167,255,0.09)", borderColor: "rgba(90,167,255,0.2)", borderRadius: 20, borderWidth: 1, marginBottom: 12, padding: 16 },
   introText: { color: "#cfe9ff", fontSize: 13, fontWeight: "600", lineHeight: 19 },
+  gainSourceCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 20, marginBottom: 12, padding: 16 },
+  gainSourceRow: { alignItems: "center", flexDirection: "row", gap: 12 },
+  settingTextGroup: { flex: 1, gap: 4 },
+  settingLabel: { color: "#d9e9ff", fontSize: 15, fontWeight: "800" },
+  settingDescription: { color: "#8ea4cf", fontSize: 12, fontWeight: "700", lineHeight: 16 },
+  settingErrorText: { color: "#ff9aa4", fontSize: 12, fontWeight: "800", marginTop: 6 },
   loadingCard: { alignItems: "center", backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, gap: 10, marginTop: 12, padding: 30 },
   loadingText: { color: "#cfe9ff", fontSize: 14, fontWeight: "800" },
   emptyCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginTop: 12, padding: 30 },

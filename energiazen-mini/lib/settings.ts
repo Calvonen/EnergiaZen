@@ -16,6 +16,14 @@ export const defaultTankTemperature = 58;
 
 export type HeatingNeedMode = "automatic" | "fixed";
 
+// "learned" (default): use the heating-gain value learned from real
+// tank_readings once enough valid segments exist, otherwise the fixed
+// fallback (see fallbackHeatingGainPerHour in lib/heatingGain.ts).
+// "fixed": always use the fixed fallback, ignoring the learned value even
+// when one is available - e.g. while distrusting a learned estimate that
+// still has too little data behind it.
+export type HeatingGainSource = "learned" | "fixed";
+
 export const defaultSettings = {
   tankSizeLiters: 290,
   heatingNeedMode: "automatic" as HeatingNeedMode,
@@ -30,6 +38,7 @@ export const defaultSettings = {
   fullTankShowers: 6,
   targetShowerReserve: defaultTargetShowerReserve,
   safetyShowerReserve: defaultSafetyShowerReserve,
+  heatingGainSource: "learned" as HeatingGainSource,
 };
 
 export type EnergiaZenSettings = typeof defaultSettings;
@@ -108,6 +117,10 @@ export function normalizeSettings(
       settings.heatingNeedMode === "fixed"
         ? "fixed"
         : defaultSettings.heatingNeedMode,
+    heatingGainSource:
+      settings.heatingGainSource === "fixed"
+        ? "fixed"
+        : defaultSettings.heatingGainSource,
     fallbackEnabled:
       typeof settings.fallbackEnabled === "boolean"
         ? settings.fallbackEnabled
