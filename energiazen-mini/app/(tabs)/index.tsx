@@ -93,6 +93,7 @@ import {
   predictWeightedTemperature,
   TankTemperatureReading,
 } from "@/lib/tankTemperatureForecast";
+import { calculateMinimumValidInletTemperature } from "@/lib/inletTemperature";
 import {
   fetchLatestTemperatureDropProfile,
   selectTemperatureDropProfile,
@@ -847,6 +848,10 @@ export default function HomeScreen() {
   const [tankTemperatureHistory, setTankTemperatureHistory] = useState<
     TankTemperatureReading[]
   >([]);
+  // Data layer only for now - not yet surfaced in the UI. See
+  // calculateMinimumValidInletTemperature for how the value is filtered.
+  const [weeklyMinimumInletTemperature, setWeeklyMinimumInletTemperature] =
+    useState<number | null>(null);
   const [heatingGainHistory, setHeatingGainHistory] = useState<
     TankTemperatureReading[]
   >([]);
@@ -2180,7 +2185,7 @@ export default function HomeScreen() {
               fetchHeatingGainHistory(async (from, to) => {
                 const { data, error } = await supabase
                   .from("tank_readings")
-                  .select("created_at,top_temp,bottom_temp,heating")
+                  .select("created_at,top_temp,bottom_temp,inlet_temp,heating")
                   .gte("created_at", sevenDaysAgoIso)
                   .order("created_at", { ascending: true })
                   .range(from, to);
@@ -2265,8 +2270,14 @@ export default function HomeScreen() {
               temperatureHistoryResult.error,
             );
             setTankTemperatureHistory([]);
+            setWeeklyMinimumInletTemperature(null);
           } else {
             setTankTemperatureHistory(temperatureHistoryResult.readings);
+            setWeeklyMinimumInletTemperature(
+              calculateMinimumValidInletTemperature(
+                temperatureHistoryResult.readings,
+              ),
+            );
           }
         } catch {
           if (!isActive) {
@@ -2278,6 +2289,7 @@ export default function HomeScreen() {
           setHeatingGainHistory([]);
           setHeatingGainHistoryFetch({ fetchedRowCount: 0, pageCount: 0 });
           setTankTemperatureHistory([]);
+          setWeeklyMinimumInletTemperature(null);
           setStoredTemperatureDropProfile(null);
           setHeating(false);
           setTankUpdatedAt(null);

@@ -1,4 +1,5 @@
 import { runTankTemperatureForecastUnitTests } from "../lib/tankTemperatureForecast.test";
+import { runInletTemperatureUnitTests } from "../lib/inletTemperature.test";
 import { runHeatingHistoryUnitTests } from "../lib/heatingHistory.test";
 import { runHeatingOptimizerUnitTests } from "../lib/heatingOptimizer.test";
 import { runHeatingOptimizationRunUnitTests } from "../lib/heatingOptimizationRun.test";
@@ -34,6 +35,7 @@ import { runHeatingOptimizationStatusSourceTests } from "../tests/heatingOptimiz
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
+  runInletTemperatureUnitTests();
   await runHeatingHistoryUnitTests();
   runHeatingEnergyCostUnitTests();
   runElectricityPricesUnitTests();
@@ -68,7 +70,7 @@ async function runTests() {
   runPriceUtilsUnitTests();
 
   console.log(
-    "tankTemperatureForecast, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation and priceUtils tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation and priceUtils tests passed",
   );
 }
 
