@@ -80,13 +80,30 @@ ohjeet.
 ### 4. Laitteisto: ESP32 + Shelly
 
 - **ESP32** (`esp32/energiazen_tank_monitor/energiazen_tank_monitor.ino`):
-  itsenäinen mittalaite. Kaksi DS18B20-lämpötila-anturia (varaajan ylä- ja
-  alaosa, GPIO4) sekä 1.3" SH1106 I2C OLED -näyttö. Lukee lämpötilat 5
-  sekunnin välein ja lähettää ne Supabaseen (`tank_readings`-taulun REST-
-  rajapintaan) 60 sekunnin välein. Laite kysyy myös paikallisverkosta
-  Shellyn RPC-statusrajapinnasta (`Switch.GetStatus`) tämänhetkisen
-  lämmitysreleen tilan ja tallentaa sen `heating`-kenttään – **ESP32 ei
-  ohjaa Shellyä**, se ainoastaan lukee ja raportoi sen tilan.
+  itsenäinen mittalaite. Kaksi pakollista DS18B20-lämpötila-anturia
+  (varaajan ylä- ja alaosa) sekä yksi valinnainen DS18B20 tuloveden
+  lämpötilalle, kaikki samassa OneWire-väylässä (GPIO4), sekä 1.3" SH1106
+  I2C OLED -näyttö. Anturit tunnistetaan niiden yksilöllisillä 64-bittisillä
+  ROM-osoitteilla (`TOP_SENSOR_ADDRESS`/`BOTTOM_SENSOR_ADDRESS`/
+  `INLET_SENSOR_ADDRESS` .ino-tiedoston alussa), ei väylän skannausjärjes-
+  tyksellä, koska järjestys ei ole taattu pysymään samana. Osoitteiden
+  selvitys: flashaa oletusarvoisilla (nolla) osoitteilla, avaa sarjaportti
+  115200 baudilla ja lue käynnistyksessä tulostettava laitelista (jokaisen
+  löydetyn anturin ROM-osoite + sille päätelty rooli), kopioi osoitteet
+  oikeisiin vakioihin ja flashaa uudelleen. Niin kauan kuin pakollinen
+  `TOP_SENSOR_ADDRESS` tai `BOTTOM_SENSOR_ADDRESS` on määrittämättä, laite
+  pysyy määritystilassa (OLED "SETUP MODE", jatkuva laitelistan tulostus
+  sarjaporttiin) eikä lähetä mitään Supabaseen eikä käynnistä anturi-
+  watchdogin uudelleenkäynnistyslogiikkaa. Tulovesianturi on valinnainen:
+  jos `INLET_SENSOR_ADDRESS` on nolla tai lukema on virheellinen, laite
+  toimii normaalisti pelkillä ylä-/ala-antureilla ja lähettää `inlet_temp`-
+  kentän arvolla `null`. Laite lukee lämpötilat 5 sekunnin välein ja
+  lähettää ne Supabaseen (`tank_readings`-taulun REST-rajapintaan, kentät
+  `top_temp`, `bottom_temp`, `inlet_temp`, `showers`, `heating`) 60
+  sekunnin välein. Laite kysyy myös paikallisverkosta Shellyn RPC-
+  statusrajapinnasta (`Switch.GetStatus`) tämänhetkisen lämmitysreleen
+  tilan ja tallentaa sen `heating`-kenttään – **ESP32 ei ohjaa Shellyä**,
+  se ainoastaan lukee ja raportoi sen tilan.
 - **Shelly-ohjain** (`energiazen-mini/shelly/energyzen-controller.js`, sekä
   minifioitu `energyzen-controller.min.js` laitteelle vietäväksi ja
   yksikkötestit `energyzen-controller.test.js`): tämä on Shellyn oma
