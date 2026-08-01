@@ -38,7 +38,9 @@ export type HeatingOptimizationRunState = PublishedHeatingPlanState<
 
 export type UseHeatingOptimizationRunOptions = Omit<
   HeatingOptimizationInputSnapshot,
-  "settings"
+  // Both are derived from appSettings inside this hook (see the snapshot
+  // useMemo below) rather than being separate caller-supplied inputs.
+  "settings" | "heatingGainSource"
 > & {
   appSettings: EnergiaZenSettings;
   fallbackHeatingGainPerHour: number;
@@ -77,6 +79,7 @@ export function useHeatingOptimizationRun({
       currentBottomTemperature,
       currentTopTemperature,
       currentWeightedTemperature,
+      heatingGainSource: appSettings.heatingGainSource,
       heatingHistory,
       hourlyDrops,
       hours,
@@ -88,6 +91,7 @@ export function useHeatingOptimizationRun({
       settings: optimizationSettings,
     }),
     [
+      appSettings.heatingGainSource,
       currentBottomTemperature,
       currentTopTemperature,
       currentWeightedTemperature,

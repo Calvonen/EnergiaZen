@@ -20,12 +20,11 @@ import {
 } from "@/lib/heatingRecoveryDrop";
 import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
 import {
-  defaultSettings,
-  loadSettings,
   saveSettings,
   type EnergiaZenSettings,
   type HeatingGainSource,
 } from "@/lib/settings";
+import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
 
@@ -382,35 +381,41 @@ export default function HeatingLearningScreen() {
     TankTemperatureReading[] | null
   >(null);
   const hasRequestedRecoveryReadings = useRef(false);
-  const [settings, setSettings] = useState<EnergiaZenSettings>(defaultSettings);
-  const [areSettingsLoaded, setAreSettingsLoaded] = useState(false);
+  const { areSettingsLoaded, commitPersistedSettings, persistedSettings } =
+    useSettingsScenario();
   const [isSavingGainSource, setIsSavingGainSource] = useState(false);
+  const [gainSourceSaveError, setGainSourceSaveError] = useState<string | null>(
+    null,
+  );
 
-  useEffect(() => {
-    let isActive = true;
-
-    void loadSettings().then((loadedSettings) => {
-      if (isActive) {
-        setSettings(loadedSettings);
-        setAreSettingsLoaded(true);
-      }
-    });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
-
-  const handleGainSourceChange = (useLearnedValue: boolean) => {
+  const handleGainSourceChange = async (useLearnedValue: boolean) => {
     const nextSource: HeatingGainSource = useLearnedValue ? "learned" : "fixed";
+    const previousSettings = persistedSettings;
     const nextSettings: EnergiaZenSettings = {
-      ...settings,
+      ...previousSettings,
       heatingGainSource: nextSource,
     };
 
-    setSettings(nextSettings);
+    setGainSourceSaveError(null);
     setIsSavingGainSource(true);
-    void saveSettings(nextSettings).finally(() => setIsSavingGainSource(false));
+    // Julkaise valinta heti jaettuun asetuskontekstiin, jotta etusivun
+    // elävä lämmitysoptimointi (SettingsScenarioProvider, ei tämän ruudun
+    // omaa paikallista tilaa) huomioi sen ilman sovelluksen uudelleenkäynnistystä.
+    commitPersistedSettings(nextSettings, previousSettings);
+
+    try {
+      await saveSettings(nextSettings);
+    } catch {
+      // AsyncStorage-tallennus epäonnistui - peruuta julkaistu muutos, jotta
+      // näytetty tila ei väitä valintaa voimassa olevaksi kun sitä ei
+      // todellisuudessa tallennettu.
+      commitPersistedSettings(previousSettings, nextSettings);
+      setGainSourceSaveError(
+        "Valinnan tallennus epäonnistui. Yritä uudelleen.",
+      );
+    } finally {
+      setIsSavingGainSource(false);
+    }
   };
 
   useEffect(() => {
@@ -471,9 +476,9 @@ export default function HeatingLearningScreen() {
     return buildLearningInfoRows(
       gainEstimate,
       backtest,
-      settings.heatingGainSource,
+      persistedSettings.heatingGainSource,
     );
-  }, [readings, settings.heatingGainSource]);
+  }, [persistedSettings.heatingGainSource, readings]);
 
   const debugSegmentRows = useMemo(() => {
     if (!readings) {
@@ -572,22 +577,29 @@ export default function HeatingLearningScreen() {
             <View style={styles.settingTextGroup}>
               <Text style={styles.settingLabel}>Käytä opittua lämmitystehoa</Text>
               <Text style={styles.settingDescription}>
-                {settings.heatingGainSource === "fixed"
+                {persistedSettings.heatingGainSource === "fixed"
                   ? `Pois päältä: käytössä on kiinteä ${fallbackHeatingGainPerHour
                       .toFixed(1)
                       .replace(".", ",")} °C/h -oletusarvo, ei opittua arvoa.`
                   : "Päällä: opittua arvoa käytetään heti kun dataa on tarpeeksi, muuten kiinteää oletusarvoa."}
               </Text>
+              {gainSourceSaveError ? (
+                <Text accessibilityRole="alert" style={styles.settingErrorText}>
+                  {gainSourceSaveError}
+                </Text>
+              ) : null}
             </View>
             <Switch
               accessibilityLabel="Käytä opittua lämmitystehoa"
               disabled={!areSettingsLoaded || isSavingGainSource}
-              onValueChange={handleGainSourceChange}
+              onValueChange={(value) => void handleGainSourceChange(value)}
               thumbColor={
-                settings.heatingGainSource !== "fixed" ? "#36f4d4" : "#9aaaca"
+                persistedSettings.heatingGainSource !== "fixed"
+                  ? "#36f4d4"
+                  : "#9aaaca"
               }
               trackColor={{ false: "#39445d", true: "#238b7c" }}
-              value={settings.heatingGainSource !== "fixed"}
+              value={persistedSettings.heatingGainSource !== "fixed"}
             />
           </View>
         </View>
@@ -695,6 +707,7 @@ const styles = StyleSheet.create({
   settingTextGroup: { flex: 1, gap: 4 },
   settingLabel: { color: "#d9e9ff", fontSize: 15, fontWeight: "800" },
   settingDescription: { color: "#8ea4cf", fontSize: 12, fontWeight: "700", lineHeight: 16 },
+  settingErrorText: { color: "#ff9aa4", fontSize: 12, fontWeight: "800", marginTop: 6 },
   loadingCard: { alignItems: "center", backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, gap: 10, marginTop: 12, padding: 30 },
   loadingText: { color: "#cfe9ff", fontSize: 14, fontWeight: "800" },
   emptyCard: { backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 24, marginTop: 12, padding: 30 },
