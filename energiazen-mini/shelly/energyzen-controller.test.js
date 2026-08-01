@@ -169,6 +169,51 @@ assert.strictEqual(
 );
 assert.strictEqual(staleOutsideBackupHour.finalTargetOn, false);
 
+// Regressiotesti Codexin P1-loydokselle: kelvollinen paivittainen
+// optimointisuunnitelma EI sisalla nykyista varatuntia (talla paivalla
+// valittiin joku muu, halvempi tunti) - tama on normaali tilanne, ei
+// itsessaan vika. Jos anturidata on samaan aikaan vanhentunut, ohituksen
+// pitaa silti laueta, koska "hour-not-planned" ei saa peittaa alleen
+// oikeaa datavikaa varatunnilla.
+const staleBackupHourNotInTodaysPlan = decide({
+  currentHour: 15,
+  plannedHours: [10],
+  reading: readingForShowers(3, 121),
+});
+assert.strictEqual(
+  staleBackupHourNotInTodaysPlan.reason,
+  "backup-fault-override",
+  "anturivika varatunnilla ohittaa vaikka tunti ei ole mukana taman paivan optimoidussa suunnitelmassa",
+);
+assert.strictEqual(staleBackupHourNotInTodaysPlan.finalTargetOn, true);
+
+const missingReadingBackupHourNotInTodaysPlan = decide({
+  currentHour: 15,
+  plannedHours: [10],
+  reading: null,
+});
+assert.strictEqual(
+  missingReadingBackupHourNotInTodaysPlan.reason,
+  "backup-fault-override",
+  "puuttuva lukema varatunnilla ohittaa myos vaikka tunti ei ole mukana suunnitelmassa",
+);
+assert.strictEqual(missingReadingBackupHourNotInTodaysPlan.finalTargetOn, true);
+
+// Sama tilanne mutta data ONKIN kelvollista - talloin "hour-not-planned"
+// pitaa silti raportoitua lopulta oikein, eika varatuntistatus yksinaan
+// saa laukaista lammitysta ilman oikeaa datavikaa.
+const healthyBackupHourNotInTodaysPlan = decide({
+  currentHour: 15,
+  plannedHours: [10],
+  reading: readingForShowers(3),
+});
+assert.strictEqual(
+  healthyBackupHourNotInTodaysPlan.reason,
+  "hour-not-planned",
+  "terve data varatunnilla joka ei ole suunnitelmassa ei saa lammittaa pelkan varatuntistatuksen perusteella",
+);
+assert.strictEqual(healthyBackupHourNotInTodaysPlan.finalTargetOn, false);
+
 const staleWithFallbackDisabled = decide({
   reading: readingForShowers(3, 121),
   testSettings: { ...settings, enabled: false },

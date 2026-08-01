@@ -292,9 +292,19 @@ function decideHeating(input, state) {
   let startThresholdShowers = null;
   let startBlockedByFillRatio = false;
   let finalTargetOn = false;
+  let backupHours = settings ? normalizeHours(settings.backupHours) : [];
+  let isBackupHour = containsHour(backupHours, input.currentHour);
   let reason = input.failSafeReason || null;
 
-  if (!reason && !planned) {
+  // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
+  // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
+  // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
+  // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
+  // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
+  // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
+  // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
+  // tank_readings vanhenee.
+  if (!reason && !planned && !isBackupHour) {
     reason = "hour-not-planned";
   }
 
@@ -332,6 +342,14 @@ function decideHeating(input, state) {
     }
   }
 
+  // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
+  // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
+  // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
+  // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
+  if (!reason && !planned) {
+    reason = "hour-not-planned";
+  }
+
   if (isValidCalibration(settings)) {
     startThresholdShowers =
       settings.fullTankShowers * START_HEATING_FILL_RATIO;
@@ -340,14 +358,13 @@ function decideHeating(input, state) {
   // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
   // varakaytto ole kaytoston pois - lammitetaan sokeana, koska varaajan
   // oma termostaatti hoitaa turvallisuuden. Katso DATA_FAULT_REASONS.
-  let backupHours = settings ? normalizeHours(settings.backupHours) : [];
   let backupFaultOverride =
     reason !== null &&
     DATA_FAULT_REASONS[reason] === true &&
     settings !== null &&
     settings !== undefined &&
     settings.enabled === true &&
-    containsHour(backupHours, input.currentHour);
+    isBackupHour;
 
   if (backupFaultOverride) {
     resetHighFillReadings(decisionState);
