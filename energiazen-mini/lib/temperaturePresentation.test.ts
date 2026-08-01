@@ -1,5 +1,8 @@
 import { defaultSettings } from "./settings";
-import { getTemperatureCardTheme } from "./temperaturePresentation";
+import {
+  formatWeeklyMinimumInletTemperatureLabel,
+  getTemperatureCardTheme,
+} from "./temperaturePresentation";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -65,5 +68,26 @@ export function runTemperaturePresentationUnitTests() {
     getTemperatureCardTheme(200, defaultSettings),
     themeFromAccents("#ff3f46", "#8f151d"),
     "kaukana maksimin ylla oleva lampotila rajataan silti maksimiin asti",
+  );
+
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureLabel(null),
+    "--",
+    "puuttuva viikon tulovesiminimi näyttää placeholderin ilman astemerkkiä",
+  );
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureLabel(7.8),
+    "8°",
+    "viikon tulovesiminimi pyöristetään ja astemerkki lisätään",
+  );
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureLabel(16.4),
+    "16°",
+    "viikon tulovesiminimi pyöristetään alaspäin puolikkaan alle mennessä",
+  );
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureLabel(0),
+    "0°",
+    "arvo 0 ei saa näyttäytyä puuttuvana arvona",
   );
 }

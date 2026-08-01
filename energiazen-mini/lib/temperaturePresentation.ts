@@ -22,3 +22,17 @@ export function getTemperatureCardTheme(
     shadowColor: deepAccent,
   };
 }
+
+// Formats the pre-computed weekly-minimum inlet temperature for display.
+// Deliberately returns a bare "--" (no degree sign) when there is no valid
+// reading, rather than falling back to a default value or reusing the
+// degree-sign format used for an actual number.
+export function formatWeeklyMinimumInletTemperatureLabel(
+  weeklyMinimumInletTemperature: number | null,
+): string {
+  if (weeklyMinimumInletTemperature === null) {
+    return "--";
+  }
+
+  return `${Math.round(weeklyMinimumInletTemperature)}°`;
+}

@@ -17,7 +17,10 @@ import { TemperatureCard } from "@/components/home/temperature-card";
 import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
-import { getTemperatureCardTheme } from "@/lib/temperaturePresentation";
+import {
+  formatWeeklyMinimumInletTemperatureLabel,
+  getTemperatureCardTheme,
+} from "@/lib/temperaturePresentation";
 import { getPriceTheme } from "@/lib/pricePresentation";
 import {
   getSortedUniqueHelsinkiHourNumbers,
@@ -848,8 +851,8 @@ export default function HomeScreen() {
   const [tankTemperatureHistory, setTankTemperatureHistory] = useState<
     TankTemperatureReading[]
   >([]);
-  // Data layer only for now - not yet surfaced in the UI. See
-  // calculateMinimumValidInletTemperature for how the value is filtered.
+  // See calculateMinimumValidInletTemperature for how this value is
+  // filtered (a confirmation window, not a raw minimum).
   const [weeklyMinimumInletTemperature, setWeeklyMinimumInletTemperature] =
     useState<number | null>(null);
   const [heatingGainHistory, setHeatingGainHistory] = useState<
@@ -1013,6 +1016,8 @@ export default function HomeScreen() {
   const displayedTopTemp = topTemp === null ? "--" : `${Math.round(topTemp)}`;
   const displayedBottomTemp =
     bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
+  const displayedWeeklyMinimumInletTemp =
+    formatWeeklyMinimumInletTemperatureLabel(weeklyMinimumInletTemperature);
   const warmWaterEstimate = getStratifiedWarmWaterEstimate(
     topTemp,
     bottomTemp,
@@ -2650,6 +2655,7 @@ export default function HomeScreen() {
           <TemperatureCard
             accessibilityLabel={temperatureCardAccessibilityLabel}
             bottomTempLabel={displayedBottomTemp}
+            inletTempLabel={displayedWeeklyMinimumInletTemp}
             isTankHeating={isTankHeating}
             onPress={() => {
               logHistoryNavigationTap("history");
