@@ -90,7 +90,11 @@ ohjeet.
   selvitys: flashaa oletusarvoisilla (nolla) osoitteilla, avaa sarjaportti
   115200 baudilla ja lue käynnistyksessä tulostettava laitelista (jokaisen
   löydetyn anturin ROM-osoite + sille päätelty rooli), kopioi osoitteet
-  oikeisiin vakioihin ja flashaa uudelleen. Tulovesianturi on valinnainen:
+  oikeisiin vakioihin ja flashaa uudelleen. Niin kauan kuin pakollinen
+  `TOP_SENSOR_ADDRESS` tai `BOTTOM_SENSOR_ADDRESS` on määrittämättä, laite
+  pysyy määritystilassa (OLED "SETUP MODE", jatkuva laitelistan tulostus
+  sarjaporttiin) eikä lähetä mitään Supabaseen eikä käynnistä anturi-
+  watchdogin uudelleenkäynnistyslogiikkaa. Tulovesianturi on valinnainen:
   jos `INLET_SENSOR_ADDRESS` on nolla tai lukema on virheellinen, laite
   toimii normaalisti pelkillä ylä-/ala-antureilla ja lähettää `inlet_temp`-
   kentän arvolla `null`. Laite lukee lämpötilat 5 sekunnin välein ja

@@ -42,6 +42,12 @@
 // TOP and BOTTOM are required. INLET is optional: leave it as all zeros to
 // run without an inlet sensor - the device then keeps working normally with
 // just the top/bottom readings, and `inlet_temp` is reported as null.
+//
+// While TOP_SENSOR_ADDRESS or BOTTOM_SENSOR_ADDRESS is still all zeros, the
+// device stays in a sensor setup mode instead of running normally: it
+// periodically re-scans the OneWire bus and prints every discovered ROM
+// address to Serial, shows "SETUP MODE" on the OLED, and does not send
+// anything to Supabase or run the sensor watchdog restart logic.
 
 constexpr uint8_t ONE_WIRE_BUS_PIN = 4;
 constexpr uint8_t OLED_SDA_PIN = 21;
@@ -94,6 +100,7 @@ float bottomTemperatureC = NAN;
 float inletTemperatureC = NAN;
 float showersLeft = 0.0;
 bool inletSensorConfigured = false;
+bool requiredSensorsConfigured = false;
 unsigned long previousSensorReadMs = 0;
 unsigned long previousSupabaseSendMs = 0;
 unsigned long previousWiFiReconnectAttemptMs = 0;
@@ -247,8 +254,9 @@ void logDiscoveredSensors() {
   if (!isAddressConfigured(TOP_SENSOR_ADDRESS) ||
       !isAddressConfigured(BOTTOM_SENSOR_ADDRESS)) {
     Serial.println(
-        "WARNING: TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS not configured - "
-        "copy the ROM addresses above into the .ino and reflash");
+        "ERROR: TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS not configured - "
+        "copy the ROM addresses above into the .ino and reflash. Staying in "
+        "sensor setup mode: no readings will be sent to Supabase.");
   } else {
     if (!topFound) {
       Serial.println("WARNING: configured TOP sensor not found on bus");
@@ -643,6 +651,28 @@ void updateDisplay() {
   display.sendBuffer();
 }
 
+void updateSetupDisplay() {
+  display.clearBuffer();
+
+  display.setFont(u8g2_font_helvB10_tf);
+  display.setCursor(0, 9);
+  display.print("EnergyZen");
+
+  display.setFont(u8g2_font_helvB12_tf);
+  display.setCursor(0, 28);
+  display.print("SETUP MODE");
+
+  display.setFont(u8g2_font_helvB10_tf);
+  display.setCursor(0, 44);
+  display.print("Sensors: ");
+  display.print(sensors.getDeviceCount());
+
+  display.setCursor(0, 58);
+  display.print("See Serial 115200");
+
+  display.sendBuffer();
+}
+
 void checkSensorWatchdog(unsigned long currentMs) {
   const unsigned long sensorWatchdogBaseMs =
       lastSuccessfulSensorReadMillis > 0 ? lastSuccessfulSensorReadMillis
@@ -718,6 +748,8 @@ void setup() {
   sensors.setResolution(12);
 
   inletSensorConfigured = isAddressConfigured(INLET_SENSOR_ADDRESS);
+  requiredSensorsConfigured = isAddressConfigured(TOP_SENSOR_ADDRESS) &&
+                               isAddressConfigured(BOTTOM_SENSOR_ADDRESS);
   logDiscoveredSensors();
 
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
@@ -728,13 +760,40 @@ void setup() {
 
   maintainWiFi(millis(), true);
 
-  readTemperatures(millis());
-  updateDisplay();
+  if (requiredSensorsConfigured) {
+    readTemperatures(millis());
+    updateDisplay();
+  } else {
+    updateSetupDisplay();
+  }
   previousSupabaseSendMs = millis();
+}
+
+// TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS are required, so until both are
+// configured the device stays in this setup mode instead of running the
+// normal read/upload/watchdog cycle: it never sends readings to Supabase
+// (top_temp/bottom_temp would only ever be null) and never triggers a
+// sensor watchdog restart over a configuration problem a reboot can't fix.
+// It periodically re-scans the bus so newly attached sensors show up
+// without a reflash.
+void runSensorSetupMode(unsigned long currentMs) {
+  if (currentMs - previousSensorReadMs >= SENSOR_READ_INTERVAL_MS) {
+    previousSensorReadMs = currentMs;
+    initializeTemperatureBus("periodic sensor setup mode scan");
+    logDiscoveredSensors();
+    updateSetupDisplay();
+  }
+
+  maintainWiFi(currentMs);
 }
 
 void loop() {
   const unsigned long currentMs = millis();
+
+  if (!requiredSensorsConfigured) {
+    runSensorSetupMode(currentMs);
+    return;
+  }
 
   if (currentMs - previousSensorReadMs >= SENSOR_READ_INTERVAL_MS) {
     previousSensorReadMs = currentMs;
