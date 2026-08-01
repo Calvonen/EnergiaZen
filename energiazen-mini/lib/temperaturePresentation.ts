@@ -36,3 +36,17 @@ export function formatWeeklyMinimumInletTemperatureLabel(
 
   return `${Math.round(weeklyMinimumInletTemperature)}°`;
 }
+
+// Screen-reader text for the same weekly-minimum inlet temperature value -
+// takes the raw number (or null), independent of formatWeeklyMinimumInlet-
+// TemperatureLabel's visual "--"/degree-sign string, so the accessibility
+// text is never derived by parsing the displayed label back apart.
+export function formatWeeklyMinimumInletTemperatureAccessibilityText(
+  weeklyMinimumInletTemperature: number | null,
+): string {
+  if (weeklyMinimumInletTemperature === null) {
+    return "Tuloveden viikon alinta lämpötilaa ei ole saatavilla";
+  }
+
+  return `Tuloveden viikon alin lämpötila ${Math.round(weeklyMinimumInletTemperature)} astetta`;
+}

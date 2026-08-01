@@ -18,6 +18,7 @@ import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import {
+  formatWeeklyMinimumInletTemperatureAccessibilityText,
   formatWeeklyMinimumInletTemperatureLabel,
   getTemperatureCardTheme,
 } from "@/lib/temperaturePresentation";
@@ -2056,7 +2057,7 @@ export default function HomeScreen() {
   );
   const temperatureCardAccessibilityLabel = `Varaajan lämpötila ${displayedTopTemp} astetta${
     isTankHeating ? ", lämmitys käynnissä" : ""
-  }${loading ? ", tietoja haetaan" : ""}`;
+  }${loading ? ", tietoja haetaan" : ""}, ${formatWeeklyMinimumInletTemperatureAccessibilityText(weeklyMinimumInletTemperature)}`;
   const temperatureBarSegmentColors = Array.from(
     { length: temperatureBarSegmentCount },
     (_, segmentIndex) =>

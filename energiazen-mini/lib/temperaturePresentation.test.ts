@@ -1,5 +1,6 @@
 import { defaultSettings } from "./settings";
 import {
+  formatWeeklyMinimumInletTemperatureAccessibilityText,
   formatWeeklyMinimumInletTemperatureLabel,
   getTemperatureCardTheme,
 } from "./temperaturePresentation";
@@ -89,5 +90,21 @@ export function runTemperaturePresentationUnitTests() {
     formatWeeklyMinimumInletTemperatureLabel(0),
     "0°",
     "arvo 0 ei saa näyttäytyä puuttuvana arvona",
+  );
+
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureAccessibilityText(null),
+    "Tuloveden viikon alinta lämpötilaa ei ole saatavilla",
+    "puuttuva viikon tulovesiminimi kertoo saavutettavuustekstissä ettei arvoa ole saatavilla",
+  );
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureAccessibilityText(7.8),
+    "Tuloveden viikon alin lämpötila 8 astetta",
+    "saavutettavuusteksti pyöristää arvon ja käyttää sanaa astetta",
+  );
+  assertEqual(
+    formatWeeklyMinimumInletTemperatureAccessibilityText(0),
+    "Tuloveden viikon alin lämpötila 0 astetta",
+    "arvo 0 ei saa näyttäytyä puuttuvana arvona saavutettavuustekstissäkään",
   );
 }
