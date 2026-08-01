@@ -15,6 +15,20 @@ let DEFAULT_BACKUP_HOURS = [2, 3, 4];
 let DEFAULT_FALLBACK_ENABLED = true;
 let requestRunning = false;
 
+// Nama syyt kertovat etta emme voi luottaa mittausdataan (vanha/puuttuva/
+// virheellinen lukema tai sen hakeminen epaonnistui) - emme siis tieda onko
+// varaaja jo taysi. Silloin varaaja lammitetaan silti ehdoitta jos ollaan
+// varatunnilla, koska varaajan oma termostaatti estaa ylikuumenemisen; muut
+// vikasyyt (esim. "hour-not-planned", "invalid-calibration") eivat kata
+// mittausdataa eivatka siis laukaise tata ohitusta.
+let DATA_FAULT_REASONS = {
+  "invalid-reading": true,
+  "missing-reading": true,
+  "missing-reading-time": true,
+  "reading-fetch-error": true,
+  "stale-reading": true,
+};
+
 function createControllerState() {
   return { consecutiveHighFillReadings: 0 };
 }
@@ -323,7 +337,23 @@ function decideHeating(input, state) {
       settings.fullTankShowers * START_HEATING_FILL_RATIO;
   }
 
-  if (reason) {
+  // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
+  // varakaytto ole kaytoston pois - lammitetaan sokeana, koska varaajan
+  // oma termostaatti hoitaa turvallisuuden. Katso DATA_FAULT_REASONS.
+  let backupHours = settings ? normalizeHours(settings.backupHours) : [];
+  let backupFaultOverride =
+    reason !== null &&
+    DATA_FAULT_REASONS[reason] === true &&
+    settings !== null &&
+    settings !== undefined &&
+    settings.enabled === true &&
+    containsHour(backupHours, input.currentHour);
+
+  if (backupFaultOverride) {
+    resetHighFillReadings(decisionState);
+    finalTargetOn = true;
+    reason = "backup-fault-override";
+  } else if (reason) {
     resetHighFillReadings(decisionState);
   } else if (relayCurrentlyOn) {
     resetHighFillReadings(decisionState);
@@ -389,18 +419,27 @@ function resolvePlanControl(rows, error, settings, today) {
     };
   }
 
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return {
-      failSafeReason: "plan-missing",
-      plannedHours: [],
-      source: "fail-safe",
-    };
-  }
+  if (!Array.isArray(rows) || rows.length === 0 || rows[0].plan_date !== today) {
+    // Yhteys Supabaseen toimii, mutta tamalle paivalle ei ole (viela)
+    // suunnitelmaa - sama tilanne turvallisuusmielessa kuin yhteysvirhe
+    // ylla, joten kaytetaan samaa varatunti-fallbackia sen sijaan etta
+    // pysahdytaan kokonaan.
+    if (settings.enabled) {
+      return {
+        failSafeReason: null,
+        plannedHours: settings.backupHours,
+        resetHighFillReadings: true,
+        source: "backup",
+      };
+    }
 
-  if (rows[0].plan_date !== today) {
     return {
-      failSafeReason: "wrong-plan-date",
+      failSafeReason:
+        !Array.isArray(rows) || rows.length === 0
+          ? "plan-missing"
+          : "wrong-plan-date",
       plannedHours: [],
+      resetHighFillReadings: true,
       source: "fail-safe",
     };
   }

@@ -120,14 +120,28 @@ ohjeet.
     Kalibrointiasetukset välimuistoidaan laitteen omaan
     `Script.storage`:en, jotta ohjaus toimii myös hetkellisen
     verkko-/Supabase-katkon yli.
-  - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe tms.) **ja**
-    fallback on käytössä, käytetään Supabasesta/välimuistista luettua
-    `backup_hours`-tuntilistaa – tämä ei ole sovelluksen koodiin
-    kovakoodattu lista, vaan konfiguroitava, tietokannassa asuva arvo.
+  - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
+    väärä `plan_date`) **ja** fallback on käytössä, käytetään
+    Supabasesta/välimuistista luettua `backup_hours`-tuntilistaa – tämä ei
+    ole sovelluksen koodiin kovakoodattu lista, vaan konfiguroitava,
+    tietokannassa asuva arvo.
   - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois lasketun
     suihkuvarausarvion ja suunniteltujen tuntien perusteella, sisältäen
     värähtelyn eston (`REQUIRED_BLOCKING_READINGS`) ja lukeman
     vanhenemistarkistuksen (`MAX_READING_AGE_SECONDS`).
+  - **Anturi-/datavika varatunnilla ohittaa lukeman validoinnin kokonaan.**
+    Jos mittausdataa ei voi luottaa (vanha/puuttuva/virheellinen
+    `tank_readings`-lukema, tai sen haku epäonnistuu) mutta kuluva tunti on
+    silti `backup_hours`-listalla eikä fallback ole pois päältä, rele
+    kytketään päälle ehdoitta (`reason: "backup-fault-override"`) - ei
+    lasketa täyttöastetta, koska sitä ei voi luottavasti laskea ilman
+    lukemaa. Tämä on tietoinen valinta: varaajan oma mekaaninen
+    ylikuumenemissuoja (termostaatti) on todellinen turvaraja, joten
+    ohjelmisto suosii "lämmitä varmuuden vuoksi" -oletusta "älä lämmitä
+    epävarmuuden vuoksi" -oletuksen sijaan silloin kun dataan ei voi
+    luottaa. Muut vikatilat (esim. `hour-not-planned`,
+    `invalid-calibration`, releen oman tilan kysely epäonnistuu) eivät
+    kuulu tähän ohitukseen.
   - **Mitä jää silti versionhallinnan ulkopuolelle:** Shellyn WiFi-
     verkkoasetukset (laitteen oma ensiasennus), sekä itse
     käyttöönotto/päivitys – `energyzen-controller.min.js`:n vieminen

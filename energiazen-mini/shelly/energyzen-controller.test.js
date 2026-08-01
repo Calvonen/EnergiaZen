@@ -143,27 +143,66 @@ const unplanned = decide({ currentHour: 14, state: unplannedState });
 assert.strictEqual(unplanned.finalTargetOn, false);
 assert.strictEqual(unplanned.consecutiveHighFillReadings, 0);
 
+// currentHour 15 on myos settings.backupHours - eli oletusparametrit
+// osuvat varatunnille. Anturivika varatunnilla lammittaa nyt ehdoitta
+// (varaajan oma termostaatti estaa ylikuumenemisen), toisin kuin
+// tunnilla joka ei ole varatunti (ks. staleOutsideBackupHour alla).
 const staleState = createControllerState();
 decide({ reading: readingForShowers(6), state: staleState });
 const stale = decide({
   reading: readingForShowers(3, 121),
   state: staleState,
 });
-assert.strictEqual(stale.reason, "stale-reading");
-assert.strictEqual(stale.finalTargetOn, false);
+assert.strictEqual(stale.reason, "backup-fault-override");
+assert.strictEqual(stale.finalTargetOn, true);
 assert.strictEqual(stale.consecutiveHighFillReadings, 0);
 
+const staleOutsideBackupHour = decide({
+  currentHour: 8,
+  plannedHours: [8],
+  reading: readingForShowers(3, 121),
+});
+assert.strictEqual(
+  staleOutsideBackupHour.reason,
+  "stale-reading",
+  "vanha lukema tunnilla joka ei ole varatunti ei saa lammittaa",
+);
+assert.strictEqual(staleOutsideBackupHour.finalTargetOn, false);
+
+const staleWithFallbackDisabled = decide({
+  reading: readingForShowers(3, 121),
+  testSettings: { ...settings, enabled: false },
+});
+assert.strictEqual(
+  staleWithFallbackDisabled.reason,
+  "stale-reading",
+  "varakaytto pois paalta -asetus estaa myos anturivikaohituksen",
+);
+assert.strictEqual(staleWithFallbackDisabled.finalTargetOn, false);
+
+assert.strictEqual(
+  decide({ currentHour: 8, plannedHours: [8], reading: null }).reason,
+  "missing-reading",
+  "puuttuva lukema tunnilla joka ei ole varatunti ei saa ohittaa",
+);
+assert.strictEqual(
+  decide({ currentHour: 8, plannedHours: [8], reading: null }).finalTargetOn,
+  false,
+  "puuttuva lukema tunnilla joka ei ole varatunti ei saa lammittaa",
+);
 assert.strictEqual(
   decide({ reading: null }).reason,
-  "missing-reading",
-  "missing reading must fail safe OFF",
+  "backup-fault-override",
+  "puuttuva lukema varatunnilla lammittaa ehdoitta",
 );
+assert.strictEqual(decide({ reading: null }).finalTargetOn, true);
+
 assert.strictEqual(
   decide({
     testSettings: { ...settings, fullTankShowers: null },
   }).reason,
   "invalid-calibration",
-  "invalid calibration must fail safe OFF",
+  "invalid calibration must fail safe OFF - kalibrointi puuttuu, varatuntejakaan ei voi luottaa",
 );
 
 const failSafeState = createControllerState();
@@ -172,8 +211,23 @@ const failSafe = decide({
   failSafeReason: "plan-fetch-error",
   state: failSafeState,
 });
-assert.strictEqual(failSafe.finalTargetOn, false);
+assert.strictEqual(
+  failSafe.finalTargetOn,
+  false,
+  "tuntematon failSafeReason ei kuulu DATA_FAULT_REASONS-listaan eika ohita",
+);
 assert.strictEqual(failSafe.consecutiveHighFillReadings, 0);
+
+const readingFetchErrorOnBackupHour = decide({
+  failSafeReason: "reading-fetch-error",
+  reading: null,
+});
+assert.strictEqual(
+  readingFetchErrorOnBackupHour.reason,
+  "backup-fault-override",
+  "lukeman hakuvirhe varatunnilla lammittaa ehdoitta",
+);
+assert.strictEqual(readingFetchErrorOnBackupHour.finalTargetOn, true);
 
 const isolatedStateA = createControllerState();
 const isolatedStateB = createControllerState();
@@ -218,8 +272,17 @@ assert.strictEqual(
     plannedHours: fallbackControl.plannedHours,
     reading: readingForShowers(3, 121),
   }).finalTargetOn,
+  true,
+  "Supabase error fallback on a backup hour now heats through a stale reading too - the tank's own thermostat is the real safety net",
+);
+assert.strictEqual(
+  decide({
+    currentHour: 8,
+    plannedHours: fallbackControl.plannedHours,
+    reading: readingForShowers(3, 121),
+  }).finalTargetOn,
   false,
-  "Supabase error fallback cannot bypass a stale reading",
+  "the stale-reading override only applies to hours actually listed in backupHours, not every hour once fallback mode is active",
 );
 
 const invalidResponseControl = resolvePlanControl(
@@ -242,8 +305,34 @@ const missingPlanControl = resolvePlanControl(
 );
 assert.strictEqual(
   missingPlanControl.source,
-  "fail-safe",
-  "a missing plan must not activate fallback",
+  "backup",
+  "a missing plan for today is treated the same as a connection error and falls back to backup hours",
 );
+assert.strictEqual(missingPlanControl.plannedHours, settings.backupHours);
+
+const wrongDateControl = resolvePlanControl(
+  [{ plan_date: "2026-07-25", planned_hours: [15] }],
+  null,
+  settings,
+  "2026-07-26",
+);
+assert.strictEqual(
+  wrongDateControl.source,
+  "backup",
+  "a stale/wrong-dated plan row also falls back to backup hours",
+);
+
+const missingPlanFallbackDisabledControl = resolvePlanControl(
+  [],
+  null,
+  { ...settings, enabled: false },
+  "2026-07-26",
+);
+assert.strictEqual(
+  missingPlanFallbackDisabledControl.source,
+  "fail-safe",
+  "a missing plan must not activate fallback when fallbackEnabled is off",
+);
+assert.strictEqual(missingPlanFallbackDisabledControl.failSafeReason, "plan-missing");
 
 console.log("EnergyZen Shelly controller tests passed");
