@@ -31,22 +31,28 @@
 // bus scan order, since scan order is not guaranteed to stay stable. To find
 // the addresses:
 //   1. Flash with the placeholder all-zero addresses below and open the
-//      Serial Monitor at 115200 baud.
-//   2. At boot the device prints every DS18B20 found on the bus together
-//      with its ROM address and the role (if any) it currently matches.
+//      Serial Monitor at 115200 baud. With TOP/BOTTOM unconfigured the
+//      device stays in sensor setup mode (see below) and keeps re-printing
+//      this list every few seconds.
+//   2. The device prints every DS18B20 found on the bus together with its
+//      ROM address, its current temperature reading, and the role (if any)
+//      it currently matches.
 //   3. Identify which physical sensor is which (e.g. warm one finger over a
-//      sensor and watch which raw reading changes in the "Sensor raw
-//      top/bottom/inlet" log line), then copy each ROM address into the
-//      matching TOP_SENSOR_ADDRESS / BOTTOM_SENSOR_ADDRESS /
-//      INLET_SENSOR_ADDRESS constant below and reflash.
-// TOP and BOTTOM are required. INLET is optional: leave it as all zeros to
-// run without an inlet sensor - the device then keeps working normally with
-// just the top/bottom readings, and `inlet_temp` is reported as null.
+//      sensor and watch which device's printed temperature changes), then
+//      copy each ROM address into the matching TOP_SENSOR_ADDRESS /
+//      BOTTOM_SENSOR_ADDRESS / INLET_SENSOR_ADDRESS constant below and
+//      reflash.
+// TOP and BOTTOM are required and must each have their own distinct ROM
+// address. INLET is optional: leave it as all zeros to run without an inlet
+// sensor - the device then keeps working normally with just the top/bottom
+// readings, and `inlet_temp` is reported as null. If INLET is configured it
+// must also be distinct from TOP and BOTTOM.
 //
-// While TOP_SENSOR_ADDRESS or BOTTOM_SENSOR_ADDRESS is still all zeros, the
-// device stays in a sensor setup mode instead of running normally: it
-// periodically re-scans the OneWire bus and prints every discovered ROM
-// address to Serial, shows "SETUP MODE" on the OLED, and does not send
+// While TOP_SENSOR_ADDRESS or BOTTOM_SENSOR_ADDRESS is still all zeros, or
+// the same ROM address is assigned to more than one role, the device stays
+// in a sensor setup mode instead of running normally: it periodically
+// re-scans the OneWire bus and prints every discovered ROM address and
+// temperature to Serial, shows "SETUP MODE" on the OLED, and does not send
 // anything to Supabase or run the sensor watchdog restart logic.
 
 constexpr uint8_t ONE_WIRE_BUS_PIN = 4;
@@ -199,7 +205,48 @@ const char *sensorRoleForAddress(const DeviceAddress address) {
   return "UNASSIGNED";
 }
 
+bool addressesEqual(const DeviceAddress a, const DeviceAddress b) {
+  return memcmp(a, b, sizeof(DeviceAddress)) == 0;
+}
+
+// True when both addresses are individually configured (non-zero) and equal
+// to each other - i.e. the same physical sensor is assigned to two roles.
+// Two unconfigured (all-zero) placeholder addresses are never a conflict.
+bool addressesConflict(const DeviceAddress a, bool aConfigured,
+                        const DeviceAddress b, bool bConfigured) {
+  return aConfigured && bConfigured && addressesEqual(a, b);
+}
+
+// Pure check over the configured TOP/BOTTOM/INLET ROM addresses: returns
+// false as soon as any two configured roles share the same ROM address.
+// Kept separate from logDiscoveredSensors() so the role-assignment rule can
+// be reasoned about (or unit tested, given a suitable harness) on its own.
+bool sensorRoleAddressesAreUnique() {
+  const bool topConfigured = isAddressConfigured(TOP_SENSOR_ADDRESS);
+  const bool bottomConfigured = isAddressConfigured(BOTTOM_SENSOR_ADDRESS);
+
+  if (addressesConflict(TOP_SENSOR_ADDRESS, topConfigured,
+                         BOTTOM_SENSOR_ADDRESS, bottomConfigured)) {
+    return false;
+  }
+  if (addressesConflict(TOP_SENSOR_ADDRESS, topConfigured,
+                         INLET_SENSOR_ADDRESS, inletSensorConfigured)) {
+    return false;
+  }
+  if (addressesConflict(BOTTOM_SENSOR_ADDRESS, bottomConfigured,
+                         INLET_SENSOR_ADDRESS, inletSensorConfigured)) {
+    return false;
+  }
+
+  return true;
+}
+
 void logDiscoveredSensors() {
+  // Read live temperatures too (not just ROM addresses) so a sensor can be
+  // identified by warming it with a finger while watching this log, even
+  // while the device is in setup mode and readTemperatures() isn't running.
+  sensors.requestTemperatures();
+
   const uint8_t deviceCount = sensors.getDeviceCount();
   Serial.print("DS18B20 devices found on bus: ");
   Serial.println(deviceCount);
@@ -226,10 +273,19 @@ void logDiscoveredSensors() {
       inletFound = true;
     }
 
+    const float temperatureC = sensors.getTempC(address);
+
     Serial.print("  Device ");
     Serial.print(i);
     Serial.print(" ROM=");
     printDeviceAddress(address);
+    Serial.print(" temp=");
+    if (isValidTemperature(temperatureC)) {
+      Serial.print(temperatureC, 4);
+      Serial.print(" C");
+    } else {
+      Serial.print(invalidTemperatureReason(temperatureC));
+    }
     Serial.print(" role=");
     Serial.println(role);
   }
@@ -257,6 +313,12 @@ void logDiscoveredSensors() {
         "ERROR: TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS not configured - "
         "copy the ROM addresses above into the .ino and reflash. Staying in "
         "sensor setup mode: no readings will be sent to Supabase.");
+  } else if (!sensorRoleAddressesAreUnique()) {
+    Serial.println(
+        "ERROR: the same ROM address is assigned to more than one of "
+        "TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS/INLET_SENSOR_ADDRESS - "
+        "each role needs its own distinct ROM address. Staying in sensor "
+        "setup mode: no readings will be sent to Supabase.");
   } else {
     if (!topFound) {
       Serial.println("WARNING: configured TOP sensor not found on bus");
@@ -749,7 +811,8 @@ void setup() {
 
   inletSensorConfigured = isAddressConfigured(INLET_SENSOR_ADDRESS);
   requiredSensorsConfigured = isAddressConfigured(TOP_SENSOR_ADDRESS) &&
-                               isAddressConfigured(BOTTOM_SENSOR_ADDRESS);
+                               isAddressConfigured(BOTTOM_SENSOR_ADDRESS) &&
+                               sensorRoleAddressesAreUnique();
   logDiscoveredSensors();
 
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
@@ -769,11 +832,13 @@ void setup() {
   previousSupabaseSendMs = millis();
 }
 
-// TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS are required, so until both are
-// configured the device stays in this setup mode instead of running the
-// normal read/upload/watchdog cycle: it never sends readings to Supabase
-// (top_temp/bottom_temp would only ever be null) and never triggers a
-// sensor watchdog restart over a configuration problem a reboot can't fix.
+// TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS are required and, together with
+// an optionally configured INLET_SENSOR_ADDRESS, must all be distinct (see
+// sensorRoleAddressesAreUnique()). Until that holds, the device stays in
+// this setup mode instead of running the normal read/upload/watchdog cycle:
+// it never sends readings to Supabase (top_temp/bottom_temp would only ever
+// be null, or a role address could collide with another) and never triggers
+// a sensor watchdog restart over a configuration problem a reboot can't fix.
 // It periodically re-scans the bus so newly attached sensors show up
 // without a reflash.
 void runSensorSetupMode(unsigned long currentMs) {
