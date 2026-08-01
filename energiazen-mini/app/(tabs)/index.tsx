@@ -808,6 +808,7 @@ function buildOptimizerHeatingPlanPresentation({
     planValid: optimizationResult.valid,
     safetyShowerReserve: runSettings.safetyShowerReserve,
     selectedHours,
+    targetCheckShowersLeft: optimizationResult.targetCheckShowersLeft,
     targetShowerReserve: runSettings.targetShowerReserve,
   });
 }

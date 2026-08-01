@@ -198,6 +198,44 @@ export function runHeatingPlanPresentationUnitTests() {
     "Turvaraja täyttyy, mutta tavoitetta ei saavuteta",
     "vain turvarajan tayttyminen ilmaistaan luonnollisesti",
   );
+
+  // Optimoija tarkistaa tavoitteen tayttymisen heti viimeisen valitun
+  // lammitystunnin jalkeen (targetCheckShowersLeft), ei koko ~30h
+  // ennustejakson lopusta (finalShowers) - katso simulateHeatingPlan.
+  // Nayttoarvo (esim. "huomenna vuorokauden lopussa") on silti finalShowers
+  // sellaisenaan, koska se on hyodyllista tietoa siita mihin tankki
+  // paatyisi ilman lisalammitysta, vaikka se ei ole se hetki jota
+  // suunnitelma lupasi kattaa.
+  const lowFinalButTargetMetAtCheckpoint = buildHeatingPlanPresentation({
+    ...baseInput,
+    finalShowers: 2.6,
+    targetCheckShowersLeft: 5,
+  });
+  assertEqual(
+    lowFinalButTargetMetAtCheckpoint.statusSummary,
+    "Tavoite ja turvaraja täyttyvät",
+    "tavoitteen tayttyminen tarkistetaan viimeisen lammitystunnin jalkeisesta arvosta, ei koko jakson lopun matalasta arvosta",
+  );
+  assertEqual(
+    lowFinalButTargetMetAtCheckpoint.forecastDetails?.finalShowersLabel,
+    "2,6",
+    "nayttoarvo pysyy koko jakson lopun lukemana riippumatta tarkistuspisteesta",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      finalShowers: 10,
+      minimumShowers: 5,
+      targetCheckShowersLeft: 1,
+    }).statusSummary,
+    "Turvaraja täyttyy, mutta tavoitetta ei saavuteta",
+    "targetCheckShowersLeft maaraa tavoitteen tayttymisen, ei enaa finalShowers suoraan",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation(baseInput).statusSummary,
+    "Tavoite ja turvaraja täyttyvät",
+    "targetCheckShowersLeftin puuttuessa pysytaan finalShowers-oletuksessa (esim. tallennettu suunnitelma)",
+  );
   assertEqual(
     standard.forecastSummary.includes("· lopussa"),
     false,
