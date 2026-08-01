@@ -676,17 +676,16 @@ bool sendSupabaseReading(unsigned long currentMs) {
   return responseCode >= 200 && responseCode < 300;
 }
 
-// u8g2_font_helvB08/10/12_tf all include the full ISO8859-1 (Latin-1) glyph
-// range, which covers both "ä" (U+00E4) and the degree sign "°" (U+00B0) -
-// verified against the rendered glyph tables at
-// https://github.com/olikraus/u8g2/wiki/fntgrpadobex11 before using them
-// here, rather than assuming support or silently falling back to ASCII.
+// No degree sign: it did not render correctly on the real SH1106 hardware
+// despite being present in the u8g2_font_helvB*_tf glyph tables, so plain
+// "C" is used instead of "°C" here - do not reintroduce "°" without
+// re-verifying it on the physical display first.
 void formatTemperatureLine(char *buffer, size_t bufferSize, const char *label,
                             float temperatureC) {
   if (isValidTemperature(temperatureC)) {
-    snprintf(buffer, bufferSize, "%s %.1f °C", label, temperatureC);
+    snprintf(buffer, bufferSize, "%s %.1f C", label, temperatureC);
   } else {
-    snprintf(buffer, bufferSize, "%s --.- °C", label);
+    snprintf(buffer, bufferSize, "%s --.- C", label);
   }
 }
 
@@ -727,9 +726,6 @@ void applyFittingFont(const char *const *lines, uint8_t lineCount,
   }
 }
 
-const uint8_t *const TEMPERATURE_LINE_FONTS[] = {u8g2_font_helvB12_tf,
-                                                  u8g2_font_helvB10_tf,
-                                                  u8g2_font_helvB08_tf};
 const uint8_t *const SETUP_LINE_FONTS[] = {u8g2_font_helvB10_tf,
                                             u8g2_font_helvB08_tf};
 
@@ -740,20 +736,20 @@ void updateDisplay() {
   display.setCursor(0, 9);
   display.print("EnergyZen");
 
+  // Fixed font: "Yla 62.8 C" / "Ala 46.5 C" / "Tulo 16.0 C" (and the
+  // "--.- C" placeholder) are short, plain-ASCII, and already known to fit
+  // comfortably in u8g2_font_helvB12_tf at 128px wide, so this screen does
+  // not need the dynamic per-line font fitting used in setup mode below.
   char topLine[24];
   char bottomLine[24];
   char inletLine[24];
-  formatTemperatureLine(topLine, sizeof(topLine), "Ylä", topTemperatureC);
+  formatTemperatureLine(topLine, sizeof(topLine), "Yla", topTemperatureC);
   formatTemperatureLine(bottomLine, sizeof(bottomLine), "Ala",
                          bottomTemperatureC);
   formatTemperatureLine(inletLine, sizeof(inletLine), "Tulo",
                          inletTemperatureC);
 
-  const char *temperatureLines[] = {topLine, bottomLine, inletLine};
-  applyFittingFont(temperatureLines, 3, TEMPERATURE_LINE_FONTS,
-                    sizeof(TEMPERATURE_LINE_FONTS) /
-                        sizeof(TEMPERATURE_LINE_FONTS[0]));
-
+  display.setFont(u8g2_font_helvB12_tf);
   display.setCursor(0, 24);
   display.print(topLine);
 
