@@ -2905,6 +2905,13 @@ export default function HomeScreen() {
                         </Text>
                       );
                     })()}
+
+                    <Text style={styles.heatingPlanLimitsSubtitle}>
+                      Peruste
+                    </Text>
+                    <Text style={styles.heatingPlanInfoReason}>
+                      {heatingPlanPresentation.reason}
+                    </Text>
                   </View>
                 ) : settings.heatingNeedMode === "fixed" ? (
                   <View style={styles.heatingPlanInfo}>
