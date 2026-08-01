@@ -70,6 +70,7 @@ export function buildHeatingPlanPresentation({
   planValid,
   safetyShowerReserve,
   selectedHours,
+  targetCheckShowersLeft,
   targetShowerReserve,
 }: {
   automaticMaxHeatingHours: number;
@@ -93,6 +94,16 @@ export function buildHeatingPlanPresentation({
   planValid: boolean;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
+  // Suihkumaara heti viimeisen valitun lammitystunnin jalkeen - tama on se
+  // hetki jota optimoija (simulateHeatingPlan) itse kayttaa tavoitteen
+  // tayttymisen tarkistukseen, ei koko (jopa ~30h) ennustejakson loppua.
+  // "statusSummary" kaytetaan tata finalShowersin sijaan, jottei kortti
+  // vaita tavoitteen jaavan saavuttamatta pelkastaan siksi etta suunnitelma
+  // ei kata viela lammittamatonta myohaisiltaa/-yota, jota se ei koskaan
+  // luvannutkaan kattaa. Oletuksena finalShowers, jos tata ei anneta
+  // (esim. buildStoredHeatingPlanPresentation, jolla ei ole erillista
+  // tarkistuspistetta).
+  targetCheckShowersLeft?: number;
   targetShowerReserve: number;
 }): HeatingPlanPresentation {
   let reasonKind: HeatingPlanReasonKind;
@@ -123,7 +134,8 @@ export function buildHeatingPlanPresentation({
   }
 
   const safetyReserveMet = minimumShowers >= safetyShowerReserve;
-  const targetReserveMet = finalShowers >= targetShowerReserve;
+  const targetReserveMet =
+    (targetCheckShowersLeft ?? finalShowers) >= targetShowerReserve;
   const statusSummary =
     safetyReserveMet && targetReserveMet
       ? "Tavoite ja turvaraja täyttyvät"
