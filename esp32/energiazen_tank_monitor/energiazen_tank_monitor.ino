@@ -6,11 +6,12 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
+#include <string.h>
 
 // EnergyZen standalone ESP32 tank monitor
 // Hardware:
 // - ESP32 Dev Module
-// - 2 x DS18B20 on GPIO4
+// - 2-3 x DS18B20 on GPIO4 (tank top + bottom, required; inlet, optional)
 // - 1.3" SH1106 I2C OLED 128x64, SDA GPIO21, SCL GPIO22
 //
 // Required Arduino libraries:
@@ -23,6 +24,24 @@
 // - WIFI_SSID
 // - WIFI_PASSWORD
 // - SUPABASE_KEY
+// - TOP_SENSOR_ADDRESS / BOTTOM_SENSOR_ADDRESS / INLET_SENSOR_ADDRESS
+//
+// Finding sensor ROM addresses:
+// Sensors are identified by their unique 64-bit DS18B20 ROM address, not by
+// bus scan order, since scan order is not guaranteed to stay stable. To find
+// the addresses:
+//   1. Flash with the placeholder all-zero addresses below and open the
+//      Serial Monitor at 115200 baud.
+//   2. At boot the device prints every DS18B20 found on the bus together
+//      with its ROM address and the role (if any) it currently matches.
+//   3. Identify which physical sensor is which (e.g. warm one finger over a
+//      sensor and watch which raw reading changes in the "Sensor raw
+//      top/bottom/inlet" log line), then copy each ROM address into the
+//      matching TOP_SENSOR_ADDRESS / BOTTOM_SENSOR_ADDRESS /
+//      INLET_SENSOR_ADDRESS constant below and reflash.
+// TOP and BOTTOM are required. INLET is optional: leave it as all zeros to
+// run without an inlet sensor - the device then keeps working normally with
+// just the top/bottom readings, and `inlet_temp` is reported as null.
 
 constexpr uint8_t ONE_WIRE_BUS_PIN = 4;
 constexpr uint8_t OLED_SDA_PIN = 21;
@@ -61,13 +80,20 @@ const char *SUPABASE_ENDPOINT =
 const char *SHELLY_STATUS_ENDPOINT =
     "http://192.168.68.52/rpc/Switch.GetStatus?id=0";
 
+// DS18B20 ROM addresses, see the "Finding sensor ROM addresses" note above.
+DeviceAddress TOP_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+DeviceAddress BOTTOM_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+DeviceAddress INLET_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 
 float topTemperatureC = NAN;
 float bottomTemperatureC = NAN;
+float inletTemperatureC = NAN;
 float showersLeft = 0.0;
+bool inletSensorConfigured = false;
 unsigned long previousSensorReadMs = 0;
 unsigned long previousSupabaseSendMs = 0;
 unsigned long previousWiFiReconnectAttemptMs = 0;
@@ -132,6 +158,110 @@ String invalidTemperatureReason(float temperatureC) {
   return "unknown";
 }
 
+bool isAddressConfigured(const DeviceAddress address) {
+  for (uint8_t i = 0; i < 8; i++) {
+    if (address[i] != 0x00) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void printDeviceAddress(const DeviceAddress address) {
+  for (uint8_t i = 0; i < 8; i++) {
+    if (address[i] < 0x10) {
+      Serial.print("0");
+    }
+    Serial.print(address[i], HEX);
+  }
+}
+
+const char *sensorRoleForAddress(const DeviceAddress address) {
+  if (memcmp(address, TOP_SENSOR_ADDRESS, sizeof(DeviceAddress)) == 0) {
+    return "TOP";
+  }
+  if (memcmp(address, BOTTOM_SENSOR_ADDRESS, sizeof(DeviceAddress)) == 0) {
+    return "BOTTOM";
+  }
+  if (inletSensorConfigured &&
+      memcmp(address, INLET_SENSOR_ADDRESS, sizeof(DeviceAddress)) == 0) {
+    return "INLET";
+  }
+
+  return "UNASSIGNED";
+}
+
+void logDiscoveredSensors() {
+  const uint8_t deviceCount = sensors.getDeviceCount();
+  Serial.print("DS18B20 devices found on bus: ");
+  Serial.println(deviceCount);
+
+  bool topFound = false;
+  bool bottomFound = false;
+  bool inletFound = false;
+
+  for (uint8_t i = 0; i < deviceCount; i++) {
+    DeviceAddress address;
+    if (!sensors.getAddress(address, i)) {
+      Serial.print("  Device ");
+      Serial.print(i);
+      Serial.println(": failed to read ROM address");
+      continue;
+    }
+
+    const char *role = sensorRoleForAddress(address);
+    if (strcmp(role, "TOP") == 0) {
+      topFound = true;
+    } else if (strcmp(role, "BOTTOM") == 0) {
+      bottomFound = true;
+    } else if (strcmp(role, "INLET") == 0) {
+      inletFound = true;
+    }
+
+    Serial.print("  Device ");
+    Serial.print(i);
+    Serial.print(" ROM=");
+    printDeviceAddress(address);
+    Serial.print(" role=");
+    Serial.println(role);
+  }
+
+  Serial.print("Configured TOP_SENSOR_ADDRESS=");
+  printDeviceAddress(TOP_SENSOR_ADDRESS);
+  Serial.println(topFound ? " (found on bus)" : " (NOT found on bus)");
+
+  Serial.print("Configured BOTTOM_SENSOR_ADDRESS=");
+  printDeviceAddress(BOTTOM_SENSOR_ADDRESS);
+  Serial.println(bottomFound ? " (found on bus)" : " (NOT found on bus)");
+
+  if (inletSensorConfigured) {
+    Serial.print("Configured INLET_SENSOR_ADDRESS=");
+    printDeviceAddress(INLET_SENSOR_ADDRESS);
+    Serial.println(inletFound ? " (found on bus)" : " (NOT found on bus)");
+  } else {
+    Serial.println(
+        "INLET_SENSOR_ADDRESS not configured; inlet sensor disabled (optional)");
+  }
+
+  if (!isAddressConfigured(TOP_SENSOR_ADDRESS) ||
+      !isAddressConfigured(BOTTOM_SENSOR_ADDRESS)) {
+    Serial.println(
+        "WARNING: TOP_SENSOR_ADDRESS/BOTTOM_SENSOR_ADDRESS not configured - "
+        "copy the ROM addresses above into the .ino and reflash");
+  } else {
+    if (!topFound) {
+      Serial.println("WARNING: configured TOP sensor not found on bus");
+    }
+    if (!bottomFound) {
+      Serial.println("WARNING: configured BOTTOM sensor not found on bus");
+    }
+  }
+  if (inletSensorConfigured && !inletFound) {
+    Serial.println("WARNING: configured INLET sensor not found on bus");
+  }
+}
+
 float calculateShowersLeft(float topC, float bottomC) {
   if (!isValidTemperature(topC) || !isValidTemperature(bottomC)) {
     return 0.0;
@@ -186,16 +316,37 @@ void resetWatchdogCountersAfterStableRun(unsigned long currentMs) {
 bool readTemperatures(unsigned long currentMs) {
   sensors.requestTemperatures();
 
-  // The first discovered DS18B20 is shown as the upper tank sensor and the
-  // second as the lower tank sensor. Swap the physical connectors if needed.
-  const float rawTopTemperatureC = sensors.getTempCByIndex(0);
-  const float rawBottomTemperatureC = sensors.getTempCByIndex(1);
+  const float rawTopTemperatureC = sensors.getTempC(TOP_SENSOR_ADDRESS);
+  const float rawBottomTemperatureC = sensors.getTempC(BOTTOM_SENSOR_ADDRESS);
+  const float rawInletTemperatureC =
+      inletSensorConfigured ? sensors.getTempC(INLET_SENSOR_ADDRESS) : NAN;
 
-  Serial.print("Sensor raw top/bottom: ");
+  Serial.print("Sensor raw top/bottom/inlet: ");
   Serial.print(rawTopTemperatureC, 4);
   Serial.print(" / ");
-  Serial.println(rawBottomTemperatureC, 4);
+  Serial.print(rawBottomTemperatureC, 4);
+  Serial.print(" / ");
+  if (inletSensorConfigured) {
+    Serial.println(rawInletTemperatureC, 4);
+  } else {
+    Serial.println("not configured");
+  }
 
+  // The inlet sensor is optional and tracked independently of the top/bottom
+  // health bookkeeping below, so a missing or failing inlet sensor never
+  // affects the required top/bottom readings.
+  if (inletSensorConfigured) {
+    if (isValidTemperature(rawInletTemperatureC)) {
+      inletTemperatureC = rawInletTemperatureC;
+    } else {
+      inletTemperatureC = NAN;
+      Serial.print("Inlet sensor reading rejected: ");
+      Serial.println(invalidTemperatureReason(rawInletTemperatureC));
+    }
+  }
+
+  // The upper and lower tank sensors are identified by their configured ROM
+  // addresses above, not by bus scan order.
   const bool topValid = isValidTemperature(rawTopTemperatureC);
   const bool bottomValid = isValidTemperature(rawBottomTemperatureC);
 
@@ -420,6 +571,7 @@ bool sendSupabaseReading(unsigned long currentMs) {
   const String payload =
       String("{\"top_temp\":") + jsonTemperatureValue(topTemperatureC) +
       ",\"bottom_temp\":" + jsonTemperatureValue(bottomTemperatureC) +
+      ",\"inlet_temp\":" + jsonTemperatureValue(inletTemperatureC) +
       ",\"showers\":" + String(showersLeft, 1) +
       ",\"heating\":" + (heating ? "true" : "false") + "}";
 
@@ -466,16 +618,19 @@ void printTemperatureLine(const char *label, float temperatureC) {
 void updateDisplay() {
   display.clearBuffer();
 
-  display.setFont(u8g2_font_helvB14_tf);
-  display.setCursor(0, 16);
+  display.setFont(u8g2_font_helvB10_tf);
+  display.setCursor(0, 9);
   display.print("EnergyZen");
 
-  display.setFont(u8g2_font_helvB18_tf);
-  display.setCursor(0, 40);
+  display.setFont(u8g2_font_helvB12_tf);
+  display.setCursor(0, 24);
   printTemperatureLine("Yla", topTemperatureC);
 
-  display.setCursor(0, 64);
+  display.setCursor(0, 39);
   printTemperatureLine("Ala", bottomTemperatureC);
+
+  display.setCursor(0, 54);
+  printTemperatureLine("Tulo", inletTemperatureC);
 
   if (sensorDataStale &&
       (lastSuccessfulSensorReadMillis == 0 ||
@@ -561,6 +716,9 @@ void setup() {
 
   sensors.begin();
   sensors.setResolution(12);
+
+  inletSensorConfigured = isAddressConfigured(INLET_SENSOR_ADDRESS);
+  logDiscoveredSensors();
 
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
   display.setI2CAddress(OLED_I2C_ADDRESS << 1);
