@@ -21,6 +21,11 @@ export type TemperatureCardTankUpdatedStatus = {
 export type TemperatureCardProps = {
   accessibilityLabel: string;
   bottomTempLabel: string;
+  // Already fully formatted (e.g. "8°" or the "--" placeholder when no
+  // valid weekly minimum is available) - unlike topTempLabel/bottomTempLabel
+  // this is rendered as-is, with no degree sign appended here, since the
+  // placeholder must not carry one.
+  inletTempLabel: string;
   isTankHeating: boolean;
   onPress: () => void;
   pulseStyle: Animated.WithAnimatedValue<ViewStyle>;
@@ -33,6 +38,7 @@ export type TemperatureCardProps = {
 export function TemperatureCard({
   accessibilityLabel,
   bottomTempLabel,
+  inletTempLabel,
   isTankHeating,
   onPress,
   pulseStyle,
@@ -68,29 +74,31 @@ export function TemperatureCard({
           <Text style={styles.cardIcon}>🔥</Text>
           <Text style={styles.cardLabel}>Varaaja</Text>
         </View>
+        <View style={styles.tankUpdatedTextSlot}>
+          {tankUpdatedStatus ? (
+            <Text
+              ellipsizeMode="tail"
+              numberOfLines={1}
+              style={[
+                styles.tankUpdatedText,
+                tankUpdatedStatus.isWarning && styles.tankUpdatedWarningText,
+              ]}
+            >
+              {tankUpdatedStatus.text}
+            </Text>
+          ) : null}
+        </View>
         <View style={styles.temperatureStack}>
-          <View style={styles.temperatureValues}>
-            <View style={styles.temperatureReadings}>
-              <View style={styles.temperatureTopSensor}>
-                <Text style={styles.temperatureValue}>{topTempLabel}°</Text>
-              </View>
-              <View style={styles.temperatureBottomSensor}>
-                <Text style={styles.temperatureLowValue}>
-                  {bottomTempLabel}°
-                </Text>
-              </View>
-            </View>
-            {tankUpdatedStatus ? (
-              <Text
-                style={[
-                  styles.tankUpdatedText,
-                  tankUpdatedStatus.isWarning &&
-                    styles.tankUpdatedWarningText,
-                ]}
-              >
-                {tankUpdatedStatus.text}
+          <View style={styles.temperatureValuesColumn}>
+            <Text style={styles.temperatureValue}>{topTempLabel}°</Text>
+            <View style={styles.lowerTemperatureGroup}>
+              <Text style={styles.temperatureLowValue}>
+                {bottomTempLabel}°
               </Text>
-            ) : null}
+              <Text style={styles.inletTemperatureValue}>
+                {inletTempLabel}
+              </Text>
+            </View>
           </View>
           <View style={styles.temperatureBar} accessible={false}>
             {segmentColors.map((segmentColor, segmentIndex) => (
@@ -160,14 +168,21 @@ const styles = StyleSheet.create({
     textAlign: "center",
     textTransform: "uppercase",
   },
-  tankUpdatedText: {
+  // Fixed-height slot right under the title so the update-age text never
+  // shifts the temperature readings below it, whether it's absent, short
+  // ("Päivitetty juuri nyt"), or long ("Päivitetty 52 min sitten").
+  tankUpdatedTextSlot: {
     alignSelf: "stretch",
+    height: 15,
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  tankUpdatedText: {
     color: "rgba(247,251,255,0.62)",
     fontSize: 9,
     fontWeight: "800",
     lineHeight: 11,
-    marginBottom: 1,
-    textAlign: "left",
+    textAlign: "center",
   },
   tankUpdatedWarningText: {
     color: "#ffcf7a",
@@ -180,36 +195,27 @@ const styles = StyleSheet.create({
     gap: 10,
     justifyContent: "space-between",
     marginRight: -5,
-    marginTop: 8,
+    marginTop: 6,
     paddingRight: 2,
     width: "100%",
   },
-  temperatureValues: {
+  // Holds all three readings centered on one vertical line, sized to the
+  // space left of the temperature bar so the bar never skews the center.
+  temperatureValuesColumn: {
+    alignItems: "center",
     alignSelf: "stretch",
     flex: 1,
     justifyContent: "space-between",
     minWidth: 0,
-    paddingBottom: 1,
-    paddingLeft: 4,
-    paddingRight: 4,
-  },
-  temperatureReadings: {
-    alignItems: "flex-start",
-    flex: 1,
-    justifyContent: "space-around",
-    paddingBottom: 14,
+    paddingBottom: 2,
     paddingTop: 2,
   },
-  temperatureTopSensor: {
-    alignItems: "flex-start",
-    alignSelf: "center",
-    marginRight: 6,
-  },
-  temperatureBottomSensor: {
-    alignItems: "flex-start",
-    alignSelf: "center",
-    marginLeft: 4,
-    marginTop: 12,
+  // Bottom and inlet readings are grouped together near the card's bottom
+  // edge, with a small gap between them, while the top reading (a sibling
+  // of this group in temperatureValuesColumn) is pushed to the top by the
+  // column's space-between.
+  lowerTemperatureGroup: {
+    alignItems: "center",
   },
   temperatureValue: {
     color: "#ffffff",
@@ -217,7 +223,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -1.6,
     lineHeight: 48,
-    textAlign: "right",
+    textAlign: "center",
     textShadowColor: "rgba(0,0,0,0.24)",
     textShadowOffset: { height: 2, width: 0 },
     textShadowRadius: 10,
@@ -243,7 +249,19 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: -0.6,
     lineHeight: 26,
-    textAlign: "right",
+    textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.2)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 8,
+  },
+  inletTemperatureValue: {
+    color: "#40d9ff",
+    fontSize: 19,
+    fontWeight: "900",
+    letterSpacing: -0.4,
+    lineHeight: 21,
+    marginTop: 5,
+    textAlign: "center",
     textShadowColor: "rgba(0,0,0,0.2)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,

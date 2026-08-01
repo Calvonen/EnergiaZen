@@ -136,9 +136,6 @@ export function WarmWaterCard({
                     </Text>
                   ))}
                 </View>
-                <Text allowFontScaling={false} style={styles.scaleShowerIcon}>
-                  🚿
-                </Text>
               </View>
               <View style={styles.tankVisual}>
                 <View
@@ -184,6 +181,7 @@ export function WarmWaterCard({
                 <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
                 <View style={[styles.tankBubble, styles.tankBubbleThree]} />
                 <Text style={styles.tankPrimaryValue}>{showersValueLabel}</Text>
+                <Text style={styles.tankSecondaryValue}>{temperatureLabel}</Text>
               </View>
               <View style={styles.scaleColumnRight}>
                 <View style={styles.scaleNumbers}>
@@ -203,9 +201,6 @@ export function WarmWaterCard({
               </View>
             </View>
           </View>
-          <Text style={styles.secondaryTemperatureValue}>
-            {temperatureLabel}
-          </Text>
         </View>
       </Pressable>
     </View>
@@ -222,7 +217,9 @@ const styles = StyleSheet.create({
     minHeight: 160,
     overflow: "hidden",
     paddingHorizontal: 14,
-    paddingVertical: 11,
+    // Matches temperature-card's metricCard paddingVertical so both card
+    // titles land on the same vertical level.
+    paddingVertical: 13,
     shadowOpacity: 0.38,
     shadowRadius: 24,
   },
@@ -249,6 +246,11 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     flex: 1,
     justifyContent: "center",
+    // Small deliberate nudge down from center, now that the tank graphic
+    // is the only child of warmWaterContent (the temperature label used
+    // to be a separate sibling below it, which pulled the group's visual
+    // center upward).
+    marginTop: 10,
     minHeight: 108,
     width: "100%",
   },
@@ -259,7 +261,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
-    minHeight: 18,
+    // Matches temperature-card's cardLabelRow minHeight so both card
+    // titles land on the same vertical level.
+    minHeight: 24,
   },
   cardLabel: {
     color: "rgba(247,251,255,0.82)",
@@ -309,12 +313,6 @@ const styles = StyleSheet.create({
     lineHeight: SCALE_LABEL_LINE_HEIGHT,
     position: "absolute",
     transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
-  },
-  scaleShowerIcon: {
-    fontSize: 12,
-    marginTop: 4,
-    textAlign: "center",
-    width: "100%",
   },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
@@ -402,12 +400,21 @@ const styles = StyleSheet.create({
     textShadowRadius: 8,
     top: (TANK_HEIGHT - PRIMARY_VALUE_LINE_HEIGHT) / 2,
   },
-  secondaryTemperatureValue: {
-    color: "rgba(247,251,255,0.7)",
-    fontSize: 18,
+  // Positioned inside the tank graphic itself, horizontally centered like
+  // tankPrimaryValue, well clear of its vertically-centered box (top ~67 to
+  // ~101 of the 168-tall tank) and clearly above the tank's bottom edge.
+  tankSecondaryValue: {
+    bottom: 16,
+    color: "rgba(247,251,255,0.82)",
+    fontSize: 17,
     fontWeight: "900",
+    left: 0,
     letterSpacing: -0.2,
-    marginTop: 5,
+    position: "absolute",
+    right: 0,
     textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.34)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 8,
   },
 });
