@@ -2,6 +2,7 @@ export type HeatingPlanReasonKind =
   | "early-for-safety"
   | "fallback"
   | "fixed"
+  | "later-hour-blocked-for-safety"
   | "max-hours-insufficient"
   | "no-heating"
   | "standard";
@@ -64,6 +65,7 @@ export function buildHeatingPlanPresentation({
   finalShowers,
   fixedHeatingHoursPerDay,
   heatingNeedMode,
+  laterHourRejectedForSafety = false,
   minimumShowers,
   minimumShowersBeforeNextHeating = minimumShowers,
   minimumShowersTimeLabel = null,
@@ -81,6 +83,12 @@ export function buildHeatingPlanPresentation({
   fixedHeatingHoursPerDay: number;
   forecastEndLabel: string;
   heatingNeedMode: "automatic" | "fixed";
+  // Halvempi, myohempi tunti loytyi jollekin JO VALITUISTA tunneista (ei
+  // valttamatta kaikille, ks. hasCheaperLaterHourRejectedForSafety), mutta
+  // se hylattiin koska turvaraja olisi alittunut ennen sita - eri tapaus
+  // kuin cheaperPlanRejectedForSafety, joka koskee koko suunnitelman
+  // siirtamista myohemmaksi.
+  laterHourRejectedForSafety?: boolean;
   // Koko ennustejakson minimi - kaytetaan turvarajan tayttymisen
   // (statusSummary) laskentaan, joka koskee koko jaksoa.
   minimumShowers: number;
@@ -127,6 +135,10 @@ export function buildHeatingPlanPresentation({
     reasonKind = "early-for-safety";
     reason =
       "Lämmitys aloitetaan aikaisemmin, koska myöhempään odottaminen alittaisi turvarajan.";
+  } else if (laterHourRejectedForSafety) {
+    reasonKind = "later-hour-blocked-for-safety";
+    reason =
+      "Yhtä lämmitystuntia ei siirretty myöhempään halvempaan tuntiin, koska odottaminen olisi alittanut turvarajan sitä ennen.";
   } else {
     reasonKind = "standard";
     reason =
@@ -243,6 +255,38 @@ export function hasCheaperSafetyRejectedPlan({
       plan.selectedHourCount === selectedHourCount &&
       plan.cost < selectedCost &&
       plan.laterThanSelected &&
+      plan.violations.includes("safety shower reserve would be violated"),
+  );
+}
+
+// hasCheaperSafetyRejectedPlan vaatii etta KOKO hylatty suunnitelma alkaa
+// myohemmin kuin valitun suunnitelman ENSIMMAINEN tunti - se ei siis
+// tunnista tilannetta jossa vain YKSI valituista tunneista (esim. viimeinen)
+// olisi voitu siirtaa myohempaan, halvempaan tuntiin muiden pysyessa
+// ennallaan. Tama funktio kattaa juuri sen: onko halvempi, saman
+// tuntimaaran suunnitelma, jonka MYOHAISIN tunti on valittua suunnitelmaa
+// myohaisempi, hylatty turvarajan takia.
+export function hasCheaperLaterHourRejectedForSafety({
+  rejectedPlans,
+  selectedCost,
+  selectedHourCount,
+  selectedLatestStartTime,
+}: {
+  rejectedPlans: {
+    cost: number;
+    latestStartTime: number;
+    selectedHourCount: number;
+    violations: string[];
+  }[];
+  selectedCost: number;
+  selectedHourCount: number;
+  selectedLatestStartTime: number;
+}) {
+  return rejectedPlans.some(
+    (plan) =>
+      plan.selectedHourCount === selectedHourCount &&
+      plan.cost < selectedCost &&
+      plan.latestStartTime > selectedLatestStartTime &&
       plan.violations.includes("safety shower reserve would be violated"),
   );
 }

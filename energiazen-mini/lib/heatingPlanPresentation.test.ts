@@ -1,6 +1,7 @@
 import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
+  hasCheaperLaterHourRejectedForSafety,
   hasCheaperSafetyRejectedPlan,
   selectActiveHeatingPlanPresentation,
 } from "./heatingPlanPresentation";
@@ -166,6 +167,81 @@ export function runHeatingPlanPresentationUnitTests() {
     }).reasonKind,
     "early-for-safety",
     "aikaisempi kallis tunti perustellaan turvarajalla",
+  );
+
+  // "11-12 lämmitys, 14-15 hylätty" -tapaus: sama ensimmäinen tunti
+  // säilyy, mutta halvempi, myöhempi vaihtoehtoinen tunti hylättiin
+  // turvarajan takia - hasCheaperSafetyRejectedPlan ei tunnista tätä,
+  // koska se vaatii että KAIKKI hylätyn suunnitelman tunnit ovat
+  // valitun suunnitelman ENSIMMÄISTÄ tuntia myöhemmin.
+  const laterHourRejected = hasCheaperLaterHourRejectedForSafety({
+    rejectedPlans: [
+      {
+        cost: 0.4,
+        latestStartTime: 14,
+        selectedHourCount: 2,
+        violations: ["safety shower reserve would be violated"],
+      },
+    ],
+    selectedCost: 0.6,
+    selectedHourCount: 2,
+    selectedLatestStartTime: 13,
+  });
+  assertEqual(
+    laterHourRejected,
+    true,
+    "halvempi myohempi tunti joka hylattiin turvarajan takia tunnistetaan, vaikka muut tunnit sailyisivat samoina",
+  );
+  assertEqual(
+    hasCheaperLaterHourRejectedForSafety({
+      rejectedPlans: [
+        {
+          cost: 0.8,
+          latestStartTime: 14,
+          selectedHourCount: 2,
+          violations: ["safety shower reserve would be violated"],
+        },
+      ],
+      selectedCost: 0.6,
+      selectedHourCount: 2,
+      selectedLatestStartTime: 13,
+    }),
+    false,
+    "kalliimpaa myohempaa vaihtoehtoa ei tulkita hylatyksi mahdollisuudeksi",
+  );
+  assertEqual(
+    hasCheaperLaterHourRejectedForSafety({
+      rejectedPlans: [
+        {
+          cost: 0.4,
+          latestStartTime: 14,
+          selectedHourCount: 2,
+          violations: ["target shower reserve would not be restored"],
+        },
+      ],
+      selectedCost: 0.6,
+      selectedHourCount: 2,
+      selectedLatestStartTime: 13,
+    }),
+    false,
+    "muu kuin turvarajan rikkomus ei laukaise tata perustetta",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      laterHourRejectedForSafety: true,
+    }).reasonKind,
+    "later-hour-blocked-for-safety",
+    "myohemman halvemman tunnin hylkays turvarajan takia perustellaan omalla syyllaan",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      cheaperPlanRejectedForSafety: true,
+      laterHourRejectedForSafety: true,
+    }).reasonKind,
+    "early-for-safety",
+    "koko suunnitelman aikaistaminen selittaa tilanteen ensisijaisesti, jos molemmat perusteet patevat",
   );
 
   const noHeating = buildHeatingPlanPresentation({

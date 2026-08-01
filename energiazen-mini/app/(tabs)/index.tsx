@@ -62,6 +62,7 @@ import { useHeatingOptimizationRun } from "@/lib/useHeatingOptimizationRun";
 import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
+  hasCheaperLaterHourRejectedForSafety,
   hasCheaperSafetyRejectedPlan,
   selectActiveHeatingPlanPresentation,
 } from "@/lib/heatingPlanPresentation";
@@ -724,26 +725,43 @@ function buildOptimizerHeatingPlanPresentation({
       (id) => startTimesById.get(id) ?? Number.POSITIVE_INFINITY,
     ),
   );
-  const cheaperPlanRejectedForSafety = hasCheaperSafetyRejectedPlan({
-    rejectedPlans: optimizationResult.diagnostics.rejectedShifts.map(
-      (rejectedPlan) => ({
-        cost: rejectedPlan.selectedHeatingHourIds.reduce(
-          (sum, id) => sum + (pricesById.get(id) ?? 0),
-          0,
-        ),
-        laterThanSelected:
-          rejectedPlan.selectedHeatingHourIds.length > 0 &&
-          rejectedPlan.selectedHeatingHourIds.every(
-            (id) =>
-              (startTimesById.get(id) ?? Number.NEGATIVE_INFINITY) >
-              firstSelectedStartTime,
-          ),
-        selectedHourCount: rejectedPlan.selectedHeatingHourIds.length,
-        violations: rejectedPlan.reason.split("; "),
-      }),
+  const selectedLatestStartTime = Math.max(
+    ...optimizationResult.selectedHeatingHourIds.map(
+      (id) => startTimesById.get(id) ?? Number.NEGATIVE_INFINITY,
     ),
+  );
+  const rejectedShiftsWithCost = optimizationResult.diagnostics.rejectedShifts.map(
+    (rejectedPlan) => ({
+      cost: rejectedPlan.selectedHeatingHourIds.reduce(
+        (sum, id) => sum + (pricesById.get(id) ?? 0),
+        0,
+      ),
+      latestStartTime: Math.max(
+        ...rejectedPlan.selectedHeatingHourIds.map(
+          (id) => startTimesById.get(id) ?? Number.NEGATIVE_INFINITY,
+        ),
+      ),
+      laterThanSelected:
+        rejectedPlan.selectedHeatingHourIds.length > 0 &&
+        rejectedPlan.selectedHeatingHourIds.every(
+          (id) =>
+            (startTimesById.get(id) ?? Number.NEGATIVE_INFINITY) >
+            firstSelectedStartTime,
+        ),
+      selectedHourCount: rejectedPlan.selectedHeatingHourIds.length,
+      violations: rejectedPlan.reason.split("; "),
+    }),
+  );
+  const cheaperPlanRejectedForSafety = hasCheaperSafetyRejectedPlan({
+    rejectedPlans: rejectedShiftsWithCost,
     selectedCost: optimizationResult.totalCost,
     selectedHourCount: optimizationResult.selectedHeatingHourIds.length,
+  });
+  const laterHourRejectedForSafety = hasCheaperLaterHourRejectedForSafety({
+    rejectedPlans: rejectedShiftsWithCost,
+    selectedCost: optimizationResult.totalCost,
+    selectedHourCount: optimizationResult.selectedHeatingHourIds.length,
+    selectedLatestStartTime,
   });
   const optimizerSelectedHourLabels = selectedHeatingHours.map((hour) => ({
     estimatedCostEuros: calculatePlannedHeatingHourCostEuros({
@@ -800,6 +818,7 @@ function buildOptimizerHeatingPlanPresentation({
     finalShowers,
     fixedHeatingHoursPerDay: runSettings.fixedHeatingHoursPerDay,
     heatingNeedMode: runSettings.heatingNeedMode,
+    laterHourRejectedForSafety,
     minimumShowers: optimizationResult.minimumPredictedShowersLeft,
     minimumShowersBeforeNextHeating:
       minimumBeforeNextHeating?.value ??
