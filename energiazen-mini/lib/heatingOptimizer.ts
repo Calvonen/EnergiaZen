@@ -561,7 +561,32 @@ export function simulateHeatingPlan({
     const spike = spikesByHour.get(helsinkiHour) ?? null;
     const violatedSpikeReserve = false;
 
-    temperature = temperatureBeforeHeating + heatingGain;
+    // Clamp a HEATED hour's result to the same "full tank" reference
+    // calculateStratifiedShowersLeft uses for its energyRatio/topUsability
+    // ceiling below - otherwise heating an already (near) full tank keeps
+    // pushing this weighted temperature past what's physically possible. The
+    // overshoot is invisible in that hour's own showersLeft (already clamped
+    // there), but it would otherwise carry forward uncapped into later
+    // hours' drop calculations, making the tank look like it cools from a
+    // higher-than-achievable starting point - i.e. crediting a heating hour
+    // for capacity the tank was never able to hold, without recognizing that
+    // a second contiguous heating hour is doing effectively nothing.
+    //
+    // Only applies when heatingApplied: fullTankAverageTemperature and
+    // maxTankTemperature are independently configurable (e.g. a 70C "full"
+    // reference under an 80C hard max), so an UNHEATED hour's temperature
+    // can legitimately sit above the reference already (a real sensor
+    // reading, or simply the previous hour's own already-legitimate value) -
+    // clamping it down there too would discard real stored heat from every
+    // later forecast hour. Math.max(...) with temperatureBeforeHeating below
+    // guards the heated case the same way: never reduce below where the
+    // hour started, only cap what heating adds on top of it.
+    temperature = heatingApplied
+      ? Math.min(
+          temperatureBeforeHeating + heatingGain,
+          Math.max(temperatureBeforeHeating, settings.fullTankAverageTemperature),
+        )
+      : temperatureBeforeHeating;
     const {
       bottomTemperature: bottomTemperatureAfter,
       topTemperature: topTemperatureAfter,
