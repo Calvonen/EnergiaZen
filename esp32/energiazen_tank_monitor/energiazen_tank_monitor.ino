@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
 #include <string.h>
+#include <stdio.h>
 
 // EnergyZen standalone ESP32 tank monitor
 // Hardware:
@@ -52,13 +53,14 @@
 // the same ROM address is assigned to more than one role, the device stays
 // in a sensor setup mode instead of running normally: it periodically
 // re-scans the OneWire bus and prints every discovered ROM address and
-// temperature to Serial, shows "SETUP MODE" on the OLED, and does not send
+// temperature to Serial, shows "ASETUSTILA" on the OLED, and does not send
 // anything to Supabase or run the sensor watchdog restart logic.
 
 constexpr uint8_t ONE_WIRE_BUS_PIN = 4;
 constexpr uint8_t OLED_SDA_PIN = 21;
 constexpr uint8_t OLED_SCL_PIN = 22;
 constexpr uint8_t OLED_I2C_ADDRESS = 0x3C;
+constexpr uint8_t DISPLAY_WIDTH_PX = 128;
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 5000;
 constexpr unsigned long SUPABASE_SEND_INTERVAL_MS = 60000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 30000;
@@ -93,9 +95,10 @@ const char *SHELLY_STATUS_ENDPOINT =
     "http://192.168.68.52/rpc/Switch.GetStatus?id=0";
 
 // DS18B20 ROM addresses, see the "Finding sensor ROM addresses" note above.
-DeviceAddress TOP_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-DeviceAddress BOTTOM_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-DeviceAddress INLET_SENSOR_ADDRESS = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+// Measured on the real device: TOP ~62.8 C, BOTTOM ~46.5 C, INLET ~16.0 C.
+DeviceAddress TOP_SENSOR_ADDRESS = {0x28, 0x70, 0x63, 0x22, 0x00, 0x00, 0x00, 0xAE};
+DeviceAddress BOTTOM_SENSOR_ADDRESS = {0x28, 0x34, 0xF4, 0x22, 0x00, 0x00, 0x00, 0xE1};
+DeviceAddress INLET_SENSOR_ADDRESS = {0x28, 0xD2, 0xBA, 0xC8, 0x00, 0x00, 0x00, 0x63};
 
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
@@ -673,17 +676,62 @@ bool sendSupabaseReading(unsigned long currentMs) {
   return responseCode >= 200 && responseCode < 300;
 }
 
-void printTemperatureLine(const char *label, float temperatureC) {
-  display.print(label);
-  display.print(" ");
-
+// u8g2_font_helvB08/10/12_tf all include the full ISO8859-1 (Latin-1) glyph
+// range, which covers both "ä" (U+00E4) and the degree sign "°" (U+00B0) -
+// verified against the rendered glyph tables at
+// https://github.com/olikraus/u8g2/wiki/fntgrpadobex11 before using them
+// here, rather than assuming support or silently falling back to ASCII.
+void formatTemperatureLine(char *buffer, size_t bufferSize, const char *label,
+                            float temperatureC) {
   if (isValidTemperature(temperatureC)) {
-    display.print(temperatureC, 1);
-    display.print(" c");
+    snprintf(buffer, bufferSize, "%s %.1f °C", label, temperatureC);
   } else {
-    display.print("--.- c");
+    snprintf(buffer, bufferSize, "%s --.- °C", label);
   }
 }
+
+// Applies the first font (in preference order) under which every line in
+// `lines` fits within DISPLAY_WIDTH_PX, so a set of lines meant to share one
+// look never gets individually clipped on the OLED's right edge. Falls back
+// to the last (smallest) font in the list if none fit, and logs exactly
+// which line(s) are still too wide so a mis-sized string is caught here
+// instead of silently clipping on the display.
+void applyFittingFont(const char *const *lines, uint8_t lineCount,
+                       const uint8_t *const *fontsByPreference,
+                       uint8_t fontCount) {
+  for (uint8_t f = 0; f < fontCount; f++) {
+    display.setFont(fontsByPreference[f]);
+
+    bool allLinesFit = true;
+    for (uint8_t i = 0; i < lineCount; i++) {
+      if (display.getUTF8Width(lines[i]) > DISPLAY_WIDTH_PX) {
+        allLinesFit = false;
+        break;
+      }
+    }
+
+    const bool isSmallestFont = f == fontCount - 1;
+    if (allLinesFit || isSmallestFont) {
+      if (!allLinesFit) {
+        for (uint8_t i = 0; i < lineCount; i++) {
+          if (display.getUTF8Width(lines[i]) > DISPLAY_WIDTH_PX) {
+            Serial.print(
+                "WARNING: OLED line does not fit even at the smallest "
+                "configured font and will be clipped: ");
+            Serial.println(lines[i]);
+          }
+        }
+      }
+      return;
+    }
+  }
+}
+
+const uint8_t *const TEMPERATURE_LINE_FONTS[] = {u8g2_font_helvB12_tf,
+                                                  u8g2_font_helvB10_tf,
+                                                  u8g2_font_helvB08_tf};
+const uint8_t *const SETUP_LINE_FONTS[] = {u8g2_font_helvB10_tf,
+                                            u8g2_font_helvB08_tf};
 
 void updateDisplay() {
   display.clearBuffer();
@@ -692,15 +740,28 @@ void updateDisplay() {
   display.setCursor(0, 9);
   display.print("EnergyZen");
 
-  display.setFont(u8g2_font_helvB12_tf);
+  char topLine[24];
+  char bottomLine[24];
+  char inletLine[24];
+  formatTemperatureLine(topLine, sizeof(topLine), "Ylä", topTemperatureC);
+  formatTemperatureLine(bottomLine, sizeof(bottomLine), "Ala",
+                         bottomTemperatureC);
+  formatTemperatureLine(inletLine, sizeof(inletLine), "Tulo",
+                         inletTemperatureC);
+
+  const char *temperatureLines[] = {topLine, bottomLine, inletLine};
+  applyFittingFont(temperatureLines, 3, TEMPERATURE_LINE_FONTS,
+                    sizeof(TEMPERATURE_LINE_FONTS) /
+                        sizeof(TEMPERATURE_LINE_FONTS[0]));
+
   display.setCursor(0, 24);
-  printTemperatureLine("Yla", topTemperatureC);
+  display.print(topLine);
 
   display.setCursor(0, 39);
-  printTemperatureLine("Ala", bottomTemperatureC);
+  display.print(bottomLine);
 
   display.setCursor(0, 54);
-  printTemperatureLine("Tulo", inletTemperatureC);
+  display.print(inletLine);
 
   if (sensorDataStale &&
       (lastSuccessfulSensorReadMillis == 0 ||
@@ -720,17 +781,23 @@ void updateSetupDisplay() {
   display.setCursor(0, 9);
   display.print("EnergyZen");
 
-  display.setFont(u8g2_font_helvB12_tf);
-  display.setCursor(0, 28);
-  display.print("SETUP MODE");
+  char sensorsLine[24];
+  snprintf(sensorsLine, sizeof(sensorsLine), "Antureita: %u",
+           static_cast<unsigned>(sensors.getDeviceCount()));
 
-  display.setFont(u8g2_font_helvB10_tf);
+  const char *setupLines[] = {"ASETUSTILA", sensorsLine,
+                               "Sarjaportti 115200"};
+  applyFittingFont(setupLines, 3, SETUP_LINE_FONTS,
+                    sizeof(SETUP_LINE_FONTS) / sizeof(SETUP_LINE_FONTS[0]));
+
+  display.setCursor(0, 28);
+  display.print(setupLines[0]);
+
   display.setCursor(0, 44);
-  display.print("Sensors: ");
-  display.print(sensors.getDeviceCount());
+  display.print(setupLines[1]);
 
   display.setCursor(0, 58);
-  display.print("See Serial 115200");
+  display.print(setupLines[2]);
 
   display.sendBuffer();
 }
