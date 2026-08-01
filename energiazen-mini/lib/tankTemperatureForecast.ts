@@ -2,6 +2,7 @@ export type TankTemperatureReading = {
   created_at?: string | null;
   top_temp?: number | null;
   bottom_temp?: number | null;
+  inlet_temp?: number | null;
   heating?: boolean | null;
 };
 
