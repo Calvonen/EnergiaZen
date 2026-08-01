@@ -155,6 +155,15 @@ export function useHeatingOptimizationRun({
             currentTopTemperature: snapshot.currentTopTemperature as number,
             currentWeightedTemperature:
               snapshot.currentWeightedTemperature as number,
+            // Explicit value bypasses estimateHeatingGainPerHour entirely
+            // (see optimizeHeatingPlan) - only set it when the user has
+            // chosen to distrust the learned estimate; otherwise leave it
+            // undefined so learned-vs-fallback keeps being decided
+            // automatically by data availability, as before.
+            heatingGainPerHour:
+              appSettings.heatingGainSource === "fixed"
+                ? fallbackHeatingGainPerHour
+                : undefined,
             hourlyDrops: snapshot.hourlyDrops,
             hours: runHours,
             isCurrentlyHeating: snapshot.isCurrentlyHeating,
