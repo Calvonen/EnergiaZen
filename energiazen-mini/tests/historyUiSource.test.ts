@@ -131,8 +131,12 @@ export function runHistoryUiSourceTests() {
   assertSource(
     !homeSource.includes("Viimeisin jakso") &&
       homeSource.includes("heatingPlanPresentation.selectedHours") &&
-      homeSource.includes("heatingPlanPresentation.planCostSummary") &&
       homeSource.includes("heatingPlanPresentation.forecastSummary"),
     "etusivulta saa poistua vain Viimeisin jakso -tiedot",
+  );
+  assertSource(
+    !homeSource.includes("heatingPlanPresentation.planCostSummary") &&
+      !homeSource.includes("splitPlanCostSummary"),
+    "lammityssuunnitelman arvioitu hinta -rivi on poistettu etusivulta kokonaan",
   );
 }

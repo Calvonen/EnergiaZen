@@ -269,14 +269,6 @@ function splitHeatingHourLabel(label: string) {
   return { costLabel, priceLabel, timeLabel: timeLabel ?? label };
 }
 
-function splitPlanCostSummary(summary: string) {
-  const match = summary.match(/^(Suunnitelman arvioitu hinta) (.+)$/);
-
-  return match
-    ? { label: match[1], value: match[2] }
-    : { label: summary, value: null };
-}
-
 function splitLimitsSummary(summary: string) {
   const match = summary.match(
     /^Tavoite ([^ ]+) suihkua · turvaraja ([^ ]+) suihkua$/,
@@ -2839,25 +2831,6 @@ export default function HomeScreen() {
                         {heatingPlanPresentation.emptyPlanLabel}
                       </Text>
                     )}
-                    {heatingPlanPresentation.planCostSummary ? (
-                      (() => {
-                        const { label, value } = splitPlanCostSummary(
-                          heatingPlanPresentation.planCostSummary,
-                        );
-
-                        return (
-                          <View style={styles.planEstimatedPriceRow}>
-                            <Text style={styles.planEstimatedPriceLabel}>
-                              {label}
-                            </Text>
-                            <Text style={styles.planEstimatedPriceValue}>
-                              {value ?? ""}
-                            </Text>
-                          </View>
-                        );
-                      })()
-                    ) : null}
-
                     <Text style={styles.heatingPlanForecastSubtitle}>
                       Ennuste
                     </Text>
@@ -3182,30 +3155,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 18,
-  },
-  planEstimatedPriceRow: {
-    alignItems: "baseline",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 3,
-    minHeight: 20,
-  },
-  planEstimatedPriceLabel: {
-    color: "#9fc7ff",
-    flex: 1,
-    flexShrink: 1,
-    fontSize: 12,
-    fontWeight: "600",
-    lineHeight: 18,
-  },
-  planEstimatedPriceValue: {
-    color: "#72ff9d",
-    fontSize: 14,
-    fontWeight: "700",
-    flexShrink: 0,
-    lineHeight: 20,
-    marginLeft: 12,
-    textAlign: "right",
   },
   heatingPlanForecastText: {
     color: "#cfe9ff",

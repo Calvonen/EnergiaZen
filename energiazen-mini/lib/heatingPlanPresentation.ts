@@ -20,7 +20,6 @@ export type HeatingPlanPresentation = {
   forecastSummary: string;
   heatingSummary: string | null;
   limitsSummary: string;
-  planCostSummary: string | null;
   reason: string;
   reasonKind: HeatingPlanReasonKind;
   selectedHours: {
@@ -135,20 +134,6 @@ export function buildHeatingPlanPresentation({
           : "Tavoitetta eikä turvarajaa saavuteta";
   const currentShowersLabel =
     currentShowers === null ? "--" : formatFinnishDecimal(currentShowers);
-  const planEstimatedCostEuros =
-    selectedHours.length > 0
-      ? selectedHours.reduce<number | null>((sum, hour) => {
-          if (
-            sum === null ||
-            typeof hour.estimatedCostEuros !== "number" ||
-            !Number.isFinite(hour.estimatedCostEuros)
-          ) {
-            return null;
-          }
-
-          return sum + hour.estimatedCostEuros;
-        }, 0)
-      : null;
 
   return {
     emptyPlanLabel:
@@ -166,10 +151,6 @@ export function buildHeatingPlanPresentation({
         ? null
         : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
     limitsSummary: `Tavoite ${targetShowerReserve} suihkua · turvaraja ${safetyShowerReserve} suihkua`,
-    planCostSummary:
-      planEstimatedCostEuros === null
-        ? null
-        : `Suunnitelman arvioitu hinta n. ${formatFinnishCurrency(planEstimatedCostEuros)} €`,
     reason,
     reasonKind,
     selectedHours: selectedHours.map((hour) => {

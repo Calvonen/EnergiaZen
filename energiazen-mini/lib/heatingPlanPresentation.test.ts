@@ -111,9 +111,9 @@ export function runHeatingPlanPresentationUnitTests() {
     "valitun tunnin arvioitu eurohinta naytetaan spot-hinnan jalkeen",
   );
   assertEqual(
-    planWithCosts.planCostSummary,
-    "Suunnitelman arvioitu hinta n. 0,57 €",
-    "suunnitelman arvioitu hinta naytetaan valittujen tuntien summana",
+    "planCostSummary" in planWithCosts,
+    false,
+    "suunnitelman arvioitua kokonaishintaa ei enaa lasketa - vain tuntikohtainen hinta sailyy",
   );
   assertEqual(
     buildHeatingPlanPresentation({
