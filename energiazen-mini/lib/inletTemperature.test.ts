@@ -132,6 +132,47 @@ export function runInletTemperatureUnitTests() {
     );
   }
 
+  // A real, fast cold-water dip must not be rejected as noise just because
+  // consecutive one-minute samples differ by several degrees: the inlet
+  // sensor can genuinely fall this quickly once water starts flowing.
+  {
+    const readings = readingsFromMinuteOffsets([16.0, 11.5, 8.2, 7.8, 8.4]);
+
+    const result = calculateMinimumValidInletTemperature(readings);
+    assertEqual(
+      result !== null && result >= 7.8 && result <= 8.2,
+      true,
+      `fast real cooling should produce a minimum around 7.8-8.2 C, got ${result}`,
+    );
+  }
+
+  // Two low readings that are only adjacent because everything in between
+  // was filtered out, but are actually far apart in real time (well beyond
+  // CONFIRMATION_WINDOW_MINUTES), must not confirm each other. The result
+  // should fall back to the nearby, mutually-confirming ~20 C readings.
+  {
+    const start = Date.UTC(2026, 6, 20, 0, 0, 0);
+    const at = (minutes: number) => new Date(start + minutes * 60_000).toISOString();
+    const readings = [
+      reading(at(0), 20.0),
+      reading(at(1), 19.9),
+      reading(at(10), 5.0),
+      reading(at(20), 5.1),
+    ];
+
+    const result = calculateMinimumValidInletTemperature(readings);
+    assertEqual(
+      result === 5.0 || result === 5.1,
+      false,
+      "low readings more than the confirmation window apart must not confirm each other",
+    );
+    assertEqual(
+      result !== null && result >= 19.9 && result <= 20.0,
+      true,
+      `should fall back to the confirmed ~20 C level, got ${result}`,
+    );
+  }
+
   // No valid data at all (empty input, or every reading invalid) returns
   // null rather than throwing or returning a misleading number.
   {

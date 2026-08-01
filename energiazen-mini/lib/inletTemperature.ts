@@ -6,10 +6,18 @@ import type { TankTemperatureReading } from "./tankTemperatureForecast";
 export const MIN_VALID_INLET_TEMPERATURE_C = 1;
 export const MAX_VALID_INLET_TEMPERATURE_C = 30;
 
-// Two valid readings that are adjacent in time (see getValidOrderedSamples)
-// and within this many degrees of each other are treated as confirming the
-// same underlying low level.
-const CONSECUTIVE_LOW_TOLERANCE_C = 1;
+// A candidate minimum is confirmed by another valid reading within this
+// many minutes of it (in either direction) - not just the immediately
+// adjacent sample - since the inlet can genuinely drop several degrees
+// within a single one-minute sampling interval when water starts flowing.
+const CONFIRMATION_WINDOW_MINUTES = 3;
+
+// The confirming reading may be up to this many degrees warmer than the
+// candidate (it's expected to still be on the way down, or just past the
+// bottom of the dip) but never colder - a colder nearby reading would mean
+// *that* reading is the better candidate, and it gets checked in its own
+// right since candidates are tried from lowest to highest.
+const MAX_CONFIRMATION_WARMER_DELTA_C = 2;
 
 type InletReadingSample = {
   createdAt: string;
@@ -25,11 +33,9 @@ function isValidInletTemperature(value: unknown): value is number {
   );
 }
 
-// Valid readings only, sorted chronologically. "Adjacent" for the
-// consecutive-low check below means adjacent in this filtered list: a
-// rejected reading in between two valid ones does not break
-// consecutiveness, since the ESP32 already reports invalid readings as
-// null/omitted rather than a fabricated number.
+// Valid readings only, sorted chronologically by created_at so the
+// confirmation-window walk below can rely on ascending time order and stop
+// as soon as it walks past CONFIRMATION_WINDOW_MINUTES.
 function getValidOrderedSamples(
   readings: TankTemperatureReading[],
 ): InletReadingSample[] {
@@ -46,6 +52,62 @@ function getValidOrderedSamples(
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+function minutesBetween(aIso: string, bIso: string): number {
+  return Math.abs(new Date(bIso).getTime() - new Date(aIso).getTime()) / 60000;
+}
+
+function isWithinConfirmationBand(
+  neighborValue: number,
+  candidateValue: number,
+): boolean {
+  return (
+    neighborValue >= candidateValue &&
+    neighborValue <= candidateValue + MAX_CONFIRMATION_WARMER_DELTA_C
+  );
+}
+
+// Whether samples[index] is confirmed by some other reading within
+// CONFIRMATION_WINDOW_MINUTES of it (walking outward in both directions
+// through the time-sorted samples, stopping as soon as the elapsed time
+// exceeds the window - two readings that are adjacent only because
+// everything between them was filtered out, but are actually far apart in
+// real time, are correctly never treated as "nearby").
+function isConfirmedLow(samples: InletReadingSample[], index: number) {
+  const candidate = samples[index];
+
+  for (let i = index - 1; i >= 0; i--) {
+    if (minutesBetween(samples[i].createdAt, candidate.createdAt) >
+      CONFIRMATION_WINDOW_MINUTES) {
+      break;
+    }
+    if (
+      isWithinConfirmationBand(
+        samples[i].inletTemperatureC,
+        candidate.inletTemperatureC,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  for (let i = index + 1; i < samples.length; i++) {
+    if (minutesBetween(candidate.createdAt, samples[i].createdAt) >
+      CONFIRMATION_WINDOW_MINUTES) {
+      break;
+    }
+    if (
+      isWithinConfirmationBand(
+        samples[i].inletTemperatureC,
+        candidate.inletTemperatureC,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Computes the lowest confirmed inlet-water temperature from a set of
  * `tank_readings` rows. Callers are expected to pass rows already scoped to
@@ -56,14 +118,18 @@ function getValidOrderedSamples(
  * MAX_VALID_INLET_TEMPERATURE_C are considered; null, NaN, and
  * out-of-range values are treated as a missing/faulty reading and ignored.
  *
- * A single isolated low reading is not trusted as the minimum: a genuine
- * cold-water dip lasts multiple sensor samples (the ESP32 reads about once
- * a minute), while a one-off sensor glitch does not. A candidate value is
- * only accepted once at least one neighboring valid reading is within
- * CONSECUTIVE_LOW_TOLERANCE_C degrees of it. Candidates are checked from
- * lowest to highest, so this returns the lowest value that clears that
- * bar - or null if no valid reading is ever corroborated by a neighbor
- * (including when there are fewer than two valid readings at all).
+ * A single isolated low reading is not trusted as the minimum, but a real,
+ * fast cold-water dip is not rejected either: the inlet can genuinely drop
+ * several degrees within one sampling interval once water starts flowing.
+ * Instead of requiring the immediately adjacent reading to be within a
+ * tight tolerance, a candidate is accepted once some other valid reading
+ * within CONFIRMATION_WINDOW_MINUTES of it is no more than
+ * MAX_CONFIRMATION_WARMER_DELTA_C degrees warmer (never colder - a colder
+ * nearby reading is itself a better candidate, and gets tried first).
+ * Candidates are checked from lowest to highest, so this returns the
+ * lowest value that clears that bar, or null if no valid reading is ever
+ * confirmed (including when there are fewer than two valid readings at
+ * all).
  */
 export function calculateMinimumValidInletTemperature(
   readings: TankTemperatureReading[],
@@ -81,20 +147,8 @@ export function calculateMinimumValidInletTemperature(
     );
 
   for (const index of indexesByAscendingValue) {
-    const value = samples[index].inletTemperatureC;
-    const previous = samples[index - 1];
-    const next = samples[index + 1];
-
-    const confirmedByPrevious =
-      previous !== undefined &&
-      Math.abs(previous.inletTemperatureC - value) <=
-        CONSECUTIVE_LOW_TOLERANCE_C;
-    const confirmedByNext =
-      next !== undefined &&
-      Math.abs(next.inletTemperatureC - value) <= CONSECUTIVE_LOW_TOLERANCE_C;
-
-    if (confirmedByPrevious || confirmedByNext) {
-      return value;
+    if (isConfirmedLow(samples, index)) {
+      return samples[index].inletTemperatureC;
     }
   }
 
