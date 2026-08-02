@@ -2082,9 +2082,13 @@ export default function HomeScreen() {
   // tilan. Toisin kuin sahkoposti, tama lasketaan aina tuoreesta
   // tankUpdatedAt-arvosta, joten se katoaa automaattisesti heti kun uusi
   // lukema saapuu, eika vaadi erillista "palautunut"-tilaa.
-  const tankMonitorFault = isTankReadingStale(
-    computeTankReadingAgeMinutes(tankUpdatedAt, currentTime),
-  );
+  // "loading" on true vain ihan ensimmäisen haun ajan (ks. useFocusEffect
+  // alla) - sita ennen tankUpdatedAt on vaistamatta viela null, koska
+  // mitaan ei ole ehditty hakea. Ilman tata ehtoa banneri vilahti
+  // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
+  const tankMonitorFault =
+    !loading &&
+    isTankReadingStale(computeTankReadingAgeMinutes(tankUpdatedAt, currentTime));
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
