@@ -83,37 +83,48 @@ export function runInletTemperatureTrendUnitTests() {
   assertEqual(
     currentPeriod,
     {
-      endIso: "2026-08-31T21:00:00.000Z",
+      endIso: "2026-09-30T21:00:00.000Z",
       isCurrent: true,
-      label: "Kesä–elokuu 2026",
-      startIso: "2026-05-31T21:00:00.000Z",
+      label: "Heinä–syyskuu 2026",
+      startIso: "2026-06-30T21:00:00.000Z",
     },
-    "kuluva jakso on kolme viimeisintä kuukautta kuluva kuukausi mukaan lukien",
+    "elokuu osuu heinä-syyskuun kvartaaliin, kuluva jakso on kiinteä kalenterikvartaali",
   );
 
   const previousPeriod = getInletTrendPeriod(1, summerNow);
   assertEqual(
     previousPeriod,
     {
-      endIso: "2026-05-31T21:00:00.000Z",
+      endIso: "2026-06-30T21:00:00.000Z",
       isCurrent: false,
-      label: "Maalis–toukokuu 2026",
-      startIso: "2026-02-28T22:00:00.000Z",
+      label: "Huhti–kesäkuu 2026",
+      startIso: "2026-03-31T21:00:00.000Z",
     },
-    "edellinen jakso jatkuu saumattomasti kuluvan jakson alusta taaksepäin",
+    "edellinen jakso on edellinen kalenterikvartaali (huhti-kesäkuu)",
   );
 
-  const winterNow = new Date("2026-01-15T10:00:00.000Z");
-  const yearCrossingPeriod = getInletTrendPeriod(0, winterNow);
+  const twoQuartersBackPeriod = getInletTrendPeriod(2, summerNow);
+  assertEqual(
+    twoQuartersBackPeriod,
+    {
+      endIso: "2026-03-31T21:00:00.000Z",
+      isCurrent: false,
+      label: "Tammi–maaliskuu 2026",
+      startIso: "2025-12-31T22:00:00.000Z",
+    },
+    "kaksi kvartaalia taaksepäin on tammi-maaliskuu",
+  );
+
+  const yearCrossingPeriod = getInletTrendPeriod(3, summerNow);
   assertEqual(
     yearCrossingPeriod,
     {
-      endIso: "2026-01-31T22:00:00.000Z",
-      isCurrent: true,
-      label: "Marraskuu 2025 – tammikuu 2026",
-      startIso: "2025-10-31T22:00:00.000Z",
+      endIso: "2025-12-31T22:00:00.000Z",
+      isCurrent: false,
+      label: "Loka–joulukuu 2025",
+      startIso: "2025-09-30T21:00:00.000Z",
     },
-    "vuodenvaihteen ylittävä jakso näyttää molemmat vuodet",
+    "kolme kvartaalia taaksepäin ylittää vuodenvaihteen ja on kokonaan edellisvuonna",
   );
 
   assertEqual(
@@ -125,10 +136,6 @@ export function runInletTemperatureTrendUnitTests() {
   assertEqual(
     getInletTrendPeriodWeekStarts(currentPeriod),
     [
-      "2026-06-01",
-      "2026-06-08",
-      "2026-06-15",
-      "2026-06-22",
       "2026-06-29",
       "2026-07-06",
       "2026-07-13",
@@ -139,8 +146,12 @@ export function runInletTemperatureTrendUnitTests() {
       "2026-08-17",
       "2026-08-24",
       "2026-08-31",
+      "2026-09-07",
+      "2026-09-14",
+      "2026-09-21",
+      "2026-09-28",
     ],
-    "jakson viikot alkavat maanantaisin ja kattavat koko 3 kuukauden jakson",
+    "jakson viikot alkavat maanantaisin ja kattavat koko kvartaalin",
   );
 
   assertEqual(
@@ -149,9 +160,9 @@ export function runInletTemperatureTrendUnitTests() {
       { minimumInletTempC: 8.1, weekStart: "2026-08-03" },
     ]).map((slot) => slot.minimumInletTempC),
     [
-      null, null, null, null, null, null, null,
+      null, null, null,
       8.5, null,
-      8.1, null, null, null, null,
+      8.1, null, null, null, null, null, null, null, null,
     ],
     "viikot, joilta ei löytynyt vahvistettua lukemaa, jäävät tyhjiksi eivätkä siirrä muita pisteitä",
   );

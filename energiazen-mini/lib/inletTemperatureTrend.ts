@@ -6,9 +6,9 @@
 // tiedosto vain muuntaa RPC:n rivit näyttöä varten, ei laske minimiä
 // itse.
 //
-// Näkymä on jaettu 3 kuukauden jaksoihin (kuten touko-heinäkuu), joita
-// voi selata taaksepäin samaan tapaan kuin päivähistorian ‹ › -nuolilla
-// (ks. getInletTrendPeriod).
+// Näkymä on jaettu kiinteisiin vuosineljänneksiin (tammi-maalis,
+// huhti-kesä, heinä-syys, loka-joulu), joita voi selata taaksepäin
+// samaan tapaan kuin päivähistorian ‹ › -nuolilla (ks. getInletTrendPeriod).
 import {
   addHelsinkiCalendarDays,
   getHelsinkiDateParts,
@@ -16,7 +16,6 @@ import {
   getUtcDateForHelsinkiLocalTime,
 } from "./temperatureHistoryDay";
 
-export const weeklyInletTemperaturePeriodMonths = 3;
 export const weeklyInletTemperatureChartMinC = 0;
 export const weeklyInletTemperatureChartMaxC = 20;
 
@@ -99,65 +98,52 @@ function capitalizeFirstLetter(text: string) {
 
 function formatInletTrendPeriodLabel(
   firstMonth: number,
-  firstYear: number,
   lastMonth: number,
-  lastYear: number,
+  year: number,
 ) {
-  const lastMonthLabel = finnishMonthNames[lastMonth - 1];
-
-  if (firstYear !== lastYear) {
-    const firstMonthLabel = finnishMonthNames[firstMonth - 1];
-
-    return capitalizeFirstLetter(
-      `${firstMonthLabel} ${firstYear} – ${lastMonthLabel} ${lastYear}`,
-    );
-  }
-
   const firstMonthLabel = stripFinnishMonthSuffix(
     finnishMonthNames[firstMonth - 1],
   );
+  const lastMonthLabel = finnishMonthNames[lastMonth - 1];
 
-  return capitalizeFirstLetter(`${firstMonthLabel}–${lastMonthLabel} ${lastYear}`);
+  return capitalizeFirstLetter(`${firstMonthLabel}–${lastMonthLabel} ${year}`);
 }
 
-// offset 0 = viimeiset weeklyInletTemperaturePeriodMonths kuukautta (kuluva
-// kuukausi mukaan lukien), offset 1 = sitä edeltävä jakso jne. Jaksot eivät
-// ole sidottuja kalenterivuosineljänneksiin vaan liukuvat kuluvasta
-// kuukaudesta taaksepäin, kuten päivähistorian ‹ › -selain liikkuu päivä
-// kerrallaan.
+// offset 0 = kuluva vuosineljännes (tammi-maalis, huhti-kesä, heinä-syys tai
+// loka-joulu, sen mukaan mihin kuluva kuukausi osuu), offset 1 = edellinen
+// vuosineljännes jne. Jaksot ovat siis kiinteitä kalenterikvartaaleja, ei
+// liukuvia kuukausi-ikkunoita, jolloin koko vuosi jakautuu neljään
+// jaksoon eikä esim. elokuu jää kahden eri näkymän väliin.
 export function getInletTrendPeriod(
   offset: number,
   now = new Date(),
 ): InletTrendPeriod {
   const clampedOffset = Math.max(offset, 0);
   const nowParts = getHelsinkiDateParts(now);
-  const lastMonthOrdinal =
-    nowParts.year * 12 +
-    (nowParts.month - 1) -
-    clampedOffset * weeklyInletTemperaturePeriodMonths;
-  const firstMonthOrdinal =
-    lastMonthOrdinal - (weeklyInletTemperaturePeriodMonths - 1);
+  const currentQuarterOrdinal =
+    nowParts.year * 4 + Math.floor((nowParts.month - 1) / 3);
+  const targetQuarterOrdinal = currentQuarterOrdinal - clampedOffset;
 
-  const firstYear = Math.floor(firstMonthOrdinal / 12);
-  const firstMonth = (firstMonthOrdinal % 12) + 1;
-  const lastYear = Math.floor(lastMonthOrdinal / 12);
-  const lastMonth = (lastMonthOrdinal % 12) + 1;
+  const targetYear = Math.floor(targetQuarterOrdinal / 4);
+  const targetQuarterIndex = targetQuarterOrdinal % 4;
+  const firstMonth = targetQuarterIndex * 3 + 1;
+  const lastMonth = firstMonth + 2;
 
   const start = getUtcDateForHelsinkiLocalTime({
     day: 1,
     month: firstMonth,
-    year: firstYear,
+    year: targetYear,
   });
   const end = getUtcDateForHelsinkiLocalTime({
     day: 1,
     month: lastMonth + 1,
-    year: lastYear,
+    year: targetYear,
   });
 
   return {
     endIso: end.toISOString(),
     isCurrent: clampedOffset === 0,
-    label: formatInletTrendPeriodLabel(firstMonth, firstYear, lastMonth, lastYear),
+    label: formatInletTrendPeriodLabel(firstMonth, lastMonth, targetYear),
     startIso: start.toISOString(),
   };
 }
