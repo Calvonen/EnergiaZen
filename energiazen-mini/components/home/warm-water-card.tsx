@@ -35,9 +35,32 @@ const LIMIT_COLOR = "#9fc7ff";
 // toleranssi riittää tunnistamaan täsmäävän kokonaisluku-tikin.
 const LIMIT_MATCH_TOLERANCE = 0.05;
 
-// Näyttää suihkumäärää (0..fullTankShowers) vastaavan lämpötila-asteikon
-// säiliögrafiikan viereen. Käyttää samaa kaavaa kuin oikea epälineaarinen
-// calculateStratifiedShowersLeft (lib/heatingOptimizer.ts):
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+// Vasemman reunan suihkumäärä-asteikko: alkuperäinen, pelkkä kokonaisluku-
+// ruudukko 0..fullTankShowers - ei riipu tavoite-/turvarajasta.
+type TankScaleTick = {
+  heightPercent: number;
+  showers: number;
+};
+
+function buildTankScaleTicks(fullTankShowers: number): TankScaleTick[] {
+  const tickCount = Math.max(1, Math.round(fullTankShowers));
+
+  return Array.from({ length: tickCount + 1 }, (_, index) => {
+    const showers = tickCount - index;
+
+    return {
+      heightPercent: (index / tickCount) * 100,
+      showers,
+    };
+  });
+}
+
+// Oikean reunan lämpötila-asteikko. Käyttää samaa kaavaa kuin oikea
+// epälineaarinen calculateStratifiedShowersLeft (lib/heatingOptimizer.ts):
 // showersLeft = energyRatio * topUsability * fullTankShowers, missä
 // energyRatio nollautuu minTankTemperature-arvossa. topUsability (0..1)
 // tulee valmiina laskettuna warmWaterEstimate.topUsability-arvosta, koska se
@@ -46,111 +69,82 @@ const LIMIT_MATCH_TOLERANCE = 0.05;
 // täyslämmin (topUsability < 1), suihkumäärä ei koskaan voi saavuttaa
 // fullTankShowers-määrää vaikka keskilämpötila olisi maksimissaan, joten
 // ylimmät tikit näyttävät tällöin saman (saavuttamattoman) kattolämpötilan.
-type TankScaleTick = {
-  heightPercent: number;
-  showers: number;
-  temperature: number;
-};
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function formatFinnishDecimal(value: number) {
-  return value.toFixed(1).replace(".", ",");
-}
-
-// Vasemman reunan suihkumäärärivit: samat kokonaisluku-tikit kuin muualla
-// (0..fullTankShowers), mutta tavoite- ja turvarajan kohdalle merkitään
-// isLimit-lippu - joko olemassa olevaan tikkiin (kun raja osuu
-// kokonaislukuun) tai omana ylimääräisenä rivinä (kun raja on esim. 2,5).
-// Ei vaikuta oikean reunan lämpötila-asteikkoon eikä säiliön viivoihin -
-// ne pysyvät ennallaan buildTankScaleTicksin varassa.
-type LeftScaleEntry = {
+//
+// Tavoite- ja turvarajan (settings.targetShowerReserve/safetyShowerReserve)
+// kohdalle merkitään isLimit-lippu - joko olemassa olevaan tikkiin (kun
+// raja osuu kokonaislukuun) tai omana ylimääräisenä rivinä (kun raja on
+// esim. 2,5) - jotta ne voidaan korostaa sinisellä sekä numerona reunassa
+// että viivana säiliön poikki.
+type TankLimitScaleEntry = {
   heightPercent: number;
   isLimit: boolean;
   label: string;
 };
 
-function buildLeftScaleEntries({
-  fullTankShowers,
-  safetyShowerReserve,
-  targetShowerReserve,
-}: {
-  fullTankShowers: number;
-  safetyShowerReserve: number;
-  targetShowerReserve: number;
-}): LeftScaleEntry[] {
-  const tickCount = Math.max(1, Math.round(fullTankShowers));
-  const limitValues = [
-    clamp(safetyShowerReserve, 0, tickCount),
-    clamp(targetShowerReserve, 0, tickCount),
-  ];
-
-  const baseEntries = Array.from({ length: tickCount + 1 }, (_, index) => {
-    const showers = tickCount - index;
-    const isLimit = limitValues.some(
-      (value) => Math.abs(value - showers) < LIMIT_MATCH_TOLERANCE,
-    );
-
-    return {
-      heightPercent: (index / tickCount) * 100,
-      isLimit,
-      label: String(showers),
-      value: showers,
-    };
-  });
-
-  const extraLimitEntries = limitValues
-    .filter(
-      (value) =>
-        !baseEntries.some(
-          (entry) => Math.abs(entry.value - value) < LIMIT_MATCH_TOLERANCE,
-        ),
-    )
-    .map((value) => ({
-      heightPercent: 100 - (value / tickCount) * 100,
-      isLimit: true,
-      label: formatFinnishDecimal(value),
-      value,
-    }));
-
-  return [...baseEntries, ...extraLimitEntries].map(
-    ({ heightPercent, isLimit, label }) => ({ heightPercent, isLimit, label }),
-  );
-}
-
-function buildTankScaleTicks({
+function buildTankLimitScaleEntries({
+  baseTicks,
   fullTankAverageTemperature,
   fullTankShowers,
   minTankTemperature,
+  safetyShowerReserve,
+  targetShowerReserve,
   topUsability,
 }: {
+  baseTicks: TankScaleTick[];
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   minTankTemperature: number;
+  safetyShowerReserve: number;
+  targetShowerReserve: number;
   topUsability: number;
-}): TankScaleTick[] {
+}): TankLimitScaleEntry[] {
   const tickCount = Math.max(1, Math.round(fullTankShowers));
   const safeTopUsability = topUsability > 0 ? topUsability : 1;
 
-  return Array.from({ length: tickCount + 1 }, (_, index) => {
-    const showers = tickCount - index;
+  function temperatureForShowers(showers: number) {
     const requiredEnergyRatio = clamp(
       showers / (tickCount * safeTopUsability),
       0,
       1,
     );
-    const temperature =
-      minTankTemperature +
-      requiredEnergyRatio * (fullTankAverageTemperature - minTankTemperature);
 
-    return {
-      heightPercent: (index / tickCount) * 100,
-      showers,
-      temperature: Math.round(temperature),
-    };
-  });
+    return Math.round(
+      minTankTemperature +
+        requiredEnergyRatio * (fullTankAverageTemperature - minTankTemperature),
+    );
+  }
+
+  const limitValues = [
+    clamp(safetyShowerReserve, 0, tickCount),
+    clamp(targetShowerReserve, 0, tickCount),
+  ];
+
+  const baseEntries = baseTicks.map((tick) => ({
+    heightPercent: tick.heightPercent,
+    isLimit: limitValues.some(
+      (value) => Math.abs(value - tick.showers) < LIMIT_MATCH_TOLERANCE,
+    ),
+    label: `${temperatureForShowers(tick.showers)}°`,
+    showers: tick.showers,
+  }));
+
+  const extraLimitEntries = limitValues
+    .filter(
+      (value) =>
+        !baseTicks.some(
+          (tick) => Math.abs(tick.showers - value) < LIMIT_MATCH_TOLERANCE,
+        ),
+    )
+    .map((value) => ({
+      heightPercent: 100 - (value / tickCount) * 100,
+      isLimit: true,
+      label: `${temperatureForShowers(value)}°`,
+      showers: value,
+    }));
+
+  return [...baseEntries, ...extraLimitEntries].map(
+    ({ heightPercent, isLimit, label }) => ({ heightPercent, isLimit, label }),
+  );
 }
 
 export type WarmWaterCardProps = {
@@ -163,7 +157,6 @@ export type WarmWaterCardProps = {
   showersAccessibilityLabel: string;
   showersValueLabel: string;
   targetShowerReserve: number;
-  temperatureLabel: string;
   topUsability: number;
 };
 
@@ -177,21 +170,20 @@ export function WarmWaterCard({
   showersAccessibilityLabel,
   showersValueLabel,
   targetShowerReserve,
-  temperatureLabel,
   topUsability,
 }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
-  const scaleTicks = buildTankScaleTicks({
+  const scaleTicks = buildTankScaleTicks(fullTankShowers);
+  const rightScaleEntries = buildTankLimitScaleEntries({
+    baseTicks: scaleTicks,
     fullTankAverageTemperature,
     fullTankShowers,
     minTankTemperature,
-    topUsability,
-  });
-  const leftScaleEntries = buildLeftScaleEntries({
-    fullTankShowers,
     safetyShowerReserve,
     targetShowerReserve,
+    topUsability,
   });
+  const limitLines = rightScaleEntries.filter((entry) => entry.isLimit);
 
   return (
     <View
@@ -223,18 +215,16 @@ export function WarmWaterCard({
             <View style={styles.tankScaleRow}>
               <View style={styles.scaleColumnLeft}>
                 <View style={styles.scaleNumbers}>
-                  {leftScaleEntries.map((entry) => (
+                  {scaleTicks.map((tick) => (
                     <Text
                       allowFontScaling={false}
-                      key={entry.label}
+                      key={tick.showers}
                       style={[
-                        entry.isLimit
-                          ? styles.scaleNumberLeftLimit
-                          : styles.scaleNumberLeft,
-                        { top: `${entry.heightPercent}%` },
+                        styles.scaleNumberLeft,
+                        { top: `${tick.heightPercent}%` },
                       ]}
                     >
-                      {entry.label}
+                      {tick.showers}
                     </Text>
                   ))}
                 </View>
@@ -278,37 +268,36 @@ export function WarmWaterCard({
                       />
                     </Fragment>
                   ))}
-                  {leftScaleEntries
-                    .filter((entry) => entry.isLimit)
-                    .map((entry) => (
-                      <View
-                        key={entry.label}
-                        style={[
-                          styles.tankScaleLineSegment,
-                          styles.tankScaleLineLeftLimit,
-                          { top: `${entry.heightPercent}%` },
-                        ]}
-                      />
-                    ))}
+                  {limitLines.map((entry) => (
+                    <View
+                      key={entry.label}
+                      style={[
+                        styles.tankScaleLineSegment,
+                        styles.tankScaleLineCenterLimit,
+                        { top: `${entry.heightPercent}%` },
+                      ]}
+                    />
+                  ))}
                 </View>
                 <View style={[styles.tankBubble, styles.tankBubbleOne]} />
                 <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
                 <View style={[styles.tankBubble, styles.tankBubbleThree]} />
                 <Text style={styles.tankPrimaryValue}>{showersValueLabel}</Text>
-                <Text style={styles.tankSecondaryValue}>{temperatureLabel}</Text>
               </View>
               <View style={styles.scaleColumnRight}>
                 <View style={styles.scaleNumbers}>
-                  {scaleTicks.map((tick) => (
+                  {rightScaleEntries.map((entry) => (
                     <Text
                       allowFontScaling={false}
-                      key={tick.showers}
+                      key={entry.label}
                       style={[
-                        styles.scaleNumberRight,
-                        { top: `${tick.heightPercent}%` },
+                        entry.isLimit
+                          ? styles.scaleNumberRightLimit
+                          : styles.scaleNumberRight,
+                        { top: `${entry.heightPercent}%` },
                       ]}
                     >
-                      {tick.temperature}°
+                      {entry.label}
                     </Text>
                   ))}
                 </View>
@@ -419,17 +408,6 @@ const styles = StyleSheet.create({
     right: 0,
     transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
   },
-  // Tavoite- ja turvarajan rivi - isompi fontti ja sininen väri erottaa sen
-  // muista suihkumäärän tikeistä (ks. LIMIT_COLOR).
-  scaleNumberLeftLimit: {
-    color: LIMIT_COLOR,
-    fontSize: 13,
-    fontWeight: "900",
-    lineHeight: LIMIT_LABEL_LINE_HEIGHT,
-    position: "absolute",
-    right: 0,
-    transform: [{ translateY: -LIMIT_LABEL_LINE_HEIGHT / 2 }],
-  },
   scaleNumberRight: {
     color: "rgba(255,255,255,0.55)",
     fontSize: 10,
@@ -438,6 +416,17 @@ const styles = StyleSheet.create({
     lineHeight: SCALE_LABEL_LINE_HEIGHT,
     position: "absolute",
     transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
+  },
+  // Tavoite- ja turvarajan rivi oikeassa reunassa - isompi fontti ja
+  // sininen väri erottaa sen muista lämpötila-tikeistä (ks. LIMIT_COLOR).
+  scaleNumberRightLimit: {
+    color: LIMIT_COLOR,
+    fontSize: 13,
+    fontWeight: "900",
+    left: 0,
+    lineHeight: LIMIT_LABEL_LINE_HEIGHT,
+    position: "absolute",
+    transform: [{ translateY: -LIMIT_LABEL_LINE_HEIGHT / 2 }],
   },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
@@ -469,13 +458,14 @@ const styles = StyleSheet.create({
     right: 0,
     width: "26%",
   },
-  // Paksumpi, sininen viiva tavoite-/turvarajan kohdalla - vain vasen puoli,
-  // piirretään tankScaleLineLeftin päälle samalla korkeudella.
-  tankScaleLineLeftLimit: {
+  // Tavoite-/turvarajan viiva kulkee koko säiliön poikki (myös täytön
+  // päällä), ei vain reunan tikkiviivana - näin raja erottuu selvästi
+  // ilman tekstiä.
+  tankScaleLineCenterLimit: {
     backgroundColor: LIMIT_COLOR,
     height: 2,
     left: 0,
-    width: "26%",
+    right: 0,
   },
   tankFill: {
     backgroundColor: "#40d9ff",
@@ -532,22 +522,5 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
     top: (TANK_HEIGHT - PRIMARY_VALUE_LINE_HEIGHT) / 2,
-  },
-  // Positioned inside the tank graphic itself, horizontally centered like
-  // tankPrimaryValue, well clear of its vertically-centered box (top ~67 to
-  // ~101 of the 168-tall tank) and clearly above the tank's bottom edge.
-  tankSecondaryValue: {
-    bottom: 16,
-    color: "rgba(247,251,255,0.82)",
-    fontSize: 17,
-    fontWeight: "900",
-    left: 0,
-    letterSpacing: -0.2,
-    position: "absolute",
-    right: 0,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.34)",
-    textShadowOffset: { height: 1, width: 0 },
-    textShadowRadius: 8,
   },
 });

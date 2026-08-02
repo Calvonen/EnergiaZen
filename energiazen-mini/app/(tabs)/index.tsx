@@ -2072,9 +2072,6 @@ export default function HomeScreen() {
   const warmWaterShowersValue = warmWaterEstimate
     ? formatFinnishDecimal(warmWaterEstimate.showersLeft)
     : "--";
-  const warmWaterAverageTempLabel = warmWaterEstimate
-    ? `${Math.round(warmWaterEstimate.weightedTemperature)}°`
-    : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
   // Sama kynnys jota supabase/functions/check-tank-monitor-health kayttaa
@@ -2706,7 +2703,6 @@ export default function HomeScreen() {
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
             showersValueLabel={warmWaterShowersValue}
             targetShowerReserve={settings.targetShowerReserve}
-            temperatureLabel={warmWaterAverageTempLabel}
             topUsability={warmWaterEstimate?.topUsability ?? 1}
           />
         </View>
