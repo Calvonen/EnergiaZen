@@ -15,6 +15,20 @@ let DEFAULT_BACKUP_HOURS = [2, 3, 4];
 let DEFAULT_FALLBACK_ENABLED = true;
 let requestRunning = false;
 
+// Nama syyt kertovat etta emme voi luottaa mittausdataan (vanha/puuttuva/
+// virheellinen lukema tai sen hakeminen epaonnistui) - emme siis tieda onko
+// varaaja jo taysi. Silloin varaaja lammitetaan silti ehdoitta jos ollaan
+// varatunnilla, koska varaajan oma termostaatti estaa ylikuumenemisen; muut
+// vikasyyt (esim. "hour-not-planned", "invalid-calibration") eivat kata
+// mittausdataa eivatka siis laukaise tata ohitusta.
+let DATA_FAULT_REASONS = {
+  "invalid-reading": true,
+  "missing-reading": true,
+  "missing-reading-time": true,
+  "reading-fetch-error": true,
+  "stale-reading": true,
+};
+
 function createControllerState() {
   return { consecutiveHighFillReadings: 0 };
 }
@@ -278,9 +292,19 @@ function decideHeating(input, state) {
   let startThresholdShowers = null;
   let startBlockedByFillRatio = false;
   let finalTargetOn = false;
+  let backupHours = settings ? normalizeHours(settings.backupHours) : [];
+  let isBackupHour = containsHour(backupHours, input.currentHour);
   let reason = input.failSafeReason || null;
 
-  if (!reason && !planned) {
+  // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
+  // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
+  // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
+  // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
+  // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
+  // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
+  // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
+  // tank_readings vanhenee.
+  if (!reason && !planned && !isBackupHour) {
     reason = "hour-not-planned";
   }
 
@@ -318,12 +342,35 @@ function decideHeating(input, state) {
     }
   }
 
+  // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
+  // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
+  // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
+  // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
+  if (!reason && !planned) {
+    reason = "hour-not-planned";
+  }
+
   if (isValidCalibration(settings)) {
     startThresholdShowers =
       settings.fullTankShowers * START_HEATING_FILL_RATIO;
   }
 
-  if (reason) {
+  // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
+  // varakaytto ole kaytoston pois - lammitetaan sokeana, koska varaajan
+  // oma termostaatti hoitaa turvallisuuden. Katso DATA_FAULT_REASONS.
+  let backupFaultOverride =
+    reason !== null &&
+    DATA_FAULT_REASONS[reason] === true &&
+    settings !== null &&
+    settings !== undefined &&
+    settings.enabled === true &&
+    isBackupHour;
+
+  if (backupFaultOverride) {
+    resetHighFillReadings(decisionState);
+    finalTargetOn = true;
+    reason = "backup-fault-override";
+  } else if (reason) {
     resetHighFillReadings(decisionState);
   } else if (relayCurrentlyOn) {
     resetHighFillReadings(decisionState);
@@ -351,10 +398,13 @@ function decideHeating(input, state) {
   }
 
   return {
+    backupHours: backupHours,
     consecutiveHighFillReadings:
       decisionState.consecutiveHighFillReadings,
+    currentHour: input.currentHour,
     currentShowers: currentShowers,
     finalTargetOn: finalTargetOn,
+    isBackupHour: isBackupHour,
     planned: planned,
     plannedHours: plannedHours,
     readingAgeSeconds: readingAgeSeconds,
@@ -389,18 +439,27 @@ function resolvePlanControl(rows, error, settings, today) {
     };
   }
 
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return {
-      failSafeReason: "plan-missing",
-      plannedHours: [],
-      source: "fail-safe",
-    };
-  }
+  if (!Array.isArray(rows) || rows.length === 0 || rows[0].plan_date !== today) {
+    // Yhteys Supabaseen toimii, mutta tamalle paivalle ei ole (viela)
+    // suunnitelmaa - sama tilanne turvallisuusmielessa kuin yhteysvirhe
+    // ylla, joten kaytetaan samaa varatunti-fallbackia sen sijaan etta
+    // pysahdytaan kokonaan.
+    if (settings.enabled) {
+      return {
+        failSafeReason: null,
+        plannedHours: settings.backupHours,
+        resetHighFillReadings: true,
+        source: "backup",
+      };
+    }
 
-  if (rows[0].plan_date !== today) {
     return {
-      failSafeReason: "wrong-plan-date",
+      failSafeReason:
+        !Array.isArray(rows) || rows.length === 0
+          ? "plan-missing"
+          : "wrong-plan-date",
       plannedHours: [],
+      resetHighFillReadings: true,
       source: "fail-safe",
     };
   }
@@ -416,10 +475,13 @@ function logDecision(decision, source) {
   console.log(
     "EnergyZen decision:",
     JSON.stringify({
+      backupHours: decision.backupHours,
       consecutiveHighFillReadings:
         decision.consecutiveHighFillReadings,
+      currentHour: decision.currentHour,
       currentShowers: decision.currentShowers,
       finalTargetOn: decision.finalTargetOn,
+      isBackupHour: decision.isBackupHour,
       planned: decision.planned,
       readingAgeSeconds: decision.readingAgeSeconds,
       reason: decision.reason,
