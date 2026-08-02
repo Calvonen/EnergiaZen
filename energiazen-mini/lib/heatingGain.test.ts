@@ -237,4 +237,71 @@ export async function runHeatingGainUnitTests() {
     );
     assertClose(estimate.gainPerHour, 4.5, "sivutettu historia antaa mediaanin");
   }
+
+  {
+    // Todellinen tapaus: kayttaja huomasi ettei lammitysjakso hylkaantynyt
+    // vaikka tulovesianturi nakisi selvan vedenoton kesken lammityksen (ks.
+    // lib/waterDrawDetection.ts) - sama neljan lukeman jakso kuin
+    // createHeatingSegment(start, 4) tuottaisi, plus yksi ylimaarainen
+    // lukema 3 min viimeisen jalkeen jossa tulovesi putoaa nopeasti.
+    const start = "2026-07-09T00:00:00.000Z";
+    const startTime = new Date(start).getTime();
+    const inletTemperaturesC = [15.7, 15.8, 15.9, 16.0];
+    const segmentReadings: TankTemperatureReading[] = [0, 10, 20, 30].map(
+      (minutes, index) => ({
+        bottom_temp: 40 + 4 * (minutes / 60),
+        created_at: new Date(startTime + minutes * 60 * 1000).toISOString(),
+        heating: true,
+        inlet_temp: inletTemperaturesC[index],
+        top_temp: 40 + 4 * (minutes / 60),
+      }),
+    );
+    const drawReading: TankTemperatureReading = {
+      bottom_temp: 40 + 4 * (33 / 60),
+      created_at: new Date(startTime + 33 * 60 * 1000).toISOString(),
+      heating: true,
+      inlet_temp: 12.2,
+      top_temp: 40 + 4 * (33 / 60),
+    };
+    const discovery = findValidHeatingSegments([
+      ...segmentReadings,
+      drawReading,
+    ]);
+
+    assertEqual(
+      discovery.rejectedSegmentCount,
+      1,
+      "vedenotto kesken lammitysjakson hylkaa jakson",
+    );
+    assertEqual(
+      discovery.rejectedSegments[0].reasons,
+      ["water_draw_detected"],
+      "hylkayssyy on vedenotto, ei muu laatuongelma",
+    );
+  }
+
+  {
+    // Vastaesimerkki: vakaa (nouseva mutta hidas) tulovesilampotila ei saa
+    // hylata jaksoa - varmistaa ettei tarkistus laukea pelkasta
+    // anturidatan lasnaolosta.
+    const start = "2026-07-10T00:00:00.000Z";
+    const startTime = new Date(start).getTime();
+    const inletTemperaturesC = [15.7, 15.8, 15.9, 16.0];
+    const segmentReadings: TankTemperatureReading[] = [0, 10, 20, 30].map(
+      (minutes, index) => ({
+        bottom_temp: 40 + 4 * (minutes / 60),
+        created_at: new Date(startTime + minutes * 60 * 1000).toISOString(),
+        heating: true,
+        inlet_temp: inletTemperaturesC[index],
+        top_temp: 40 + 4 * (minutes / 60),
+      }),
+    );
+    const discovery = findValidHeatingSegments(segmentReadings);
+
+    assertEqual(
+      discovery.acceptedSegmentCount,
+      1,
+      "vakaa tulovesilampotila ei hylkaa lammitysjaksoa",
+    );
+  }
 }

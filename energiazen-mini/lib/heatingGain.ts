@@ -1,4 +1,6 @@
+import { isValidInletTemperature } from "./inletTemperature";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
+import { detectsWaterDraw } from "./waterDrawDetection";
 
 export const heatingGainHistoryDays = 30;
 export const heatingGainHistoryPageSize = 1000;
@@ -46,7 +48,8 @@ export type HeatingGainRejectionReason =
   | "insufficient_readings"
   | "negative_temperature_change"
   | "non_finite_gain"
-  | "unrealistic_gain";
+  | "unrealistic_gain"
+  | "water_draw_detected";
 
 export type HeatingGainWarningReason =
   | "sensor_anomaly"
@@ -103,6 +106,7 @@ export type HeatingGainSegmentDiscovery = {
 
 type ValidHeatingReading = {
   bottomTemperature: number;
+  inletTemperatureC: number | null;
   time: number;
   topTemperature: number;
   weightedTemperature: number;
@@ -152,6 +156,9 @@ function getValidHeatingReading(
 
   return {
     bottomTemperature,
+    inletTemperatureC: isValidInletTemperature(reading.inlet_temp)
+      ? reading.inlet_temp
+      : null,
     time,
     topTemperature,
     weightedTemperature: topTemperature * 0.7 + bottomTemperature * 0.3,
@@ -199,6 +206,16 @@ export function findValidHeatingSegments(
       topGainPerHour,
       weightedGainPerHour,
     });
+
+    // A shower/tap draw during heating pulls in cold makeup water while the
+    // heater is also adding heat, so the observed gain rate no longer
+    // reflects the heater alone - reject rather than warn, same as the
+    // recovery-window check in heatingRecoveryDrop.ts, since a contaminated
+    // sample would otherwise silently skew the learned median.
+    if (detectsWaterDraw(currentSegment)) {
+      reasons.push("water_draw_detected");
+    }
+
     const quality = getSegmentQuality(currentSegment);
     const warnings = getSegmentWarnings(quality);
 

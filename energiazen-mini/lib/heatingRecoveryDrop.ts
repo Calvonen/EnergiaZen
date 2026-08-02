@@ -2,6 +2,7 @@ import { findValidHeatingSegments, getMedian } from "./heatingGain";
 import { isValidInletTemperature } from "./inletTemperature";
 import { fallbackHourlyTemperatureDrop } from "./tankTemperatureForecast";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
+import { detectsWaterDraw, waterDrawDetectionLimits } from "./waterDrawDetection";
 
 // v1 keeps the recovery window fixed at one simulation hour rather than
 // deriving it from heating duration - see docs/PROJECT_CONTEXT.md's
@@ -10,19 +11,6 @@ export const recoveryDropLearningLimits = {
   minValidSamples: 3,
   recoveryWindowHours: 1,
   recoveryWindowToleranceMinutes: 15,
-} as const;
-
-// A stagnant inlet pipe sits several degrees above the true mains-water
-// temperature (confirmed against real hardware: ~15.7 idle vs. ~12.2
-// flowing), so a fast drop mid-recovery is a reliable sign that someone
-// drew hot water (and so cold makeup water) during the window - which
-// would otherwise silently corrupt the learned drop rate, since only the
-// two window endpoints feed the final calculation. "Fast" is judged over a
-// short trailing window rather than adjacent readings only, since a poll
-// gap could otherwise hide a real draw between two samples.
-const waterDrawDetectionLimits = {
-  minDropCelsius: 2,
-  windowMinutes: 5,
 } as const;
 
 export type RecoveryDropEstimate = {
@@ -71,41 +59,6 @@ function getOrderedReadings(
     })
     .filter((reading): reading is OrderedReading => reading !== null)
     .sort((first, second) => first.time - second.time);
-}
-
-// True if any reading in windowReadings (chronological) is at least
-// minDropCelsius colder than some earlier reading within windowMinutes of
-// it. Readings without a valid inlet sensor value (no sensor installed, or
-// pre-1.8.2026 data) are simply skipped, so segments are judged exactly as
-// before whenever inlet data isn't available.
-function detectsWaterDraw(windowReadings: OrderedReading[]): boolean {
-  for (let laterIndex = 1; laterIndex < windowReadings.length; laterIndex++) {
-    const later = windowReadings[laterIndex];
-
-    if (later.inletTemperatureC === null) {
-      continue;
-    }
-
-    for (let earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex--) {
-      const earlier = windowReadings[earlierIndex];
-      const minutesApart = (later.time - earlier.time) / (60 * 1000);
-
-      if (minutesApart > waterDrawDetectionLimits.windowMinutes) {
-        break;
-      }
-      if (earlier.inletTemperatureC === null) {
-        continue;
-      }
-      if (
-        earlier.inletTemperatureC - later.inletTemperatureC >=
-        waterDrawDetectionLimits.minDropCelsius
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 // For each accepted heating segment, looks one recovery window past the

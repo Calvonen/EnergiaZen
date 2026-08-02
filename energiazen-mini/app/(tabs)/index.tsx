@@ -2170,7 +2170,7 @@ export default function HomeScreen() {
               fetchHeatingGainHistory(async (from, to) => {
                 const { data, error } = await supabase
                   .from("tank_readings")
-                  .select("created_at,top_temp,bottom_temp,heating")
+                  .select("created_at,top_temp,bottom_temp,inlet_temp,heating")
                   .eq("heating", true)
                   .gte("created_at", heatingGainHistoryStartIso)
                   .lte("created_at", historyEndIso)

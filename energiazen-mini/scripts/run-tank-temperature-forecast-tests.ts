@@ -35,6 +35,7 @@ import { runHeatingOptimizationStatusSourceTests } from "../tests/heatingOptimiz
 import { runTankMonitorAlertUnitTests } from "../lib/tankMonitorAlert.test";
 import { runTankMonitorAlertLogicUnitTests } from "../supabase/functions/check-tank-monitor-health/alertLogic.test";
 import { runInletTemperatureTrendUnitTests } from "../lib/inletTemperatureTrend.test";
+import { runWaterDrawDetectionUnitTests } from "../lib/waterDrawDetection.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -74,9 +75,10 @@ async function runTests() {
   runTankMonitorAlertUnitTests();
   runTankMonitorAlertLogicUnitTests();
   runInletTemperatureTrendUnitTests();
+  runWaterDrawDetectionUnitTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic and inletTemperatureTrend tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend and waterDrawDetection tests passed",
   );
 }
 
