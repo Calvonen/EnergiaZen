@@ -22,7 +22,7 @@ function getDatePart(
   return parts.find((part) => part.type === type)?.value ?? "";
 }
 
-function getHelsinkiDateParts(date: Date) {
+export function getHelsinkiDateParts(date: Date) {
   const parts = new Intl.DateTimeFormat("sv-SE", {
     day: "2-digit",
     hour: "2-digit",
@@ -54,7 +54,7 @@ function parseDayKey(dayKey: string) {
   return { day, month, year };
 }
 
-function getUtcDateForHelsinkiLocalTime({
+export function getUtcDateForHelsinkiLocalTime({
   day,
   hour = 0,
   minute = 0,

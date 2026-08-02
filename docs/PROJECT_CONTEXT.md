@@ -208,7 +208,10 @@ suoraan Supabasen RPC-funktioista
 ja myöhemmät korjaukset) suorituskyvyn vuoksi.
 
 `energiazen-mini/app/history.tsx`:ssä on lisäksi tulovesianturin
-viikoittainen trendikäyrä (viimeiset 12 viikkoa, yksi piste per viikko).
+viikoittainen trendikäyrä, yksi piste per viikko, 3 kuukauden jaksoissa
+(esim. "Kesä–elokuu 2026") joita voi selata taaksepäin ‹ › -nuolilla,
+samaan tapaan kuin päivähistorian selain. Jaksojen rajat laskee
+`energiazen-mini/lib/inletTemperatureTrend.ts`:n `getInletTrendPeriod`.
 Datan laskee `get_weekly_minimum_inlet_temperature`-RPC
 (`energiazen-mini/supabase/migrations/20260803000000_add_weekly_minimum_inlet_temperature_rpc.sql`),
 joka käyttää samaa "vahvistetun minimin" periaatetta kuin
@@ -216,7 +219,7 @@ joka käyttää samaa "vahvistetun minimin" periaatetta kuin
 `calculateMinimumValidInletTemperature` (yksittäistä lukemaa ei luoteta
 ellei toinen kelvollinen lukema samalta viikolta vahvista sitä).
 `inlet_temp`-sarake lisättiin `tank_readings`-tauluun vasta 1.8.2026, joten
-trendi täyttyy vasta ajan myötä.
+kuluva jakso täyttyy vasta ajan myötä.
 
 ### 7. CI/CD: GitHub Actions
 

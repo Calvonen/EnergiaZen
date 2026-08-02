@@ -26,10 +26,10 @@ import {
   isTodayHelsinkiDay,
 } from "@/lib/temperatureHistoryDay";
 import {
+  getInletTrendPeriod,
   getWeeklyInletTemperaturePointHeightPercent,
   mapWeeklyInletTemperatureRows,
   WeeklyInletTemperaturePoint,
-  weeklyInletTemperatureTrendWeeks,
 } from "@/lib/inletTemperatureTrend";
 
 type HistoryTab = "24h" | "day";
@@ -103,6 +103,8 @@ let temperatureHistory24hCache: TemperatureHistoryPoint[] = [];
 let temperatureHistory24hLoaded = false;
 const temperatureHistoryDayCache =
   createTemperatureHistoryDayCache<TemperatureHistoryPoint[]>();
+const inletTrendPeriodCache =
+  createTemperatureHistoryDayCache<WeeklyInletTemperaturePoint[]>();
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -521,33 +523,59 @@ export default function TemperatureHistoryScreen() {
   const [isLoadingWeeklyInletTrend, setIsLoadingWeeklyInletTrend] =
     useState(false);
   const [inletTrendChartWidth, setInletTrendChartWidth] = useState(0);
-  const inletTrendLoadedRef = useRef(false);
+  const [inletTrendPeriodOffset, setInletTrendPeriodOffset] = useState(0);
+  const inletTrendPeriodOffsetRef = useRef(inletTrendPeriodOffset);
+  const inFlightInletTrendOffsetsRef = useRef(new Set<number>());
 
-  const loadWeeklyInletTrend = useCallback(async () => {
-    if (inletTrendLoadedRef.current) {
+  const loadWeeklyInletTrend = useCallback(async (offset: number) => {
+    const cacheKey = String(offset);
+
+    if (inFlightInletTrendOffsetsRef.current.has(offset)) {
       return;
     }
-    inletTrendLoadedRef.current = true;
-    setIsLoadingWeeklyInletTrend(true);
+
+    const cachedPoints = inletTrendPeriodCache.get(cacheKey);
+
+    if (cachedPoints) {
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setWeeklyInletTrend(cachedPoints);
+      }
+      return;
+    }
+
+    if (inletTrendPeriodOffsetRef.current === offset) {
+      setWeeklyInletTrend([]);
+      setIsLoadingWeeklyInletTrend(true);
+    }
+    inFlightInletTrendOffsetsRef.current.add(offset);
 
     try {
+      const period = getInletTrendPeriod(offset);
       const { data, error } = await supabase.rpc(
         "get_weekly_minimum_inlet_temperature",
-        { p_weeks: weeklyInletTemperatureTrendWeeks },
+        { p_end: period.endIso, p_start: period.startIso },
       );
 
       if (error) {
         throw error;
       }
 
-      setWeeklyInletTrend(mapWeeklyInletTemperatureRows(data));
+      const points = mapWeeklyInletTemperatureRows(data);
+      inletTrendPeriodCache.set(cacheKey, points);
+
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setWeeklyInletTrend(points);
+      }
     } catch (error) {
       console.warn(
         "Tulovesitrendin haku epäonnistui",
         error instanceof Error ? error.message : error,
       );
     } finally {
-      setIsLoadingWeeklyInletTrend(false);
+      inFlightInletTrendOffsetsRef.current.delete(offset);
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setIsLoadingWeeklyInletTrend(false);
+      }
     }
   }, []);
 
@@ -735,17 +763,10 @@ export default function TemperatureHistoryScreen() {
       } else {
         void loadDayHistory(selectedDayKey);
       }
-      void loadWeeklyInletTrend();
     });
 
     return () => task.cancel();
-  }, [
-    loadDayHistory,
-    loadHistoryTab,
-    loadWeeklyInletTrend,
-    selectedDayKey,
-    selectedTab,
-  ]);
+  }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]);
 
   useFocusEffect(
     useCallback(() => {
@@ -791,6 +812,22 @@ export default function TemperatureHistoryScreen() {
     }
     void loadDayHistory(selectedDayKey);
   }, [isInteractionComplete, loadDayHistory, selectedDayKey, selectedTab]);
+
+  useEffect(() => {
+    inletTrendPeriodOffsetRef.current = inletTrendPeriodOffset;
+  }, [inletTrendPeriodOffset]);
+
+  useEffect(() => {
+    if (!isInteractionComplete) {
+      return;
+    }
+
+    const cachedPoints = inletTrendPeriodCache.get(String(inletTrendPeriodOffset));
+    if (cachedPoints) {
+      setWeeklyInletTrend(cachedPoints);
+    }
+    void loadWeeklyInletTrend(inletTrendPeriodOffset);
+  }, [inletTrendPeriodOffset, isInteractionComplete, loadWeeklyInletTrend]);
 
   useEffect(() => {
     return () => setSelectedHistoryPoint(null);
@@ -844,6 +881,10 @@ export default function TemperatureHistoryScreen() {
     () => getInletTrendLineSegments(weeklyInletTrend, inletTrendChartWidth),
     [inletTrendChartWidth, weeklyInletTrend],
   );
+  const inletTrendPeriod = useMemo(
+    () => getInletTrendPeriod(inletTrendPeriodOffset),
+    [inletTrendPeriodOffset],
+  );
   const dayXAxisLabels = useMemo(
     () => (isDayView ? getDayXAxisLabels(visibleHistory) : null),
     [isDayView, visibleHistory],
@@ -867,6 +908,14 @@ export default function TemperatureHistoryScreen() {
         ? nextDayKey
         : currentDayKey;
     });
+  }, []);
+
+  const selectPreviousInletTrendPeriod = useCallback(() => {
+    setInletTrendPeriodOffset((currentOffset) => currentOffset + 1);
+  }, []);
+
+  const selectNextInletTrendPeriod = useCallback(() => {
+    setInletTrendPeriodOffset((currentOffset) => Math.max(currentOffset - 1, 0));
   }, []);
 
   const updateSelectedHistoryPoint = useCallback(
@@ -1300,6 +1349,39 @@ export default function TemperatureHistoryScreen() {
                 </View>
               </View>
             )}
+
+            <View style={styles.daySelector}>
+              <Pressable
+                accessibilityLabel="Näytä edellinen 3 kuukauden jakso"
+                accessibilityRole="button"
+                onPress={selectPreviousInletTrendPeriod}
+                style={styles.dayArrowButton}
+              >
+                <Text style={styles.dayArrowText}>‹</Text>
+              </Pressable>
+              <Text style={styles.daySelectorLabel}>
+                {inletTrendPeriod.label}
+              </Text>
+              <Pressable
+                accessibilityLabel="Näytä seuraava 3 kuukauden jakso"
+                accessibilityRole="button"
+                disabled={inletTrendPeriod.isCurrent}
+                onPress={selectNextInletTrendPeriod}
+                style={[
+                  styles.dayArrowButton,
+                  inletTrendPeriod.isCurrent && styles.dayArrowButtonDisabled,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.dayArrowText,
+                    inletTrendPeriod.isCurrent && styles.dayArrowTextDisabled,
+                  ]}
+                >
+                  ›
+                </Text>
+              </Pressable>
+            </View>
           </View>
         ) : null}
       </ScrollView>

@@ -1,4 +1,5 @@
 import {
+  getInletTrendPeriod,
   getWeeklyInletTemperaturePointHeightPercent,
   mapWeeklyInletTemperatureRows,
   weeklyInletTemperatureChartMaxC,
@@ -72,5 +73,49 @@ export function runInletTemperatureTrendUnitTests() {
     getWeeklyInletTemperaturePointHeightPercent(25),
     100,
     "asteikon yli menevä arvo rajataan 100 %:iin",
+  );
+
+  const summerNow = new Date("2026-08-02T10:00:00.000Z");
+  const currentPeriod = getInletTrendPeriod(0, summerNow);
+  assertEqual(
+    currentPeriod,
+    {
+      endIso: "2026-08-31T21:00:00.000Z",
+      isCurrent: true,
+      label: "Kesä–elokuu 2026",
+      startIso: "2026-05-31T21:00:00.000Z",
+    },
+    "kuluva jakso on kolme viimeisintä kuukautta kuluva kuukausi mukaan lukien",
+  );
+
+  const previousPeriod = getInletTrendPeriod(1, summerNow);
+  assertEqual(
+    previousPeriod,
+    {
+      endIso: "2026-05-31T21:00:00.000Z",
+      isCurrent: false,
+      label: "Maalis–toukokuu 2026",
+      startIso: "2026-02-28T22:00:00.000Z",
+    },
+    "edellinen jakso jatkuu saumattomasti kuluvan jakson alusta taaksepäin",
+  );
+
+  const winterNow = new Date("2026-01-15T10:00:00.000Z");
+  const yearCrossingPeriod = getInletTrendPeriod(0, winterNow);
+  assertEqual(
+    yearCrossingPeriod,
+    {
+      endIso: "2026-01-31T22:00:00.000Z",
+      isCurrent: true,
+      label: "Marraskuu 2025 – tammikuu 2026",
+      startIso: "2025-10-31T22:00:00.000Z",
+    },
+    "vuodenvaihteen ylittävä jakso näyttää molemmat vuodet",
+  );
+
+  assertEqual(
+    getInletTrendPeriod(-1, summerNow),
+    currentPeriod,
+    "negatiivinen offset rajataan kuluvaan jaksoon",
   );
 }
