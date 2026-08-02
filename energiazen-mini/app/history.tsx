@@ -25,6 +25,15 @@ import {
   getTemperatureHistoryDayCacheKey,
   isTodayHelsinkiDay,
 } from "@/lib/temperatureHistoryDay";
+import {
+  buildInletTrendSlots,
+  formatInletTrendWeekRangeLabel,
+  getInletTrendPeriod,
+  getWeeklyInletTemperaturePointHeightPercent,
+  InletTrendSlot,
+  mapWeeklyInletTemperatureRows,
+  WeeklyInletTemperaturePoint,
+} from "@/lib/inletTemperatureTrend";
 
 type HistoryTab = "24h" | "day";
 
@@ -38,6 +47,12 @@ type TemperatureHistoryPoint = {
 type SelectedHistoryPoint = {
   index: number;
   point: TemperatureHistoryPoint;
+  x: number;
+};
+
+type SelectedInletTrendSlot = {
+  index: number;
+  slot: InletTrendSlot;
   x: number;
 };
 
@@ -62,6 +77,9 @@ const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
 const bottomTemperatureColor = "#60A5FA";
 const tooltipBottomOffset = 28;
+const inletTrendChartHeight = 72;
+const inletTrendScale = [20, 10, 0];
+const inletTemperatureColor = "#5ec8f2";
 const dayXAxisTargets = [
   { label: "00", minute: 0 },
   { label: "06", minute: 6 * 60 },
@@ -94,6 +112,8 @@ let temperatureHistory24hCache: TemperatureHistoryPoint[] = [];
 let temperatureHistory24hLoaded = false;
 const temperatureHistoryDayCache =
   createTemperatureHistoryDayCache<TemperatureHistoryPoint[]>();
+const inletTrendPeriodCache =
+  createTemperatureHistoryDayCache<WeeklyInletTemperaturePoint[]>();
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -422,6 +442,62 @@ function getChartLineSegments(
   return segments;
 }
 
+function getInletTrendPointBottom(minimumInletTempC: number) {
+  return (
+    (getWeeklyInletTemperaturePointHeightPercent(minimumInletTempC) / 100) *
+    inletTrendChartHeight
+  );
+}
+
+type InletTrendLineSegment = {
+  angle: string;
+  height: number;
+  key: string;
+  left: number;
+  top: number;
+  width: number;
+};
+
+function getInletTrendLineSegments(
+  slots: InletTrendSlot[],
+  chartWidth: number,
+): InletTrendLineSegment[] {
+  if (slots.length < 2 || chartWidth <= 0) {
+    return [];
+  }
+
+  const columnWidth = chartWidth / slots.length;
+  const segments: InletTrendLineSegment[] = [];
+
+  slots.slice(0, -1).forEach((slot, index) => {
+    const nextSlot = slots[index + 1];
+
+    if (slot.minimumInletTempC === null || nextSlot.minimumInletTempC === null) {
+      return;
+    }
+
+    const currentX = columnWidth * index + columnWidth / 2;
+    const nextX = columnWidth * (index + 1) + columnWidth / 2;
+    const currentY =
+      inletTrendChartHeight - getInletTrendPointBottom(slot.minimumInletTempC);
+    const nextY =
+      inletTrendChartHeight - getInletTrendPointBottom(nextSlot.minimumInletTempC);
+    const deltaX = nextX - currentX;
+    const deltaY = nextY - currentY;
+
+    segments.push({
+      angle: `${Math.atan2(deltaY, deltaX)}rad`,
+      height: 1,
+      key: `inlet-trend-${index}`,
+      left: currentX,
+      top: currentY,
+      width: Math.hypot(deltaX, deltaY),
+    });
+  });
+
+  return segments;
+}
+
 export default function TemperatureHistoryScreen() {
   const router = useRouter();
   const mountedAtRef = useRef(getPerformanceNow());
@@ -457,6 +533,69 @@ export default function TemperatureHistoryScreen() {
   const [chartWidth, setChartWidth] = useState(0);
   const [selectedHistoryPoint, setSelectedHistoryPoint] =
     useState<SelectedHistoryPoint | null>(null);
+  const [weeklyInletTrend, setWeeklyInletTrend] = useState<
+    WeeklyInletTemperaturePoint[]
+  >([]);
+  const [isLoadingWeeklyInletTrend, setIsLoadingWeeklyInletTrend] =
+    useState(false);
+  const [inletTrendChartWidth, setInletTrendChartWidth] = useState(0);
+  const [inletTrendPeriodOffset, setInletTrendPeriodOffset] = useState(0);
+  const [selectedInletTrendSlot, setSelectedInletTrendSlot] =
+    useState<SelectedInletTrendSlot | null>(null);
+  const inletTrendPeriodOffsetRef = useRef(inletTrendPeriodOffset);
+  const inFlightInletTrendOffsetsRef = useRef(new Set<number>());
+
+  const loadWeeklyInletTrend = useCallback(async (offset: number) => {
+    const cacheKey = String(offset);
+
+    if (inFlightInletTrendOffsetsRef.current.has(offset)) {
+      return;
+    }
+
+    const cachedPoints = inletTrendPeriodCache.get(cacheKey);
+
+    if (cachedPoints) {
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setWeeklyInletTrend(cachedPoints);
+      }
+      return;
+    }
+
+    if (inletTrendPeriodOffsetRef.current === offset) {
+      setWeeklyInletTrend([]);
+      setIsLoadingWeeklyInletTrend(true);
+    }
+    inFlightInletTrendOffsetsRef.current.add(offset);
+
+    try {
+      const period = getInletTrendPeriod(offset);
+      const { data, error } = await supabase.rpc(
+        "get_weekly_minimum_inlet_temperature",
+        { p_end: period.endIso, p_start: period.startIso },
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      const points = mapWeeklyInletTemperatureRows(data);
+      inletTrendPeriodCache.set(cacheKey, points);
+
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setWeeklyInletTrend(points);
+      }
+    } catch (error) {
+      console.warn(
+        "Tulovesitrendin haku epäonnistui",
+        error instanceof Error ? error.message : error,
+      );
+    } finally {
+      inFlightInletTrendOffsetsRef.current.delete(offset);
+      if (inletTrendPeriodOffsetRef.current === offset) {
+        setIsLoadingWeeklyInletTrend(false);
+      }
+    }
+  }, []);
 
   const loadHistoryTab = useCallback(async (tab: "24h", force = false) => {
     if (inFlightRef.current[tab]) {
@@ -693,6 +832,23 @@ export default function TemperatureHistoryScreen() {
   }, [isInteractionComplete, loadDayHistory, selectedDayKey, selectedTab]);
 
   useEffect(() => {
+    inletTrendPeriodOffsetRef.current = inletTrendPeriodOffset;
+    setSelectedInletTrendSlot(null);
+  }, [inletTrendPeriodOffset]);
+
+  useEffect(() => {
+    if (!isInteractionComplete) {
+      return;
+    }
+
+    const cachedPoints = inletTrendPeriodCache.get(String(inletTrendPeriodOffset));
+    if (cachedPoints) {
+      setWeeklyInletTrend(cachedPoints);
+    }
+    void loadWeeklyInletTrend(inletTrendPeriodOffset);
+  }, [inletTrendPeriodOffset, isInteractionComplete, loadWeeklyInletTrend]);
+
+  useEffect(() => {
     return () => setSelectedHistoryPoint(null);
   }, [selectedDayKey, selectedTab]);
 
@@ -736,9 +892,27 @@ export default function TemperatureHistoryScreen() {
         Math.max(chartWidth - tooltipWidth, 0),
       )
     : 0;
+  const selectedInletTrendTooltipLeft = selectedInletTrendSlot
+    ? Math.min(
+        Math.max(selectedInletTrendSlot.x - tooltipWidth / 2, 0),
+        Math.max(inletTrendChartWidth - tooltipWidth, 0),
+      )
+    : 0;
   const lineSegments = useMemo(
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
+  );
+  const inletTrendPeriod = useMemo(
+    () => getInletTrendPeriod(inletTrendPeriodOffset),
+    [inletTrendPeriodOffset],
+  );
+  const inletTrendSlots = useMemo(
+    () => buildInletTrendSlots(inletTrendPeriod, weeklyInletTrend),
+    [inletTrendPeriod, weeklyInletTrend],
+  );
+  const inletTrendLineSegments = useMemo(
+    () => getInletTrendLineSegments(inletTrendSlots, inletTrendChartWidth),
+    [inletTrendChartWidth, inletTrendSlots],
   );
   const dayXAxisLabels = useMemo(
     () => (isDayView ? getDayXAxisLabels(visibleHistory) : null),
@@ -763,6 +937,14 @@ export default function TemperatureHistoryScreen() {
         ? nextDayKey
         : currentDayKey;
     });
+  }, []);
+
+  const selectPreviousInletTrendPeriod = useCallback(() => {
+    setInletTrendPeriodOffset((currentOffset) => currentOffset + 1);
+  }, []);
+
+  const selectNextInletTrendPeriod = useCallback(() => {
+    setInletTrendPeriodOffset((currentOffset) => Math.max(currentOffset - 1, 0));
   }, []);
 
   const updateSelectedHistoryPoint = useCallback(
@@ -795,6 +977,31 @@ export default function TemperatureHistoryScreen() {
       });
     },
     [chartWidth, visibleHistory],
+  );
+
+  const updateSelectedInletTrendSlot = useCallback(
+    (event: GestureResponderEvent) => {
+      if (inletTrendChartWidth <= 0 || inletTrendSlots.length === 0) {
+        return;
+      }
+
+      const touchX = Math.min(
+        Math.max(event.nativeEvent.locationX, 0),
+        inletTrendChartWidth,
+      );
+      const columnWidth = inletTrendChartWidth / inletTrendSlots.length;
+      const nearestIndex = Math.min(
+        Math.max(Math.round((touchX - columnWidth / 2) / columnWidth), 0),
+        inletTrendSlots.length - 1,
+      );
+
+      setSelectedInletTrendSlot({
+        index: nearestIndex,
+        slot: inletTrendSlots[nearestIndex],
+        x: columnWidth * nearestIndex + columnWidth / 2,
+      });
+    },
+    [inletTrendChartWidth, inletTrendSlots],
   );
 
   return (
@@ -1118,6 +1325,159 @@ export default function TemperatureHistoryScreen() {
           ) : null}
         </View>
         )}
+
+        {isInteractionComplete ? (
+          <View style={styles.inletTrendCard}>
+            <Text style={styles.inletTrendTitle}>
+              Tulovesi anturi, viikoittainen
+            </Text>
+
+            {weeklyInletTrend.length === 0 ? (
+              <Text style={styles.inletTrendEmptyText}>
+                {isLoadingWeeklyInletTrend
+                  ? "Ladataan..."
+                  : "Ei vielä tulovesidataa tältä jaksolta."}
+              </Text>
+            ) : (
+              <View style={styles.chartRow}>
+                <View style={styles.inletTrendScaleColumn}>
+                  {inletTrendScale.map((value) => (
+                    <Text key={value} style={styles.scaleText}>
+                      {value}°
+                    </Text>
+                  ))}
+                </View>
+
+                <View
+                  onLayout={(event) =>
+                    setInletTrendChartWidth(event.nativeEvent.layout.width)
+                  }
+                  onMoveShouldSetResponder={() => true}
+                  onResponderGrant={updateSelectedInletTrendSlot}
+                  onResponderMove={updateSelectedInletTrendSlot}
+                  onStartShouldSetResponder={() => true}
+                  style={styles.inletTrendChartArea}
+                >
+                  {inletTrendScale.map((value) => (
+                    <View
+                      key={value}
+                      style={[
+                        styles.gridLine,
+                        { bottom: getInletTrendPointBottom(value) },
+                      ]}
+                    />
+                  ))}
+
+                  {inletTrendLineSegments.map((segment) => (
+                    <View
+                      key={segment.key}
+                      style={[
+                        styles.inletTrendLine,
+                        {
+                          height: segment.height,
+                          left: segment.left,
+                          top: segment.top,
+                          transform: [{ rotateZ: segment.angle }],
+                          width: segment.width,
+                        },
+                      ]}
+                    />
+                  ))}
+
+                  {selectedInletTrendSlot ? (
+                    <>
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.inletTrendSelectedMarkerLine,
+                          { left: selectedInletTrendSlot.x },
+                        ]}
+                      />
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.inletTrendTooltip,
+                          { left: selectedInletTrendTooltipLeft },
+                        ]}
+                      >
+                        <Text style={styles.inletTrendTooltipTime}>
+                          {formatInletTrendWeekRangeLabel(
+                            selectedInletTrendSlot.slot.weekStart,
+                          )}
+                        </Text>
+                        <Text style={styles.inletTrendTooltipValue}>
+                          {selectedInletTrendSlot.slot.minimumInletTempC === null
+                            ? "Ei vahvistettua lukemaa"
+                            : `Alin ${selectedInletTrendSlot.slot.minimumInletTempC} °C`}
+                        </Text>
+                      </View>
+                    </>
+                  ) : null}
+
+                  <View style={styles.inletTrendColumns}>
+                    {inletTrendSlots.map((slot) => (
+                      <View
+                        accessibilityLabel={
+                          slot.minimumInletTempC === null
+                            ? `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, ei vahvistettua lukemaa`
+                            : `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
+                        }
+                        key={slot.weekStart}
+                        style={styles.inletTrendColumn}
+                      >
+                        {slot.minimumInletTempC === null ? null : (
+                          <View
+                            style={[
+                              styles.inletTrendDot,
+                              {
+                                bottom: getInletTrendPointBottom(
+                                  slot.minimumInletTempC,
+                                ),
+                              },
+                            ]}
+                          />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.daySelector}>
+              <Pressable
+                accessibilityLabel="Näytä edellinen 3 kuukauden jakso"
+                accessibilityRole="button"
+                onPress={selectPreviousInletTrendPeriod}
+                style={styles.dayArrowButton}
+              >
+                <Text style={styles.dayArrowText}>‹</Text>
+              </Pressable>
+              <Text style={styles.daySelectorLabel}>
+                {inletTrendPeriod.label}
+              </Text>
+              <Pressable
+                accessibilityLabel="Näytä seuraava 3 kuukauden jakso"
+                accessibilityRole="button"
+                disabled={inletTrendPeriod.isCurrent}
+                onPress={selectNextInletTrendPeriod}
+                style={[
+                  styles.dayArrowButton,
+                  inletTrendPeriod.isCurrent && styles.dayArrowButtonDisabled,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.dayArrowText,
+                    inletTrendPeriod.isCurrent && styles.dayArrowTextDisabled,
+                  ]}
+                >
+                  ›
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -1457,5 +1817,98 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "900",
     textAlign: "center",
+  },
+  inletTrendCard: {
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 24,
+    borderWidth: 1,
+    marginTop: 14,
+    padding: 16,
+    width: "100%",
+  },
+  inletTrendTitle: {
+    color: "#b9d7ff",
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  inletTrendEmptyText: {
+    color: "#cfe9ff",
+    fontSize: 13,
+    fontWeight: "700",
+    paddingVertical: 12,
+    textAlign: "center",
+  },
+  inletTrendScaleColumn: {
+    height: inletTrendChartHeight,
+    justifyContent: "space-between",
+    width: 32,
+  },
+  inletTrendChartArea: {
+    flex: 1,
+    height: inletTrendChartHeight,
+    position: "relative",
+  },
+  inletTrendLine: {
+    backgroundColor: inletTemperatureColor,
+    opacity: 0.78,
+    position: "absolute",
+    transformOrigin: "left center",
+  },
+  inletTrendColumns: {
+    flexDirection: "row",
+    height: inletTrendChartHeight,
+  },
+  inletTrendColumn: {
+    flex: 1,
+    height: inletTrendChartHeight,
+    justifyContent: "flex-end",
+    position: "relative",
+  },
+  inletTrendDot: {
+    backgroundColor: inletTemperatureColor,
+    borderRadius: 999,
+    height: 6,
+    left: "50%",
+    marginBottom: -3,
+    marginLeft: -3,
+    position: "absolute",
+    shadowColor: inletTemperatureColor,
+    shadowOpacity: 0.7,
+    shadowRadius: 6,
+    width: 6,
+  },
+  inletTrendSelectedMarkerLine: {
+    backgroundColor: "rgba(247,251,255,0.38)",
+    bottom: 0,
+    height: inletTrendChartHeight,
+    position: "absolute",
+    width: 1,
+    zIndex: 4,
+  },
+  inletTrendTooltip: {
+    backgroundColor: "rgba(5,8,22,0.92)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: 12,
+    borderWidth: 1,
+    bottom: inletTrendChartHeight + 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    position: "absolute",
+    width: tooltipWidth,
+    zIndex: 5,
+  },
+  inletTrendTooltipTime: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  inletTrendTooltipValue: {
+    color: inletTemperatureColor,
+    fontSize: 11,
+    fontWeight: "900",
   },
 });
