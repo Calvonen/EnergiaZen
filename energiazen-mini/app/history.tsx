@@ -26,8 +26,10 @@ import {
   isTodayHelsinkiDay,
 } from "@/lib/temperatureHistoryDay";
 import {
+  buildInletTrendSlots,
   getInletTrendPeriod,
   getWeeklyInletTemperaturePointHeightPercent,
+  InletTrendSlot,
   mapWeeklyInletTemperatureRows,
   WeeklyInletTemperaturePoint,
 } from "@/lib/inletTemperatureTrend";
@@ -450,36 +452,43 @@ type InletTrendLineSegment = {
 };
 
 function getInletTrendLineSegments(
-  points: WeeklyInletTemperaturePoint[],
+  slots: InletTrendSlot[],
   chartWidth: number,
 ): InletTrendLineSegment[] {
-  if (points.length < 2 || chartWidth <= 0) {
+  if (slots.length < 2 || chartWidth <= 0) {
     return [];
   }
 
-  const columnWidth = chartWidth / points.length;
+  const columnWidth = chartWidth / slots.length;
+  const segments: InletTrendLineSegment[] = [];
 
-  return points.slice(0, -1).map((point, index) => {
-    const nextPoint = points[index + 1];
+  slots.slice(0, -1).forEach((slot, index) => {
+    const nextSlot = slots[index + 1];
+
+    if (slot.minimumInletTempC === null || nextSlot.minimumInletTempC === null) {
+      return;
+    }
+
     const currentX = columnWidth * index + columnWidth / 2;
     const nextX = columnWidth * (index + 1) + columnWidth / 2;
     const currentY =
-      inletTrendChartHeight - getInletTrendPointBottom(point.minimumInletTempC);
+      inletTrendChartHeight - getInletTrendPointBottom(slot.minimumInletTempC);
     const nextY =
-      inletTrendChartHeight -
-      getInletTrendPointBottom(nextPoint.minimumInletTempC);
+      inletTrendChartHeight - getInletTrendPointBottom(nextSlot.minimumInletTempC);
     const deltaX = nextX - currentX;
     const deltaY = nextY - currentY;
 
-    return {
+    segments.push({
       angle: `${Math.atan2(deltaY, deltaX)}rad`,
       height: 1,
       key: `inlet-trend-${index}`,
       left: currentX,
       top: currentY,
       width: Math.hypot(deltaX, deltaY),
-    };
+    });
   });
+
+  return segments;
 }
 
 export default function TemperatureHistoryScreen() {
@@ -877,13 +886,17 @@ export default function TemperatureHistoryScreen() {
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
   );
-  const inletTrendLineSegments = useMemo(
-    () => getInletTrendLineSegments(weeklyInletTrend, inletTrendChartWidth),
-    [inletTrendChartWidth, weeklyInletTrend],
-  );
   const inletTrendPeriod = useMemo(
     () => getInletTrendPeriod(inletTrendPeriodOffset),
     [inletTrendPeriodOffset],
+  );
+  const inletTrendSlots = useMemo(
+    () => buildInletTrendSlots(inletTrendPeriod, weeklyInletTrend),
+    [inletTrendPeriod, weeklyInletTrend],
+  );
+  const inletTrendLineSegments = useMemo(
+    () => getInletTrendLineSegments(inletTrendSlots, inletTrendChartWidth),
+    [inletTrendChartWidth, inletTrendSlots],
   );
   const dayXAxisLabels = useMemo(
     () => (isDayView ? getDayXAxisLabels(visibleHistory) : null),
@@ -1282,7 +1295,7 @@ export default function TemperatureHistoryScreen() {
               <Text style={styles.inletTrendEmptyText}>
                 {isLoadingWeeklyInletTrend
                   ? "Ladataan..."
-                  : "Ei vielä tulovesidataa."}
+                  : "Ei vielä tulovesidataa tältä jaksolta."}
               </Text>
             ) : (
               <View style={styles.chartRow}>
@@ -1327,22 +1340,28 @@ export default function TemperatureHistoryScreen() {
                   ))}
 
                   <View style={styles.inletTrendColumns}>
-                    {weeklyInletTrend.map((point) => (
+                    {inletTrendSlots.map((slot) => (
                       <View
-                        accessibilityLabel={`Viikko ${point.weekStart}, alin tulovesilämpötila ${point.minimumInletTempC} astetta`}
-                        key={point.weekStart}
+                        accessibilityLabel={
+                          slot.minimumInletTempC === null
+                            ? `Viikko ${slot.weekStart}, ei vahvistettua lukemaa`
+                            : `Viikko ${slot.weekStart}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
+                        }
+                        key={slot.weekStart}
                         style={styles.inletTrendColumn}
                       >
-                        <View
-                          style={[
-                            styles.inletTrendDot,
-                            {
-                              bottom: getInletTrendPointBottom(
-                                point.minimumInletTempC,
-                              ),
-                            },
-                          ]}
-                        />
+                        {slot.minimumInletTempC === null ? null : (
+                          <View
+                            style={[
+                              styles.inletTrendDot,
+                              {
+                                bottom: getInletTrendPointBottom(
+                                  slot.minimumInletTempC,
+                                ),
+                              },
+                            ]}
+                          />
+                        )}
                       </View>
                     ))}
                   </View>

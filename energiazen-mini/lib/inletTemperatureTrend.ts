@@ -10,7 +10,9 @@
 // voi selata taaksepäin samaan tapaan kuin päivähistorian ‹ › -nuolilla
 // (ks. getInletTrendPeriod).
 import {
+  addHelsinkiCalendarDays,
   getHelsinkiDateParts,
+  getHelsinkiDayKey,
   getUtcDateForHelsinkiLocalTime,
 } from "./temperatureHistoryDay";
 
@@ -158,4 +160,45 @@ export function getInletTrendPeriod(
     label: formatInletTrendPeriodLabel(firstMonth, firstYear, lastMonth, lastYear),
     startIso: start.toISOString(),
   };
+}
+
+export type InletTrendSlot = {
+  minimumInletTempC: number | null;
+  weekStart: string;
+};
+
+// Kaikkien jakson kalenteriviikkojen (maanantaista alkaen, sama sääntö
+// kuin RPC:n date_trunc('week', ...)) alkupäivät. Käytetään pisteiden
+// sijoitteluun niin, että viikko, jolta ei löytynyt vahvistettua lukemaa,
+// jää tyhjäksi kohdakseen sen sijaan että jäljellä olevat pisteet
+// litistyisivät vierekkäin ja vääristäisivät trendin kaltevuutta.
+export function getInletTrendPeriodWeekStarts(period: InletTrendPeriod) {
+  const startDayKey = getHelsinkiDayKey(new Date(period.startIso));
+  const endDayKeyExclusive = getHelsinkiDayKey(new Date(period.endIso));
+  const startWeekday = new Date(`${startDayKey}T12:00:00.000Z`).getUTCDay();
+  const mondayOffset = (startWeekday + 6) % 7;
+
+  const weekStarts: string[] = [];
+  let weekStartKey = addHelsinkiCalendarDays(startDayKey, -mondayOffset);
+
+  while (weekStartKey < endDayKeyExclusive) {
+    weekStarts.push(weekStartKey);
+    weekStartKey = addHelsinkiCalendarDays(weekStartKey, 7);
+  }
+
+  return weekStarts;
+}
+
+export function buildInletTrendSlots(
+  period: InletTrendPeriod,
+  points: WeeklyInletTemperaturePoint[],
+): InletTrendSlot[] {
+  const minimumInletTempCByWeekStart = new Map(
+    points.map((point) => [point.weekStart, point.minimumInletTempC]),
+  );
+
+  return getInletTrendPeriodWeekStarts(period).map((weekStart) => ({
+    minimumInletTempC: minimumInletTempCByWeekStart.get(weekStart) ?? null,
+    weekStart,
+  }));
 }

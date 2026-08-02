@@ -1,5 +1,7 @@
 import {
+  buildInletTrendSlots,
   getInletTrendPeriod,
+  getInletTrendPeriodWeekStarts,
   getWeeklyInletTemperaturePointHeightPercent,
   mapWeeklyInletTemperatureRows,
   weeklyInletTemperatureChartMaxC,
@@ -117,5 +119,39 @@ export function runInletTemperatureTrendUnitTests() {
     getInletTrendPeriod(-1, summerNow),
     currentPeriod,
     "negatiivinen offset rajataan kuluvaan jaksoon",
+  );
+
+  assertEqual(
+    getInletTrendPeriodWeekStarts(currentPeriod),
+    [
+      "2026-06-01",
+      "2026-06-08",
+      "2026-06-15",
+      "2026-06-22",
+      "2026-06-29",
+      "2026-07-06",
+      "2026-07-13",
+      "2026-07-20",
+      "2026-07-27",
+      "2026-08-03",
+      "2026-08-10",
+      "2026-08-17",
+      "2026-08-24",
+      "2026-08-31",
+    ],
+    "jakson viikot alkavat maanantaisin ja kattavat koko 3 kuukauden jakson",
+  );
+
+  assertEqual(
+    buildInletTrendSlots(currentPeriod, [
+      { minimumInletTempC: 8.5, weekStart: "2026-07-20" },
+      { minimumInletTempC: 8.1, weekStart: "2026-08-03" },
+    ]).map((slot) => slot.minimumInletTempC),
+    [
+      null, null, null, null, null, null, null,
+      8.5, null,
+      8.1, null, null, null, null,
+    ],
+    "viikot, joilta ei löytynyt vahvistettua lukemaa, jäävät tyhjiksi eivätkä siirrä muita pisteitä",
   );
 }

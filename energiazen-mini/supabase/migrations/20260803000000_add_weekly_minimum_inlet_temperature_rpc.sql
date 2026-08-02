@@ -43,11 +43,17 @@ confirmed_readings as (
   select v.week_start, v.inlet_temp
   from valid_readings v
   where exists (
+    -- Haetaan naapurilukema suoraan tank_readings-taulusta (ei
+    -- valid_readings-CTE:stä) ja rajataan created_at-aikaväliksi, jotta
+    -- Postgres voi käyttää tank_readings_created_at_idx-indeksiä sen
+    -- sijaan että jokainen viikon lukemapari jouduttaisiin vertaamaan
+    -- toisiinsa (abs(extract(epoch from ...)) ei ole indeksoitavissa).
     select 1
-    from valid_readings n
-    where n.week_start = v.week_start
+    from public.tank_readings n
+    where n.created_at >= v.created_at - interval '180 seconds'
+      and n.created_at <= v.created_at + interval '180 seconds'
       and n.created_at <> v.created_at
-      and abs(extract(epoch from (n.created_at - v.created_at))) <= 180
+      and n.inlet_temp is not null
       and n.inlet_temp >= v.inlet_temp
       and n.inlet_temp <= v.inlet_temp + 2
   )
