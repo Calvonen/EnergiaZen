@@ -24,7 +24,7 @@ type InletReadingSample = {
   inletTemperatureC: number;
 };
 
-function isValidInletTemperature(value: unknown): value is number {
+export function isValidInletTemperature(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isFinite(value) &&
