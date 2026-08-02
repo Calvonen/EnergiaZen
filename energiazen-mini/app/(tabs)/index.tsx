@@ -2702,8 +2702,10 @@ export default function HomeScreen() {
             fullTankShowers={settings.fullTankShowers}
             minTankTemperature={settings.minTankTemperature}
             onPress={() => router.push("/settings")}
+            safetyShowerReserve={settings.safetyShowerReserve}
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
             showersValueLabel={warmWaterShowersValue}
+            targetShowerReserve={settings.targetShowerReserve}
             temperatureLabel={warmWaterAverageTempLabel}
             topUsability={warmWaterEstimate?.topUsability ?? 1}
           />
