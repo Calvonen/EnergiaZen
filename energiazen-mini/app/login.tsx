@@ -46,6 +46,9 @@ export default function Login() {
           padding: 12,
         }}
       />
+      <Text style={{ color: "#666", fontSize: 12 }}>
+        Sähköpostiosoitetta käytetään myös vikailmoitusten lähettämiseen.
+      </Text>
 
       <TextInput
         placeholder="Salasana"

@@ -195,3 +195,68 @@ select cron.unschedule(jobid)
 from cron.job
 where jobname = 'fetch-electricity-prices-hourly';
 ```
+
+## Varaajan mittausvian sähköpostihälytys
+
+`check-tank-monitor-health` tarkistaa 5 minuutin välein (`pg_cron`-jobi
+`check-tank-monitor-health-every-5-minutes`, migraatio
+`supabase/migrations/20260802000000_add_tank_monitor_health_alert_schedule.sql`)
+onko `tank_readings`-taulun tuorein rivi yli 30 minuuttia vanha (kynnys
+`supabase/functions/check-tank-monitor-health/alertLogic.ts`:n
+`staleReadingAlertThresholdMinutes` - pidä synkassa
+`lib/tankMonitorAlert.ts`:n vastaavan vakion kanssa, jota etusivun
+virhebanneri käyttää). Sähköposti lähtee [Resendillä](https://resend.com)
+vain terve → vanhentunut -tilasiirtymässä, ei joka ajolla eikä uudestaan
+niin kauan kuin vika on jo tiedossa (`device_monitor_state`-taulun yhden
+rivin tila). Palautumisesta ei lähetetä erillistä sähköpostia - se näkyy
+suoraan etusivun bannerin katoamisena heti kun tuore mittaus saapuu.
+
+Vastaanottajat haetaan Supabase Authista
+(`supabase.auth.admin.listUsers()`), ei kovakoodata - kaikki appiin
+kirjautuneet käyttäjät saavat hälytyksen samaan osoitteeseen jolla he
+kirjautuvat sisään.
+
+Tallenna Resendin API-avain secretiksi (ei koskaan repoon):
+
+```bash
+supabase secrets set RESEND_API_KEY=re_xxxxxxxx --project-ref amyvzelzbvjvrevikvrp
+```
+
+Deployaa funktio:
+
+```bash
+supabase functions deploy check-tank-monitor-health
+```
+
+Aja migraatiot linkitettyyn projektiin (luo `device_monitor_state`-taulun ja
+ajastuksen - käyttää samoja `project_url`/`publishable_key`-Vault-secretejä
+jotka on jo luotu sähkön hintahaun ajastusta varten yllä):
+
+```bash
+supabase link --project-ref amyvzelzbvjvrevikvrp
+supabase db push
+```
+
+Tarkista jobi ja viimeisimmät ajot:
+
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'check-tank-monitor-health-every-5-minutes';
+
+select *
+from cron.job_run_details
+where jobid = (
+  select jobid
+  from cron.job
+  where jobname = 'check-tank-monitor-health-every-5-minutes'
+)
+order by start_time desc
+limit 10;
+```
+
+Tarkista nykyinen tila:
+
+```sql
+select * from public.device_monitor_state;
+```
