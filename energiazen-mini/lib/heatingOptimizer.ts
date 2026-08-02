@@ -298,13 +298,6 @@ export function estimateShowersLeftFromWeightedTemperature({
   return fillRatio * fullTankShowers;
 }
 
-// Alin yläanturin lämpötila, jolla säiliön yläosassa katsotaan vielä olevan
-// käyttökelpoista lämmintä vettä. Käytetään sekä epälineaarisen
-// täyttöasteen laskennassa (topUsability alla) että warm-water-card.tsx:n
-// näyttöasteikon "0 suihkua" -pohjana, jotta asteikko vastaa oikeaa
-// laskentaa eikä pelkkää minTankTemperature-arvoa.
-export const minimumUsableTopTemperature = 42;
-
 export function calculateStratifiedShowersLeft({
   bottomTemperature,
   fullTankAverageTemperature,
@@ -334,6 +327,7 @@ export function calculateStratifiedShowersLeft({
     0,
     1,
   );
+  const minimumUsableTopTemperature = 42;
   const topUsabilityTemperatureRange = Math.max(
     fullTankTemp - minimumUsableTopTemperature,
     1,
