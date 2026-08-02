@@ -66,38 +66,24 @@ export function runTankMonitorAlertLogicUnitTests() {
     "terve tila ei koskaan laukaise hälytystä",
   );
 
+  // Sisällön rakentaminen ei enää ota kantaa vastaanottajiin - jokainen
+  // saa saman sisällön, mutta kukin lähetetään erikseen (index.ts) ettei
+  // kukaan näe muiden osoitteita samassa to-kentässä.
+  const email = buildStaleReadingAlertEmail({ ageMinutes: 45 });
   assertEqual(
-    buildStaleReadingAlertEmail({ ageMinutes: 45, recipientEmails: [] }),
-    null,
-    "ilman vastaanottajia sähköpostia ei rakenneta",
-  );
-
-  const email = buildStaleReadingAlertEmail({
-    ageMinutes: 45,
-    recipientEmails: ["user@example.com"],
-  });
-  assertEqual(
-    email?.to,
-    ["user@example.com"],
-    "sähköposti osoitetaan kaikille tunnetuille käyttäjille",
-  );
-  assertEqual(
-    email?.subject,
+    email.subject,
     "EnergyZen: varaajan mittaus ei toimi",
     "aihe kertoo suoraan mistä on kyse",
   );
   assertEqual(
-    email?.html.includes("45 minuuttia"),
+    email.html.includes("45 minuuttia"),
     true,
     "viesti sisältää mittauksen iän",
   );
 
-  const missingReadingEmail = buildStaleReadingAlertEmail({
-    ageMinutes: null,
-    recipientEmails: ["user@example.com"],
-  });
+  const missingReadingEmail = buildStaleReadingAlertEmail({ ageMinutes: null });
   assertEqual(
-    missingReadingEmail?.html.includes("Mittausta ei löytynyt lainkaan"),
+    missingReadingEmail.html.includes("Mittausta ei löytynyt lainkaan"),
     true,
     "täysin puuttuva mittaus kerrotaan selkeästi eri tekstillä kuin vanhentunut",
   );

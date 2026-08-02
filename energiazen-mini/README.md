@@ -212,9 +212,24 @@ rivin tila). Palautumisesta ei lähetetä erillistä sähköpostia - se näkyy
 suoraan etusivun bannerin katoamisena heti kun tuore mittaus saapuu.
 
 Vastaanottajat haetaan Supabase Authista
-(`supabase.auth.admin.listUsers()`), ei kovakoodata - kaikki appiin
-kirjautuneet käyttäjät saavat hälytyksen samaan osoitteeseen jolla he
-kirjautuvat sisään.
+(`supabase.auth.admin.listUsers()`, kaikki sivut käyden läpi), ei
+kovakoodata - kaikki appiin kirjautuneet käyttäjät saavat hälytyksen
+samaan osoitteeseen jolla he kirjautuvat sisään. Jokaiselle
+vastaanottajalle lähetetään oma erillinen viesti, jottei kukaan näe
+muiden kirjautumissähköposteja.
+
+**Rajoitus:** `onboarding@resend.dev`-testidomain toimittaa viestejä vain
+Resend-tilin *omistajan* sähköpostiin. Tämä toimii nyt koska ainoa
+Supabase Auth -käyttäjä on sama henkilö kuin Resend-tilin omistaja. Jos
+appiin lisätään joskus toinen kirjautuva käyttäjä eri sähköpostilla,
+tarvitaan oma verifioitu lähetysdomain Resendissä
+(https://resend.com/domains), muuten kyseisen käyttäjän hälytys epäonnistuu
+äänettömästi (Edge Function palauttaa 502:n, mutta cron-ajo ei ilmoita
+siitä mihinkään erikseen).
+
+`device_monitor_state`-taulussa on RLS käytössä ilman client-policyja -
+vain `service_role` (joka ohittaa RLS:n) pääsee siihen käsiksi, joten
+appin/Shellyn julkisella avaimella ei voi peukaloida hälytystilaa.
 
 Tallenna Resendin API-avain secretiksi (ei koskaan repoon):
 

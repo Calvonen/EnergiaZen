@@ -9,13 +9,56 @@ import {
 
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
 const resendApiUrl = "https://api.resend.com/emails";
-// Resendin oma testidomain - riittää tähän matalan volyymin henkilökohtaiseen
-// hälytyskäyttöön ilman erillistä domain-verifiointia (ks. README.md).
+// Resendin oma testidomain - HUOM: tällä lähettäjällä Resend toimittaa
+// viestejä vain sen tilin OMISTAJAN sähköpostiin (se osoite jolla Resend-tili
+// luotiin), ei mihin tahansa osoitteeseen. Toimii nyt koska ainoa Supabase
+// Auth -käyttäjä on sama henkilö. Jos appiin lisätään joskus toinen
+// kirjautuva käyttäjä eri sähköpostilla, tämä pitää vaihtaa verifioituun
+// omaan domainiin (ks. README.md) tai kyseinen käyttäjä ei koskaan saa
+// hälytystä - Resend palauttaa silloin virheen eikä mitään lähde.
 const alertFromAddress = "EnergyZen <onboarding@resend.dev>";
 const monitorStateId = 1;
+// supabase-js:n auth.admin.listUsers() palauttaa oletuksena vain
+// ensimmäisen 50 käyttäjän sivun - fetchAllUserEmails käy kaikki sivut läpi
+// jottei ketään unohdeta jos käyttäjiä on joskus enemmän.
+const listUsersPageSize = 200;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { headers: jsonHeaders, status });
+}
+
+async function fetchAllUserEmails(
+  supabase: ReturnType<typeof createClient>,
+): Promise<string[]> {
+  const emails: string[] = [];
+  let page = 1;
+
+  for (;;) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: listUsersPageSize,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const users = data?.users ?? [];
+
+    for (const user of users) {
+      if (user.email) {
+        emails.push(user.email);
+      }
+    }
+
+    if (users.length < listUsersPageSize) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return emails;
 }
 
 Deno.serve(async (request) => {
@@ -70,47 +113,52 @@ Deno.serve(async (request) => {
     let alertSent = false;
 
     if (shouldAlert) {
-      const { data: usersResult, error: usersError } =
-        await supabase.auth.admin.listUsers();
+      let recipientEmails: string[];
 
-      if (usersError) {
-        return jsonResponse({ error: usersError.message }, 502);
+      try {
+        recipientEmails = await fetchAllUserEmails(supabase);
+      } catch (error) {
+        return jsonResponse(
+          {
+            error:
+              error instanceof Error ? error.message : "Failed to list users",
+          },
+          502,
+        );
       }
 
-      const recipientEmails = (usersResult?.users ?? [])
-        .map((user) => user.email)
-        .filter((email): email is string => Boolean(email));
+      if (recipientEmails.length > 0) {
+        const email = buildStaleReadingAlertEmail({ ageMinutes });
 
-      const email = buildStaleReadingAlertEmail({
-        ageMinutes,
-        recipientEmails,
-      });
-
-      if (email) {
-        const resendResponse = await fetch(resendApiUrl, {
-          body: JSON.stringify({
-            from: alertFromAddress,
-            html: email.html,
-            subject: email.subject,
-            to: email.to,
-          }),
-          headers: {
-            Authorization: `Bearer ${resendApiKey}`,
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        });
-
-        if (!resendResponse.ok) {
-          const errorBody = await resendResponse.text();
-          return jsonResponse(
-            {
-              error: "Resend request failed",
-              resend_body: errorBody,
-              resend_status: resendResponse.status,
+        // Yksi viesti per vastaanottaja (ei kaikkia samaan to-kenttään) -
+        // muuten jokainen käyttäjä näkisi kaikkien muidenkin
+        // kirjautumissähköpostit vastaanottaja-otsikosta.
+        for (const recipientEmail of recipientEmails) {
+          const resendResponse = await fetch(resendApiUrl, {
+            body: JSON.stringify({
+              from: alertFromAddress,
+              html: email.html,
+              subject: email.subject,
+              to: [recipientEmail],
+            }),
+            headers: {
+              Authorization: `Bearer ${resendApiKey}`,
+              "Content-Type": "application/json",
             },
-            502,
-          );
+            method: "POST",
+          });
+
+          if (!resendResponse.ok) {
+            const errorBody = await resendResponse.text();
+            return jsonResponse(
+              {
+                error: "Resend request failed",
+                resend_body: errorBody,
+                resend_status: resendResponse.status,
+              },
+              502,
+            );
+          }
         }
 
         alertSent = true;

@@ -47,20 +47,16 @@ export function shouldSendStaleAlert({
 export type TankMonitorAlertEmail = {
   html: string;
   subject: string;
-  to: string[];
 };
 
+// Ei ota vastaanottajia kantaa ollenkaan - sisältö on sama kaikille, mutta
+// jokainen lähetetään erikseen (ks. index.ts) ettei kukaan käyttäjä näe
+// muiden sähköpostiosoitteita samassa to-kentässä.
 export function buildStaleReadingAlertEmail({
   ageMinutes,
-  recipientEmails,
 }: {
   ageMinutes: number | null;
-  recipientEmails: string[];
-}): TankMonitorAlertEmail | null {
-  if (recipientEmails.length === 0) {
-    return null;
-  }
-
+}): TankMonitorAlertEmail {
   const ageText =
     ageMinutes === null
       ? "Mittausta ei löytynyt lainkaan"
@@ -73,6 +69,5 @@ export function buildStaleReadingAlertEmail({
       "<p>EnergyZen käyttää tänä aikana valittuja varatunteja lämmitykseen, " +
       "kunnes mittaus toimii jälleen.</p>",
     subject: "EnergyZen: varaajan mittaus ei toimi",
-    to: recipientEmails,
   };
 }
