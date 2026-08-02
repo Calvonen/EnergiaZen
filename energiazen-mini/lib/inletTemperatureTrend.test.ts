@@ -1,5 +1,6 @@
 import {
   buildInletTrendSlots,
+  formatInletTrendWeekRangeLabel,
   getInletTrendPeriod,
   getInletTrendPeriodWeekStarts,
   getWeeklyInletTemperaturePointHeightPercent,
@@ -153,5 +154,11 @@ export function runInletTemperatureTrendUnitTests() {
       8.1, null, null, null, null,
     ],
     "viikot, joilta ei löytynyt vahvistettua lukemaa, jäävät tyhjiksi eivätkä siirrä muita pisteitä",
+  );
+
+  assertEqual(
+    formatInletTrendWeekRangeLabel("2026-07-27"),
+    "27.7.–2.8.",
+    "viikon range näyttää koko maanantaista sunnuntaihin ulottuvan jakson, ei pelkkää alkupäivää",
   );
 }

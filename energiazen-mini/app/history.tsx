@@ -27,6 +27,7 @@ import {
 } from "@/lib/temperatureHistoryDay";
 import {
   buildInletTrendSlots,
+  formatInletTrendWeekRangeLabel,
   getInletTrendPeriod,
   getWeeklyInletTemperaturePointHeightPercent,
   InletTrendSlot,
@@ -1344,8 +1345,8 @@ export default function TemperatureHistoryScreen() {
                       <View
                         accessibilityLabel={
                           slot.minimumInletTempC === null
-                            ? `Viikko ${slot.weekStart}, ei vahvistettua lukemaa`
-                            : `Viikko ${slot.weekStart}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
+                            ? `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, ei vahvistettua lukemaa`
+                            : `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
                         }
                         key={slot.weekStart}
                         style={styles.inletTrendColumn}

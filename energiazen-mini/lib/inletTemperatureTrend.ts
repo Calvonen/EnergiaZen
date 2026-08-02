@@ -202,3 +202,19 @@ export function buildInletTrendSlots(
     weekStart,
   }));
 }
+
+function formatDayKeyAsShortFinnishDate(dayKey: string) {
+  const [, month, day] = dayKey.split("-");
+
+  return `${Number(day)}.${Number(month)}.`;
+}
+
+// "week_start" on aina viikon maanantai, mikä voi harhaanjohtaa (esim.
+// asennuspäivä osuu viikon loppuun, jolloin "2026-07-27" näyttää
+// vanhemmalta kuin data oikeasti on). Tämä muotoilee koko viikon rangen
+// esim. "27.7.–2.8." pelkän alkupäivän sijaan.
+export function formatInletTrendWeekRangeLabel(weekStart: string) {
+  const weekEnd = addHelsinkiCalendarDays(weekStart, 6);
+
+  return `${formatDayKeyAsShortFinnishDate(weekStart)}–${formatDayKeyAsShortFinnishDate(weekEnd)}`;
+}
