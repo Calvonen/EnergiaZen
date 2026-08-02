@@ -2695,15 +2695,12 @@ export default function HomeScreen() {
 
           <WarmWaterCard
             fillPercent={warmWaterFillPercent}
-            fullTankAverageTemperature={settings.fullTankAverageTemperature}
             fullTankShowers={settings.fullTankShowers}
-            minTankTemperature={settings.minTankTemperature}
             onPress={() => router.push("/settings")}
             safetyShowerReserve={settings.safetyShowerReserve}
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
             showersValueLabel={warmWaterShowersValue}
             targetShowerReserve={settings.targetShowerReserve}
-            topUsability={warmWaterEstimate?.topUsability ?? 1}
           />
         </View>
 
