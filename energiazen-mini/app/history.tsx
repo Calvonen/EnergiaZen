@@ -1329,7 +1329,7 @@ export default function TemperatureHistoryScreen() {
         {isInteractionComplete ? (
           <View style={styles.inletTrendCard}>
             <Text style={styles.inletTrendTitle}>
-              Tulovesi, viikoittainen alin
+              Tulovesi anturi, viikoittainen
             </Text>
 
             {weeklyInletTrend.length === 0 ? (
@@ -1828,10 +1828,11 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   inletTrendTitle: {
-    color: "#f7fbff",
-    fontSize: 14,
-    fontWeight: "900",
+    color: "#b9d7ff",
+    fontSize: 15,
+    fontWeight: "700",
     marginBottom: 12,
+    textAlign: "center",
   },
   inletTrendEmptyText: {
     color: "#cfe9ff",
