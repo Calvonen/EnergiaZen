@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { minimumUsableTopTemperature } from "@/lib/heatingOptimizer";
+
 function getWarmWaterCardTheme() {
   const accent = "#26d9d2";
 
@@ -25,13 +27,15 @@ const TANK_INNER_HEIGHT = TANK_HEIGHT - TANK_BORDER_WIDTH * 2;
 const SCALE_LABEL_LINE_HEIGHT = 11;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
 
-// Kevyt, pelkästään näytettävä asteikko säiliögrafiikan päälle. Käyttää
-// samaa lineaarista lämpötila <-> suihkut-muunnosta kuin
-// estimateShowersLeftFromWeightedTemperature (lib/heatingOptimizer.ts):
-// suihkut jaetaan tasavälein 0..fullTankShowers, ja jokaista suihkumäärää
-// vastaava lämpötila lasketaan samalla lineaarisella asteikolla
-// minTankTemperature..fullTankAverageTemperature. Ei vaikuta eikä liity
-// varsinaiseen (epälineaariseen) täyttöasteen laskentaan - pelkkä visuaalinen
+// Kevyt, pelkästään näytettävä asteikko säiliögrafiikan päälle. Suihkut
+// jaetaan tasavälein 0..fullTankShowers, ja jokaista suihkumäärää vastaava
+// lämpötila lasketaan lineaarisella asteikolla
+// minimumUsableTopTemperature..fullTankAverageTemperature. Käyttää samaa
+// minimumUsableTopTemperature-vakiota (lib/heatingOptimizer.ts) kuin oikea
+// epälineaarinen calculateStratifiedShowersLeft käyttää "0 käyttökelpoista
+// suihkua" -pohjana yläanturille, jotta asteikon lämpötilat vastaavat
+// todellista laskentaa eivätkä pelkkää säiliön minimilämpötilaa. Ei silti
+// itse toista täyttöasteen epälineaarista kaavaa - pelkkä visuaalinen
 // apuasteikko.
 type TankScaleTick = {
   heightPercent: number;
@@ -42,11 +46,9 @@ type TankScaleTick = {
 function buildTankScaleTicks({
   fullTankAverageTemperature,
   fullTankShowers,
-  minTankTemperature,
 }: {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
-  minTankTemperature: number;
 }): TankScaleTick[] {
   const tickCount = Math.max(1, Math.round(fullTankShowers));
 
@@ -54,8 +56,8 @@ function buildTankScaleTicks({
     const showers = tickCount - index;
     const ratio = showers / tickCount;
     const temperature =
-      minTankTemperature +
-      ratio * (fullTankAverageTemperature - minTankTemperature);
+      minimumUsableTopTemperature +
+      ratio * (fullTankAverageTemperature - minimumUsableTopTemperature);
 
     return {
       heightPercent: (index / tickCount) * 100,
@@ -69,7 +71,6 @@ export type WarmWaterCardProps = {
   fillPercent: number;
   fullTankAverageTemperature: number;
   fullTankShowers: number;
-  minTankTemperature: number;
   onPress: () => void;
   showersAccessibilityLabel: string;
   showersValueLabel: string;
@@ -80,7 +81,6 @@ export function WarmWaterCard({
   fillPercent,
   fullTankAverageTemperature,
   fullTankShowers,
-  minTankTemperature,
   onPress,
   showersAccessibilityLabel,
   showersValueLabel,
@@ -90,7 +90,6 @@ export function WarmWaterCard({
   const scaleTicks = buildTankScaleTicks({
     fullTankAverageTemperature,
     fullTankShowers,
-    minTankTemperature,
   });
 
   return (
