@@ -18,6 +18,10 @@ import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import {
+  computeTankReadingAgeMinutes,
+  isTankReadingStale,
+} from "@/lib/tankMonitorAlert";
+import {
   formatWeeklyMinimumInletTemperatureAccessibilityText,
   formatWeeklyMinimumInletTemperatureLabel,
   getTemperatureCardTheme,
@@ -2073,6 +2077,18 @@ export default function HomeScreen() {
     : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
+  // Sama kynnys jota supabase/functions/check-tank-monitor-health kayttaa
+  // sahkopostihalytykseen - banneri ja sahkoposti kertovat aina saman
+  // tilan. Toisin kuin sahkoposti, tama lasketaan aina tuoreesta
+  // tankUpdatedAt-arvosta, joten se katoaa automaattisesti heti kun uusi
+  // lukema saapuu, eika vaadi erillista "palautunut"-tilaa.
+  // "loading" on true vain ihan ensimmäisen haun ajan (ks. useFocusEffect
+  // alla) - sita ennen tankUpdatedAt on vaistamatta viela null, koska
+  // mitaan ei ole ehditty hakea. Ilman tata ehtoa banneri vilahti
+  // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
+  const tankMonitorFault =
+    !loading &&
+    isTankReadingStale(computeTankReadingAgeMinutes(tankUpdatedAt, currentTime));
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -2631,6 +2647,17 @@ export default function HomeScreen() {
           ) : null}
         </View>
 
+        {tankMonitorFault ? (
+          <View style={styles.tankMonitorFaultBanner}>
+            <Text
+              accessibilityRole="alert"
+              style={styles.tankMonitorFaultText}
+            >
+              Varaajan mittaus ei toimi, käytetään valittuja varatunteja
+            </Text>
+          </View>
+        ) : null}
+
         <PriceCard
           accessibilityLabel={priceCardAccessibilityLabel}
           hasPrice={currentPrice !== null}
@@ -3033,6 +3060,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
     marginTop: 6,
+    textAlign: "center",
+  },
+  tankMonitorFaultBanner: {
+    alignSelf: "stretch",
+    backgroundColor: "rgba(255, 95, 109, 0.16)",
+    borderColor: "rgba(255, 95, 109, 0.52)",
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  tankMonitorFaultText: {
+    color: "#ffb3ba",
+    fontSize: 13,
+    fontWeight: "800",
     textAlign: "center",
   },
   scenarioBanner: {

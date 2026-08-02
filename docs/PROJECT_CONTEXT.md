@@ -52,6 +52,10 @@ ei repon juuressa. Sovellus käyttää seuraavia tauluja (todettu
 - `heating_control_settings` – varaajan kalibrointi- ja ohjausasetukset
 - `tank_readings` – ESP32:n lähettämät lämpötila- ja lämmitystilarivit
 - `temperature_drop_profiles` – lasketut lämpötilan laskunopeusprofiilit
+- `device_monitor_state` – yhden rivin tila jota
+  `check-tank-monitor-health`-Edge Function käyttää (kohta 3b) tunnistaakseen
+  terve→vanhentunut-tilasiirtymän eikä lähettääkseen samaa sähköpostihälytystä
+  joka ajolla
 
 > **Huom (dokumentoitu ristiriita):** `energiazen-mini/supabase/migrations/`
 > -kansiosta löytyy vain `electricity_prices`- ja
@@ -76,6 +80,27 @@ tallentaa ne `electricity_prices`-tauluun. Haku on ajastettu `pg_cron`-jobilla
 `energiazen-mini/supabase/migrations/20260724020000_schedule_electricity_price_fetch.sql`).
 Katso `energiazen-mini/README.md` ajastuksen ja Edge Functionin täydet
 ohjeet.
+
+### 3b. Varaajan mittausvian sähköpostihälytys
+
+Edge Function
+`energiazen-mini/supabase/functions/check-tank-monitor-health` tarkistaa
+5 minuutin välein (`pg_cron`-jobi
+`check-tank-monitor-health-every-5-minutes`) onko `tank_readings`-taulun
+tuorein rivi yli 30 minuuttia vanha. Kynnys on määritelty kahdessa
+paikassa jotka pitää pitää synkassa: `alertLogic.ts`:n
+`staleReadingAlertThresholdMinutes` (Edge Function) ja
+`energiazen-mini/lib/tankMonitorAlert.ts`:n
+`tankMonitorAlertThresholdMinutes` (etusivun virhebanneri, joka lasketaan
+suoraan appissa jo haetusta `tankUpdatedAt`-arvosta, ei tästä taulusta).
+Sähköposti lähtee [Resendillä](https://resend.com) vain terve→vanhentunut
+-tilasiirtymässä (`device_monitor_state`-taulu estää toiston), vastaanottajat
+haetaan Supabase Authista (`supabase.auth.admin.listUsers()`) - appiin
+kirjautuneen käyttäjän sähköposti toimii siis myös hälytysosoitteena, sitä
+ei kovakoodata. Palautumisesta ei lähetetä erillistä sähköpostia, koska
+etusivun banneri katoaa automaattisesti heti kun tuore mittaus saapuu.
+Katso `energiazen-mini/README.md` täydet ohjeet (secretin asetus, deploy,
+migraatio).
 
 ### 4. Laitteisto: ESP32 + Shelly
 
