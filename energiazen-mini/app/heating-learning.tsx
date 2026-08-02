@@ -236,6 +236,7 @@ const rejectionReasonLabels: Record<HeatingGainRejectionReason, string> = {
   negative_temperature_change: "Lämpötila laski jakson aikana",
   non_finite_gain: "Nousua ei voitu laskea",
   unrealistic_gain: "Nousu epärealistisen suuri",
+  water_draw_detected: "Vedenotto havaittu jakson aikana",
 };
 
 const warningReasonLabels: Record<HeatingGainWarningReason, string> = {
@@ -433,7 +434,7 @@ export default function HeatingLearningScreen() {
         const result = await fetchHeatingGainHistory(async (from, to) => {
           const { data, error: queryError } = await supabase
             .from("tank_readings")
-            .select("created_at,top_temp,bottom_temp,heating")
+            .select("created_at,top_temp,bottom_temp,inlet_temp,heating")
             .eq("heating", true)
             .gte("created_at", startIso)
             .lte("created_at", endIso)
