@@ -2307,7 +2307,14 @@ export default function HomeScreen() {
           setWeeklyMinimumInletTemperature(null);
           setStoredTemperatureDropProfile(null);
           setHeating(false);
-          setTankUpdatedAt(null);
+          // EI setTankUpdatedAt(null) tässä - tämä haku toistuu 30s
+          // välein (ei vain alkulatauksessa), ja yksittäinen ohimenevä
+          // verkkovirhe ei tarkoita että edellinen lukema olisi
+          // vanhentunut. Nollaus sai anturivikabannerin vilahtamaan
+          // näkyviin ohimenevistä katkoista, ei vain aidoista vioista -
+          // säilytetään viimeisin tunnettu arvo kunnes seuraava haku
+          // joko onnistuu tai lukema oikeasti vanhenee (30 min raja,
+          // lib/tankMonitorAlert.ts).
         } finally {
           tankReadingsRefreshInFlight = false;
 
