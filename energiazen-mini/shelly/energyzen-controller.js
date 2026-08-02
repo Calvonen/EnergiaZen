@@ -398,10 +398,13 @@ function decideHeating(input, state) {
   }
 
   return {
+    backupHours: backupHours,
     consecutiveHighFillReadings:
       decisionState.consecutiveHighFillReadings,
+    currentHour: input.currentHour,
     currentShowers: currentShowers,
     finalTargetOn: finalTargetOn,
+    isBackupHour: isBackupHour,
     planned: planned,
     plannedHours: plannedHours,
     readingAgeSeconds: readingAgeSeconds,
@@ -472,10 +475,13 @@ function logDecision(decision, source) {
   console.log(
     "EnergyZen decision:",
     JSON.stringify({
+      backupHours: decision.backupHours,
       consecutiveHighFillReadings:
         decision.consecutiveHighFillReadings,
+      currentHour: decision.currentHour,
       currentShowers: decision.currentShowers,
       finalTargetOn: decision.finalTargetOn,
+      isBackupHour: decision.isBackupHour,
       planned: decision.planned,
       readingAgeSeconds: decision.readingAgeSeconds,
       reason: decision.reason,
