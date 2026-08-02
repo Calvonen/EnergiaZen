@@ -23,91 +23,97 @@ const TANK_HEIGHT = 168;
 const TANK_BORDER_WIDTH = 2;
 const TANK_INNER_HEIGHT = TANK_HEIGHT - TANK_BORDER_WIDTH * 2;
 const SCALE_LABEL_LINE_HEIGHT = 11;
+const LIMIT_LABEL_LINE_HEIGHT = 14;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
-
-// Näyttää suihkumäärää (0..fullTankShowers) vastaavan lämpötila-asteikon
-// säiliögrafiikan viereen. Käyttää samaa kaavaa kuin oikea epälineaarinen
-// calculateStratifiedShowersLeft (lib/heatingOptimizer.ts):
-// showersLeft = energyRatio * topUsability * fullTankShowers, missä
-// energyRatio nollautuu minTankTemperature-arvossa. topUsability (0..1)
-// tulee valmiina laskettuna warmWaterEstimate.topUsability-arvosta, koska se
-// riippuu yläanturin raakalämpötilasta erikseen eikä pelkästä
-// näytettävästä painotetusta lämpötilasta - kun yläanturi ei ole
-// täyslämmin (topUsability < 1), suihkumäärä ei koskaan voi saavuttaa
-// fullTankShowers-määrää vaikka keskilämpötila olisi maksimissaan, joten
-// ylimmät tikit näyttävät tällöin saman (saavuttamattoman) kattolämpötilan.
-type TankScaleTick = {
-  heightPercent: number;
-  showers: number;
-  temperature: number;
-};
+// Sama sininen kuin etusivun lämmityssuunnitelmakortin "Käytetyt rajat"
+// -tekstissä (app/(tabs)/index.tsx: heatingPlanLimitsText/-Subtitle), jotta
+// tavoite/turvaraja tunnistaa samaksi asiaksi kummassakin paikassa.
+const LIMIT_COLOR = "#9fc7ff";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildTankScaleTicks({
-  fullTankAverageTemperature,
-  fullTankShowers,
-  minTankTemperature,
-  topUsability,
-}: {
-  fullTankAverageTemperature: number;
-  fullTankShowers: number;
-  minTankTemperature: number;
-  topUsability: number;
-}): TankScaleTick[] {
+// Vasemman reunan suihkumäärä-asteikko: alkuperäinen, pelkkä kokonaisluku-
+// ruudukko 0..fullTankShowers - ei riipu tavoite-/turvarajasta.
+type TankScaleTick = {
+  heightPercent: number;
+  showers: number;
+};
+
+function buildTankScaleTicks(fullTankShowers: number): TankScaleTick[] {
   const tickCount = Math.max(1, Math.round(fullTankShowers));
-  const safeTopUsability = topUsability > 0 ? topUsability : 1;
 
   return Array.from({ length: tickCount + 1 }, (_, index) => {
     const showers = tickCount - index;
-    const requiredEnergyRatio = clamp(
-      showers / (tickCount * safeTopUsability),
-      0,
-      1,
-    );
-    const temperature =
-      minTankTemperature +
-      requiredEnergyRatio * (fullTankAverageTemperature - minTankTemperature);
 
     return {
       heightPercent: (index / tickCount) * 100,
       showers,
-      temperature: Math.round(temperature),
+    };
+  });
+}
+
+// Oikea reuna näyttää enää pelkät käytetyt rajat (tavoite ja turvaraja,
+// settings.targetShowerReserve/safetyShowerReserve) - samat suihkumäärät
+// kuin lämmityssuunnitelmakortin "Käytetyt rajat" -tekstissä, ei mitään
+// muuta lukua. Rivi piirretään myös säiliön poikki menevänä viivana, jotta
+// raja erottuu myös täytön päältä ilman tekstiä.
+type LimitMarker = {
+  heightPercent: number;
+  label: string;
+};
+
+function formatShowerCount(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(".", ",");
+}
+
+function buildLimitMarkers({
+  fullTankShowers,
+  safetyShowerReserve,
+  targetShowerReserve,
+}: {
+  fullTankShowers: number;
+  safetyShowerReserve: number;
+  targetShowerReserve: number;
+}): LimitMarker[] {
+  const tickCount = Math.max(1, Math.round(fullTankShowers));
+
+  return [safetyShowerReserve, targetShowerReserve].map((value) => {
+    const clampedValue = clamp(value, 0, tickCount);
+
+    return {
+      heightPercent: 100 - (clampedValue / tickCount) * 100,
+      label: formatShowerCount(clampedValue),
     };
   });
 }
 
 export type WarmWaterCardProps = {
   fillPercent: number;
-  fullTankAverageTemperature: number;
   fullTankShowers: number;
-  minTankTemperature: number;
   onPress: () => void;
+  safetyShowerReserve: number;
   showersAccessibilityLabel: string;
   showersValueLabel: string;
-  temperatureLabel: string;
-  topUsability: number;
+  targetShowerReserve: number;
 };
 
 export function WarmWaterCard({
   fillPercent,
-  fullTankAverageTemperature,
   fullTankShowers,
-  minTankTemperature,
   onPress,
+  safetyShowerReserve,
   showersAccessibilityLabel,
   showersValueLabel,
-  temperatureLabel,
-  topUsability,
+  targetShowerReserve,
 }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
-  const scaleTicks = buildTankScaleTicks({
-    fullTankAverageTemperature,
+  const scaleTicks = buildTankScaleTicks(fullTankShowers);
+  const limitMarkers = buildLimitMarkers({
     fullTankShowers,
-    minTankTemperature,
-    topUsability,
+    safetyShowerReserve,
+    targetShowerReserve,
   });
 
   return (
@@ -193,25 +199,34 @@ export function WarmWaterCard({
                       />
                     </Fragment>
                   ))}
+                  {limitMarkers.map((marker) => (
+                    <View
+                      key={marker.label}
+                      style={[
+                        styles.tankScaleLineSegment,
+                        styles.tankScaleLineCenterLimit,
+                        { top: `${marker.heightPercent}%` },
+                      ]}
+                    />
+                  ))}
                 </View>
                 <View style={[styles.tankBubble, styles.tankBubbleOne]} />
                 <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
                 <View style={[styles.tankBubble, styles.tankBubbleThree]} />
                 <Text style={styles.tankPrimaryValue}>{showersValueLabel}</Text>
-                <Text style={styles.tankSecondaryValue}>{temperatureLabel}</Text>
               </View>
               <View style={styles.scaleColumnRight}>
                 <View style={styles.scaleNumbers}>
-                  {scaleTicks.map((tick) => (
+                  {limitMarkers.map((marker) => (
                     <Text
                       allowFontScaling={false}
-                      key={tick.showers}
+                      key={marker.label}
                       style={[
-                        styles.scaleNumberRight,
-                        { top: `${tick.heightPercent}%` },
+                        styles.scaleNumberRightLimit,
+                        { top: `${marker.heightPercent}%` },
                       ]}
                     >
-                      {tick.temperature}°
+                      {marker.label}
                     </Text>
                   ))}
                 </View>
@@ -322,14 +337,16 @@ const styles = StyleSheet.create({
     right: 0,
     transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
   },
-  scaleNumberRight: {
-    color: "rgba(255,255,255,0.55)",
-    fontSize: 10,
-    fontWeight: "800",
+  // Tavoite- ja turvarajan rivi oikeassa reunassa - ainoat oikean puolen
+  // luvut (ks. LIMIT_COLOR).
+  scaleNumberRightLimit: {
+    color: LIMIT_COLOR,
+    fontSize: 13,
+    fontWeight: "900",
     left: 0,
-    lineHeight: SCALE_LABEL_LINE_HEIGHT,
+    lineHeight: LIMIT_LABEL_LINE_HEIGHT,
     position: "absolute",
-    transform: [{ translateY: -SCALE_LABEL_LINE_HEIGHT / 2 }],
+    transform: [{ translateY: -LIMIT_LABEL_LINE_HEIGHT / 2 }],
   },
   tankVisual: {
     backgroundColor: "rgba(2,11,30,0.42)",
@@ -360,6 +377,15 @@ const styles = StyleSheet.create({
   tankScaleLineRight: {
     right: 0,
     width: "26%",
+  },
+  // Tavoite-/turvarajan viiva kulkee koko säiliön poikki (myös täytön
+  // päällä), ei vain reunan tikkiviivana - näin raja erottuu selvästi
+  // ilman tekstiä.
+  tankScaleLineCenterLimit: {
+    backgroundColor: LIMIT_COLOR,
+    height: 2,
+    left: 0,
+    right: 0,
   },
   tankFill: {
     backgroundColor: "#40d9ff",
@@ -416,22 +442,5 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 8,
     top: (TANK_HEIGHT - PRIMARY_VALUE_LINE_HEIGHT) / 2,
-  },
-  // Positioned inside the tank graphic itself, horizontally centered like
-  // tankPrimaryValue, well clear of its vertically-centered box (top ~67 to
-  // ~101 of the 168-tall tank) and clearly above the tank's bottom edge.
-  tankSecondaryValue: {
-    bottom: 16,
-    color: "rgba(247,251,255,0.82)",
-    fontSize: 17,
-    fontWeight: "900",
-    left: 0,
-    letterSpacing: -0.2,
-    position: "absolute",
-    right: 0,
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.34)",
-    textShadowOffset: { height: 1, width: 0 },
-    textShadowRadius: 8,
   },
 });

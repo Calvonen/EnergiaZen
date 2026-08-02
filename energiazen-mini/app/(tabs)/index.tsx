@@ -2072,9 +2072,6 @@ export default function HomeScreen() {
   const warmWaterShowersValue = warmWaterEstimate
     ? formatFinnishDecimal(warmWaterEstimate.showersLeft)
     : "--";
-  const warmWaterAverageTempLabel = warmWaterEstimate
-    ? `${Math.round(warmWaterEstimate.weightedTemperature)}°`
-    : "--°";
   const warmWaterShowersAccessibilityLabel = `${warmWaterShowersValue} suihkua`;
   const tankUpdatedStatus = getTankUpdatedStatus(tankUpdatedAt, currentTime);
   // Sama kynnys jota supabase/functions/check-tank-monitor-health kayttaa
@@ -2698,14 +2695,12 @@ export default function HomeScreen() {
 
           <WarmWaterCard
             fillPercent={warmWaterFillPercent}
-            fullTankAverageTemperature={settings.fullTankAverageTemperature}
             fullTankShowers={settings.fullTankShowers}
-            minTankTemperature={settings.minTankTemperature}
             onPress={() => router.push("/settings")}
+            safetyShowerReserve={settings.safetyShowerReserve}
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
             showersValueLabel={warmWaterShowersValue}
-            temperatureLabel={warmWaterAverageTempLabel}
-            topUsability={warmWaterEstimate?.topUsability ?? 1}
+            targetShowerReserve={settings.targetShowerReserve}
           />
         </View>
 
