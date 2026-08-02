@@ -506,7 +506,7 @@ export default function HeatingLearningScreen() {
         const result = await fetchHeatingGainHistory(async (from, to) => {
           const { data, error: queryError } = await supabase
             .from("tank_readings")
-            .select("created_at,top_temp,bottom_temp,heating")
+            .select("created_at,top_temp,bottom_temp,inlet_temp,heating")
             .gte("created_at", startIso)
             .lte("created_at", endIso)
             .order("created_at", { ascending: true })
