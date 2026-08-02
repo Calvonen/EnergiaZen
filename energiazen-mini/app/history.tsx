@@ -50,6 +50,12 @@ type SelectedHistoryPoint = {
   x: number;
 };
 
+type SelectedInletTrendSlot = {
+  index: number;
+  slot: InletTrendSlot;
+  x: number;
+};
+
 type TankReadingRow = {
   created_at?: string | null;
   top_temp?: number | null;
@@ -534,6 +540,8 @@ export default function TemperatureHistoryScreen() {
     useState(false);
   const [inletTrendChartWidth, setInletTrendChartWidth] = useState(0);
   const [inletTrendPeriodOffset, setInletTrendPeriodOffset] = useState(0);
+  const [selectedInletTrendSlot, setSelectedInletTrendSlot] =
+    useState<SelectedInletTrendSlot | null>(null);
   const inletTrendPeriodOffsetRef = useRef(inletTrendPeriodOffset);
   const inFlightInletTrendOffsetsRef = useRef(new Set<number>());
 
@@ -825,6 +833,7 @@ export default function TemperatureHistoryScreen() {
 
   useEffect(() => {
     inletTrendPeriodOffsetRef.current = inletTrendPeriodOffset;
+    setSelectedInletTrendSlot(null);
   }, [inletTrendPeriodOffset]);
 
   useEffect(() => {
@@ -881,6 +890,12 @@ export default function TemperatureHistoryScreen() {
     ? Math.min(
         Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
         Math.max(chartWidth - tooltipWidth, 0),
+      )
+    : 0;
+  const selectedInletTrendTooltipLeft = selectedInletTrendSlot
+    ? Math.min(
+        Math.max(selectedInletTrendSlot.x - tooltipWidth / 2, 0),
+        Math.max(inletTrendChartWidth - tooltipWidth, 0),
       )
     : 0;
   const lineSegments = useMemo(
@@ -962,6 +977,31 @@ export default function TemperatureHistoryScreen() {
       });
     },
     [chartWidth, visibleHistory],
+  );
+
+  const updateSelectedInletTrendSlot = useCallback(
+    (event: GestureResponderEvent) => {
+      if (inletTrendChartWidth <= 0 || inletTrendSlots.length === 0) {
+        return;
+      }
+
+      const touchX = Math.min(
+        Math.max(event.nativeEvent.locationX, 0),
+        inletTrendChartWidth,
+      );
+      const columnWidth = inletTrendChartWidth / inletTrendSlots.length;
+      const nearestIndex = Math.min(
+        Math.max(Math.round((touchX - columnWidth / 2) / columnWidth), 0),
+        inletTrendSlots.length - 1,
+      );
+
+      setSelectedInletTrendSlot({
+        index: nearestIndex,
+        slot: inletTrendSlots[nearestIndex],
+        x: columnWidth * nearestIndex + columnWidth / 2,
+      });
+    },
+    [inletTrendChartWidth, inletTrendSlots],
   );
 
   return (
@@ -1312,6 +1352,10 @@ export default function TemperatureHistoryScreen() {
                   onLayout={(event) =>
                     setInletTrendChartWidth(event.nativeEvent.layout.width)
                   }
+                  onMoveShouldSetResponder={() => true}
+                  onResponderGrant={updateSelectedInletTrendSlot}
+                  onResponderMove={updateSelectedInletTrendSlot}
+                  onStartShouldSetResponder={() => true}
                   style={styles.inletTrendChartArea}
                 >
                   {inletTrendScale.map((value) => (
@@ -1339,6 +1383,36 @@ export default function TemperatureHistoryScreen() {
                       ]}
                     />
                   ))}
+
+                  {selectedInletTrendSlot ? (
+                    <>
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.inletTrendSelectedMarkerLine,
+                          { left: selectedInletTrendSlot.x },
+                        ]}
+                      />
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.inletTrendTooltip,
+                          { left: selectedInletTrendTooltipLeft },
+                        ]}
+                      >
+                        <Text style={styles.inletTrendTooltipTime}>
+                          {formatInletTrendWeekRangeLabel(
+                            selectedInletTrendSlot.slot.weekStart,
+                          )}
+                        </Text>
+                        <Text style={styles.inletTrendTooltipValue}>
+                          {selectedInletTrendSlot.slot.minimumInletTempC === null
+                            ? "Ei vahvistettua lukemaa"
+                            : `Alin ${selectedInletTrendSlot.slot.minimumInletTempC} °C`}
+                        </Text>
+                      </View>
+                    </>
+                  ) : null}
 
                   <View style={styles.inletTrendColumns}>
                     {inletTrendSlots.map((slot) => (
@@ -1804,5 +1878,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.7,
     shadowRadius: 6,
     width: 6,
+  },
+  inletTrendSelectedMarkerLine: {
+    backgroundColor: "rgba(247,251,255,0.38)",
+    bottom: 0,
+    height: inletTrendChartHeight,
+    position: "absolute",
+    width: 1,
+    zIndex: 4,
+  },
+  inletTrendTooltip: {
+    backgroundColor: "rgba(5,8,22,0.92)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: 12,
+    borderWidth: 1,
+    bottom: inletTrendChartHeight + 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    position: "absolute",
+    width: tooltipWidth,
+    zIndex: 5,
+  },
+  inletTrendTooltipTime: {
+    color: "#f7fbff",
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  inletTrendTooltipValue: {
+    color: inletTemperatureColor,
+    fontSize: 11,
+    fontWeight: "900",
   },
 });
