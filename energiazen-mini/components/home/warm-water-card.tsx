@@ -25,37 +25,51 @@ const TANK_INNER_HEIGHT = TANK_HEIGHT - TANK_BORDER_WIDTH * 2;
 const SCALE_LABEL_LINE_HEIGHT = 11;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
 
-// Kevyt, pelkästään näytettävä asteikko säiliögrafiikan päälle. Käyttää
-// samaa lineaarista lämpötila <-> suihkut-muunnosta kuin
-// estimateShowersLeftFromWeightedTemperature (lib/heatingOptimizer.ts):
-// suihkut jaetaan tasavälein 0..fullTankShowers, ja jokaista suihkumäärää
-// vastaava lämpötila lasketaan samalla lineaarisella asteikolla
-// minTankTemperature..fullTankAverageTemperature. Ei vaikuta eikä liity
-// varsinaiseen (epälineaariseen) täyttöasteen laskentaan - pelkkä visuaalinen
-// apuasteikko.
+// Näyttää suihkumäärää (0..fullTankShowers) vastaavan lämpötila-asteikon
+// säiliögrafiikan viereen. Käyttää samaa kaavaa kuin oikea epälineaarinen
+// calculateStratifiedShowersLeft (lib/heatingOptimizer.ts):
+// showersLeft = energyRatio * topUsability * fullTankShowers, missä
+// energyRatio nollautuu minTankTemperature-arvossa. topUsability (0..1)
+// tulee valmiina laskettuna warmWaterEstimate.topUsability-arvosta, koska se
+// riippuu yläanturin raakalämpötilasta erikseen eikä pelkästä
+// näytettävästä painotetusta lämpötilasta - kun yläanturi ei ole
+// täyslämmin (topUsability < 1), suihkumäärä ei koskaan voi saavuttaa
+// fullTankShowers-määrää vaikka keskilämpötila olisi maksimissaan, joten
+// ylimmät tikit näyttävät tällöin saman (saavuttamattoman) kattolämpötilan.
 type TankScaleTick = {
   heightPercent: number;
   showers: number;
   temperature: number;
 };
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function buildTankScaleTicks({
   fullTankAverageTemperature,
   fullTankShowers,
   minTankTemperature,
+  topUsability,
 }: {
   fullTankAverageTemperature: number;
   fullTankShowers: number;
   minTankTemperature: number;
+  topUsability: number;
 }): TankScaleTick[] {
   const tickCount = Math.max(1, Math.round(fullTankShowers));
+  const safeTopUsability = topUsability > 0 ? topUsability : 1;
 
   return Array.from({ length: tickCount + 1 }, (_, index) => {
     const showers = tickCount - index;
-    const ratio = showers / tickCount;
+    const requiredEnergyRatio = clamp(
+      showers / (tickCount * safeTopUsability),
+      0,
+      1,
+    );
     const temperature =
       minTankTemperature +
-      ratio * (fullTankAverageTemperature - minTankTemperature);
+      requiredEnergyRatio * (fullTankAverageTemperature - minTankTemperature);
 
     return {
       heightPercent: (index / tickCount) * 100,
@@ -74,6 +88,7 @@ export type WarmWaterCardProps = {
   showersAccessibilityLabel: string;
   showersValueLabel: string;
   temperatureLabel: string;
+  topUsability: number;
 };
 
 export function WarmWaterCard({
@@ -85,12 +100,14 @@ export function WarmWaterCard({
   showersAccessibilityLabel,
   showersValueLabel,
   temperatureLabel,
+  topUsability,
 }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
   const scaleTicks = buildTankScaleTicks({
     fullTankAverageTemperature,
     fullTankShowers,
     minTankTemperature,
+    topUsability,
   });
 
   return (

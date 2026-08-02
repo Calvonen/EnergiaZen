@@ -2705,6 +2705,7 @@ export default function HomeScreen() {
             showersAccessibilityLabel={warmWaterShowersAccessibilityLabel}
             showersValueLabel={warmWaterShowersValue}
             temperatureLabel={warmWaterAverageTempLabel}
+            topUsability={warmWaterEstimate?.topUsability ?? 1}
           />
         </View>
 
