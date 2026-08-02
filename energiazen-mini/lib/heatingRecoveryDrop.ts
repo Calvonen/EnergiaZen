@@ -73,12 +73,11 @@ function getOrderedReadings(
     .sort((first, second) => first.time - second.time);
 }
 
-// True if any reading in windowReadings (chronological, starting with the
-// recovery baseline) is at least minDropCelsius colder than some earlier
-// reading within windowMinutes of it. Readings without a valid inlet
-// sensor value (no sensor installed, or pre-1.8.2026 data) are simply
-// skipped, so segments are judged exactly as before whenever inlet data
-// isn't available.
+// True if any reading in windowReadings (chronological) is at least
+// minDropCelsius colder than some earlier reading within windowMinutes of
+// it. Readings without a valid inlet sensor value (no sensor installed, or
+// pre-1.8.2026 data) are simply skipped, so segments are judged exactly as
+// before whenever inlet data isn't available.
 function detectsWaterDraw(windowReadings: OrderedReading[]): boolean {
   for (let laterIndex = 1; laterIndex < windowReadings.length; laterIndex++) {
     const later = windowReadings[laterIndex];
@@ -124,6 +123,8 @@ export function estimateRecoveryDropPerHour(
     recoveryDropLearningLimits.recoveryWindowHours * 60 * 60 * 1000;
   const toleranceMilliseconds =
     recoveryDropLearningLimits.recoveryWindowToleranceMinutes * 60 * 1000;
+  const waterDrawDetectionWindowMilliseconds =
+    waterDrawDetectionLimits.windowMinutes * 60 * 1000;
   const samples: number[] = [];
 
   for (const segment of segments) {
@@ -156,10 +157,6 @@ export function estimateRecoveryDropPerHour(
       continue;
     }
 
-    if (detectsWaterDraw([offTransitionReading, ...candidates])) {
-      continue;
-    }
-
     let nearest: OrderedReading | null = null;
     let nearestDifference = Number.POSITIVE_INFINITY;
 
@@ -173,6 +170,28 @@ export function estimateRecoveryDropPerHour(
     }
 
     if (!nearest || nearestDifference > toleranceMilliseconds) {
+      continue;
+    }
+
+    // Draw detection covers everything from waterDrawDetectionWindowMinutes
+    // before the off-transition (so a draw already under way at that point
+    // is still visible as a drop against its own recent past) through the
+    // selected `nearest` endpoint - not the full, more generous candidates
+    // range. Activity after `nearest` never touches the drop calculation
+    // (only offTransitionReading and nearest do), so it must not be able to
+    // discard an otherwise clean sample either.
+    const precedingReadings = orderedReadings.filter(
+      (reading) =>
+        reading.time < recoveryStartTime &&
+        reading.time >= recoveryStartTime - waterDrawDetectionWindowMilliseconds,
+    );
+    const drawDetectionReadings = [
+      ...precedingReadings,
+      offTransitionReading,
+      ...candidates.filter((candidate) => candidate.time <= nearest.time),
+    ];
+
+    if (detectsWaterDraw(drawDetectionReadings)) {
       continue;
     }
 

@@ -316,4 +316,61 @@ export function runHeatingRecoveryDropUnitTests() {
       "vakaa tulovesilampotila ei hylkaa naytetta",
     );
   }
+
+  {
+    // Codexin P2-loydos: vedenotto on jo kaynnissa siirtymalukemalla itsellaan
+    // (esim. suihku alkoi juuri ennen ensimmaista heating=false-pollia).
+    // Ilman edeltavaa ikkunaa tama ei nakynyt mitenkaan, koska
+    // siirtymalukema oli aina ensimmainen tarkasteltu piste. Uudelleenkaytetaan
+    // lammitysjakson viimeista (heating=true) lukemaa vertailukohtana - se on
+    // tasan 5 min ennen siirtymalukemaa, edeltavan ikkunan rajalla.
+    const start3 = "2026-07-03T00:00:00.000Z";
+    const heatingSegment3 = createHeatingSegment(start3, 4);
+    const lastHeatingReadingWithInlet = withInlet(
+      heatingSegment3[heatingSegment3.length - 1],
+      15.7,
+    );
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...heatingSegment3.slice(0, -1),
+      lastHeatingReadingWithInlet,
+      withInlet(offTransitionReading(start3, 42.3), 12.2),
+      recoveryReading(start3, 42.2),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      2,
+      "siirtymalukemalla jo kaynnissa oleva vedenotto havaitaan edeltavan ikkunan lukemien avulla",
+    );
+  }
+
+  {
+    // Codexin toinen P2-loydos: vedenotto tapahtuu candidates-joukossa mutta
+    // valitun paatepisteen (nearest) JALKEEN - se ei vaikuta laskettuun
+    // pudotukseen (vain offTransitionReading ja nearest kayttavat), joten
+    // sen ei pida hylata muuten puhdasta naytetta. nearest osuu tasan
+    // tavoiteaikaan (+95 min), vedenotto tulee +100 min kohdalla.
+    const start3 = "2026-07-03T00:00:00.000Z";
+    const afterNearestDrawTime = new Date(
+      new Date(start3).getTime() + 100 * 60 * 1000,
+    ).toISOString();
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...createHeatingSegment(start3, 4),
+      withInlet(offTransitionReading(start3, 42.3), 15.7),
+      withInlet(recoveryReading(start3, 42.2), 15.6),
+      withInlet(reading(afterNearestDrawTime, 42.15, false), 12.0),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      3,
+      "valitun paatepisteen jalkeen tapahtuva vedenotto ei hylkaa muuten puhdasta naytetta",
+    );
+  }
 }
