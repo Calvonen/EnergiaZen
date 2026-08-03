@@ -2545,6 +2545,8 @@ export default function HomeScreen() {
         supabase
           .from("electricity_prices")
           .select(storedElectricityPriceColumns)
+          .eq("region", electricityPriceRegion)
+          .eq("price_date", yesterdayKey)
           .order("start_date", { ascending: true }),
         fetch(priceApiUrl, {
           signal,

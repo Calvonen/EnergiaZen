@@ -139,4 +139,9 @@ export function runHistoryUiSourceTests() {
       !homeSource.includes("splitPlanCostSummary"),
     "lammityssuunnitelman arvioitu hinta -rivi on poistettu etusivulta kokonaan",
   );
+  assertSource(
+    homeSource.includes('.eq("region", electricityPriceRegion)') &&
+      homeSource.includes('.eq("price_date", yesterdayKey)'),
+    "etusivun eilisen hintahaku rajataan alueeseen ja paivaan ennen Supabasen rivirajaa",
+  );
 }
