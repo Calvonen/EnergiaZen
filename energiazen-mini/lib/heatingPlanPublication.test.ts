@@ -2,6 +2,7 @@ import {
   canPublishActiveHeatingPlan,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
+  preserveCurrentHourWhileHeatingUnknown,
   publishLatestHeatingPlan,
 } from "./heatingPlanPublication";
 import type { PublishedHeatingPlanState } from "./heatingPlanPublication";
@@ -165,5 +166,61 @@ export function runHeatingPlanPublicationUnitTests() {
     unchangedPollSources,
     ["optimizer", "optimizer", "optimizer"],
     "muuttumaton 30 sekunnin pollaus ei vaihda kortin lahdetta",
+  );
+
+  // P1-korjaus (Codex review, PR #147): epavarma (heating=null) nykyinen
+  // tunti ei saa havita julkaistusta suunnitelmasta, koska Shellyn oma
+  // controller-skripti sammuttaa releen heti kun sen oma tunti puuttuu
+  // heating_plans:sta - riippumatta siita onko lammitys todellisuudessa
+  // kesken.
+  assertEqual(
+    preserveCurrentHourWhileHeatingUnknown({
+      currentHourNumber: 14,
+      heating: null,
+      nextPlannedHours: [10, 18],
+      previousPlannedHours: [10, 14, 18],
+    }),
+    [10, 14, 18],
+    "nykyinen tunti oli suunnitelmassa ja heating muuttuu nulliksi - tunti sailyy",
+  );
+  assertEqual(
+    preserveCurrentHourWhileHeatingUnknown({
+      currentHourNumber: 14,
+      heating: null,
+      nextPlannedHours: [10, 18],
+      previousPlannedHours: [10, 18],
+    }),
+    [10, 18],
+    "nykyinen tunti ei ollut suunnitelmassa ja heating=null - tuntia ei lisata",
+  );
+  assertEqual(
+    preserveCurrentHourWhileHeatingUnknown({
+      currentHourNumber: 14,
+      heating: null,
+      nextPlannedHours: [10],
+      previousPlannedHours: [10, 14, 18],
+    }),
+    [10, 14],
+    "tulevia tunteja (18) ei sailyteta eika lisata null-tilan perusteella - vain nykyinen tunti (14) palautetaan",
+  );
+  assertEqual(
+    preserveCurrentHourWhileHeatingUnknown({
+      currentHourNumber: 14,
+      heating: false,
+      nextPlannedHours: [10, 18],
+      previousPlannedHours: [10, 14, 18],
+    }),
+    [10, 18],
+    "heating=false sallii normaalin optimoinnin poistaa nykyisen tunnin",
+  );
+  assertEqual(
+    preserveCurrentHourWhileHeatingUnknown({
+      currentHourNumber: 14,
+      heating: true,
+      nextPlannedHours: [10, 14, 18],
+      previousPlannedHours: [10, 14, 18],
+    }),
+    [10, 14, 18],
+    "heating=true kayttaa nykyista lukituslogiikkaa (optimoija on jo lukinnut tunnin, guard ei muuta mitaan)",
   );
 }

@@ -74,6 +74,7 @@ import {
   canPublishActiveHeatingPlan,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
+  preserveCurrentHourWhileHeatingUnknown,
 } from "@/lib/heatingPlanPublication";
 import {
   DaySelection,
@@ -1771,7 +1772,14 @@ export default function HomeScreen() {
     const todayPlan = {
       mode: settings.heatingNeedMode,
       plan_date: todayPlanDate,
-      planned_hours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
+      planned_hours: preserveCurrentHourWhileHeatingUnknown({
+        currentHourNumber: getHelsinkiHourNumber(currentHourStart),
+        heating,
+        nextPlannedHours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
+        previousPlannedHours: normalizeStoredHeatingPlanHours(
+          storedHeatingPlansRef.current[todayPlanDate]?.planned_hours,
+        ),
+      }),
       reason: optimizerReason ?? heatingRecommendation.reason,
       target_hours: finalTargetHours,
       updated_at: updatedAt,
@@ -1875,7 +1883,9 @@ export default function HomeScreen() {
   }, [
     activeHeatingOptimization,
     areSettingsLoaded,
+    currentHourStart,
     currentWeightedTemperature,
+    heating,
     heatingRecommendation.reason,
     heatingOptimization,
     activeOptimizationRun.runId,

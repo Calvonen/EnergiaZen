@@ -71,6 +71,39 @@ export function getChangedHeatingPlans<T extends ComparableHeatingPlan>(
   );
 }
 
+// While the current hour's heating status is unknown (heating: null, e.g.
+// ESP32 couldn't reach Shelly), an unrelated re-optimization must not be
+// allowed to drop that hour from what's already published - the Shelly
+// controller script turns the relay off the moment its own hour is missing
+// from heating_plans, regardless of whether it's actually mid-cycle
+// (Codex P1 review, PR #147). This only ever restores an hour that was
+// ALREADY published for the current hour; it never adds a new hour, never
+// touches any other hour, and never runs once heating is confirmed true or
+// false again.
+export function preserveCurrentHourWhileHeatingUnknown({
+  currentHourNumber,
+  heating,
+  nextPlannedHours,
+  previousPlannedHours,
+}: {
+  currentHourNumber: number;
+  heating: boolean | null;
+  nextPlannedHours: number[];
+  previousPlannedHours: number[];
+}): number[] {
+  if (
+    heating !== null ||
+    !previousPlannedHours.includes(currentHourNumber) ||
+    nextPlannedHours.includes(currentHourNumber)
+  ) {
+    return nextPlannedHours;
+  }
+
+  return [...nextPlannedHours, currentHourNumber].sort(
+    (first, second) => first - second,
+  );
+}
+
 export function getHeatingPlanPresentationSource({
   hasPublishedOptimization,
   hasStoredPlan,
