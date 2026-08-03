@@ -76,6 +76,8 @@
     "lib/inletTemperatureTrend.test.ts",
     "lib/waterDrawDetection.ts",
     "lib/waterDrawDetection.test.ts",
+    "lib/tankReadingFreshness.ts",
+    "lib/tankReadingFreshness.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }
