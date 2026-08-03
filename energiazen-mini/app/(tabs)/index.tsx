@@ -1039,17 +1039,19 @@ export default function HomeScreen() {
   // stale reading falls back to the same defaultTankTemperature it already
   // uses when there is no reading at all, instead of letting the automatic
   // heating-need decision act on an outdated temperature. This is a
-  // deliberate conservative no-data placeholder, not a real measurement -
-  // it only ever reaches heatingRecommendation below, the legacy/manual-mode
-  // display recommendation. It is never published to heating_plans: that
-  // publish path is activeOptimizationRun.result (see useHeatingOptimizationRun.ts),
-  // which runs through the fully independent heatingOptimizer pipeline and is
-  // gated separately by shouldRunHeatingOptimization/isHeatingOptimizationResultUsable.
-  // isOptimizerPlanActive below prefers that optimizer result over
-  // heatingRecommendation whenever automatic mode has one, so this fallback
-  // is visible to the user only as a fixed-mode suggestion or a transient
-  // "no fresh optimizer result yet" placeholder, never as a silently
-  // temperature-driven automatic decision.
+  // deliberate conservative no-data placeholder, not a real measurement.
+  //
+  // heatingRecommendation (built from this value) does reach heating_plans -
+  // the publication effect around line 1715 upserts plans derived from it
+  // whenever heatingNeedMode !== "automatic" (fixed mode), not only through
+  // activeOptimizationRun.result. But in fixed mode selectHeatingRecommendation
+  // ignores tankTemperature entirely: effectiveHeatingHours is
+  // settings.fixedHeatingHoursPerDay (see heatingLogic.ts), so this fallback
+  // value cannot change what gets published there either way. In automatic
+  // mode, isOptimizerPlanActive prefers activeOptimizationRun.result, and the
+  // publication effect explicitly skips publishing while that result is
+  // null/stale (see the `heatingNeedMode === "automatic" && !activeHeatingOptimization`
+  // guard) rather than falling back to this temperature-driven value.
   const tankTemperatureForCalculation = isTankReadingFresh
     ? tankTemperature
     : defaultTankTemperature;
