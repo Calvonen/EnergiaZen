@@ -153,7 +153,14 @@ migraatio).
   - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois lasketun
     suihkuvarausarvion ja suunniteltujen tuntien perusteella, sisältäen
     värähtelyn eston (`REQUIRED_BLOCKING_READINGS`) ja lukeman
-    vanhenemistarkistuksen (`MAX_READING_AGE_SECONDS`).
+    vanhenemistarkistuksen (`MAX_READING_AGE_SECONDS = 120`). **Tämä kahden
+    minuutin ohjausraja on tarkoituksella eri asia kuin appin ja
+    monitorointifunktion 30 minuutin käyttäjähälytysraja:** Shelly tarkistaa
+    tilanteen kerran minuutissa ja lakkaa luottamasta reaaliaikaiseen
+    ohjausdataan nopeasti, jotta yhden tunnin varatunti ei ehdi kulua
+    suurelta osin ennen fallbackia. Lyhyt katko voi siis käynnistää paikallisen
+    varatoiminnan ilman käyttäjähälytystä. Arvoa 120 ei pidä synkronoida 30
+    minuutin hälytysrajan kanssa.
   - **Anturi-/datavika varatunnilla ohittaa lukeman validoinnin kokonaan.**
     Jos mittausdataa ei voi luottaa (vanha/puuttuva/virheellinen
     `tank_readings`-lukema, tai sen haku epäonnistuu) mutta kuluva tunti on
