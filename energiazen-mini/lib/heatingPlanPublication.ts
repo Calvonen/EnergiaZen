@@ -80,19 +80,32 @@ export function getChangedHeatingPlans<T extends ComparableHeatingPlan>(
 // ALREADY published for the current hour; it never adds a new hour, never
 // touches any other hour, and never runs once heating is confirmed true or
 // false again.
+//
+// unknownAnchorHourNumber must be the exact hour that was current the
+// moment heating first became null (see index.tsx's unknownHeatingAnchorRef)
+// - previousPlannedHours alone is not enough, since it can also contain
+// hours that were merely scheduled for later that day. Without this extra
+// check, a continuous null streak spanning an hour boundary could force-
+// keep or even start a brand new hour's relay cycle on nothing but that
+// streak, which is exactly the "don't add/continue future hours from null"
+// guarantee this function must not violate (Codex P1 review, PR #147
+// follow-up).
 export function preserveCurrentHourWhileHeatingUnknown({
   currentHourNumber,
   heating,
   nextPlannedHours,
   previousPlannedHours,
+  unknownAnchorHourNumber,
 }: {
   currentHourNumber: number;
   heating: boolean | null;
   nextPlannedHours: number[];
   previousPlannedHours: number[];
+  unknownAnchorHourNumber: number | null;
 }): number[] {
   if (
     heating !== null ||
+    unknownAnchorHourNumber !== currentHourNumber ||
     !previousPlannedHours.includes(currentHourNumber) ||
     nextPlannedHours.includes(currentHourNumber)
   ) {

@@ -868,6 +868,24 @@ export default function HomeScreen() {
     Record<string, StoredHeatingPlan>
   >({});
   const storedHeatingPlansRef = useRef(storedHeatingPlans);
+  // Which plan_dates loadHeatingPlans has actually finished fetching at
+  // least once - storedHeatingPlansRef being empty for a date is ambiguous
+  // between "nothing published" and "not loaded yet", and the null-heating
+  // guard below must never treat the latter as the former (Codex P1
+  // review, PR #147: a cold start could otherwise publish over an
+  // already-published current hour before the load request resolves).
+  const loadedHeatingPlanDatesRef = useRef<Set<string>>(new Set());
+  // The exact (plan_date, hour) that was current the moment heating first
+  // became null with no earlier pin in effect. Only this specific hour may
+  // be preserved while heating stays null - an hour that merely happens to
+  // already be in a previously published plan (e.g. a later hour rolled
+  // into "current" while status stayed unknown) was never confirmed to be
+  // actually running and must not be force-kept or started on null alone
+  // (Codex P1 review, PR #147).
+  const unknownHeatingAnchorRef = useRef<{
+    hourNumber: number;
+    planDate: string;
+  } | null>(null);
   // null = the Shelly relay status could not be reliably read (ESP32-side
   // WiFi/HTTP/JSON failure or no reading fetched yet) - must never be
   // coerced to false, which would silently claim "confirmed off".
@@ -1209,6 +1227,28 @@ export default function HomeScreen() {
   }, [hourlyPrices, tomorrowTargetHours]);
   const todayPlanDate = getChartDayKey("today");
   const tomorrowPlanDate = getChartDayKey("tomorrow");
+  useEffect(() => {
+    if (heating !== null) {
+      unknownHeatingAnchorRef.current = null;
+      return;
+    }
+
+    // Latch the pin once, on the first null observed after a confirmed
+    // true/false (or after app start once today's plan is known loaded) -
+    // deliberately does NOT refresh/move the pin to a later hour just
+    // because heating is still null when the clock rolls over, otherwise
+    // an hour that was only ever a future plan entry could get force-kept
+    // or started on nothing but a continued null streak.
+    if (
+      unknownHeatingAnchorRef.current === null &&
+      loadedHeatingPlanDatesRef.current.has(todayPlanDate)
+    ) {
+      unknownHeatingAnchorRef.current = {
+        hourNumber: getHelsinkiHourNumber(currentHourStart),
+        planDate: todayPlanDate,
+      };
+    }
+  }, [currentHourStart, heating, storedHeatingPlans, todayPlanDate]);
   const oldTodayPlannedHeatingHours = useMemo(
     () => recommendedHeatingHours.filter((item) => item.status === "planned"),
     [recommendedHeatingHours],
@@ -1712,6 +1752,10 @@ export default function HomeScreen() {
 
           return nextPlans;
         });
+
+        for (const planDate of planDates) {
+          loadedHeatingPlanDatesRef.current.add(planDate);
+        }
       } catch (error) {
         console.warn("Failed to load heating plans", error);
       }
@@ -1766,19 +1810,41 @@ export default function HomeScreen() {
       return;
     }
 
+    // Cannot yet tell whether the current hour was already published (an
+    // empty storedHeatingPlansRef is ambiguous between "nothing published"
+    // and "not loaded yet") - defer entirely rather than risk upserting a
+    // plan that silently drops an already-running hour before the load
+    // request resolves (Codex P1 review, PR #147).
+    if (heating === null && !loadedHeatingPlanDatesRef.current.has(todayPlanDate)) {
+      debugLog("Heating plan publication deferred until today's stored plan is loaded", {
+        heating,
+        todayPlanDate,
+      });
+      latestHeatingPlanSaveVersionRef.current += 1;
+      return;
+    }
+
     const getHourNumbersFromKey = (key: string) =>
       key.length === 0 ? [] : key.split(",").map(Number);
     const updatedAt = new Date().toISOString();
+    const currentHourNumber = getHelsinkiHourNumber(currentHourStart);
+    const unknownHeatingAnchor = unknownHeatingAnchorRef.current;
+    const unknownAnchorHourNumber =
+      unknownHeatingAnchor !== null &&
+      unknownHeatingAnchor.planDate === todayPlanDate
+        ? unknownHeatingAnchor.hourNumber
+        : null;
     const todayPlan = {
       mode: settings.heatingNeedMode,
       plan_date: todayPlanDate,
       planned_hours: preserveCurrentHourWhileHeatingUnknown({
-        currentHourNumber: getHelsinkiHourNumber(currentHourStart),
+        currentHourNumber,
         heating,
         nextPlannedHours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
         previousPlannedHours: normalizeStoredHeatingPlanHours(
           storedHeatingPlansRef.current[todayPlanDate]?.planned_hours,
         ),
+        unknownAnchorHourNumber,
       }),
       reason: optimizerReason ?? heatingRecommendation.reason,
       target_hours: finalTargetHours,
@@ -1895,6 +1961,7 @@ export default function HomeScreen() {
     optimizerHours.length,
     settings.heatingNeedMode,
     settings.fixedHeatingHoursPerDay,
+    storedHeatingPlans,
     todayPlanDate,
     todayPlannedHourNumbersKey,
     tomorrowPlanDate,
