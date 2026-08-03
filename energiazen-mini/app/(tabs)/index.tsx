@@ -76,6 +76,7 @@ import {
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
+  shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "@/lib/heatingPlanPublication";
 import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
 import {
@@ -1811,9 +1812,11 @@ export default function HomeScreen() {
     // unknownHeatingAnchorRef is still empty, so defer on that too (Codex
     // P1 review, PR #147 follow-up).
     if (
-      heating === null &&
-      (!loadedHeatingPlanDatesRef.current.has(todayPlanDate) ||
-        !hasAttemptedTankReadingFetchRef.current)
+      shouldDeferHeatingPlanPublicationForUnknownStatus({
+        hasAttemptedTankReadingFetch: hasAttemptedTankReadingFetchRef.current,
+        heating,
+        isTodayPlanLoaded: loadedHeatingPlanDatesRef.current.has(todayPlanDate),
+      })
     ) {
       debugLog("Heating plan publication deferred until today's stored plan is loaded", {
         hasAttemptedTankReadingFetch: hasAttemptedTankReadingFetchRef.current,

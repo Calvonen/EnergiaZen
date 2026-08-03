@@ -5,6 +5,7 @@ import {
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
   publishLatestHeatingPlan,
+  shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "./heatingPlanPublication";
 import type { PublishedHeatingPlanState } from "./heatingPlanPublication";
 
@@ -307,5 +308,55 @@ export function runHeatingPlanPublicationUnitTests() {
     }),
     { hourNumber: 15, planDate: "2026-08-03" },
     "ilman lukemaa (haku epaonnistui kokonaan) ankkuri lukitaan elavaan nykyhetkeen, koska rivin aikaleimaa ei ole",
+  );
+
+  // shouldDeferHeatingPlanPublicationForUnknownStatus (valmistumiskriteerin
+  // kohta 1, PR #147): julkaisu pitaa lykata heating=null-tilassa kunnes
+  // SEKA tamanpaivainen suunnitelma on ladattu ETTA ensimmainen
+  // relelukuyritys on paattynyt - kumpikaan yksinaan ei riita.
+  assertEqual(
+    shouldDeferHeatingPlanPublicationForUnknownStatus({
+      hasAttemptedTankReadingFetch: true,
+      heating: true,
+      isTodayPlanLoaded: false,
+    }),
+    false,
+    "varmistettu heating=true ei koskaan lykkaydy vaikka mikaan muu ei olisi valmis",
+  );
+  assertEqual(
+    shouldDeferHeatingPlanPublicationForUnknownStatus({
+      hasAttemptedTankReadingFetch: true,
+      heating: false,
+      isTodayPlanLoaded: false,
+    }),
+    false,
+    "varmistettu heating=false ei koskaan lykkaydy vaikka mikaan muu ei olisi valmis",
+  );
+  assertEqual(
+    shouldDeferHeatingPlanPublicationForUnknownStatus({
+      hasAttemptedTankReadingFetch: true,
+      heating: null,
+      isTodayPlanLoaded: false,
+    }),
+    true,
+    "heating=null lykkaytyy jos suunnitelmaa ei ole viela ladattu, vaikka relelukema on jo yritetty",
+  );
+  assertEqual(
+    shouldDeferHeatingPlanPublicationForUnknownStatus({
+      hasAttemptedTankReadingFetch: false,
+      heating: null,
+      isTodayPlanLoaded: true,
+    }),
+    true,
+    "heating=null lykkaytyy jos relelukemaa ei ole viela yritetty, vaikka suunnitelma on jo ladattu (kiintea tila ei odota optimoijaa)",
+  );
+  assertEqual(
+    shouldDeferHeatingPlanPublicationForUnknownStatus({
+      hasAttemptedTankReadingFetch: true,
+      heating: null,
+      isTodayPlanLoaded: true,
+    }),
+    false,
+    "heating=null julkaistaan normaalisti (guard soveltuu) kun molemmat ehdot on tayttyneet",
   );
 }

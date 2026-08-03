@@ -16,6 +16,34 @@ export type PublishedHeatingPlanState<TResult, THour> = {
 
 export type HeatingOptimizationRunSource = "active" | "scenario";
 
+// Whether the heating_plans publish effect must defer entirely rather than
+// upsert this cycle. Only matters while heating is unknown (null) - a
+// confirmed true/false is always safe to publish. Two independent things
+// must both be true before it's safe to trust previousPlannedHours enough
+// to decide whether the current hour needs preserving:
+//  - isTodayPlanLoaded: storedHeatingPlansRef being empty for today is
+//    otherwise ambiguous between "nothing published" and "not loaded yet".
+//  - hasAttemptedTankReadingFetch: fixed heating mode isn't gated on the
+//    optimizer being ready, so this effect can run before the relay-status
+//    fetch has ever settled even once, while heating is still only its
+//    React-state initial value and the unknown-anchor is still empty.
+// Publishing anyway in either gap could replace a stored plan without ever
+// getting a chance to preserve its currently running hour (Codex P1
+// review, PR #147).
+export function shouldDeferHeatingPlanPublicationForUnknownStatus({
+  hasAttemptedTankReadingFetch,
+  heating,
+  isTodayPlanLoaded,
+}: {
+  hasAttemptedTankReadingFetch: boolean;
+  heating: boolean | null;
+  isTodayPlanLoaded: boolean;
+}): boolean {
+  return (
+    heating === null && (!isTodayPlanLoaded || !hasAttemptedTankReadingFetch)
+  );
+}
+
 export function canPublishActiveHeatingPlan({
   isOptimizationCurrent,
   source,
