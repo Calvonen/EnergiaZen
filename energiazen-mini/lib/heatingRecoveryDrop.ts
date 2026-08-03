@@ -21,7 +21,7 @@ export type RecoveryDropEstimate = {
 };
 
 type OrderedReading = {
-  heating: boolean;
+  heating: boolean | null;
   inletTemperatureC: number | null;
   time: number;
   weightedTemperature: number;
@@ -49,7 +49,11 @@ function getOrderedReadings(
       }
 
       return {
-        heating: reading.heating === true,
+        // Preserved as a tri-state rather than collapsed to boolean: an
+        // unreadable Shelly status (heating: null) must not be usable as
+        // evidence of an off-transition below, only an explicit false may
+        // anchor the recovery window.
+        heating: reading.heating ?? null,
         inletTemperatureC: isValidInletTemperature(reading.inlet_temp)
           ? reading.inlet_temp
           : null,
@@ -91,7 +95,7 @@ export function estimateRecoveryDropPerHour(
     // active heating isn't folded into the learned recovery rate (flagged
     // in PR #121 review).
     const offTransitionReading = orderedReadings.find(
-      (reading) => reading.time > segmentEndTime && !reading.heating,
+      (reading) => reading.time > segmentEndTime && reading.heating === false,
     );
 
     if (!offTransitionReading) {
@@ -106,7 +110,7 @@ export function estimateRecoveryDropPerHour(
         reading.time <= targetTime + toleranceMilliseconds,
     );
 
-    if (candidates.some((reading) => reading.heating)) {
+    if (candidates.some((reading) => reading.heating === true)) {
       continue;
     }
 

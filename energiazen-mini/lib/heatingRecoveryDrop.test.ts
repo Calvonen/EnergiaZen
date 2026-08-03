@@ -22,7 +22,7 @@ function assertClose(actual: number, expected: number, message: string) {
 function reading(
   createdAt: string,
   temperature: number,
-  heating: boolean,
+  heating: boolean | null,
 ): TankTemperatureReading {
   return {
     bottom_temp: temperature,
@@ -394,6 +394,36 @@ export function runHeatingRecoveryDropUnitTests() {
       estimate.sampleCount,
       2,
       "termostaatin todennakoisesti katkaisema lammitysjakso ei tuota myoskaan recoveryDrop-naytetta",
+    );
+  }
+
+  {
+    // T1-regressio: epavarma (heating=null, esim. Shellyn statuskysely
+    // epaonnistui ESP32:lla) lukema ei kelpaa off-transition-ankkuriksi -
+    // vain eksplisiittinen heating=false kelpaa. Jos jaksoa ei koskaan
+    // seuraa aito false-lukema, naytetta ei muodostu lainkaan.
+    const readings = [
+      ...createHeatingSegment("2026-07-01T00:00:00.000Z", 4),
+      offTransitionReading("2026-07-01T00:00:00.000Z", 42.3),
+      recoveryReading("2026-07-01T00:00:00.000Z", 42.2),
+      ...createHeatingSegment("2026-07-02T00:00:00.000Z", 4),
+      offTransitionReading("2026-07-02T00:00:00.000Z", 42.3),
+      recoveryReading("2026-07-02T00:00:00.000Z", 42.2),
+      ...createHeatingSegment("2026-07-03T00:00:00.000Z", 4),
+      reading(
+        new Date(
+          new Date("2026-07-03T00:00:00.000Z").getTime() + 35 * 60 * 1000,
+        ).toISOString(),
+        42.3,
+        null,
+      ),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      2,
+      "epavarma (null) heating-tila ei kelpaa off-transition-ankkuriksi",
     );
   }
 }

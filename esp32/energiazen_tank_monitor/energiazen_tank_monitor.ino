@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "shelly_heating_status.h"
+
 // EnergyZen standalone ESP32 tank monitor
 // Hardware:
 // - ESP32 Dev Module
@@ -526,55 +528,66 @@ String jsonTemperatureValue(float temperatureC) {
   return String(temperatureC, 1);
 }
 
-bool readShellyHeatingStatus() {
-  bool heating = false;
+// Gathers every signal decideShellyHeatingStatus() (shelly_heating_status.h)
+// needs and defers the actual ON/OFF/UNKNOWN decision to that pure,
+// separately unit-tested function - see
+// tests/shelly_heating_status_test.cpp. Any failure along the way (no
+// WiFi, HTTP begin, HTTP GET, non-200 response, JSON parse, missing/non-
+// boolean output field) must resolve to Unknown, never to a silent OFF.
+ShellyHeatingStatus readShellyHeatingStatus() {
+  ShellyStatusSignals signals = {};
+  signals.wifiConnected = WiFi.status() == WL_CONNECTED;
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!signals.wifiConnected) {
     Serial.println("Shelly status skipped: WiFi disconnected");
-    Serial.println("Shelly heating channel: OFF");
-    return false;
-  }
-
-  WiFiClient client;
-  HTTPClient http;
-  if (!http.begin(client, SHELLY_STATUS_ENDPOINT)) {
-    Serial.println("Warning: Shelly HTTP begin failed");
-    Serial.println("Shelly heating channel: OFF");
-    return false;
-  }
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-
-  const int responseCode = http.GET();
-  Serial.print("Shelly HTTP response code: ");
-  Serial.println(responseCode);
-
-  if (responseCode <= 0) {
-    Serial.print("Warning: Shelly HTTP GET failed: ");
-    Serial.println(responseCode);
-  } else if (responseCode != HTTP_CODE_OK) {
-    Serial.print("Warning: Shelly unexpected HTTP response: ");
-    Serial.println(responseCode);
   } else {
-    const String response = http.getString();
-    JsonDocument doc;
-    const DeserializationError error = deserializeJson(doc, response);
+    WiFiClient client;
+    HTTPClient http;
+    signals.httpBeginOk = http.begin(client, SHELLY_STATUS_ENDPOINT);
 
-    if (error) {
-      Serial.print("Warning: Shelly JSON parse failed: ");
-      Serial.println(error.c_str());
-    } else if (!doc["output"].is<bool>()) {
-      Serial.println("Warning: Shelly JSON missing boolean output field");
+    if (!signals.httpBeginOk) {
+      Serial.println("Warning: Shelly HTTP begin failed");
     } else {
-      heating = doc["output"].as<bool>();
+      http.setConnectTimeout(HTTP_TIMEOUT_MS);
+      http.setTimeout(HTTP_TIMEOUT_MS);
+
+      signals.httpResponseCode = http.GET();
+      Serial.print("Shelly HTTP response code: ");
+      Serial.println(signals.httpResponseCode);
+
+      if (signals.httpResponseCode <= 0) {
+        Serial.print("Warning: Shelly HTTP GET failed: ");
+        Serial.println(signals.httpResponseCode);
+      } else if (signals.httpResponseCode != HTTP_CODE_OK) {
+        Serial.print("Warning: Shelly unexpected HTTP response: ");
+        Serial.println(signals.httpResponseCode);
+      } else {
+        const String response = http.getString();
+        JsonDocument doc;
+        const DeserializationError error = deserializeJson(doc, response);
+
+        signals.jsonParseOk = !error;
+        if (error) {
+          Serial.print("Warning: Shelly JSON parse failed: ");
+          Serial.println(error.c_str());
+        } else {
+          signals.outputFieldIsBool = doc["output"].is<bool>();
+          if (!signals.outputFieldIsBool) {
+            Serial.println("Warning: Shelly JSON missing boolean output field");
+          } else {
+            signals.outputValue = doc["output"].as<bool>();
+          }
+        }
+      }
+
+      http.end();
     }
   }
 
-  http.end();
-
+  const ShellyHeatingStatus status = decideShellyHeatingStatus(signals);
   Serial.print("Shelly heating channel: ");
-  Serial.println(heating ? "ON" : "OFF");
-  return heating;
+  Serial.println(shellyHeatingStatusLabel(status));
+  return status;
 }
 
 bool sendSupabaseReading(unsigned long currentMs) {
@@ -622,7 +635,7 @@ bool sendSupabaseReading(unsigned long currentMs) {
     return false;
   }
 
-  const bool heating = readShellyHeatingStatus();
+  const ShellyHeatingStatus shellyHeatingStatus = readShellyHeatingStatus();
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -646,7 +659,8 @@ bool sendSupabaseReading(unsigned long currentMs) {
       ",\"bottom_temp\":" + jsonTemperatureValue(bottomTemperatureC) +
       ",\"inlet_temp\":" + jsonTemperatureValue(inletTemperatureC) +
       ",\"showers\":" + String(showersLeft, 1) +
-      ",\"heating\":" + (heating ? "true" : "false") + "}";
+      ",\"heating\":" + shellyHeatingStatusJsonToken(shellyHeatingStatus) +
+      "}";
 
   const int responseCode = http.POST(payload);
   const String response = responseCode > 0 ? http.getString() : "";

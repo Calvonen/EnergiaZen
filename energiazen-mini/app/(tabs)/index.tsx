@@ -867,7 +867,10 @@ export default function HomeScreen() {
     Record<string, StoredHeatingPlan>
   >({});
   const storedHeatingPlansRef = useRef(storedHeatingPlans);
-  const [heating, setHeating] = useState(false);
+  // null = the Shelly relay status could not be reliably read (ESP32-side
+  // WiFi/HTTP/JSON failure or no reading fetched yet) - must never be
+  // coerced to false, which would silently claim "confirmed off".
+  const [heating, setHeating] = useState<boolean | null>(null);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
   >({
@@ -1235,6 +1238,12 @@ export default function HomeScreen() {
       startDate: item.startDate,
     }));
   }, [currentHourStart, hourlyPrices]);
+  // Only an explicitly confirmed heating=true locks the current hour into
+  // the plan (see heatingOptimizer.ts's lockedHours) - an unreadable Shelly
+  // status (heating: null) must not lock the hour, but it must also not be
+  // read as "confirmed not heating" anywhere else, so this stays local to
+  // isCurrentlyHeating rather than coercing the shared `heating` state.
+  const isCurrentlyHeatingConfirmed = heating === true;
   // Two independent optimization pipelines. Active always runs on persisted
   // settings and is the only one allowed to publish to heating_plans. Scenario
   // only runs while there is an unsaved, valid draft and is preview-only.
@@ -1247,7 +1256,7 @@ export default function HomeScreen() {
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,
     hours: optimizerHours,
-    isCurrentlyHeating: heating,
+    isCurrentlyHeating: isCurrentlyHeatingConfirmed,
     isEnabled: true,
     manualRefreshRevision: manualOptimizationRevision,
     mode: activeSettings.heatingNeedMode,
@@ -1266,7 +1275,7 @@ export default function HomeScreen() {
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,
     hours: optimizerHours,
-    isCurrentlyHeating: heating,
+    isCurrentlyHeating: isCurrentlyHeatingConfirmed,
     isEnabled: hasUnsavedChanges && scenarioValidation.errors.length === 0,
     manualRefreshRevision: manualOptimizationRevision,
     mode: scenarioSettings.heatingNeedMode,
@@ -2095,7 +2104,8 @@ export default function HomeScreen() {
   );
   // A stale heating=true must not read as "still heating" - only isHeatingNow
   // (schedule-derived, not sensor-derived) can keep the indicator on then.
-  const isTankHeating = (isTankReadingFresh && heating) || isHeatingNow;
+  const isTankHeating =
+    (isTankReadingFresh && heating === true) || isHeatingNow;
   const temperatureCardTheme = getTemperatureCardTheme(
     tankTemperature,
     settings,
@@ -2277,7 +2287,7 @@ export default function HomeScreen() {
 
             setTopTemp(reading?.top_temp ?? null);
             setBottomTemp(reading?.bottom_temp ?? null);
-            setHeating(reading?.heating ?? false);
+            setHeating(reading?.heating ?? null);
             setTankUpdatedAt(reading?.created_at ?? null);
           }
 
@@ -2351,7 +2361,7 @@ export default function HomeScreen() {
           setTankTemperatureHistory([]);
           setWeeklyMinimumInletTemperature(null);
           setStoredTemperatureDropProfile(null);
-          setHeating(false);
+          setHeating(null);
           // EI setTankUpdatedAt(null) tässä - tämä haku toistuu 30s
           // välein (ei vain alkulatauksessa), ja yksittäinen ohimenevä
           // verkkovirhe ei tarkoita että edellinen lukema olisi
@@ -2999,7 +3009,7 @@ export default function HomeScreen() {
                     <Text style={styles.manualHeatingHoursText}>
                       {manualSelectedHeatingHoursText}
                     </Text>
-                    {heating && isManualHeatingHourNow ? (
+                    {heating === true && isManualHeatingHourNow ? (
                       <Text style={styles.manualHeatingStatusText}>
                         Lämmitys käynnissä valitun tunnin mukaan.
                       </Text>
