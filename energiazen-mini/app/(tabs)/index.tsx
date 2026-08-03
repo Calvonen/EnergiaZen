@@ -885,6 +885,19 @@ export default function HomeScreen() {
   // actually running and must not be force-kept or started on null alone
   // (Codex P1 review, PR #147).
   const unknownHeatingAnchorRef = useRef<UnknownHeatingAnchor | null>(null);
+  // Whether refreshTankReadings has settled at least once (success, query
+  // error, or thrown error - any outcome counts). heating starts out as
+  // null before any fetch has even been attempted, which is a DIFFERENT
+  // situation from a confirmed-then-lost status: in fixed heating mode the
+  // publish effect isn't gated on the optimizer being ready, so it can run
+  // before this first fetch settles, while heating is still only its
+  // initial null and unknownHeatingAnchorRef is still empty - publishing
+  // in that window could replace a stored plan without ever getting a
+  // chance to preserve its currently running hour (Codex P1 review, PR
+  // #147 follow-up).
+  const hasAttemptedTankReadingFetchRef = useRef(false);
+  const [hasAttemptedTankReadingFetch, setHasAttemptedTankReadingFetch] =
+    useState(false);
   // null = the Shelly relay status could not be reliably read (ESP32-side
   // WiFi/HTTP/JSON failure or no reading fetched yet) - must never be
   // coerced to false, which would silently claim "confirmed off".
@@ -1791,9 +1804,19 @@ export default function HomeScreen() {
     // empty storedHeatingPlansRef is ambiguous between "nothing published"
     // and "not loaded yet") - defer entirely rather than risk upserting a
     // plan that silently drops an already-running hour before the load
-    // request resolves (Codex P1 review, PR #147).
-    if (heating === null && !loadedHeatingPlanDatesRef.current.has(todayPlanDate)) {
+    // request resolves (Codex P1 review, PR #147). Fixed heating mode isn't
+    // gated on the optimizer being ready, so this effect can also run
+    // before refreshTankReadings' own Promise.all has ever settled - in
+    // that window heating is still only its initial null and
+    // unknownHeatingAnchorRef is still empty, so defer on that too (Codex
+    // P1 review, PR #147 follow-up).
+    if (
+      heating === null &&
+      (!loadedHeatingPlanDatesRef.current.has(todayPlanDate) ||
+        !hasAttemptedTankReadingFetchRef.current)
+    ) {
       debugLog("Heating plan publication deferred until today's stored plan is loaded", {
+        hasAttemptedTankReadingFetch: hasAttemptedTankReadingFetchRef.current,
         heating,
         todayPlanDate,
       });
@@ -1941,6 +1964,7 @@ export default function HomeScreen() {
     activeOptimizationRun.runId,
     finalTargetHours,
     finalTomorrowTargetHours,
+    hasAttemptedTankReadingFetch,
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,
@@ -2241,6 +2265,13 @@ export default function HomeScreen() {
 
       let tankReadingsRefreshInFlight = false;
 
+      function markTankReadingFetchAttempted() {
+        if (!hasAttemptedTankReadingFetchRef.current) {
+          hasAttemptedTankReadingFetchRef.current = true;
+          setHasAttemptedTankReadingFetch(true);
+        }
+      }
+
       const refreshTankReadings = async () => {
         if (tankReadingsRefreshInFlight) {
           debugLog("tank_readings refresh skipped while request is in flight");
@@ -2385,6 +2416,8 @@ export default function HomeScreen() {
             });
           }
 
+          markTankReadingFetchAttempted();
+
           const todayKey = getDateKeyOffset(0);
           const yesterdayKey = getDateKeyOffset(-1);
           const realizedHeatingHours = calculateRealizedHeatingHours(
@@ -2464,6 +2497,7 @@ export default function HomeScreen() {
             now: new Date(),
             readingCreatedAt: null,
           });
+          markTankReadingFetchAttempted();
           // EI setTankUpdatedAt(null) tässä - tämä haku toistuu 30s
           // välein (ei vain alkulatauksessa), ja yksittäinen ohimenevä
           // verkkovirhe ei tarkoita että edellinen lukema olisi
