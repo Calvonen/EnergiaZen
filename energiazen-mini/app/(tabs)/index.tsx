@@ -1731,6 +1731,15 @@ export default function HomeScreen() {
       debugLog("Heating plan publication skipped", {
         plannedHours: heatingOptimization?.selectedHeatingHourIds ?? [],
       });
+      // A save enqueued by an earlier run of this effect may still be
+      // waiting in heatingPlanSaveChainRef behind a slow Supabase call.
+      // Bumping the version here makes its saveVersion check (below) fail,
+      // so it becomes a no-op instead of upserting once this effect no
+      // longer stands behind it - this is what actually cancels a queued
+      // publish when, for example, the reading goes stale mid-flight and
+      // activeHeatingOptimization drops to null (see
+      // isHeatingOptimizationResultUsable in heatingOptimizationRun.ts).
+      latestHeatingPlanSaveVersionRef.current += 1;
       return;
     }
 
@@ -1743,6 +1752,7 @@ export default function HomeScreen() {
         optimizerHourCount: optimizerHours.length,
         optimizerSelectedHeatingHourIds: [],
       });
+      latestHeatingPlanSaveVersionRef.current += 1;
       return;
     }
 
