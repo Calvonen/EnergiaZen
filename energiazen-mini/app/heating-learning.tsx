@@ -233,6 +233,8 @@ const rejectionReasonLabels: Record<HeatingGainRejectionReason, string> = {
   insufficient_duration: "Jakso liian lyhyt",
   insufficient_gain: "Nousu liian pieni",
   insufficient_readings: "Liian vähän mittauksia",
+  max_temperature_reached:
+    "Saavutti maksimilämpötilan - termostaatti on saattanut katkaista lämmityksen",
   negative_temperature_change: "Lämpötila laski jakson aikana",
   non_finite_gain: "Nousua ei voitu laskea",
   unrealistic_gain: "Nousu epärealistisen suuri",
