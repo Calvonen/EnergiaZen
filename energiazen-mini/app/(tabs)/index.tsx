@@ -78,6 +78,7 @@ import {
 } from "@/lib/heatingPlanPublication";
 import {
   DaySelection,
+  formatHelsinkiDateKey,
   getCheapestHours,
   getDateKeyOffset,
   getFinnishDateKey,
@@ -1249,13 +1250,28 @@ export default function HomeScreen() {
     //
     // Once latched, deliberately does NOT refresh/move to a later hour just
     // because heating is still null when the clock rolls over.
+    //
+    // Deliberately reads a fresh `new Date()` here instead of currentHourStart
+    // - currentHourStart only advances with the 30s currentTime interval (or
+    // whenever that resumes after the app was backgrounded), so right after
+    // an hour boundary or an app resume it can still name the PRECEDING hour
+    // for up to that long. Latching that stale hour would point the anchor
+    // at an hour that already ended, so the guard would fail to protect the
+    // real current hour once currentHourStart catches up (Codex P2 review,
+    // PR #147 follow-up).
     if (unknownHeatingAnchorRef.current === null) {
+      const now = new Date();
+
       unknownHeatingAnchorRef.current = {
-        hourNumber: getHelsinkiHourNumber(currentHourStart),
-        planDate: todayPlanDate,
+        hourNumber: getHelsinkiHourNumber(now),
+        planDate: formatHelsinkiDateKey(now),
       };
     }
-  }, [currentHourStart, heating, todayPlanDate]);
+    // Only heating needs to be a dependency - the anchor is deliberately
+    // never re-evaluated on an hour tick alone (see comment above), and its
+    // hour/date now come from a live Date read inside the effect rather
+    // than from currentHourStart/todayPlanDate.
+  }, [heating]);
   const oldTodayPlannedHeatingHours = useMemo(
     () => recommendedHeatingHours.filter((item) => item.status === "planned"),
     [recommendedHeatingHours],
