@@ -21,6 +21,7 @@ import {
   computeTankReadingAgeMinutes,
   isTankReadingStale,
 } from "@/lib/tankMonitorAlert";
+import { isTankReadingFreshForCalculation } from "@/lib/tankReadingFreshness";
 import {
   formatWeeklyMinimumInletTemperatureAccessibilityText,
   formatWeeklyMinimumInletTemperatureLabel,
@@ -1016,11 +1017,24 @@ export default function HomeScreen() {
     bottomTemp === null ? "--" : `${Math.round(bottomTemp)}`;
   const displayedWeeklyMinimumInletTemp =
     formatWeeklyMinimumInletTemperatureLabel(weeklyMinimumInletTemperature);
-  const warmWaterEstimate = getStratifiedWarmWaterEstimate(
-    topTemp,
-    bottomTemp,
-    settings,
+  // Gates the calculations listed in isTankReadingFreshForCalculation's own
+  // doc comment (shower estimate, forecast, automatic heating need,
+  // heating_plans publish) - topTemp/bottomTemp/tankUpdatedAt themselves
+  // stay as the last known values so the temperature card can keep
+  // displaying them (marked stale via tankUpdatedStatus below), per
+  // CLAUDE.md scope: this is a targeted safety fix, not a display rewrite.
+  const isTankReadingFresh = isTankReadingFreshForCalculation(
+    tankUpdatedAt,
+    currentTime,
   );
+  const warmWaterEstimate = isTankReadingFresh
+    ? getStratifiedWarmWaterEstimate(topTemp, bottomTemp, settings)
+    : null;
+  // Same gating for the forecast below: a stale reading must not be
+  // extrapolated forward as if it were a trustworthy starting point.
+  const freshWeightedTemperature = isTankReadingFresh
+    ? currentWeightedTemperature
+    : null;
   const localTemperatureDropProfile = useMemo(
     () => buildHourlyTemperatureDropProfileResult(tankTemperatureHistory),
     [tankTemperatureHistory],
@@ -1067,20 +1081,20 @@ export default function HomeScreen() {
     if (
       settings.heatingNeedMode === "fixed" ||
       !nextHeatingStart ||
-      currentWeightedTemperature === null
+      freshWeightedTemperature === null
     ) {
       return {
         heatingHoursBeforeForecast:
           heatingHoursBeforeForecast.targetHours,
         heatingHoursAfterForecast: heatingHoursBeforeForecast.targetHours,
         nextHeatingStart,
-        predictedWeightedTemperature: currentWeightedTemperature,
+        predictedWeightedTemperature: freshWeightedTemperature,
         recommendation: heatingHoursBeforeForecast,
       };
     }
 
     const predictedWeightedTemperature = predictWeightedTemperature({
-      currentTemperature: currentWeightedTemperature,
+      currentTemperature: freshWeightedTemperature,
       from: currentTime,
       hourlyDropProfile: hourlyTemperatureDropProfile,
       to: nextHeatingStart,
@@ -1110,7 +1124,7 @@ export default function HomeScreen() {
   }, [
     currentHourStart,
     currentTime,
-    currentWeightedTemperature,
+    freshWeightedTemperature,
     hourlyPrices,
     hourlyTemperatureDropProfile,
     settings,
@@ -2047,7 +2061,9 @@ export default function HomeScreen() {
       item.date.getTime() <= currentHourStart.getTime() &&
       item.endDate.getTime() > currentHourStart.getTime(),
   );
-  const isTankHeating = heating || isHeatingNow;
+  // A stale heating=true must not read as "still heating" - only isHeatingNow
+  // (schedule-derived, not sensor-derived) can keep the indicator on then.
+  const isTankHeating = (isTankReadingFresh && heating) || isHeatingNow;
   const temperatureCardTheme = getTemperatureCardTheme(
     tankTemperature,
     settings,

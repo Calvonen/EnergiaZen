@@ -146,6 +146,8 @@ export function useHeatingOptimizationRun({
           hoursCount: runHours.length,
           isEnabled,
           mode: snapshot.mode,
+          now: new Date(),
+          readingCreatedAt: snapshot.readingCreatedAt,
         })
       ) {
         result = await Promise.resolve().then(() => {

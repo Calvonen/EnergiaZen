@@ -301,6 +301,7 @@ export function runHeatingOptimizationRunUnitTests() {
 
   {
     const base = createSnapshot();
+    const readingTime = new Date(base.readingCreatedAt as string);
     const gateArgs = {
       currentBottomTemperature: base.currentBottomTemperature,
       currentTopTemperature: base.currentTopTemperature,
@@ -308,6 +309,8 @@ export function runHeatingOptimizationRunUnitTests() {
       hoursCount: base.hours.length,
       isEnabled: true,
       mode: base.mode,
+      now: readingTime,
+      readingCreatedAt: base.readingCreatedAt,
     };
 
     assertEqual(
@@ -337,6 +340,27 @@ export function runHeatingOptimizationRunUnitTests() {
       shouldRunHeatingOptimization({ ...gateArgs, hoursCount: 0 }),
       false,
       "tyhja tuntivalikoima estaa optimoinnin",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({
+        ...gateArgs,
+        now: new Date(readingTime.getTime() + 30 * 60 * 1000),
+      }),
+      true,
+      "tasan 30 minuutin ikainen mittaus sallii viela optimoinnin ja julkaisun",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({
+        ...gateArgs,
+        now: new Date(readingTime.getTime() + 31 * 60 * 1000),
+      }),
+      false,
+      "yli 30 minuuttia vanha mittaus estaa optimoinnin ja uuden suunnitelman julkaisun",
+    );
+    assertEqual(
+      shouldRunHeatingOptimization({ ...gateArgs, readingCreatedAt: null }),
+      false,
+      "puuttuva mittausajankohta estaa optimoinnin ja julkaisun",
     );
   }
 }

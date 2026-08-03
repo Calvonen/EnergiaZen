@@ -7,6 +7,7 @@ import type { HeatingGainSource } from "./settings";
 import type {
   TankTemperatureReading,
 } from "./tankTemperatureForecast";
+import { isTankReadingFreshForCalculation } from "./tankReadingFreshness";
 
 export type HeatingOptimizationInputSnapshot = {
   currentBottomTemperature: number | null;
@@ -97,6 +98,8 @@ export function shouldRunHeatingOptimization({
   hoursCount,
   isEnabled,
   mode,
+  now,
+  readingCreatedAt,
 }: {
   currentBottomTemperature: number | null;
   currentTopTemperature: number | null;
@@ -104,6 +107,8 @@ export function shouldRunHeatingOptimization({
   hoursCount: number;
   isEnabled: boolean;
   mode: string;
+  now: Date;
+  readingCreatedAt: string | null;
 }) {
   return (
     mode === "automatic" &&
@@ -111,7 +116,12 @@ export function shouldRunHeatingOptimization({
     currentWeightedTemperature !== null &&
     currentTopTemperature !== null &&
     currentBottomTemperature !== null &&
-    hoursCount > 0
+    hoursCount > 0 &&
+    // A stale reading must not drive a new automatic recommendation or a
+    // new heating_plans publish - this is the only path allowed to
+    // publish (see useHeatingOptimizationRun.ts), so gating it here also
+    // covers the publish requirement without a separate check.
+    isTankReadingFreshForCalculation(readingCreatedAt, now)
   );
 }
 
