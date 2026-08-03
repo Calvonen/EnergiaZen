@@ -10,7 +10,7 @@
 // temperature. That's why this looks for a *relative* drop within a short
 // trailing window rather than an absolute threshold.
 export const waterDrawDetectionLimits = {
-  minDropCelsius: 2,
+  minDropCelsius: 5,
   windowMinutes: 5,
 } as const;
 

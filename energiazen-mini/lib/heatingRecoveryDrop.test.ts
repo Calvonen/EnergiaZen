@@ -250,8 +250,8 @@ export function runHeatingRecoveryDropUnitTests() {
   {
     // Todellinen tapaus: suihku alkaa juuri lammityksen paattyessa. Varaajan
     // omasta lampotilasta se ei valttamatta erotu, mutta tulovesianturi
-    // nakee nopean, kylman pudotuksen (idle ~15.7, virtaava vesi ~12.2 -
-    // oikealta laitteistolta mitatut arvot) 2 min siirtymalukeman jalkeen.
+    // nakee nopean, kylman 5.0 asteen pudotuksen 2 min
+    // siirtymalukeman jalkeen.
     const start3 = "2026-07-03T00:00:00.000Z";
     const drawStart = new Date(
       new Date(start3).getTime() + 37 * 60 * 1000,
@@ -261,7 +261,7 @@ export function runHeatingRecoveryDropUnitTests() {
       ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
       ...createHeatingSegment(start3, 4),
       withInlet(offTransitionReading(start3, 42.3), 15.7),
-      withInlet(reading(drawStart, 42.25, false), 12.2),
+      withInlet(reading(drawStart, 42.25, false), 10.7),
       recoveryReading(start3, 42.2),
     ];
     const estimate = estimateRecoveryDropPerHour(readings);
@@ -285,7 +285,7 @@ export function runHeatingRecoveryDropUnitTests() {
       ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
       ...createHeatingSegment(start3, 4),
       withInlet(offTransitionReading(start3, 42.3), 15.7),
-      withInlet(reading(slowDrawTime, 42.25, false), 12.2),
+      withInlet(reading(slowDrawTime, 42.25, false), 10.7),
       recoveryReading(start3, 42.2),
     ];
     const estimate = estimateRecoveryDropPerHour(readings);
@@ -335,7 +335,7 @@ export function runHeatingRecoveryDropUnitTests() {
       ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
       ...heatingSegment3.slice(0, -1),
       lastHeatingReadingWithInlet,
-      withInlet(offTransitionReading(start3, 42.3), 12.2),
+      withInlet(offTransitionReading(start3, 42.3), 10.7),
       recoveryReading(start3, 42.2),
     ];
     const estimate = estimateRecoveryDropPerHour(readings);
@@ -363,7 +363,7 @@ export function runHeatingRecoveryDropUnitTests() {
       ...createHeatingSegment(start3, 4),
       withInlet(offTransitionReading(start3, 42.3), 15.7),
       withInlet(recoveryReading(start3, 42.2), 15.6),
-      withInlet(reading(afterNearestDrawTime, 42.15, false), 12.0),
+      withInlet(reading(afterNearestDrawTime, 42.15, false), 10.6),
     ];
     const estimate = estimateRecoveryDropPerHour(readings);
 

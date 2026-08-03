@@ -260,7 +260,7 @@ export async function runHeatingGainUnitTests() {
       bottom_temp: 40 + 4 * (33 / 60),
       created_at: new Date(startTime + 33 * 60 * 1000).toISOString(),
       heating: true,
-      inlet_temp: 12.2,
+      inlet_temp: 10.9,
       top_temp: 40 + 4 * (33 / 60),
     };
     const discovery = findValidHeatingSegments([
