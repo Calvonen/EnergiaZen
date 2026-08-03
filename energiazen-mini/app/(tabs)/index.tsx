@@ -72,13 +72,14 @@ import {
 } from "@/lib/heatingPlanPresentation";
 import {
   canPublishActiveHeatingPlan,
+  computeNextUnknownHeatingAnchor,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
 } from "@/lib/heatingPlanPublication";
+import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
 import {
   DaySelection,
-  formatHelsinkiDateKey,
   getCheapestHours,
   getDateKeyOffset,
   getFinnishDateKey,
@@ -883,10 +884,7 @@ export default function HomeScreen() {
   // into "current" while status stayed unknown) was never confirmed to be
   // actually running and must not be force-kept or started on null alone
   // (Codex P1 review, PR #147).
-  const unknownHeatingAnchorRef = useRef<{
-    hourNumber: number;
-    planDate: string;
-  } | null>(null);
+  const unknownHeatingAnchorRef = useRef<UnknownHeatingAnchor | null>(null);
   // null = the Shelly relay status could not be reliably read (ESP32-side
   // WiFi/HTTP/JSON failure or no reading fetched yet) - must never be
   // coerced to false, which would silently claim "confirmed off".
@@ -1228,50 +1226,6 @@ export default function HomeScreen() {
   }, [hourlyPrices, tomorrowTargetHours]);
   const todayPlanDate = getChartDayKey("today");
   const tomorrowPlanDate = getChartDayKey("tomorrow");
-  useEffect(() => {
-    if (heating !== null) {
-      unknownHeatingAnchorRef.current = null;
-      return;
-    }
-
-    // Latch the pin the moment heating is first observed null, regardless
-    // of whether today's stored plan has loaded yet - the hour itself is
-    // always knowable from the wall clock, independent of that load. Gating
-    // the latch on the load (as an earlier version of this fix did) let a
-    // cold start straddling an hour boundary record the WRONG hour: if
-    // heating was already null at 14:59 but the plan only finished loading
-    // after the 15:00 rollover, the anchor would land on 15 instead of the
-    // hour where the uncertainty actually began (Codex P1 review, PR #147
-    // follow-up) - previousPlannedHours could then contain 15 as a merely
-    // scheduled future hour and the guard would restore/start it on nothing
-    // but a continued null streak. The publish effect's own separate
-    // loadedHeatingPlanDatesRef gate still defers any actual publish until
-    // the plan is loaded; this ref only needs the hour to be correct.
-    //
-    // Once latched, deliberately does NOT refresh/move to a later hour just
-    // because heating is still null when the clock rolls over.
-    //
-    // Deliberately reads a fresh `new Date()` here instead of currentHourStart
-    // - currentHourStart only advances with the 30s currentTime interval (or
-    // whenever that resumes after the app was backgrounded), so right after
-    // an hour boundary or an app resume it can still name the PRECEDING hour
-    // for up to that long. Latching that stale hour would point the anchor
-    // at an hour that already ended, so the guard would fail to protect the
-    // real current hour once currentHourStart catches up (Codex P2 review,
-    // PR #147 follow-up).
-    if (unknownHeatingAnchorRef.current === null) {
-      const now = new Date();
-
-      unknownHeatingAnchorRef.current = {
-        hourNumber: getHelsinkiHourNumber(now),
-        planDate: formatHelsinkiDateKey(now),
-      };
-    }
-    // Only heating needs to be a dependency - the anchor is deliberately
-    // never re-evaluated on an hour tick alone (see comment above), and its
-    // hour/date now come from a live Date read inside the effect rather
-    // than from currentHourStart/todayPlanDate.
-  }, [heating]);
   const oldTodayPlannedHeatingHours = useMemo(
     () => recommendedHeatingHours.filter((item) => item.status === "planned"),
     [recommendedHeatingHours],
@@ -2400,13 +2354,35 @@ export default function HomeScreen() {
             // matter how stale that reading actually is (Codex P1 review,
             // PR #147).
             setHeating(null);
+            // No reading at all here, so computeNextUnknownHeatingAnchor
+            // falls back to live "now" - there's no row timestamp to prefer.
+            unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+              currentAnchor: unknownHeatingAnchorRef.current,
+              heating: null,
+              now: new Date(),
+              readingCreatedAt: null,
+            });
           } else {
             const reading = latestReadingResult.data as TankReading | null;
+            const nextHeating = reading?.heating ?? null;
 
             setTopTemp(reading?.top_temp ?? null);
             setBottomTemp(reading?.bottom_temp ?? null);
-            setHeating(reading?.heating ?? null);
+            setHeating(nextHeating);
             setTankUpdatedAt(reading?.created_at ?? null);
+            // Imperative, not a useEffect keyed on `heating` - two
+            // consecutive fetches can both resolve to heating=null without
+            // the STATE value ever changing (e.g. this query kept erroring,
+            // or two readings in a row are both unknown), which would
+            // silently skip a reactive effect but must not skip
+            // re-evaluating the anchor (Codex P1 review, PR #147
+            // follow-up).
+            unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+              currentAnchor: unknownHeatingAnchorRef.current,
+              heating: nextHeating,
+              now: new Date(),
+              readingCreatedAt: reading?.created_at ?? null,
+            });
           }
 
           const todayKey = getDateKeyOffset(0);
@@ -2480,6 +2456,14 @@ export default function HomeScreen() {
           setWeeklyMinimumInletTemperature(null);
           setStoredTemperatureDropProfile(null);
           setHeating(null);
+          // No reading at all here either, so fall back to live "now" -
+          // same reasoning as the query-error branch above.
+          unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+            currentAnchor: unknownHeatingAnchorRef.current,
+            heating: null,
+            now: new Date(),
+            readingCreatedAt: null,
+          });
           // EI setTankUpdatedAt(null) tässä - tämä haku toistuu 30s
           // välein (ei vain alkulatauksessa), ja yksittäinen ohimenevä
           // verkkovirhe ei tarkoita että edellinen lukema olisi

@@ -1,5 +1,6 @@
 import {
   canPublishActiveHeatingPlan,
+  computeNextUnknownHeatingAnchor,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
@@ -262,5 +263,49 @@ export function runHeatingPlanPublicationUnitTests() {
     }),
     [10, 18],
     "ilman ankkuria (esim. suunnitelmaa ei viela ladattu) tuntia ei sailyteta",
+  );
+
+  // computeNextUnknownHeatingAnchor (Codex P1 review, PR #147 follow-up).
+  // Elokuun alussa Helsinki on UTC+3 (kesaaika): 11:59:30Z = 14:59:30
+  // Helsingin aikaa (tunti 14), 12:00:05Z = 15:00:05 (tunti 15).
+  assertEqual(
+    computeNextUnknownHeatingAnchor({
+      currentAnchor: { hourNumber: 10, planDate: "2026-08-03" },
+      heating: true,
+      now: new Date("2026-08-03T12:00:05.000Z"),
+      readingCreatedAt: null,
+    }),
+    null,
+    "heating=true tyhjentaa ankkurin vaikka aiempi olisi asetettu",
+  );
+  assertEqual(
+    computeNextUnknownHeatingAnchor({
+      currentAnchor: { hourNumber: 10, planDate: "2026-08-03" },
+      heating: null,
+      now: new Date("2026-08-03T12:00:05.000Z"),
+      readingCreatedAt: "2026-08-03T11:59:30.000Z",
+    }),
+    { hourNumber: 10, planDate: "2026-08-03" },
+    "olemassa olevaa ankkuria ei siirreta uuteen tuntiin heatingin pysyessa nullina",
+  );
+  assertEqual(
+    computeNextUnknownHeatingAnchor({
+      currentAnchor: null,
+      heating: null,
+      now: new Date("2026-08-03T12:00:05.000Z"),
+      readingCreatedAt: "2026-08-03T11:59:30.000Z",
+    }),
+    { hourNumber: 14, planDate: "2026-08-03" },
+    "uusi ankkuri lukitaan lukeman OMAAN aikaleimaan (tunti 14), ei elavaan nykyhetkeen (tunti 15) - kylmakaynnistys joka ylittaa tuntirajan haun aikana ei saa ankkuroitua vaaraan, jo alkaneeseen tuntiin",
+  );
+  assertEqual(
+    computeNextUnknownHeatingAnchor({
+      currentAnchor: null,
+      heating: null,
+      now: new Date("2026-08-03T12:00:05.000Z"),
+      readingCreatedAt: null,
+    }),
+    { hourNumber: 15, planDate: "2026-08-03" },
+    "ilman lukemaa (haku epaonnistui kokonaan) ankkuri lukitaan elavaan nykyhetkeen, koska rivin aikaleimaa ei ole",
   );
 }
