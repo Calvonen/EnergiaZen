@@ -1035,6 +1035,13 @@ export default function HomeScreen() {
   const freshWeightedTemperature = isTankReadingFresh
     ? currentWeightedTemperature
     : null;
+  // selectHeatingRecommendation's tankTemperature param isn't nullable, so a
+  // stale reading falls back to the same defaultTankTemperature it already
+  // uses when there is no reading at all, instead of letting the automatic
+  // heating-need decision act on an outdated temperature.
+  const tankTemperatureForCalculation = isTankReadingFresh
+    ? tankTemperature
+    : defaultTankTemperature;
   const localTemperatureDropProfile = useMemo(
     () => buildHourlyTemperatureDropProfileResult(tankTemperatureHistory),
     [tankTemperatureHistory],
@@ -1057,7 +1064,7 @@ export default function HomeScreen() {
       currentHourStart,
       todayActualHeatingHourNumbers,
       settings,
-      tankTemperature,
+      tankTemperatureForCalculation,
       warmWaterEstimate?.showersLeft ?? null,
     );
     const preliminaryTomorrowHeatingHours = sortHoursChronologically(
@@ -1128,7 +1135,7 @@ export default function HomeScreen() {
     hourlyPrices,
     hourlyTemperatureDropProfile,
     settings,
-    tankTemperature,
+    tankTemperatureForCalculation,
     todayActualHeatingHourNumbers,
     warmWaterEstimate?.showersLeft,
   ]);
@@ -1231,6 +1238,7 @@ export default function HomeScreen() {
     isEnabled: true,
     manualRefreshRevision: manualOptimizationRevision,
     mode: activeSettings.heatingNeedMode,
+    now: currentTime,
     readingCreatedAt: tankUpdatedAt,
     recoveryReadings: tankTemperatureHistory,
     todayPlanDate,
@@ -1249,6 +1257,7 @@ export default function HomeScreen() {
     isEnabled: hasUnsavedChanges && scenarioValidation.errors.length === 0,
     manualRefreshRevision: manualOptimizationRevision,
     mode: scenarioSettings.heatingNeedMode,
+    now: currentTime,
     readingCreatedAt: tankUpdatedAt,
     recoveryReadings: tankTemperatureHistory,
     todayPlanDate,

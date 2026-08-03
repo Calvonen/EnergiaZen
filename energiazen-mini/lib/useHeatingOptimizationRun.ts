@@ -12,6 +12,7 @@ import {
   createHeatingOptimizationInputKey,
   createHeatingOptimizationRunController,
   HeatingOptimizationInputSnapshot,
+  isHeatingOptimizationResultUsable,
   materializeHeatingOptimizationHours,
   shouldRunHeatingOptimization,
 } from "./heatingOptimizationRun";
@@ -45,6 +46,11 @@ export type UseHeatingOptimizationRunOptions = Omit<
   appSettings: EnergiaZenSettings;
   fallbackHeatingGainPerHour: number;
   isEnabled: boolean;
+  // Ticking "now" (the caller's periodically-updated clock, not read once)
+  // so a previously computed result gets hidden as soon as its reading goes
+  // stale while the app stays open, even though nothing else about the
+  // input snapshot changes without a new reading arriving.
+  now: Date;
   todayPlanDate: string | null;
   tomorrowPlanDate: string | null;
 };
@@ -62,6 +68,7 @@ export function useHeatingOptimizationRun({
   isEnabled,
   manualRefreshRevision,
   mode,
+  now,
   readingCreatedAt,
   recoveryReadings,
   todayPlanDate,
@@ -212,7 +219,14 @@ export function useHeatingOptimizationRun({
 
   useEffect(() => () => controllerRef.current.invalidate(), []);
 
-  const result = state.inputKey === inputKey ? state.result : null;
+  const result = isHeatingOptimizationResultUsable({
+    inputKey,
+    now,
+    readingCreatedAt,
+    resultInputKey: state.inputKey,
+  })
+    ? state.result
+    : null;
 
   return { ...state, result };
 }

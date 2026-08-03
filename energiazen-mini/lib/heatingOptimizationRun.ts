@@ -125,6 +125,29 @@ export function shouldRunHeatingOptimization({
   );
 }
 
+// inputKey alone doesn't catch a reading going stale while the app stays
+// open: readingCreatedAt is fixed once a reading arrives, so inputKey stays
+// unchanged as time passes without a new one arriving. A cached result must
+// still stop being exposed once that fixed reading crosses the freshness
+// threshold against the live clock, even though nothing about the snapshot
+// itself changed.
+export function isHeatingOptimizationResultUsable({
+  inputKey,
+  now,
+  readingCreatedAt,
+  resultInputKey,
+}: {
+  inputKey: string;
+  now: Date;
+  readingCreatedAt: string | null;
+  resultInputKey: string;
+}) {
+  return (
+    resultInputKey === inputKey &&
+    isTankReadingFreshForCalculation(readingCreatedAt, now)
+  );
+}
+
 export function createHeatingOptimizationRunController() {
   let latestRunId = 0;
   let latestInputKey: string | null = null;
