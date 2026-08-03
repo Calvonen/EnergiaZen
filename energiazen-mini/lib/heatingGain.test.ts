@@ -335,4 +335,41 @@ export async function runHeatingGainUnitTests() {
       "juuri alle kynnysarvon jaava jakso hyvaksytaan normaalisti",
     );
   }
+
+  {
+    // T1-regressio: epavarma (heating=null, esim. Shellyn statuskysely
+    // epaonnistui) lukema ei saa tulla mukaan lammitysjaksoon - sen pitaa
+    // katkaista jakso tasan samoin kuin heating=false tekisi, ei jaada
+    // hiljaa mukaan hyvaksyttyyn segmenttiin.
+    const start = "2026-07-13T00:00:00.000Z";
+    const startTime = new Date(start).getTime();
+    const segmentWithAmbiguousReading: TankTemperatureReading[] = [
+      0, 10, 20, 30,
+    ].map((minutes) => ({
+      bottom_temp: 40 + 4 * (minutes / 60),
+      created_at: new Date(startTime + minutes * 60 * 1000).toISOString(),
+      heating: minutes === 20 ? null : true,
+      top_temp: 40 + 4 * (minutes / 60),
+    }));
+    const segmentWithFalseReading = segmentWithAmbiguousReading.map(
+      (item) => (item.heating === null ? { ...item, heating: false } : item),
+    );
+    const discoveryWithNull = findValidHeatingSegments(
+      segmentWithAmbiguousReading,
+    );
+    const discoveryWithFalse = findValidHeatingSegments(
+      segmentWithFalseReading,
+    );
+
+    assertEqual(
+      discoveryWithNull.acceptedSegmentCount,
+      0,
+      "epavarma (null) lukema katkaisee jakson eika tuota hyvaksyttya segmenttia",
+    );
+    assertEqual(
+      discoveryWithNull.rejectedSegments.map((segment) => segment.readingCount),
+      discoveryWithFalse.rejectedSegments.map((segment) => segment.readingCount),
+      "null kasitellaan segmentoinnissa tasan samoin kuin false",
+    );
+  }
 }

@@ -306,4 +306,31 @@ export async function runHeatingHistoryUnitTests() {
     rawKnownConsumption.today_estimated_energy_kwh,
     "rpc-jaksot tuottavat saman energiankulutuksen kuin tunnettu raakadata",
   );
+
+  // T1-regressio: epavarma (heating=null, esim. Shelly-statuskysely
+  // epaonnistui ESP32:lla) lukema ei saa laskea toteutuneeksi
+  // lammitystunniksi samoin kuin heating=true - vain eksplisiittinen true
+  // kelpaa.
+  const ambiguousHeatingRows: HeatingHistoryReading[] = Array.from(
+    { length: 15 },
+    (_, index) => ({
+      created_at: new Date(
+        Date.parse("2026-07-22T00:00:00.000Z") + index * 60_000,
+      ).toISOString(),
+      heating: null,
+    }),
+  );
+  const realizedWithAmbiguousHeating = calculateRealizedHeatingHours(
+    ambiguousHeatingRows,
+    "2026-07-22",
+    "2026-07-21",
+    (createdAt) => createdAt.slice(0, 10),
+    (createdAt) => new Date(createdAt).getUTCHours(),
+  );
+
+  assertEqual(
+    realizedWithAmbiguousHeating.today,
+    [],
+    "epavarma (null) heating-tila ei tuota toteutunutta lammitystuntia",
+  );
 }

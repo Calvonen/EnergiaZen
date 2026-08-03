@@ -72,9 +72,13 @@ import {
 } from "@/lib/heatingPlanPresentation";
 import {
   canPublishActiveHeatingPlan,
+  computeNextUnknownHeatingAnchor,
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
+  preserveCurrentHourWhileHeatingUnknown,
+  shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "@/lib/heatingPlanPublication";
+import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
 import {
   DaySelection,
   getCheapestHours,
@@ -867,7 +871,38 @@ export default function HomeScreen() {
     Record<string, StoredHeatingPlan>
   >({});
   const storedHeatingPlansRef = useRef(storedHeatingPlans);
-  const [heating, setHeating] = useState(false);
+  // Which plan_dates loadHeatingPlans has actually finished fetching at
+  // least once - storedHeatingPlansRef being empty for a date is ambiguous
+  // between "nothing published" and "not loaded yet", and the null-heating
+  // guard below must never treat the latter as the former (Codex P1
+  // review, PR #147: a cold start could otherwise publish over an
+  // already-published current hour before the load request resolves).
+  const loadedHeatingPlanDatesRef = useRef<Set<string>>(new Set());
+  // The exact (plan_date, hour) that was current the moment heating first
+  // became null with no earlier pin in effect. Only this specific hour may
+  // be preserved while heating stays null - an hour that merely happens to
+  // already be in a previously published plan (e.g. a later hour rolled
+  // into "current" while status stayed unknown) was never confirmed to be
+  // actually running and must not be force-kept or started on null alone
+  // (Codex P1 review, PR #147).
+  const unknownHeatingAnchorRef = useRef<UnknownHeatingAnchor | null>(null);
+  // Whether refreshTankReadings has settled at least once (success, query
+  // error, or thrown error - any outcome counts). heating starts out as
+  // null before any fetch has even been attempted, which is a DIFFERENT
+  // situation from a confirmed-then-lost status: in fixed heating mode the
+  // publish effect isn't gated on the optimizer being ready, so it can run
+  // before this first fetch settles, while heating is still only its
+  // initial null and unknownHeatingAnchorRef is still empty - publishing
+  // in that window could replace a stored plan without ever getting a
+  // chance to preserve its currently running hour (Codex P1 review, PR
+  // #147 follow-up).
+  const hasAttemptedTankReadingFetchRef = useRef(false);
+  const [hasAttemptedTankReadingFetch, setHasAttemptedTankReadingFetch] =
+    useState(false);
+  // null = the Shelly relay status could not be reliably read (ESP32-side
+  // WiFi/HTTP/JSON failure or no reading fetched yet) - must never be
+  // coerced to false, which would silently claim "confirmed off".
+  const [heating, setHeating] = useState<boolean | null>(null);
   const [actualHeatingHours, setActualHeatingHours] = useState<
     Partial<Record<DaySelection, number[]>>
   >({
@@ -1235,6 +1270,12 @@ export default function HomeScreen() {
       startDate: item.startDate,
     }));
   }, [currentHourStart, hourlyPrices]);
+  // Only an explicitly confirmed heating=true locks the current hour into
+  // the plan (see heatingOptimizer.ts's lockedHours) - an unreadable Shelly
+  // status (heating: null) must not lock the hour, but it must also not be
+  // read as "confirmed not heating" anywhere else, so this stays local to
+  // isCurrentlyHeating rather than coercing the shared `heating` state.
+  const isCurrentlyHeatingConfirmed = heating === true;
   // Two independent optimization pipelines. Active always runs on persisted
   // settings and is the only one allowed to publish to heating_plans. Scenario
   // only runs while there is an unsaved, valid draft and is preview-only.
@@ -1247,7 +1288,7 @@ export default function HomeScreen() {
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,
     hours: optimizerHours,
-    isCurrentlyHeating: heating,
+    isCurrentlyHeating: isCurrentlyHeatingConfirmed,
     isEnabled: true,
     manualRefreshRevision: manualOptimizationRevision,
     mode: activeSettings.heatingNeedMode,
@@ -1266,7 +1307,7 @@ export default function HomeScreen() {
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,
     hours: optimizerHours,
-    isCurrentlyHeating: heating,
+    isCurrentlyHeating: isCurrentlyHeatingConfirmed,
     isEnabled: hasUnsavedChanges && scenarioValidation.errors.length === 0,
     manualRefreshRevision: manualOptimizationRevision,
     mode: scenarioSettings.heatingNeedMode,
@@ -1702,6 +1743,10 @@ export default function HomeScreen() {
 
           return nextPlans;
         });
+
+        for (const planDate of planDates) {
+          loadedHeatingPlanDatesRef.current.add(planDate);
+        }
       } catch (error) {
         console.warn("Failed to load heating plans", error);
       }
@@ -1756,13 +1801,61 @@ export default function HomeScreen() {
       return;
     }
 
+    // Cannot yet tell whether the current hour was already published (an
+    // empty storedHeatingPlansRef is ambiguous between "nothing published"
+    // and "not loaded yet") - defer entirely rather than risk upserting a
+    // plan that silently drops an already-running hour before the load
+    // request resolves (Codex P1 review, PR #147). Fixed heating mode isn't
+    // gated on the optimizer being ready, so this effect can also run
+    // before refreshTankReadings' own Promise.all has ever settled - in
+    // that window heating is still only its initial null and
+    // unknownHeatingAnchorRef is still empty, so defer on that too (Codex
+    // P1 review, PR #147 follow-up).
+    if (
+      shouldDeferHeatingPlanPublicationForUnknownStatus({
+        hasAttemptedTankReadingFetch: hasAttemptedTankReadingFetchRef.current,
+        heating,
+        isTodayPlanLoaded: loadedHeatingPlanDatesRef.current.has(todayPlanDate),
+      })
+    ) {
+      debugLog("Heating plan publication deferred until today's stored plan is loaded", {
+        hasAttemptedTankReadingFetch: hasAttemptedTankReadingFetchRef.current,
+        heating,
+        todayPlanDate,
+      });
+      latestHeatingPlanSaveVersionRef.current += 1;
+      return;
+    }
+
     const getHourNumbersFromKey = (key: string) =>
       key.length === 0 ? [] : key.split(",").map(Number);
     const updatedAt = new Date().toISOString();
+    // Read live, not currentHourStart - currentHourStart only advances on
+    // the 30s currentTime interval, so right after an hour boundary it can
+    // still name the PRECEDING hour while unknownHeatingAnchorRef (latched
+    // from its own live Date - see the effect above) already correctly
+    // names the new one. That mismatch would make this call think the
+    // anchor doesn't match "now" and skip preservation for the hour that
+    // actually needs it (Codex P1 review, PR #147 follow-up).
+    const currentHourNumber = getHelsinkiHourNumber(new Date());
+    const unknownHeatingAnchor = unknownHeatingAnchorRef.current;
+    const unknownAnchorHourNumber =
+      unknownHeatingAnchor !== null &&
+      unknownHeatingAnchor.planDate === todayPlanDate
+        ? unknownHeatingAnchor.hourNumber
+        : null;
     const todayPlan = {
       mode: settings.heatingNeedMode,
       plan_date: todayPlanDate,
-      planned_hours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
+      planned_hours: preserveCurrentHourWhileHeatingUnknown({
+        currentHourNumber,
+        heating,
+        nextPlannedHours: getHourNumbersFromKey(todayPlannedHourNumbersKey),
+        previousPlannedHours: normalizeStoredHeatingPlanHours(
+          storedHeatingPlansRef.current[todayPlanDate]?.planned_hours,
+        ),
+        unknownAnchorHourNumber,
+      }),
       reason: optimizerReason ?? heatingRecommendation.reason,
       target_hours: finalTargetHours,
       updated_at: updatedAt,
@@ -1866,16 +1959,20 @@ export default function HomeScreen() {
   }, [
     activeHeatingOptimization,
     areSettingsLoaded,
+    currentHourStart,
     currentWeightedTemperature,
+    heating,
     heatingRecommendation.reason,
     heatingOptimization,
     activeOptimizationRun.runId,
     finalTargetHours,
     finalTomorrowTargetHours,
+    hasAttemptedTankReadingFetch,
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,
     settings.fixedHeatingHoursPerDay,
+    storedHeatingPlans,
     todayPlanDate,
     todayPlannedHourNumbersKey,
     tomorrowPlanDate,
@@ -2095,7 +2192,8 @@ export default function HomeScreen() {
   );
   // A stale heating=true must not read as "still heating" - only isHeatingNow
   // (schedule-derived, not sensor-derived) can keep the indicator on then.
-  const isTankHeating = (isTankReadingFresh && heating) || isHeatingNow;
+  const isTankHeating =
+    (isTankReadingFresh && heating === true) || isHeatingNow;
   const temperatureCardTheme = getTemperatureCardTheme(
     tankTemperature,
     settings,
@@ -2169,6 +2267,13 @@ export default function HomeScreen() {
         );
 
       let tankReadingsRefreshInFlight = false;
+
+      function markTankReadingFetchAttempted() {
+        if (!hasAttemptedTankReadingFetchRef.current) {
+          hasAttemptedTankReadingFetchRef.current = true;
+          setHasAttemptedTankReadingFetch(true);
+        }
+      }
 
       const refreshTankReadings = async () => {
         if (tankReadingsRefreshInFlight) {
@@ -2272,14 +2377,49 @@ export default function HomeScreen() {
 
           if (latestReadingResult.error) {
             console.error(latestReadingResult.error);
+            // Supabase resolves (does not reject) on a query-level error
+            // here, so the catch block below - which already resets
+            // heating to null for network-level failures - is never
+            // reached for this case. heating has no separate staleness
+            // gate the way tankUpdatedAt does, so leaving it untouched
+            // would let a persisted true/false from the last successful
+            // poll keep isCurrentlyHeatingConfirmed locking/extending
+            // hours indefinitely while this query keeps failing, no
+            // matter how stale that reading actually is (Codex P1 review,
+            // PR #147).
+            setHeating(null);
+            // No reading at all here, so computeNextUnknownHeatingAnchor
+            // falls back to live "now" - there's no row timestamp to prefer.
+            unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+              currentAnchor: unknownHeatingAnchorRef.current,
+              heating: null,
+              now: new Date(),
+              readingCreatedAt: null,
+            });
           } else {
             const reading = latestReadingResult.data as TankReading | null;
+            const nextHeating = reading?.heating ?? null;
 
             setTopTemp(reading?.top_temp ?? null);
             setBottomTemp(reading?.bottom_temp ?? null);
-            setHeating(reading?.heating ?? false);
+            setHeating(nextHeating);
             setTankUpdatedAt(reading?.created_at ?? null);
+            // Imperative, not a useEffect keyed on `heating` - two
+            // consecutive fetches can both resolve to heating=null without
+            // the STATE value ever changing (e.g. this query kept erroring,
+            // or two readings in a row are both unknown), which would
+            // silently skip a reactive effect but must not skip
+            // re-evaluating the anchor (Codex P1 review, PR #147
+            // follow-up).
+            unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+              currentAnchor: unknownHeatingAnchorRef.current,
+              heating: nextHeating,
+              now: new Date(),
+              readingCreatedAt: reading?.created_at ?? null,
+            });
           }
+
+          markTankReadingFetchAttempted();
 
           const todayKey = getDateKeyOffset(0);
           const yesterdayKey = getDateKeyOffset(-1);
@@ -2351,7 +2491,16 @@ export default function HomeScreen() {
           setTankTemperatureHistory([]);
           setWeeklyMinimumInletTemperature(null);
           setStoredTemperatureDropProfile(null);
-          setHeating(false);
+          setHeating(null);
+          // No reading at all here either, so fall back to live "now" -
+          // same reasoning as the query-error branch above.
+          unknownHeatingAnchorRef.current = computeNextUnknownHeatingAnchor({
+            currentAnchor: unknownHeatingAnchorRef.current,
+            heating: null,
+            now: new Date(),
+            readingCreatedAt: null,
+          });
+          markTankReadingFetchAttempted();
           // EI setTankUpdatedAt(null) tässä - tämä haku toistuu 30s
           // välein (ei vain alkulatauksessa), ja yksittäinen ohimenevä
           // verkkovirhe ei tarkoita että edellinen lukema olisi
@@ -2999,7 +3148,7 @@ export default function HomeScreen() {
                     <Text style={styles.manualHeatingHoursText}>
                       {manualSelectedHeatingHoursText}
                     </Text>
-                    {heating && isManualHeatingHourNow ? (
+                    {heating === true && isManualHeatingHourNow ? (
                       <Text style={styles.manualHeatingStatusText}>
                         Lämmitys käynnissä valitun tunnin mukaan.
                       </Text>

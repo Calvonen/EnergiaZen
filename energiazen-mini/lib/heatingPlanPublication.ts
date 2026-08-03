@@ -1,3 +1,5 @@
+import { formatHelsinkiDateKey, getHelsinkiHourNumber } from "./heatingLogic";
+
 export type ComparableHeatingPlan = {
   mode?: string | null;
   plan_date?: string | null;
@@ -13,6 +15,34 @@ export type PublishedHeatingPlanState<TResult, THour> = {
 };
 
 export type HeatingOptimizationRunSource = "active" | "scenario";
+
+// Whether the heating_plans publish effect must defer entirely rather than
+// upsert this cycle. Only matters while heating is unknown (null) - a
+// confirmed true/false is always safe to publish. Two independent things
+// must both be true before it's safe to trust previousPlannedHours enough
+// to decide whether the current hour needs preserving:
+//  - isTodayPlanLoaded: storedHeatingPlansRef being empty for today is
+//    otherwise ambiguous between "nothing published" and "not loaded yet".
+//  - hasAttemptedTankReadingFetch: fixed heating mode isn't gated on the
+//    optimizer being ready, so this effect can run before the relay-status
+//    fetch has ever settled even once, while heating is still only its
+//    React-state initial value and the unknown-anchor is still empty.
+// Publishing anyway in either gap could replace a stored plan without ever
+// getting a chance to preserve its currently running hour (Codex P1
+// review, PR #147).
+export function shouldDeferHeatingPlanPublicationForUnknownStatus({
+  hasAttemptedTankReadingFetch,
+  heating,
+  isTodayPlanLoaded,
+}: {
+  hasAttemptedTankReadingFetch: boolean;
+  heating: boolean | null;
+  isTodayPlanLoaded: boolean;
+}): boolean {
+  return (
+    heating === null && (!isTodayPlanLoaded || !hasAttemptedTankReadingFetch)
+  );
+}
 
 export function canPublishActiveHeatingPlan({
   isOptimizationCurrent,
@@ -68,6 +98,104 @@ export function getChangedHeatingPlans<T extends ComparableHeatingPlan>(
         currentPlans[plan.plan_date],
         plan,
       ),
+  );
+}
+
+export type UnknownHeatingAnchor = {
+  hourNumber: number;
+  planDate: string;
+};
+
+// Computes the next unknownHeatingAnchorRef value for
+// preserveCurrentHourWhileHeatingUnknown below. Must be called every time a
+// tank_readings fetch resolves (success, query error, or thrown error) -
+// not from a useEffect keyed on the `heating` state value, because two
+// consecutive fetches can both resolve to heating=null (e.g. a persistent
+// query error) without the STATE value ever changing, which would silently
+// skip an effect but must not skip re-evaluating the anchor (Codex P1
+// review, PR #147 follow-up).
+//
+// Prefers readingCreatedAt (the fetched row's own timestamp) over `now`:
+// a fetch that straddles an hour boundary (typically an app cold start)
+// can resolve after the boundary while the row it fetched - and the
+// heating value it carries - is still genuinely from the hour before it.
+// Anchoring to the reading's own hour degrades safely in that case: it
+// names an hour that has already passed, which simply never matches
+// "now" again in preserveCurrentHourWhileHeatingUnknown's comparison and
+// so is never preserved, rather than wrongly anchoring the NEW current
+// hour to status that was never actually observed for it. `now` is only
+// used when there is no reading at all (a fetch that failed outright) -
+// there is no row timestamp to prefer there.
+export function computeNextUnknownHeatingAnchor({
+  currentAnchor,
+  heating,
+  now,
+  readingCreatedAt,
+}: {
+  currentAnchor: UnknownHeatingAnchor | null;
+  heating: boolean | null;
+  now: Date;
+  readingCreatedAt: string | null;
+}): UnknownHeatingAnchor | null {
+  if (heating !== null) {
+    return null;
+  }
+
+  if (currentAnchor !== null) {
+    return currentAnchor;
+  }
+
+  const anchorInstant = readingCreatedAt ? new Date(readingCreatedAt) : now;
+
+  return {
+    hourNumber: getHelsinkiHourNumber(anchorInstant),
+    planDate: formatHelsinkiDateKey(anchorInstant),
+  };
+}
+
+// While the current hour's heating status is unknown (heating: null, e.g.
+// ESP32 couldn't reach Shelly), an unrelated re-optimization must not be
+// allowed to drop that hour from what's already published - the Shelly
+// controller script turns the relay off the moment its own hour is missing
+// from heating_plans, regardless of whether it's actually mid-cycle
+// (Codex P1 review, PR #147). This only ever restores an hour that was
+// ALREADY published for the current hour; it never adds a new hour, never
+// touches any other hour, and never runs once heating is confirmed true or
+// false again.
+//
+// unknownAnchorHourNumber must be the exact hour that was current the
+// moment heating first became null (see index.tsx's unknownHeatingAnchorRef)
+// - previousPlannedHours alone is not enough, since it can also contain
+// hours that were merely scheduled for later that day. Without this extra
+// check, a continuous null streak spanning an hour boundary could force-
+// keep or even start a brand new hour's relay cycle on nothing but that
+// streak, which is exactly the "don't add/continue future hours from null"
+// guarantee this function must not violate (Codex P1 review, PR #147
+// follow-up).
+export function preserveCurrentHourWhileHeatingUnknown({
+  currentHourNumber,
+  heating,
+  nextPlannedHours,
+  previousPlannedHours,
+  unknownAnchorHourNumber,
+}: {
+  currentHourNumber: number;
+  heating: boolean | null;
+  nextPlannedHours: number[];
+  previousPlannedHours: number[];
+  unknownAnchorHourNumber: number | null;
+}): number[] {
+  if (
+    heating !== null ||
+    unknownAnchorHourNumber !== currentHourNumber ||
+    !previousPlannedHours.includes(currentHourNumber) ||
+    nextPlannedHours.includes(currentHourNumber)
+  ) {
+    return nextPlannedHours;
+  }
+
+  return [...nextPlannedHours, currentHourNumber].sort(
+    (first, second) => first - second,
   );
 }
 

@@ -124,8 +124,12 @@ export function buildHourlyTemperatureDropProfileResult(
       Number.isNaN(currentDate.getTime()) ||
       previousTemperature === null ||
       currentTemperature === null ||
-      previous.heating === true ||
-      current.heating === true
+      // Only an explicitly confirmed heating=false pair is a trustworthy
+      // "just cooling" observation - true is excluded as before, but so is
+      // an unreadable Shelly status (heating: null): it must not be
+      // silently treated as "not heating" and folded into the drop rate.
+      previous.heating !== false ||
+      current.heating !== false
     ) {
       continue;
     }

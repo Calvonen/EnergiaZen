@@ -21,7 +21,7 @@ export type RecoveryDropEstimate = {
 };
 
 type OrderedReading = {
-  heating: boolean;
+  heating: boolean | null;
   inletTemperatureC: number | null;
   time: number;
   weightedTemperature: number;
@@ -49,7 +49,11 @@ function getOrderedReadings(
       }
 
       return {
-        heating: reading.heating === true,
+        // Preserved as a tri-state rather than collapsed to boolean: an
+        // unreadable Shelly status (heating: null) must not be usable as
+        // evidence of an off-transition below, only an explicit false may
+        // anchor the recovery window.
+        heating: reading.heating ?? null,
         inletTemperatureC: isValidInletTemperature(reading.inlet_temp)
           ? reading.inlet_temp
           : null,
@@ -59,6 +63,38 @@ function getOrderedReadings(
     })
     .filter((reading): reading is OrderedReading => reading !== null)
     .sort((first, second) => first.time - second.time);
+}
+
+// Walks forward in time from segmentEndTime looking for the first confirmed
+// heating=false reading. Unlike a plain .find(), this stops and gives up
+// (returns null) as soon as it hits a heating=true reading first - without
+// that, a later, unrelated heating cycle's own off-transition could get
+// picked up as if it belonged to THIS segment, silently swallowing the
+// entire intervening cycle into what looks like one clean recovery window
+// (Codex review, PR #147). heating=null readings are skipped over (neither
+// stop nor match), since an unreadable Shelly status is not evidence either
+// way - findValidHeatingSegments already only builds `segments` from
+// confirmed heating=true readings, so that later cycle gets its own correct
+// anchor from its own iteration of this same loop.
+function findOffTransitionReading(
+  orderedReadings: OrderedReading[],
+  segmentEndTime: number,
+): OrderedReading | null {
+  for (const reading of orderedReadings) {
+    if (reading.time <= segmentEndTime) {
+      continue;
+    }
+
+    if (reading.heating === true) {
+      return null;
+    }
+
+    if (reading.heating === false) {
+      return reading;
+    }
+  }
+
+  return null;
 }
 
 // For each accepted heating segment, looks one recovery window past the
@@ -90,8 +126,9 @@ export function estimateRecoveryDropPerHour(
     // both for its start time and its baseline temperature, so the tail of
     // active heating isn't folded into the learned recovery rate (flagged
     // in PR #121 review).
-    const offTransitionReading = orderedReadings.find(
-      (reading) => reading.time > segmentEndTime && !reading.heating,
+    const offTransitionReading = findOffTransitionReading(
+      orderedReadings,
+      segmentEndTime,
     );
 
     if (!offTransitionReading) {
@@ -106,10 +143,6 @@ export function estimateRecoveryDropPerHour(
         reading.time <= targetTime + toleranceMilliseconds,
     );
 
-    if (candidates.some((reading) => reading.heating)) {
-      continue;
-    }
-
     let nearest: OrderedReading | null = null;
     let nearestDifference = Number.POSITIVE_INFINITY;
 
@@ -123,6 +156,22 @@ export function estimateRecoveryDropPerHour(
     }
 
     if (!nearest || nearestDifference > toleranceMilliseconds) {
+      continue;
+    }
+
+    // Every reading up to (and including) the selected `nearest` endpoint
+    // must be positive evidence of "not heating" - an unreadable Shelly
+    // status (heating: null) provides no such evidence and must contaminate
+    // the measured interval exactly like a confirmed true would (Codex
+    // review, PR #147). Readings later in the tolerance tail than `nearest`
+    // never touch the drop calculation, so - same principle as
+    // precedingReadings below - they must not be able to discard an
+    // otherwise clean sample either (Codex review, PR #147 follow-up).
+    const measuredIntervalReadings = candidates.filter(
+      (reading) => reading.time <= nearest.time,
+    );
+
+    if (measuredIntervalReadings.some((reading) => reading.heating !== false)) {
       continue;
     }
 

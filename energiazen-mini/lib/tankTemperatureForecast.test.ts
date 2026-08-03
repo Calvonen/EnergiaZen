@@ -27,7 +27,7 @@ function assertClose(
 function reading(
   createdAt: string,
   temperature: number,
-  heating = false,
+  heating: boolean | null = false,
 ): TankTemperatureReading {
   return {
     bottom_temp: temperature,
@@ -106,6 +106,23 @@ export function runTankTemperatureForecastUnitTests() {
     ]);
 
     assertClose(profile[7], 0.25, "heating=true-jaksot jaavat pois");
+  }
+
+  {
+    // T1-regressio: epavarma (heating=null, esim. Shellyn statuskysely
+    // epaonnistui) lukema ei saa tulla mukaan pudotusprofiiliin - vain
+    // eksplisiittinen heating=false kelpaa, aivan kuten heating=true jaa
+    // pois.
+    const profile = buildHourlyTemperatureDropProfile([
+      reading("2026-07-01T04:00:00.000Z", 60),
+      reading("2026-07-01T04:15:00.000Z", 55, null),
+    ]);
+
+    assertClose(
+      profile[7],
+      0.25,
+      "epavarma (heating=null) lukema jattaa parin pois samoin kuin heating=true",
+    );
   }
 
   {
