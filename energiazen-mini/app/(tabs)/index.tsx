@@ -1850,7 +1850,14 @@ export default function HomeScreen() {
     const getHourNumbersFromKey = (key: string) =>
       key.length === 0 ? [] : key.split(",").map(Number);
     const updatedAt = new Date().toISOString();
-    const currentHourNumber = getHelsinkiHourNumber(currentHourStart);
+    // Read live, not currentHourStart - currentHourStart only advances on
+    // the 30s currentTime interval, so right after an hour boundary it can
+    // still name the PRECEDING hour while unknownHeatingAnchorRef (latched
+    // from its own live Date - see the effect above) already correctly
+    // names the new one. That mismatch would make this call think the
+    // anchor doesn't match "now" and skip preservation for the hour that
+    // actually needs it (Codex P1 review, PR #147 follow-up).
+    const currentHourNumber = getHelsinkiHourNumber(new Date());
     const unknownHeatingAnchor = unknownHeatingAnchorRef.current;
     const unknownAnchorHourNumber =
       unknownHeatingAnchor !== null &&
