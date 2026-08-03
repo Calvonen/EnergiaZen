@@ -170,7 +170,7 @@ assert.strictEqual(stale.consecutiveHighFillReadings, 0);
 // Varatila ei saa jaada paalle: kun seuraavan tarkistuksen lukema on taas
 // tuore, paatos tehdaan normaalisti suunnitelman ja tayttoasteen perusteella.
 const recoveredAfterStale = decide({
-  currentHour: 8,
+  currentHour: 15,
   plannedHours: [10],
   reading: readingForShowers(3),
   state: staleState,
