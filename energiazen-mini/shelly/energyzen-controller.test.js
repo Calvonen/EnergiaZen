@@ -143,6 +143,16 @@ const unplanned = decide({ currentHour: 14, state: unplannedState });
 assert.strictEqual(unplanned.finalTargetOn, false);
 assert.strictEqual(unplanned.consecutiveHighFillReadings, 0);
 
+// Ohjausdatan 120 sekunnin tuoreusraja on tarkoituksella paljon tiukempi
+// kuin appin ja sahkopostihalytyksen 30 minuutin vikaraja. Shelly tarkistaa
+// kerran minuutissa, joten 120 sekuntia vanha lukema kelpaa viela mutta heti
+// sen jalkeen siirrytaan vain ennalta maaritettyjen varatuntien ohjaukseen.
+const exactReadingAgeThreshold = decide({
+  reading: readingForShowers(3, 120),
+});
+assert.strictEqual(exactReadingAgeThreshold.reason, "planned-heating-starts");
+assert.strictEqual(exactReadingAgeThreshold.finalTargetOn, true);
+
 // currentHour 15 on myos settings.backupHours - eli oletusparametrit
 // osuvat varatunnille. Anturivika varatunnilla lammittaa nyt ehdoitta
 // (varaajan oma termostaatti estaa ylikuumenemisen), toisin kuin
@@ -156,6 +166,17 @@ const stale = decide({
 assert.strictEqual(stale.reason, "backup-fault-override");
 assert.strictEqual(stale.finalTargetOn, true);
 assert.strictEqual(stale.consecutiveHighFillReadings, 0);
+
+// Varatila ei saa jaada paalle: kun seuraavan tarkistuksen lukema on taas
+// tuore, paatos tehdaan normaalisti suunnitelman ja tayttoasteen perusteella.
+const recoveredAfterStale = decide({
+  currentHour: 8,
+  plannedHours: [10],
+  reading: readingForShowers(3),
+  state: staleState,
+});
+assert.strictEqual(recoveredAfterStale.reason, "hour-not-planned");
+assert.strictEqual(recoveredAfterStale.finalTargetOn, false);
 
 const staleOutsideBackupHour = decide({
   currentHour: 8,
