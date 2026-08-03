@@ -1233,22 +1233,29 @@ export default function HomeScreen() {
       return;
     }
 
-    // Latch the pin once, on the first null observed after a confirmed
-    // true/false (or after app start once today's plan is known loaded) -
-    // deliberately does NOT refresh/move the pin to a later hour just
-    // because heating is still null when the clock rolls over, otherwise
-    // an hour that was only ever a future plan entry could get force-kept
-    // or started on nothing but a continued null streak.
-    if (
-      unknownHeatingAnchorRef.current === null &&
-      loadedHeatingPlanDatesRef.current.has(todayPlanDate)
-    ) {
+    // Latch the pin the moment heating is first observed null, regardless
+    // of whether today's stored plan has loaded yet - the hour itself is
+    // always knowable from the wall clock, independent of that load. Gating
+    // the latch on the load (as an earlier version of this fix did) let a
+    // cold start straddling an hour boundary record the WRONG hour: if
+    // heating was already null at 14:59 but the plan only finished loading
+    // after the 15:00 rollover, the anchor would land on 15 instead of the
+    // hour where the uncertainty actually began (Codex P1 review, PR #147
+    // follow-up) - previousPlannedHours could then contain 15 as a merely
+    // scheduled future hour and the guard would restore/start it on nothing
+    // but a continued null streak. The publish effect's own separate
+    // loadedHeatingPlanDatesRef gate still defers any actual publish until
+    // the plan is loaded; this ref only needs the hour to be correct.
+    //
+    // Once latched, deliberately does NOT refresh/move to a later hour just
+    // because heating is still null when the clock rolls over.
+    if (unknownHeatingAnchorRef.current === null) {
       unknownHeatingAnchorRef.current = {
         hourNumber: getHelsinkiHourNumber(currentHourStart),
         planDate: todayPlanDate,
       };
     }
-  }, [currentHourStart, heating, storedHeatingPlans, todayPlanDate]);
+  }, [currentHourStart, heating, todayPlanDate]);
   const oldTodayPlannedHeatingHours = useMemo(
     () => recommendedHeatingHours.filter((item) => item.status === "planned"),
     [recommendedHeatingHours],
