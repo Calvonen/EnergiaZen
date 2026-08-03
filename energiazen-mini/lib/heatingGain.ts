@@ -25,6 +25,13 @@ export const heatingGainLearningLimits = {
   minValidTemperature: 0,
   minValidSegments: 3,
   minWeightedGainPerHour: 0.5,
+  // Observed on real hardware: the tank's mechanical thermostat can cut
+  // the element off around this weighted temperature, independent of the
+  // app's own control logic and unrelated to the user-configurable
+  // settings.maxTankTemperature target. A segment that reaches this is no
+  // longer measuring the heater's own rate - the curve flattens out
+  // because the thermostat tripped, not because the app decided to stop.
+  thermostatCutoffWeightedTemperatureCelsius: 60,
 } as const;
 
 export type HeatingGainEstimate = {
@@ -46,6 +53,7 @@ export type HeatingGainRejectionReason =
   | "insufficient_duration"
   | "insufficient_gain"
   | "insufficient_readings"
+  | "max_temperature_reached"
   | "negative_temperature_change"
   | "non_finite_gain"
   | "unrealistic_gain"
@@ -214,6 +222,22 @@ export function findValidHeatingSegments(
     // sample would otherwise silently skew the learned median.
     if (detectsWaterDraw(currentSegment)) {
       reasons.push("water_draw_detected");
+    }
+
+    // The mechanical thermostat, not the app, may have ended heating here -
+    // reject rather than warn, same reasoning as the water-draw check.
+    // estimateRecoveryDropPerHour (heatingRecoveryDrop.ts) only considers
+    // segments from this function's accepted list, so rejecting here also
+    // removes the segment's recovery window from that learning in the same
+    // pass, without a separate check there.
+    if (
+      currentSegment.some(
+        (reading) =>
+          reading.weightedTemperature >=
+          heatingGainLearningLimits.thermostatCutoffWeightedTemperatureCelsius,
+      )
+    ) {
+      reasons.push("max_temperature_reached");
     }
 
     const quality = getSegmentQuality(currentSegment);

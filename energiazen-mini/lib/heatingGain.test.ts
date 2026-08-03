@@ -304,4 +304,35 @@ export async function runHeatingGainUnitTests() {
       "vakaa tulovesilampotila ei hylkaa lammitysjaksoa",
     );
   }
+
+  {
+    // Todellinen tapaus: yolammitys pysahtyi varaajan mekaaniseen
+    // termostaattiin (jakso saavutti 60 astetta), ei appin omaan
+    // paatokseen - jakson mitattu nousunopeus ei silloin enaa edusta
+    // lammittimen todellista tehoa.
+    const segment = createHeatingSegment("2026-07-11T00:00:00.000Z", 4, 58);
+    const discovery = findValidHeatingSegments(segment);
+
+    assertEqual(
+      discovery.rejectedSegmentCount,
+      1,
+      "60 astetta saavuttava jakso hylataan - termostaatti on saattanut katkaista lammityksen",
+    );
+    assertEqual(
+      discovery.rejectedSegments[0].reasons,
+      ["max_temperature_reached"],
+      "hylkayssyy on maksimilampotila, ei muu laatuongelma",
+    );
+  }
+
+  {
+    const segment = createHeatingSegment("2026-07-12T00:00:00.000Z", 4, 57.9);
+    const discovery = findValidHeatingSegments(segment);
+
+    assertEqual(
+      discovery.acceptedSegmentCount,
+      1,
+      "juuri alle kynnysarvon jaava jakso hyvaksytaan normaalisti",
+    );
+  }
 }

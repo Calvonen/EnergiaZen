@@ -373,4 +373,27 @@ export function runHeatingRecoveryDropUnitTests() {
       "valitun paatepisteen jalkeen tapahtuva vedenotto ei hylkaa muuten puhdasta naytetta",
     );
   }
+
+  {
+    // Todellinen tapaus: lammitys pysahtyi varaajan mekaaniseen
+    // termostaattiin (60 astetta), ei appin omaan paatokseen.
+    // estimateRecoveryDropPerHour kayttaa vain findValidHeatingSegments:n
+    // hyvaksymia jaksoja, joten heatingGain.ts:n hylkays (ks.
+    // heatingGain.test.ts) poistaa jakson myos taalta ilman erillista
+    // tarkistusta - tama testi todistaa etta se ketju todella toimii.
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...createHeatingSegment("2026-07-03T00:00:00.000Z", 4, 58),
+      offTransitionReading("2026-07-03T00:00:00.000Z", 60.1),
+      recoveryReading("2026-07-03T00:00:00.000Z", 60.0),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      2,
+      "termostaatin todennakoisesti katkaisema lammitysjakso ei tuota myoskaan recoveryDrop-naytetta",
+    );
+  }
 }
