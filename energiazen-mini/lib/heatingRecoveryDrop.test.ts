@@ -482,4 +482,33 @@ export function runHeatingRecoveryDropUnitTests() {
       "epavarma (null) lukema palautumisikkunassa hylkaa naytteen samoin kuin varmistettu lammitys tekisi",
     );
   }
+
+  {
+    // Codexin P2-loydos (PR #147, commit cd701b8): epavarma (null) lukema
+    // joka osuu toleranssihannan (60-75 min) puolelle VALITUN nearest-
+    // paatepisteen (tasan 60 min kohdalla) JALKEEN ei saa hylata naytetta -
+    // se ei koskaan kosketa mitattua valia, samoin kuin precedingReadings
+    // jo kasittelee vesenoton tunnistuksessa.
+    const start = "2026-07-06T00:00:00.000Z";
+    const lateAmbiguousReading = reading(
+      new Date(new Date(start).getTime() + 100 * 60 * 1000).toISOString(),
+      42.15,
+      null,
+    );
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...createHeatingSegment(start, 4),
+      offTransitionReading(start, 42.3),
+      recoveryReading(start, 42.2),
+      lateAmbiguousReading,
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      3,
+      "myohainen epavarma lukema toleranssihannassa valitun nearest-paatepisteen jalkeen ei saa hylata naytetta",
+    );
+  }
 }

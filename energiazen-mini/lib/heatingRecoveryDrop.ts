@@ -143,14 +143,6 @@ export function estimateRecoveryDropPerHour(
         reading.time <= targetTime + toleranceMilliseconds,
     );
 
-    // Every candidate must be positive evidence of "not heating" - an
-    // unreadable Shelly status (heating: null) provides no such evidence
-    // and must contaminate the window exactly like a confirmed true would,
-    // not be silently treated as clean (Codex review, PR #147).
-    if (candidates.some((reading) => reading.heating !== false)) {
-      continue;
-    }
-
     let nearest: OrderedReading | null = null;
     let nearestDifference = Number.POSITIVE_INFINITY;
 
@@ -164,6 +156,22 @@ export function estimateRecoveryDropPerHour(
     }
 
     if (!nearest || nearestDifference > toleranceMilliseconds) {
+      continue;
+    }
+
+    // Every reading up to (and including) the selected `nearest` endpoint
+    // must be positive evidence of "not heating" - an unreadable Shelly
+    // status (heating: null) provides no such evidence and must contaminate
+    // the measured interval exactly like a confirmed true would (Codex
+    // review, PR #147). Readings later in the tolerance tail than `nearest`
+    // never touch the drop calculation, so - same principle as
+    // precedingReadings below - they must not be able to discard an
+    // otherwise clean sample either (Codex review, PR #147 follow-up).
+    const measuredIntervalReadings = candidates.filter(
+      (reading) => reading.time <= nearest.time,
+    );
+
+    if (measuredIntervalReadings.some((reading) => reading.heating !== false)) {
       continue;
     }
 

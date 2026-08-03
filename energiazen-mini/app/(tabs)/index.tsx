@@ -2359,6 +2359,17 @@ export default function HomeScreen() {
 
           if (latestReadingResult.error) {
             console.error(latestReadingResult.error);
+            // Supabase resolves (does not reject) on a query-level error
+            // here, so the catch block below - which already resets
+            // heating to null for network-level failures - is never
+            // reached for this case. heating has no separate staleness
+            // gate the way tankUpdatedAt does, so leaving it untouched
+            // would let a persisted true/false from the last successful
+            // poll keep isCurrentlyHeatingConfirmed locking/extending
+            // hours indefinitely while this query keeps failing, no
+            // matter how stale that reading actually is (Codex P1 review,
+            // PR #147).
+            setHeating(null);
           } else {
             const reading = latestReadingResult.data as TankReading | null;
 
