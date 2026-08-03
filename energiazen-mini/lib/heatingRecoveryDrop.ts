@@ -65,6 +65,38 @@ function getOrderedReadings(
     .sort((first, second) => first.time - second.time);
 }
 
+// Walks forward in time from segmentEndTime looking for the first confirmed
+// heating=false reading. Unlike a plain .find(), this stops and gives up
+// (returns null) as soon as it hits a heating=true reading first - without
+// that, a later, unrelated heating cycle's own off-transition could get
+// picked up as if it belonged to THIS segment, silently swallowing the
+// entire intervening cycle into what looks like one clean recovery window
+// (Codex review, PR #147). heating=null readings are skipped over (neither
+// stop nor match), since an unreadable Shelly status is not evidence either
+// way - findValidHeatingSegments already only builds `segments` from
+// confirmed heating=true readings, so that later cycle gets its own correct
+// anchor from its own iteration of this same loop.
+function findOffTransitionReading(
+  orderedReadings: OrderedReading[],
+  segmentEndTime: number,
+): OrderedReading | null {
+  for (const reading of orderedReadings) {
+    if (reading.time <= segmentEndTime) {
+      continue;
+    }
+
+    if (reading.heating === true) {
+      return null;
+    }
+
+    if (reading.heating === false) {
+      return reading;
+    }
+  }
+
+  return null;
+}
+
 // For each accepted heating segment, looks one recovery window past the
 // segment's own end for the nearest clean (no intervening heating, no
 // detected water draw) reading, and samples the observed drop rate across
@@ -94,8 +126,9 @@ export function estimateRecoveryDropPerHour(
     // both for its start time and its baseline temperature, so the tail of
     // active heating isn't folded into the learned recovery rate (flagged
     // in PR #121 review).
-    const offTransitionReading = orderedReadings.find(
-      (reading) => reading.time > segmentEndTime && reading.heating === false,
+    const offTransitionReading = findOffTransitionReading(
+      orderedReadings,
+      segmentEndTime,
     );
 
     if (!offTransitionReading) {
@@ -110,7 +143,11 @@ export function estimateRecoveryDropPerHour(
         reading.time <= targetTime + toleranceMilliseconds,
     );
 
-    if (candidates.some((reading) => reading.heating === true)) {
+    // Every candidate must be positive evidence of "not heating" - an
+    // unreadable Shelly status (heating: null) provides no such evidence
+    // and must contaminate the window exactly like a confirmed true would,
+    // not be silently treated as clean (Codex review, PR #147).
+    if (candidates.some((reading) => reading.heating !== false)) {
       continue;
     }
 

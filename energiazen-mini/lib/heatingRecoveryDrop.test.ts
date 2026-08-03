@@ -426,4 +426,60 @@ export function runHeatingRecoveryDropUnitTests() {
       "epavarma (null) heating-tila ei kelpaa off-transition-ankkuriksi",
     );
   }
+
+  {
+    // Codexin P2-loydos (PR #147): jos jaksoa seuraa TOINEN taysi
+    // lammitysjakso ennen kuin aito heating=false-lukema loytyy, haku ei
+    // saa ohittaa valissa olevaa lammitysjaksoa ja ankkuroitua sen omaan
+    // off-transitioon - se kuuluisi vain sille toiselle jaksolle, ei
+    // talle. 15 min tauko pakottaa findValidHeatingSegments:n katkaisemaan
+    // erillisiksi jaksoiksi (maxGapMinutes=10).
+    const start1 = "2026-07-05T00:00:00.000Z";
+    const start2 = new Date(
+      new Date(start1).getTime() + 45 * 60 * 1000,
+    ).toISOString();
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...createHeatingSegment(start1, 4),
+      ...createHeatingSegment(start2, 4),
+      offTransitionReading(start2, 42.3),
+      recoveryReading(start2, 42.2),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      3,
+      "valissa oleva toinen lammitysjakso ei saa tuottaa naytetta edellisen jakson puolesta - vain jalkimmainen jakso saa oman naytteensa",
+    );
+  }
+
+  {
+    // Codexin toinen P2-loydos (PR #147): palautumisikkunan sisalla oleva
+    // epavarma (null) lukema ei ole todiste "ei lammitysta" - se pitaa
+    // hylata naytteen tuottavana kontaminaationa aivan kuten varmistettu
+    // heating=true tekisi, ei kohdella sita puhtaana.
+    const start3 = "2026-07-03T00:00:00.000Z";
+    const ambiguousInWindow = reading(
+      new Date(new Date(start3).getTime() + 60 * 60 * 1000).toISOString(),
+      42.25,
+      null,
+    );
+    const readings = [
+      ...cleanRecoverySegment("2026-07-01T00:00:00.000Z"),
+      ...cleanRecoverySegment("2026-07-02T00:00:00.000Z"),
+      ...createHeatingSegment(start3, 4),
+      offTransitionReading(start3, 42.3),
+      ambiguousInWindow,
+      recoveryReading(start3, 42.2),
+    ];
+    const estimate = estimateRecoveryDropPerHour(readings);
+
+    assertEqual(
+      estimate.sampleCount,
+      2,
+      "epavarma (null) lukema palautumisikkunassa hylkaa naytteen samoin kuin varmistettu lammitys tekisi",
+    );
+  }
 }
