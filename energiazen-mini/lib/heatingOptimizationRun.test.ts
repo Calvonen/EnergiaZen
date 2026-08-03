@@ -2,6 +2,7 @@ import {
   createHeatingOptimizationInputKey,
   createHeatingOptimizationRunController,
   HeatingOptimizationInputSnapshot,
+  isHeatingOptimizationResultUsable,
   materializeHeatingOptimizationHours,
   shouldRunHeatingOptimization,
 } from "./heatingOptimizationRun";
@@ -361,6 +362,55 @@ export function runHeatingOptimizationRunUnitTests() {
       shouldRunHeatingOptimization({ ...gateArgs, readingCreatedAt: null }),
       false,
       "puuttuva mittausajankohta estaa optimoinnin ja julkaisun",
+    );
+  }
+
+  {
+    const readingCreatedAt = "2026-07-26T07:18:00.000Z";
+    const readingTime = new Date(readingCreatedAt);
+    const usableArgs = {
+      inputKey: "same-key",
+      now: readingTime,
+      readingCreatedAt,
+      resultInputKey: "same-key",
+    };
+
+    assertEqual(
+      isHeatingOptimizationResultUsable(usableArgs),
+      true,
+      "tuore tulos samalla syotteella on kaytettavissa",
+    );
+    assertEqual(
+      isHeatingOptimizationResultUsable({
+        ...usableArgs,
+        resultInputKey: "different-key",
+      }),
+      false,
+      "eri syotteella laskettu tulos ei ole kaytettavissa",
+    );
+    assertEqual(
+      isHeatingOptimizationResultUsable({
+        ...usableArgs,
+        now: new Date(readingTime.getTime() + 30 * 60 * 1000),
+      }),
+      true,
+      "tasan 30 minuutin ikainen mittaus pitaa aiemman tuloksen viela kaytettavissa",
+    );
+    assertEqual(
+      isHeatingOptimizationResultUsable({
+        ...usableArgs,
+        now: new Date(readingTime.getTime() + 31 * 60 * 1000),
+      }),
+      false,
+      "aiemmin laskettu tulos mitatoityy kun mittaus vanhenee sovelluksen ollessa auki, vaikka syote ei muutu",
+    );
+    assertEqual(
+      isHeatingOptimizationResultUsable({
+        ...usableArgs,
+        readingCreatedAt: null,
+      }),
+      false,
+      "puuttuva mittausajankohta ei pida aiempaa tulosta kaytettavissa",
     );
   }
 }
