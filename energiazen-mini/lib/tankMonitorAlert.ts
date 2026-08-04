@@ -40,3 +40,19 @@ export function isTankReadingStale(ageMinutes: number | null) {
     ageMinutes > tankMonitorAlertThresholdMinutes
   );
 }
+
+export function shouldShowTankMonitorFault({
+  ageMinutes,
+  hasInitialFetchSettled,
+  isResumeRefreshPending,
+}: {
+  ageMinutes: number | null;
+  hasInitialFetchSettled: boolean;
+  isResumeRefreshPending: boolean;
+}) {
+  return (
+    hasInitialFetchSettled &&
+    !isResumeRefreshPending &&
+    isTankReadingStale(ageMinutes)
+  );
+}

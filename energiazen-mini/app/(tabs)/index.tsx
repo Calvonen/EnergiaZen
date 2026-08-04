@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
+  AppState,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -19,7 +20,7 @@ import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import {
   computeTankReadingUiAgeMinutes,
-  isTankReadingStale,
+  shouldShowTankMonitorFault,
 } from "@/lib/tankMonitorAlert";
 import { isTankReadingFreshForCalculation } from "@/lib/tankReadingFreshness";
 import {
@@ -913,6 +914,8 @@ export default function HomeScreen() {
   const heatingPlanSaveChainRef = useRef(Promise.resolve());
   const latestHeatingPlanSaveVersionRef = useRef(0);
   const [loading, setLoading] = useState(true);
+  const [isTankReadingResumeRefreshPending, setIsTankReadingResumeRefreshPending] =
+    useState(false);
   const handleSelectedDayChange = useCallback((day: DaySelection) => {
     const startedAt = Date.now();
 
@@ -2226,11 +2229,11 @@ export default function HomeScreen() {
   // alla) - sita ennen tankUpdatedAt on vaistamatta viela null, koska
   // mitaan ei ole ehditty hakea. Ilman tata ehtoa banneri vilahti
   // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
-  const tankMonitorFault =
-    !loading &&
-    isTankReadingStale(
-      computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
-    );
+  const tankMonitorFault = shouldShowTankMonitorFault({
+    ageMinutes: computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
+    hasInitialFetchSettled: !loading,
+    isResumeRefreshPending: isTankReadingResumeRefreshPending,
+  });
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
@@ -2266,6 +2269,7 @@ export default function HomeScreen() {
         );
 
       let tankReadingsRefreshInFlight = false;
+      let resumeRefreshPending = false;
 
       function markTankReadingFetchAttempted() {
         if (!hasAttemptedTankReadingFetchRef.current) {
@@ -2513,6 +2517,10 @@ export default function HomeScreen() {
 
           if (isActive) {
             setLoading(false);
+            if (resumeRefreshPending) {
+              resumeRefreshPending = false;
+              setIsTankReadingResumeRefreshPending(false);
+            }
           }
         }
       };
@@ -2524,9 +2532,32 @@ export default function HomeScreen() {
         void refreshTankReadings();
       }, 30000);
 
+      let previousAppState = AppState.currentState;
+      const appStateSubscription = AppState.addEventListener(
+        "change",
+        (nextAppState) => {
+          const returnedFromBackground =
+            (previousAppState === "background" ||
+              previousAppState === "inactive") &&
+            nextAppState === "active";
+          previousAppState = nextAppState;
+
+          if (returnedFromBackground) {
+            // Cache data may have crossed the normal stale threshold while
+            // the app was suspended. Wait for this first active-state fetch
+            // to settle before evaluating the fault banner; its success and
+            // error paths retain all existing stale/fault semantics.
+            resumeRefreshPending = true;
+            setIsTankReadingResumeRefreshPending(true);
+            void refreshTankReadings();
+          }
+        },
+      );
+
       return () => {
         isActive = false;
         clearInterval(tankReadingsInterval);
+        appStateSubscription.remove();
       };
     }, [router]),
   );
