@@ -2232,6 +2232,37 @@ export default function HomeScreen() {
   const tankMonitorFault =
     !loading &&
     isTankReadingStale(computeTankReadingAgeMinutes(tankUpdatedAt, currentTime));
+  const tankReadingAgeMinutes = computeTankReadingAgeMinutes(
+    tankUpdatedAt,
+    currentTime,
+  );
+  const tankMonitorBannerReason = loading
+    ? "banner hidden: initial tank_readings fetch is still loading"
+    : tankUpdatedAt === null
+      ? "banner shown: latest Supabase created_at is missing"
+      : tankReadingAgeMinutes === null
+        ? "banner shown: latest Supabase created_at is invalid"
+        : tankReadingAgeMinutes < 0
+          ? "banner shown: latest Supabase created_at is in the future"
+          : tankMonitorFault
+            ? "banner shown: latest Supabase reading is over 30 minutes old"
+            : "banner hidden: latest Supabase reading is fresh";
+
+  useEffect(() => {
+    // Temporary production diagnostic: keep this unconditional so the values
+    // remain visible even when the general DEV_LOGS switch is disabled.
+    console.log("Tank monitor banner diagnostic", {
+      latestSupabaseCreatedAt: tankUpdatedAt,
+      tankReadingAgeMinutes,
+      tankMonitorFault,
+      bannerReason: tankMonitorBannerReason,
+    });
+  }, [
+    tankMonitorBannerReason,
+    tankMonitorFault,
+    tankReadingAgeMinutes,
+    tankUpdatedAt,
+  ]);
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
