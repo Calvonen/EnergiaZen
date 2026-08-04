@@ -1,5 +1,6 @@
 import {
   computeTankReadingAgeMinutes,
+  computeTankReadingUiAgeMinutes,
   isTankReadingStale,
   tankMonitorAlertThresholdMinutes,
 } from "./tankMonitorAlert";
@@ -33,7 +34,21 @@ export function runTankMonitorAlertUnitTests() {
   assertEqual(
     computeTankReadingAgeMinutes("2026-08-02T12:05:00.000Z", now),
     -5,
-    "tulevaisuudessa oleva aikaleima tuottaa negatiivisen iän",
+    "yleinen ikälaskenta säilyttää tulevan aikaleiman kellovirheenä",
+  );
+  const slightlyFutureReadingAge = computeTankReadingUiAgeMinutes(
+    "2026-08-02T12:00:15.000Z",
+    now,
+  );
+  assertEqual(
+    slightlyFutureReadingAge,
+    0,
+    "currentTime-tikkia hieman uudempi aikaleima rajataan nollaan",
+  );
+  assertEqual(
+    isTankReadingStale(slightlyFutureReadingAge),
+    false,
+    "uuden Supabase-rivin ja currentTime-tikin valinen ero ei nayta banneria",
   );
 
   assertEqual(
@@ -44,7 +59,7 @@ export function runTankMonitorAlertUnitTests() {
   assertEqual(
     isTankReadingStale(-1),
     true,
-    "negatiivinen ikä (kellovirhe) tulkitaan vanhentuneeksi",
+    "suoraan annettu negatiivinen ikä tulkitaan yhä virheelliseksi",
   );
   assertEqual(
     isTankReadingStale(0),

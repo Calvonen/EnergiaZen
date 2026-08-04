@@ -18,7 +18,7 @@ import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import {
-  computeTankReadingAgeMinutes,
+  computeTankReadingUiAgeMinutes,
   isTankReadingStale,
 } from "@/lib/tankMonitorAlert";
 import { isTankReadingFreshForCalculation } from "@/lib/tankReadingFreshness";
@@ -429,16 +429,13 @@ function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
     return null;
   }
 
-  const updatedDate = new Date(updatedAt);
-
-  if (Number.isNaN(updatedDate.getTime())) {
+  const preciseAgeInMinutes = computeTankReadingUiAgeMinutes(updatedAt, now);
+  if (preciseAgeInMinutes === null) {
     return null;
   }
 
-  const ageInMinutes = Math.max(
-    0,
-    Math.floor((now.getTime() - updatedDate.getTime()) / (60 * 1000)),
-  );
+  const updatedDate = new Date(updatedAt);
+  const ageInMinutes = Math.floor(preciseAgeInMinutes);
 
   if (ageInMinutes < 2) {
     return {
@@ -2231,7 +2228,9 @@ export default function HomeScreen() {
   // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
   const tankMonitorFault =
     !loading &&
-    isTankReadingStale(computeTankReadingAgeMinutes(tankUpdatedAt, currentTime));
+    isTankReadingStale(
+      computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
+    );
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
