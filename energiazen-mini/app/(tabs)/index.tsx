@@ -2556,6 +2556,13 @@ export default function HomeScreen() {
 
       return () => {
         isActive = false;
+        // The screen can lose focus while the first refresh after resume is
+        // still in flight. Its finally block deliberately ignores inactive
+        // effects, so clear the banner gate here as part of the same focus
+        // lifecycle. A later visit starts a new focus fetch, but that is no
+        // longer the refresh belonging to the background -> active event.
+        resumeRefreshPending = false;
+        setIsTankReadingResumeRefreshPending(false);
         clearInterval(tankReadingsInterval);
         appStateSubscription.remove();
       };
