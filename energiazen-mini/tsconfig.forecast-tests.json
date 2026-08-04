@@ -57,6 +57,7 @@
     "lib/settingsScenario.test.ts",
     "tests/historyUiSource.test.ts",
     "tests/heatingGainHistorySource.test.ts",
+    "tests/homeResumeRefreshSource.test.ts",
     "tests/temperatureHistoryRpcMigration.test.ts",
     "tests/settingsDraftUiSource.test.ts",
     "tests/settingsScenarioUiSource.test.ts",
