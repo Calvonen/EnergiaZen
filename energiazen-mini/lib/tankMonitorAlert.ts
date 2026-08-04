@@ -21,6 +21,18 @@ export function computeTankReadingAgeMinutes(
   return (now.getTime() - readingTime) / (60 * 1000);
 }
 
+export function computeTankReadingUiAgeMinutes(
+  readingCreatedAt: string | null,
+  now: Date,
+): number | null {
+  const ageMinutes = computeTankReadingAgeMinutes(readingCreatedAt, now);
+
+  // `now` is UI state refreshed every 30 seconds, while a newly fetched
+  // Supabase created_at can be newer. Both UI consumers treat that temporary
+  // ordering gap as a reading from right now.
+  return ageMinutes === null ? null : Math.max(0, ageMinutes);
+}
+
 export function isTankReadingStale(ageMinutes: number | null) {
   return (
     ageMinutes === null ||

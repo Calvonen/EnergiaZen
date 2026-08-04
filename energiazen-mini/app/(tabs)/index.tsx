@@ -18,7 +18,7 @@ import { WarmWaterCard } from "@/components/home/warm-water-card";
 import { debugLog } from "@/lib/debug";
 import { getTemperatureBarSegmentColor } from "@/lib/temperatureColors";
 import {
-  computeTankReadingAgeMinutes,
+  computeTankReadingUiAgeMinutes,
   isTankReadingStale,
 } from "@/lib/tankMonitorAlert";
 import { isTankReadingFreshForCalculation } from "@/lib/tankReadingFreshness";
@@ -429,16 +429,13 @@ function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
     return null;
   }
 
-  const updatedDate = new Date(updatedAt);
-
-  if (Number.isNaN(updatedDate.getTime())) {
+  const preciseAgeInMinutes = computeTankReadingUiAgeMinutes(updatedAt, now);
+  if (preciseAgeInMinutes === null) {
     return null;
   }
 
-  const ageInMinutes = Math.max(
-    0,
-    Math.floor((now.getTime() - updatedDate.getTime()) / (60 * 1000)),
-  );
+  const updatedDate = new Date(updatedAt);
+  const ageInMinutes = Math.floor(preciseAgeInMinutes);
 
   if (ageInMinutes < 2) {
     return {
@@ -2231,38 +2228,9 @@ export default function HomeScreen() {
   // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
   const tankMonitorFault =
     !loading &&
-    isTankReadingStale(computeTankReadingAgeMinutes(tankUpdatedAt, currentTime));
-  const tankReadingAgeMinutes = computeTankReadingAgeMinutes(
-    tankUpdatedAt,
-    currentTime,
-  );
-  const tankMonitorBannerReason = loading
-    ? "banner hidden: initial tank_readings fetch is still loading"
-    : tankUpdatedAt === null
-      ? "banner shown: latest Supabase created_at is missing"
-      : tankReadingAgeMinutes === null
-        ? "banner shown: latest Supabase created_at is invalid"
-        : tankReadingAgeMinutes < 0
-          ? "banner shown: latest Supabase created_at is in the future"
-          : tankMonitorFault
-            ? "banner shown: latest Supabase reading is over 30 minutes old"
-            : "banner hidden: latest Supabase reading is fresh";
-
-  useEffect(() => {
-    // Temporary production diagnostic: keep this unconditional so the values
-    // remain visible even when the general DEV_LOGS switch is disabled.
-    console.log("Tank monitor banner diagnostic", {
-      latestSupabaseCreatedAt: tankUpdatedAt,
-      tankReadingAgeMinutes,
-      tankMonitorFault,
-      bannerReason: tankMonitorBannerReason,
-    });
-  }, [
-    tankMonitorBannerReason,
-    tankMonitorFault,
-    tankReadingAgeMinutes,
-    tankUpdatedAt,
-  ]);
+    isTankReadingStale(
+      computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
+    );
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
     (cheapest, item) =>
       !cheapest || item.price < cheapest.price ? item : cheapest,
