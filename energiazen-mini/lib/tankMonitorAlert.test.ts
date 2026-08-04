@@ -2,6 +2,7 @@ import {
   computeTankReadingAgeMinutes,
   computeTankReadingUiAgeMinutes,
   isTankReadingStale,
+  shouldShowTankMonitorFault,
   tankMonitorAlertThresholdMinutes,
 } from "./tankMonitorAlert";
 
@@ -75,5 +76,23 @@ export function runTankMonitorAlertUnitTests() {
     isTankReadingStale(tankMonitorAlertThresholdMinutes + 0.01),
     true,
     "kynnysarvon ylittävä ikä on vanhentunut",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: tankMonitorAlertThresholdMinutes + 1,
+      hasInitialFetchSettled: true,
+      isResumeRefreshPending: true,
+    }),
+    false,
+    "vanhaa valimuistilukemaa ei nayteta vikana paluupaivityksen aikana",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: tankMonitorAlertThresholdMinutes + 1,
+      hasInitialFetchSettled: true,
+      isResumeRefreshPending: false,
+    }),
+    true,
+    "vanha lukema naytetaan vikana kun paluupaivitys on valmistunut",
   );
 }
