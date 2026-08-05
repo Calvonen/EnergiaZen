@@ -39,6 +39,10 @@ import { runTankMonitorAlertLogicUnitTests } from "../supabase/functions/check-t
 import { runInletTemperatureTrendUnitTests } from "../lib/inletTemperatureTrend.test";
 import { runWaterDrawDetectionUnitTests } from "../lib/waterDrawDetection.test";
 import { runTankReadingFreshnessUnitTests } from "../lib/tankReadingFreshness.test";
+import { runSensorGeometryUnitTests } from "../lib/energyModelV2/sensorGeometry.test";
+import { runReplayEngineUnitTests } from "../lib/energyModelV2/replayEngine.test";
+import { runEnergyModelCoreUnitTests } from "../lib/energyModelV2/energyModelCore.test";
+import { runReplayValidationUnitTests } from "../lib/energyModelV2/replayValidation.test";
 import { runHomeResumeRefreshSourceTests } from "../tests/homeResumeRefreshSource.test";
 
 async function runTests() {
@@ -84,9 +88,13 @@ async function runTests() {
   runWaterDrawDetectionUnitTests();
   runTankReadingFreshnessUnitTests();
   runHomeResumeRefreshSourceTests();
+  runSensorGeometryUnitTests();
+  runReplayEngineUnitTests();
+  runEnergyModelCoreUnitTests();
+  runReplayValidationUnitTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection and tankReadingFreshness tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore and replayValidation tests passed",
   );
 }
 
