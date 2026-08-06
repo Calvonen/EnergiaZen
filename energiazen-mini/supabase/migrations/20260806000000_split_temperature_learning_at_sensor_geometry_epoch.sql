@@ -1,14 +1,17 @@
--- Keep the learned cooling profile on the current sensor geometry.
--- The top sensor moved from 9 cm to 16 cm below the lid at this UTC instant.
--- recalculate_temperature_drop_profile hyvaksyi lukemaparin siivuun, jos
--- previous_heating/heating oli "is not true" - tama on Postgresin
--- kolmiarvoisessa logiikassa totta seka false:lle ETTA null:lle. Nyt kun
--- tank_readings.heating voi olla null (Shellyn statuskysely epaonnistui
--- ESP32:lla), epavarma valiaika saattoi paatya osaksi Supabaseen
--- tallennettua 30 paivan jaahdytysprofiilia, vaikka paikallinen
--- (tankTemperatureForecast.ts) laskenta vaatii jo eksplisiittisen
--- heating = false molemmilta paatepisteilta (Codex-review, PR #147).
--- Vaaditaan nyt sama molemmilta puolilta myos taalla.
+-- ESP32:n ylasensori siirrettiin fyysisesti 9 cm:sta 16 cm:iin kannen alle
+-- 2026-08-05T14:00:00Z (ks. energyModelV2/sensorGeometry.ts:n
+-- topSensorMovedAt). Ennen tata migraatiota
+-- recalculate_temperature_drop_profile() saattoi sekoittaa V1- ja
+-- V2-geometrian aikaisia lukemia samaan 30 paivan oppimisikkunaan, ja
+-- previous_profile-CTE saattoi kayttaa V1-geometrialla laskettua profiilia
+-- fallbackina V2-profiilille, vaikka anturin fyysinen sijainti - ja siten
+-- mitattu jaahtymiskayra - muuttui siirron myota.
+--
+-- Korjaus: oppimisikkunan alku ankkuroidaan aina vahintaan anturin
+-- siirtohetkeen (v_source_start = greatest(source_end - 30pv, siirtohetki)),
+-- ja previous_profile hyvaksyy vain profiileja joiden oma source_start on
+-- siirtohetkella tai sen jalkeen - V1-aikainen profiili ei voi enaa paatya
+-- V2-profiilin fallbackiksi (Codex-review, PR #156).
 create or replace function public.recalculate_temperature_drop_profile()
 returns void
 language plpgsql
