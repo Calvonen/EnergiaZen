@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { estimateRecoveryDropPerHour } from "../heatingRecoveryDrop";
 import { topSensorMovedAt } from "./sensorGeometry";
 
 type DashboardReading = {
@@ -14,14 +15,18 @@ export type EnergyModelDashboardData = {
   fullHeatings: number;
   latest: DashboardReading | null;
   missingMeasurements: number;
+  recoverySamples: number;
   validReplayDays: number;
   v1Readings: number;
   v2Readings: number;
   waterDraws: number;
 };
 
-const EXPECTED_INTERVAL_MS = 5 * 60 * 1000;
+const EXPECTED_INTERVAL_MS = 60 * 1000;
 const PERIOD_GAP_MS = 20 * 60 * 1000;
+const READINGS_PAGE_SIZE = 1000;
+const VALID_REPLAY_DAY_MINIMUM_READINGS =
+  (20 * 60 * 60 * 1000) / EXPECTED_INTERVAL_MS;
 
 export function summarizeDashboardReadings(
   readings: DashboardReading[],
@@ -61,7 +66,9 @@ export function summarizeDashboardReadings(
     coolingPeriods,
     fullHeatings,
     missingMeasurements,
-    validReplayDays: [...dayCounts.values()].filter((count) => count >= 240).length,
+    validReplayDays: [...dayCounts.values()].filter(
+      (count) => count >= VALID_REPLAY_DAY_MINIMUM_READINGS,
+    ).length,
     waterDraws,
   };
 }
@@ -77,22 +84,37 @@ async function countReadings(before?: string, after?: string) {
 
 export async function fetchEnergyModelDashboardData(): Promise<EnergyModelDashboardData> {
   const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const [{ data, error }, v1Readings, v2Readings] = await Promise.all([
-    supabase
+  const [readings, v1Readings, v2Readings] = await Promise.all([
+    fetchReadingsSince(windowStart),
+    countReadings(topSensorMovedAt),
+    countReadings(undefined, topSensorMovedAt),
+  ]);
+  return {
+    ...summarizeDashboardReadings(readings),
+    latest: readings.at(-1) ?? null,
+    recoverySamples: estimateRecoveryDropPerHour(readings).sampleCount,
+    v1Readings,
+    v2Readings,
+  };
+}
+
+async function fetchReadingsSince(windowStart: string) {
+  const readings: DashboardReading[] = [];
+
+  for (let from = 0; ; from += READINGS_PAGE_SIZE) {
+    const { data, error } = await supabase
       .from("tank_readings")
       .select("created_at, top_temp, bottom_temp, inlet_temp, heating")
       .gte("created_at", windowStart)
       .order("created_at", { ascending: true })
-      .limit(10000),
-    countReadings(topSensorMovedAt),
-    countReadings(undefined, topSensorMovedAt),
-  ]);
-  if (error) throw error;
-  const readings = (data ?? []) as DashboardReading[];
-  return {
-    ...summarizeDashboardReadings(readings),
-    latest: readings.at(-1) ?? null,
-    v1Readings,
-    v2Readings,
-  };
+      .range(from, from + READINGS_PAGE_SIZE - 1);
+
+    if (error) throw error;
+    const page = (data ?? []) as DashboardReading[];
+    readings.push(...page);
+
+    if (page.length < READINGS_PAGE_SIZE) break;
+  }
+
+  return readings;
 }

@@ -82,13 +82,13 @@ export default function EnergyModelDashboardScreen() {
             ]} />
             <DashboardCard title="Learning Status" metrics={[
               { label: "Heating Gain", ...learningStatus(data.fullHeatings) },
-              { label: "Recovery", ...learningStatus(data.fullHeatings) },
+              { label: "Recovery", ...learningStatus(data.recoverySamples) },
               { label: "Cooling", ...learningStatus(data.coolingPeriods) },
               { label: "Replay", ...learningStatus(data.validReplayDays) },
             ]} />
-            <DashboardCard title="Tank DNA" metrics={[
-              { label: "Replay", value: data.validReplayDays > 0 ? "Valmis" : "Ei valmis", tone: data.validReplayDays > 0 ? "good" : "warning" },
-            ]} />
+            <DashboardCard title="Tank DNA">
+              <Text style={styles.placeholder}>Tulossa myöhemmässä sprintissä</Text>
+            </DashboardCard>
             <DashboardCard title="Replay Readiness" metrics={[
               { label: "Täydet lämmitykset", value: String(data.fullHeatings) },
               { label: "Cooling-jaksot", value: String(data.coolingPeriods) },
@@ -122,4 +122,5 @@ const styles = StyleSheet.create({
   errorCard: { backgroundColor: "rgba(255,95,109,0.12)", borderColor: "rgba(255,95,109,0.35)", borderRadius: 18, borderWidth: 1, padding: 18 },
   errorTitle: { color: "#ff9aa4", fontSize: 15, fontWeight: "900" },
   errorText: { color: "#c9a5ad", fontSize: 13, marginTop: 5 },
+  placeholder: { color: "#7889aa", fontSize: 13, fontWeight: "700", paddingBottom: 18 },
 });
