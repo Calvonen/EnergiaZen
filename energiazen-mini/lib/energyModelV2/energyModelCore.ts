@@ -47,6 +47,8 @@ export type EnergyModelCoreConfig = {
     toTop: number;
   };
   heatingPowerKwhPerHour: number;
+  longGapThresholdMinutes: number;
+  longGapUncertaintyKwhPerHour: number;
   maxNodeTemperatureC: number;
   specificHeatKwhPerKgC: number;
   targetUseTempC: number;
@@ -62,6 +64,8 @@ export const defaultEnergyModelCoreConfig = {
     toTop: 0.45,
   },
   heatingPowerKwhPerHour: 3,
+  longGapThresholdMinutes: 180,
+  longGapUncertaintyKwhPerHour: 0.15,
   maxNodeTemperatureC: 80,
   // Water heat capacity: 4.186 kJ/kgC = 0.00116278 kWh/kgC.
   specificHeatKwhPerKgC: 0.001163,
@@ -167,7 +171,8 @@ export function advanceState(
     return previousState;
   }
 
-  const deltaHours = Math.max(deltaTimeMinutes, 0) / 60;
+  const safeDeltaTimeMinutes = Math.max(deltaTimeMinutes, 0);
+  const deltaHours = safeDeltaTimeMinutes / 60;
   const inletTempC = isFiniteNumber(observation.inletTempC)
     ? observation.inletTempC
     : previousState.inletTemperatureC;
@@ -202,9 +207,15 @@ export function advanceState(
     ? observation.bottomTempC
     : heatedTemperatures.bottomTempC;
   const uncertaintyReasons = getAdvanceUncertaintyReasons({
+    deltaTimeMinutes: safeDeltaTimeMinutes,
     observation,
     predictedBottomTempC: heatedTemperatures.bottomTempC,
     predictedTopTempC: heatedTemperatures.topTempC,
+    config,
+  });
+  const longGapUncertainty = calculateLongGapUncertaintyKwh({
+    config,
+    deltaTimeMinutes: safeDeltaTimeMinutes,
   });
 
   return createTankStateFromNodeTemperatures({
@@ -215,6 +226,7 @@ export function advanceState(
     timestamp: observation.timestamp,
     topTempC: correctedTopTempC,
     uncertaintyReasons,
+    extraEnergyUncertaintyKwh: longGapUncertainty,
     config,
   });
 }
@@ -270,6 +282,7 @@ function createTankStateFromNodeTemperatures({
   timestamp,
   topTempC,
   uncertaintyReasons,
+  extraEnergyUncertaintyKwh = 0,
 }: {
   bottomTempC: number;
   config: EnergyModelCoreConfig;
@@ -279,6 +292,7 @@ function createTankStateFromNodeTemperatures({
   timestamp: string;
   topTempC: number;
   uncertaintyReasons: string[];
+  extraEnergyUncertaintyKwh?: number;
 }): TankState {
   const bottomEnergyKwh = calculateLayerStoredEnergyKwh({
     config,
@@ -312,7 +326,7 @@ function createTankStateFromNodeTemperatures({
     topNodeTemperatureC: topTempC,
     uncertainty: {
       bottomTemperatureC: uncertaintyReasons.length > 0 ? 0.5 : 0,
-      energyKwh: uncertaintyReasons.length > 0 ? 0.1 : 0,
+      energyKwh: roundEnergyKwh((uncertaintyReasons.length > 0 ? 0.1 : 0) + extraEnergyUncertaintyKwh),
       reasons: uncertaintyReasons,
       topTemperatureC: uncertaintyReasons.length > 0 ? 0.5 : 0,
     },
@@ -400,16 +414,23 @@ function calculateImmediateUsabilityWeight(
 }
 
 function getAdvanceUncertaintyReasons({
+  config,
+  deltaTimeMinutes,
   observation,
   predictedBottomTempC,
   predictedTopTempC,
 }: {
+  config: EnergyModelCoreConfig;
+  deltaTimeMinutes: number;
   observation: TankObservation;
   predictedBottomTempC: number;
   predictedTopTempC: number;
 }) {
   const reasons: string[] = [];
 
+  if (deltaTimeMinutes > config.longGapThresholdMinutes) {
+    reasons.push("long-replay-gap");
+  }
   if (!isFiniteNumber(observation.topTempC)) {
     reasons.push("missing-top-temperature-corrected-by-model");
   }
@@ -429,6 +450,21 @@ function getAdvanceUncertaintyReasons({
   }
 
   return reasons;
+}
+
+function calculateLongGapUncertaintyKwh({
+  config,
+  deltaTimeMinutes,
+}: {
+  config: EnergyModelCoreConfig;
+  deltaTimeMinutes: number;
+}) {
+  const excessGapMinutes = Math.max(
+    deltaTimeMinutes - config.longGapThresholdMinutes,
+    0,
+  );
+
+  return (excessGapMinutes / 60) * config.longGapUncertaintyKwhPerHour;
 }
 
 function getObservationQualityReasons(observation: TankObservation) {

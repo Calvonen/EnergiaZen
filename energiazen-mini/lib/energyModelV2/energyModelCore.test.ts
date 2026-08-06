@@ -240,6 +240,36 @@ export function runEnergyModelCoreUnitTests() {
     "six hours of Newton cooling lowers both node temperatures",
   );
 
+  const longGapState = advanceState(
+    initialDynamicState,
+    {
+      bottomTempC: null,
+      heating: false,
+      inletTempC: 12,
+      timestamp: "2026-08-02T13:00:00.000Z",
+      topTempC: null,
+    },
+    24 * 60,
+  );
+
+  assert(
+    longGapState.quality === "degraded",
+    "long replay gaps degrade state quality deterministically",
+  );
+  assert(
+    longGapState.uncertainty.reasons.includes("long-replay-gap"),
+    "long replay gaps are recorded as uncertainty reasons",
+  );
+  assert(
+    longGapState.uncertainty.energyKwh > restedSixHours.uncertainty.energyKwh,
+    "long replay gaps increase energy uncertainty with gap length",
+  );
+  assert(
+    (longGapState.topNodeTemperatureC ?? 0) <= defaultEnergyModelCoreConfig.maxNodeTemperatureC &&
+      (longGapState.bottomNodeTemperatureC ?? 0) <= defaultEnergyModelCoreConfig.maxNodeTemperatureC,
+    "long replay gaps keep node temperatures inside the deterministic model bounds",
+  );
+
   const heatingStartState = calculateTankStateFromObservation({
     geometry: sensorGeometryV2,
     observation: {

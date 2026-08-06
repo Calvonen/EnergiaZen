@@ -14,6 +14,12 @@ const path = require("node:path");
 
 const readingColumns = "created_at,top_temp,bottom_temp,inlet_temp,heating";
 const pageSize = 1000;
+const envSupabaseUrl = process.env.SUPABASE_URL ?? process.env.ENERGIAZEN_SUPABASE_URL;
+const envSupabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+  process.env.SUPABASE_ANON_KEY ??
+  process.env.SUPABASE_KEY;
+const envTopSensorMovedAt = process.env.ENERGYZEN_TOP_SENSOR_MOVED_AT;
 
 type ReplayValidateArgs = {
   day: string;
@@ -23,12 +29,8 @@ type ReplayValidateArgs = {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const supabaseUrl = readRequiredEnv("SUPABASE_URL", "ENERGIAZEN_SUPABASE_URL");
-  const supabaseKey = readRequiredEnv(
-    "SUPABASE_SERVICE_ROLE_KEY",
-    "SUPABASE_ANON_KEY",
-    "SUPABASE_KEY",
-  );
+  const supabaseUrl = readSupabaseUrl();
+  const supabaseKey = readSupabaseKey();
   const { fromInclusive, toExclusive } = getHelsinkiDayBoundsUtc(args.day);
   const readings = await fetchTankReadings({
     fromInclusive,
@@ -85,7 +87,7 @@ function parseArgs(argv: string[]): ReplayValidateArgs {
   const outputDir = readOption(argv, "--output-dir");
   const topSensorMovedAt =
     readOption(argv, "--top-sensor-moved-at") ??
-    process.env.ENERGYZEN_TOP_SENSOR_MOVED_AT ??
+    envTopSensorMovedAt ??
     null;
 
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -114,16 +116,22 @@ function readOption(argv: string[], name: string) {
   return argv[index + 1] ?? null;
 }
 
-function readRequiredEnv(...names: string[]) {
-  for (const name of names) {
-    const value = process.env[name];
-
-    if (value) {
-      return value;
-    }
+function readSupabaseUrl() {
+  if (envSupabaseUrl) {
+    return envSupabaseUrl;
   }
 
-  throw new Error(`Missing required environment variable: ${names.join(" or ")}`);
+  throw new Error("Missing required environment variable: SUPABASE_URL or ENERGIAZEN_SUPABASE_URL");
+}
+
+function readSupabaseKey() {
+  if (envSupabaseKey) {
+    return envSupabaseKey;
+  }
+
+  throw new Error(
+    "Missing required environment variable: SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY or SUPABASE_KEY",
+  );
 }
 
 async function fetchTankReadings({

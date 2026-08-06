@@ -180,6 +180,11 @@ export function runReplayValidationUnitTests() {
     "Validation API returns water-draw event details",
   );
   assert(
+    (validation.metrics.top.mae ?? 0) > 0 &&
+      (validation.metrics.bottom.mae ?? 0) > 0,
+    "Replay Validation metrics compare measured values against one-step model predictions",
+  );
+  assert(
     validation.visualizationData.length === validation.report.observationCount,
     "Validation API returns visualization data for each replay step",
   );

@@ -1,4 +1,6 @@
 import {
+  advanceState,
+  createTankObservationFromReplayStep,
   runEnergyModelCoreReplay,
   type TankState,
 } from "./energyModelCore";
@@ -101,14 +103,28 @@ export function validateReplay({
 }): ReplayValidationResult {
   const replay = runEnergyModelCoreReplay({ readings, sensorGeometryEpochs });
   const physicsVersion = "energy-model-core-v1";
-  const steps = replay.steps.map((step) =>
-    createValidationStep({
+  const steps = replay.steps.map((step, index) => {
+    const previousState = replay.steps[index - 1]?.state ?? null;
+    const predictionState = previousState && step.segmentMinutes !== null
+      ? advanceState(
+          previousState,
+          {
+            ...createTankObservationFromReplayStep(step),
+            bottomTempC: null,
+            topTempC: null,
+          },
+          step.segmentMinutes,
+        )
+      : step.state;
+
+    return createValidationStep({
       physicsVersion,
+      predictionState,
       reading: step.reading,
       sensorGeometryVersion: step.geometry.version,
       state: step.state,
-    }),
-  );
+    });
+  });
   const events = detectReplayValidationEvents(steps);
   const metrics = calculateValidationMetrics(steps);
   const report = createReplayValidationReport({
@@ -202,11 +218,13 @@ function createValidationStep({
   physicsVersion,
   reading,
   sensorGeometryVersion,
+  predictionState,
   state,
 }: {
   physicsVersion: EnergyModelPhysicsVersion;
   reading: TankTemperatureReading & { created_at: string };
   sensorGeometryVersion: SensorGeometryVersion;
+  predictionState: TankState | null;
   state: TankState | null;
 }): ReplayValidationStep {
   const uncertainty = state
@@ -217,7 +235,7 @@ function createValidationStep({
 
   return {
     bottomMeasured: finiteNumberOrNull(reading.bottom_temp),
-    bottomModel: state?.bottomNodeTemperatureC ?? null,
+    bottomModel: predictionState?.bottomNodeTemperatureC ?? null,
     heating: reading.heating ?? null,
     immediateEnergy: state?.immediateEnergy.kwh ?? null,
     physicsVersion,
@@ -227,7 +245,7 @@ function createValidationStep({
     storedEnergy: state?.storedEnergy.kwh ?? null,
     timestamp: reading.created_at,
     topMeasured: finiteNumberOrNull(reading.top_temp),
-    topModel: state?.topNodeTemperatureC ?? null,
+    topModel: predictionState?.topNodeTemperatureC ?? null,
     uncertainty,
     uncertaintyReasons: state?.uncertainty.reasons ?? [],
     usableEnergy: state?.usableEnergy.kwh ?? null,
