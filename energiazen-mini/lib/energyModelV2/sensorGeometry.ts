@@ -44,6 +44,12 @@ export const sensorGeometryV2 = {
   version: "V2",
 } as const satisfies SensorGeometry;
 
+// The top sensor was physically moved from 9 cm to 16 cm below the lid at
+// this instant. Keep this as the single production boundary for every model
+// and learning pipeline; timestamps before it are V1 and timestamps at or
+// after it are V2.
+export const topSensorMovedAt = "2026-08-05T14:00:00.000Z";
+
 export type SensorGeometryEpoch = SensorGeometry & {
   effectiveFromInclusive: string | null;
   effectiveUntilExclusive: string | null;
@@ -66,6 +72,73 @@ export function createSensorGeometryEpochs({
       effectiveFromInclusive: topSensorMovedAt,
     },
   ];
+}
+
+export const sensorGeometryEpochs = createSensorGeometryEpochs({
+  topSensorMovedAt,
+});
+
+export function areTimestampsInSameSensorGeometryEpoch(
+  firstTimestamp: string,
+  secondTimestamp: string,
+): boolean {
+  try {
+    return (
+      resolveSensorGeometryForTimestamp({
+        epochs: sensorGeometryEpochs,
+        timestamp: firstTimestamp,
+      }).version ===
+      resolveSensorGeometryForTimestamp({
+        epochs: sensorGeometryEpochs,
+        timestamp: secondTimestamp,
+      }).version
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function filterToLatestSensorGeometryEpoch<
+  T extends { created_at?: string | null },
+>(readings: T[]): T[] {
+  const resolved = readings
+    .map((reading) => {
+      if (!reading.created_at) {
+        return null;
+      }
+
+      try {
+        return {
+          epoch: resolveSensorGeometryForTimestamp({
+            epochs: sensorGeometryEpochs,
+            timestamp: reading.created_at,
+          }),
+          reading,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const latestEpochStart = resolved.reduce(
+    (latest, item) =>
+      Math.max(
+        latest,
+        item.epoch.effectiveFromInclusive
+          ? new Date(item.epoch.effectiveFromInclusive).getTime()
+          : Number.NEGATIVE_INFINITY,
+      ),
+    Number.NEGATIVE_INFINITY,
+  );
+
+  return resolved
+    .filter((item) => {
+      const epochStart = item.epoch.effectiveFromInclusive
+        ? new Date(item.epoch.effectiveFromInclusive).getTime()
+        : Number.NEGATIVE_INFINITY;
+      return epochStart === latestEpochStart;
+    })
+    .map((item) => item.reading);
 }
 
 export function assertValidSensorGeometryEpochs(

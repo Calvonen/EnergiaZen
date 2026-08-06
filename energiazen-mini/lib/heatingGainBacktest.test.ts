@@ -45,7 +45,7 @@ function createSegmentsOnConsecutiveDays(
 ): TankTemperatureReading[] {
   return gainsAndDurations.flatMap(([gainPerHour, durationMinutes], index) =>
     createHeatingSegment(
-      `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+      `2026-08-${String(index + 2).padStart(2, "0")}T00:00:00.000Z`,
       gainPerHour,
       durationMinutes,
     ),
@@ -68,7 +68,7 @@ export function runHeatingGainBacktestUnitTests() {
 
   {
     const accepted = createHeatingSegment(
-      "2026-08-01T00:00:00.000Z",
+      "2026-08-01T13:00:00.000Z",
       4,
       60,
     );

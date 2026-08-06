@@ -1,8 +1,12 @@
 import {
+  areTimestampsInSameSensorGeometryEpoch,
   createSensorGeometryEpochs,
+  filterToLatestSensorGeometryEpoch,
   resolveSensorGeometryForTimestamp,
   sensorGeometryV1,
   sensorGeometryV2,
+  sensorGeometryEpochs,
+  topSensorMovedAt,
 } from "./sensorGeometry";
 
 function assert(condition: boolean, message: string) {
@@ -18,7 +22,7 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
 }
 
 export function runSensorGeometryUnitTests() {
-  const movedAt = "2026-08-01T12:00:00.000Z";
+  const movedAt = "2026-08-05T14:00:00.000Z";
   const epochs = createSensorGeometryEpochs({ topSensorMovedAt: movedAt });
 
   assertEqual(sensorGeometryV1.topSensorDistanceFromTopCm, 9, "V1 top sensor distance");
@@ -29,7 +33,7 @@ export function runSensorGeometryUnitTests() {
   assertEqual(
     resolveSensorGeometryForTimestamp({
       epochs,
-      timestamp: "2026-08-01T11:59:59.000Z",
+      timestamp: "2026-08-05T13:59:59.000Z",
     }).version,
     "V1",
     "timestamp before top sensor move uses V1",
@@ -45,5 +49,40 @@ export function runSensorGeometryUnitTests() {
   assert(
     epochs[0].effectiveUntilExclusive === epochs[1].effectiveFromInclusive,
     "geometry epochs are contiguous at the sensor move timestamp",
+  );
+  assertEqual(
+    topSensorMovedAt,
+    movedAt,
+    "production sensor move timestamp is canonical",
+  );
+  assertEqual(
+    sensorGeometryEpochs[1].effectiveFromInclusive,
+    topSensorMovedAt,
+    "production V2 epoch starts at the canonical move timestamp",
+  );
+  assert(
+    !areTimestampsInSameSensorGeometryEpoch(
+      "2026-08-05T13:59:59.000Z",
+      topSensorMovedAt,
+    ),
+    "learning window must not cross the production geometry boundary",
+  );
+  assert(
+    areTimestampsInSameSensorGeometryEpoch(
+      topSensorMovedAt,
+      "2026-08-05T14:00:01.000Z",
+    ),
+    "timestamps inside V2 remain in the same learning epoch",
+  );
+  assertEqual(
+    filterToLatestSensorGeometryEpoch([
+      { created_at: "2026-08-05T13:59:59.000Z", value: "V1" },
+      { created_at: topSensorMovedAt, value: "V2 start" },
+      { created_at: "2026-08-05T14:00:01.000Z", value: "V2 latest" },
+    ])
+      .map((reading) => reading.value)
+      .join(","),
+    "V2 start,V2 latest",
+    "mixed learning history keeps only the latest geometry epoch",
   );
 }

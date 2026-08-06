@@ -11,7 +11,7 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
   const migrationSource = readFileSync(
     join(
       process.cwd(),
-      "supabase/migrations/20260803030000_require_explicit_false_in_temperature_drop_profile.sql",
+      "supabase/migrations/20260806000000_split_temperature_learning_at_sensor_geometry_epoch.sql",
     ),
     "utf8",
   );
@@ -46,5 +46,29 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
   assertSource(
     !validDropsSource.includes("is not true"),
     "vanha is not true -ehto (hyvaksyy myos nullin Postgresin kolmiarvoisessa logiikassa) ei saa enaa esiintya",
+  );
+  assertSource(
+    migrationSource.includes(
+      "v_top_sensor_moved_at constant timestamptz := '2026-08-05T14:00:00.000Z'",
+    ) && migrationSource.includes("v_source_start := greatest("),
+    "jaahdytysprofiilin 30 paivan oppimisikkuna pitaa katkaista tuotannon sensorigeometrian vaihtumishetkeen",
+  );
+
+  const previousProfileStart = migrationSource.indexOf("previous_profile as (");
+  const completeProfileStart = migrationSource.indexOf("complete_profile as (");
+  const previousProfileSource = migrationSource.slice(
+    previousProfileStart,
+    completeProfileStart,
+  );
+
+  assertSource(
+    previousProfileStart !== -1 && completeProfileStart > previousProfileStart,
+    "previous_profile-CTE:n pitaa loytya ennen complete_profile-CTE:ta",
+  );
+  assertSource(
+    previousProfileSource.includes(
+      "profile.source_start >= v_top_sensor_moved_at",
+    ),
+    "V1-geometrialla opittua profiilia ei saa kayttaa V2-profiilin fallbackina",
   );
 }

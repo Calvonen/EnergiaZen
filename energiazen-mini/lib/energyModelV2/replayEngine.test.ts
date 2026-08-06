@@ -9,7 +9,7 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
 }
 
 export function runReplayEngineUnitTests() {
-  const movedAt = "2026-08-01T12:00:00.000Z";
+  const movedAt = "2026-08-05T14:00:00.000Z";
   const sensorGeometryEpochs = createSensorGeometryEpochs({
     topSensorMovedAt: movedAt,
   });
@@ -40,14 +40,14 @@ export function runReplayEngineUnitTests() {
     [
       {
         bottom_temp: 35,
-        created_at: "2026-08-01T12:01:00.000Z",
+        created_at: "2026-08-05T14:01:00.000Z",
         heating: false,
         inlet_temp: 8,
         top_temp: 54,
       },
       {
         bottom_temp: 34,
-        created_at: "2026-08-01T11:59:00.000Z",
+        created_at: "2026-08-05T13:59:00.000Z",
         heating: null,
         inlet_temp: 8,
         top_temp: 53,

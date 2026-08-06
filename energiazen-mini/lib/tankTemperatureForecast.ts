@@ -1,3 +1,8 @@
+import {
+  areTimestampsInSameSensorGeometryEpoch,
+  filterToLatestSensorGeometryEpoch,
+} from "./energyModelV2/sensorGeometry";
+
 export type TankTemperatureReading = {
   created_at?: string | null;
   top_temp?: number | null;
@@ -100,7 +105,7 @@ export function buildHourlyTemperatureDropProfileResult(
   readings: TankTemperatureReading[],
 ) {
   const dayHourDrops = new Map<string, { drop: number; hour: number }>();
-  const sortedReadings = [...readings].sort((a, b) => {
+  const sortedReadings = filterToLatestSensorGeometryEpoch(readings).sort((a, b) => {
     const firstTime = a.created_at ? new Date(a.created_at).getTime() : NaN;
     const secondTime = b.created_at ? new Date(b.created_at).getTime() : NaN;
 
@@ -124,6 +129,10 @@ export function buildHourlyTemperatureDropProfileResult(
       Number.isNaN(currentDate.getTime()) ||
       previousTemperature === null ||
       currentTemperature === null ||
+      !areTimestampsInSameSensorGeometryEpoch(
+        previous.created_at ?? "",
+        current.created_at ?? "",
+      ) ||
       // Only an explicitly confirmed heating=false pair is a trustworthy
       // "just cooling" observation - true is excluded as before, but so is
       // an unreadable Shelly status (heating: null): it must not be

@@ -3,6 +3,10 @@ import { isValidInletTemperature } from "./inletTemperature";
 import { fallbackHourlyTemperatureDrop } from "./tankTemperatureForecast";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
 import { detectsWaterDraw, waterDrawDetectionLimits } from "./waterDrawDetection";
+import {
+  areTimestampsInSameSensorGeometryEpoch,
+  filterToLatestSensorGeometryEpoch,
+} from "./energyModelV2/sensorGeometry";
 
 // v1 keeps the recovery window fixed at one simulation hour rather than
 // deriving it from heating duration - see docs/PROJECT_CONTEXT.md's
@@ -30,7 +34,7 @@ type OrderedReading = {
 function getOrderedReadings(
   readings: TankTemperatureReading[],
 ): OrderedReading[] {
-  return readings
+  return filterToLatestSensorGeometryEpoch(readings)
     .map((reading): OrderedReading | null => {
       const time = reading.created_at
         ? new Date(reading.created_at).getTime()
@@ -135,6 +139,15 @@ export function estimateRecoveryDropPerHour(
       continue;
     }
 
+    if (
+      !areTimestampsInSameSensorGeometryEpoch(
+        segment.endTime,
+        new Date(offTransitionReading.time).toISOString(),
+      )
+    ) {
+      continue;
+    }
+
     const recoveryStartTime = offTransitionReading.time;
     const targetTime = recoveryStartTime + windowMilliseconds;
     const candidates = orderedReadings.filter(
@@ -156,6 +169,15 @@ export function estimateRecoveryDropPerHour(
     }
 
     if (!nearest || nearestDifference > toleranceMilliseconds) {
+      continue;
+    }
+
+    if (
+      !areTimestampsInSameSensorGeometryEpoch(
+        new Date(recoveryStartTime).toISOString(),
+        new Date(nearest.time).toISOString(),
+      )
+    ) {
       continue;
     }
 
