@@ -110,6 +110,7 @@ begin
     from public.temperature_drop_profiles as profile
     where profile.timezone = 'Europe/Helsinki'
       and profile.profile_date <= v_profile_date
+      and profile.source_start >= v_top_sensor_moved_at
     order by profile.profile_date desc, profile.created_at desc
     limit 1
   ),
