@@ -6,7 +6,7 @@ declare const process: {
 declare function require(moduleName: string): any;
 
 import { validateReplay } from "../lib/energyModelV2/replayValidation";
-import { createSensorGeometryEpochs } from "../lib/energyModelV2/sensorGeometry";
+import { sensorGeometryEpochs } from "../lib/energyModelV2/sensorGeometry";
 import type { TankTemperatureReading } from "../lib/tankTemperatureForecast";
 
 const fs = require("node:fs/promises");
@@ -19,12 +19,10 @@ const envSupabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ??
   process.env.SUPABASE_ANON_KEY ??
   process.env.SUPABASE_KEY;
-const envTopSensorMovedAt = process.env.ENERGYZEN_TOP_SENSOR_MOVED_AT;
 
 type ReplayValidateArgs = {
   day: string;
   outputDir: string | null;
-  topSensorMovedAt: string;
 };
 
 async function main() {
@@ -47,9 +45,7 @@ async function main() {
 
   const validation = validateReplay({
     readings,
-    sensorGeometryEpochs: createSensorGeometryEpochs({
-      topSensorMovedAt: args.topSensorMovedAt,
-    }),
+    sensorGeometryEpochs,
   });
   const outputDir = args.outputDir ?? path.join("artifacts", "replay", args.day);
 
@@ -85,21 +81,11 @@ async function main() {
 function parseArgs(argv: string[]): ReplayValidateArgs {
   const day = readOption(argv, "--day") ?? readPositionalDay(argv);
   const outputDir = readOption(argv, "--output-dir");
-  const topSensorMovedAt =
-    readOption(argv, "--top-sensor-moved-at") ??
-    envTopSensorMovedAt ??
-    null;
 
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     throw new Error("Usage: npm run replay:validate --day YYYY-MM-DD");
   }
-  if (!topSensorMovedAt || !Number.isFinite(new Date(topSensorMovedAt).getTime())) {
-    throw new Error(
-      "Set ENERGYZEN_TOP_SENSOR_MOVED_AT or pass --top-sensor-moved-at ISO_TIMESTAMP",
-    );
-  }
-
-  return { day, outputDir, topSensorMovedAt };
+  return { day, outputDir };
 }
 
 function readPositionalDay(argv: string[]) {

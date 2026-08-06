@@ -1,6 +1,10 @@
 import { isValidInletTemperature } from "./inletTemperature";
 import type { TankTemperatureReading } from "./tankTemperatureForecast";
 import { detectsWaterDraw } from "./waterDrawDetection";
+import {
+  areTimestampsInSameSensorGeometryEpoch,
+  filterToLatestSensorGeometryEpoch,
+} from "./energyModelV2/sensorGeometry";
 
 export const heatingGainHistoryDays = 30;
 export const heatingGainHistoryPageSize = 1000;
@@ -176,7 +180,7 @@ function getValidHeatingReading(
 export function findValidHeatingSegments(
   readings: TankTemperatureReading[],
 ): HeatingGainSegmentDiscovery {
-  const sortedReadings = [...readings].sort((first, second) =>
+  const sortedReadings = filterToLatestSensorGeometryEpoch(readings).sort((first, second) =>
     String(first.created_at ?? "").localeCompare(
       String(second.created_at ?? ""),
     ),
@@ -304,7 +308,12 @@ export function findValidHeatingSegments(
 
     if (
       previous &&
-      (gapMinutes <= 0 ||
+      (!reading.created_at ||
+        !areTimestampsInSameSensorGeometryEpoch(
+          new Date(previous.time).toISOString(),
+          reading.created_at,
+        ) ||
+        gapMinutes <= 0 ||
         gapMinutes > heatingGainLearningLimits.maxGapMinutes)
     ) {
       closeSegment();
