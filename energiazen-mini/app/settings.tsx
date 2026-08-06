@@ -1333,6 +1333,16 @@ export default function SettingsScreen() {
           <Text style={styles.diagnosticsLinkChevron}>›</Text>
         </Pressable>
 
+        <Text style={styles.developerLabel}>Developer</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push("/energy-model-dashboard")}
+          style={styles.diagnosticsLink}
+        >
+          <Text style={styles.diagnosticsLinkText}>EnergyModel Dashboard</Text>
+          <Text style={styles.diagnosticsLinkChevron}>›</Text>
+        </Pressable>
+
         <Pressable
           accessibilityRole="button"
           onPress={handleSignOut}
@@ -1833,6 +1843,15 @@ const styles = StyleSheet.create({
     marginTop: 24,
     paddingHorizontal: 16,
     paddingVertical: 14,
+  },
+  developerLabel: {
+    color: "#7083a8",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+    marginBottom: -16,
+    marginTop: 24,
+    textTransform: "uppercase",
   },
   diagnosticsLinkText: {
     color: "#cfe9ff",
