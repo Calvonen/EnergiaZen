@@ -79,6 +79,15 @@
     "lib/waterDrawDetection.test.ts",
     "lib/tankReadingFreshness.ts",
     "lib/tankReadingFreshness.test.ts",
+    "lib/energyModelV2/sensorGeometry.ts",
+    "lib/energyModelV2/sensorGeometry.test.ts",
+    "lib/energyModelV2/tankDna.ts",
+    "lib/energyModelV2/replayEngine.ts",
+    "lib/energyModelV2/replayEngine.test.ts",
+    "lib/energyModelV2/energyModelCore.ts",
+    "lib/energyModelV2/energyModelCore.test.ts",
+    "lib/energyModelV2/replayValidation.ts",
+    "lib/energyModelV2/replayValidation.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }

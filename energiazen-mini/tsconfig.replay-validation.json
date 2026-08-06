@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": ".tmp-replay-validation",
+    "strict": true,
+    "target": "es2020"
+  },
+  "include": [
+    "lib/tankTemperatureForecast.ts",
+    "lib/energyModelV2/sensorGeometry.ts",
+    "lib/energyModelV2/tankDna.ts",
+    "lib/energyModelV2/replayEngine.ts",
+    "lib/energyModelV2/energyModelCore.ts",
+    "lib/energyModelV2/replayValidation.ts",
+    "scripts/runReplayValidation.ts"
+  ]
+}
