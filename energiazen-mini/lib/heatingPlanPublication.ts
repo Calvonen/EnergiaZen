@@ -17,16 +17,21 @@ export type PublishedHeatingPlanState<TResult, THour> = {
 export type HeatingOptimizationRunSource = "active" | "scenario";
 
 // Whether the heating_plans publish effect must defer entirely rather than
-// upsert this cycle. Only matters while heating is unknown (null) - a
-// confirmed true/false is always safe to publish. Two independent things
-// must both be true before it's safe to trust previousPlannedHours enough
-// to decide whether the current hour needs preserving:
-//  - isTodayPlanLoaded: storedHeatingPlansRef being empty for today is
-//    otherwise ambiguous between "nothing published" and "not loaded yet".
-//  - hasAttemptedTankReadingFetch: fixed heating mode isn't gated on the
-//    optimizer being ready, so this effect can run before the relay-status
-//    fetch has ever settled even once, while heating is still only its
-//    React-state initial value and the unknown-anchor is still empty.
+// upsert this cycle.
+//  - isTodayPlanLoaded gates unconditionally, regardless of heating: with
+//    storedHeatingPlansRef still empty, getChangedHeatingPlans compares
+//    every hour against undefined, which never equals the real stored plan
+//    - so every cold start would force an upsert whether or not the
+//    optimizer's result actually differs from what's already published.
+//    heating resolving quickly to a confirmed true/false (since PR #147)
+//    made this race easy to hit: the publish effect no longer waits on
+//    heating, so it now regularly runs while the separate stored-plan load
+//    (keyed on visiblePlanDatesKey) is still in flight.
+//  - heating === null additionally requires hasAttemptedTankReadingFetch,
+//    since fixed heating mode isn't gated on the optimizer being ready, so
+//    this effect can run before the relay-status fetch has ever settled
+//    even once, while heating is still only its React-state initial value
+//    and the unknown-anchor is still empty.
 // Publishing anyway in either gap could replace a stored plan without ever
 // getting a chance to preserve its currently running hour (Codex P1
 // review, PR #147).
@@ -40,7 +45,8 @@ export function shouldDeferHeatingPlanPublicationForUnknownStatus({
   isTodayPlanLoaded: boolean;
 }): boolean {
   return (
-    heating === null && (!isTodayPlanLoaded || !hasAttemptedTankReadingFetch)
+    !isTodayPlanLoaded ||
+    (heating === null && !hasAttemptedTankReadingFetch)
   );
 }
 
