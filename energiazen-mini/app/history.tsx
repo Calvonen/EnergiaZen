@@ -12,6 +12,10 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
+import {
+  Gesture,
+  GestureDetector,
+} from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { debugLog } from "@/lib/debug";
@@ -952,7 +956,7 @@ export default function TemperatureHistoryScreen() {
   }, []);
 
   const updateSelectedHistoryPoint = useCallback(
-    (event: GestureResponderEvent) => {
+    (locationX: number) => {
       if (chartWidth <= 0) {
         return;
       }
@@ -965,7 +969,7 @@ export default function TemperatureHistoryScreen() {
       }
 
       const touchX = Math.min(
-        Math.max(event.nativeEvent.locationX, 0),
+        Math.max(locationX, 0),
         chartWidth,
       );
       const columnWidth = chartWidth / chartData.length;
@@ -999,6 +1003,19 @@ export default function TemperatureHistoryScreen() {
       );
     },
     [chartWidth, historyTooltipLeft, visibleHistory],
+  );
+
+  const historyChartGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-6, 6])
+        .failOffsetY([-8, 8])
+        .onBegin((event) => updateSelectedHistoryPoint(event.x))
+        .onStart((event) => updateSelectedHistoryPoint(event.x))
+        .onUpdate((event) => updateSelectedHistoryPoint(event.x))
+        .onFinalize(() => setSelectedHistoryPoint(null))
+        .runOnJS(true),
+    [updateSelectedHistoryPoint],
   );
 
   const updateSelectedInletTrendSlot = useCallback(
@@ -1160,159 +1177,156 @@ export default function TemperatureHistoryScreen() {
                   ))}
                 </View>
 
-                <View
-                  onLayout={(event) =>
-                    setChartWidth(event.nativeEvent.layout.width)
-                  }
-                  onMoveShouldSetResponder={() => true}
-                  onResponderGrant={updateSelectedHistoryPoint}
-                  onResponderMove={updateSelectedHistoryPoint}
-                  onResponderTerminationRequest={() => false}
-                  onStartShouldSetResponder={() => true}
-                  style={styles.chartArea}
-                >
-                  {chartScale.map((value) => (
-                    <View
-                      key={value}
-                      style={[
-                        styles.gridLine,
-                        { bottom: getPointBottom(value) },
-                      ]}
-                    />
-                  ))}
-
-                  {lineSegments.map((segment) => (
-                    <View
-                      key={segment.key}
-                      style={[
-                        styles.chartLine,
-                        {
-                          backgroundColor: segment.color,
-                          height: segment.height,
-                          left: segment.left,
-                          top: segment.top,
-                          transform: [{ rotateZ: segment.angle }],
-                          width: segment.width,
-                        },
-                      ]}
-                    />
-                  ))}
-
-                  {selectedHistoryPoint ? (
-                    <>
+                <GestureDetector gesture={historyChartGesture}>
+                  <View
+                    onLayout={(event) =>
+                      setChartWidth(event.nativeEvent.layout.width)
+                    }
+                    style={styles.chartArea}
+                  >
+                    {chartScale.map((value) => (
                       <View
-                        pointerEvents="none"
+                        key={value}
                         style={[
-                          styles.selectedMarkerLine,
-                          { left: selectedHistoryPoint.pointX },
+                          styles.gridLine,
+                          { bottom: getPointBottom(value) },
                         ]}
                       />
-                      <Animated.View
-                        pointerEvents="none"
+                    ))}
+
+                    {lineSegments.map((segment) => (
+                      <View
+                        key={segment.key}
                         style={[
-                          styles.historyTooltip,
-                          { left: historyTooltipLeft },
+                          styles.chartLine,
+                          {
+                            backgroundColor: segment.color,
+                            height: segment.height,
+                            left: segment.left,
+                            top: segment.top,
+                            transform: [{ rotateZ: segment.angle }],
+                            width: segment.width,
+                          },
                         ]}
-                      >
-                        <Text style={styles.historyTooltipTime}>
-                          {isDayView
-                            ? formatDayTooltipTime(
-                                selectedHistoryPoint.point.timestamp,
-                              )
-                            : formatTooltipTime(
-                                selectedHistoryPoint.point.timestamp,
-                              )}
-                        </Text>
-                        <Text style={styles.historyTooltipTop}>
-                          Ylä{" "}
-                          {roundTemperature(
-                            getTopTemperature(selectedHistoryPoint.point),
-                          ).toFixed(1)}{" "}
-                          °C
-                        </Text>
-                        <Text style={styles.historyTooltipBottom}>
-                          Ala{" "}
-                          {roundTemperature(
-                            getBottomTemperature(selectedHistoryPoint.point),
-                          ).toFixed(1)}{" "}
-                          °C
-                        </Text>
-                        <Text style={styles.historyTooltipAverage}>
-                          70/30{" "}
-                          {roundTemperature(
-                            getAverageTemperature(selectedHistoryPoint.point),
-                          ).toFixed(1)}{" "}
-                          °C
-                        </Text>
-                      </Animated.View>
-                    </>
-                  ) : null}
+                      />
+                    ))}
 
-                  <View style={styles.historyColumns}>
-                    {visibleHistory.map((point, index) => {
-                      const topTemperature = getTopTemperature(point);
-                      const bottomTemperature = getBottomTemperature(point);
-                      const averageTemperature = getAverageTemperature(point);
-                      const defaultXAxisLabel = formatHour(point.timestamp);
-                      const dayXAxisLabel = dayXAxisLabels?.get(index);
-                      const xAxisLabel =
-                        dayXAxisLabel?.text ?? defaultXAxisLabel;
-                      const { bottomBottom, topBottom } =
-                        getAdjustedPointBottoms(
-                          topTemperature,
-                          bottomTemperature,
-                        );
-
-                      return (
+                    {selectedHistoryPoint ? (
+                      <>
                         <View
-                          accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, painotettu lämpö ${averageTemperature} astetta`}
-                          key={point.timestamp}
-                          style={styles.historyColumn}
+                          pointerEvents="none"
+                          style={[
+                            styles.selectedMarkerLine,
+                            { left: selectedHistoryPoint.pointX },
+                          ]}
+                        />
+                        <Animated.View
+                          pointerEvents="none"
+                          style={[
+                            styles.historyTooltip,
+                            { left: historyTooltipLeft },
+                          ]}
                         >
+                          <Text style={styles.historyTooltipTime}>
+                            {isDayView
+                              ? formatDayTooltipTime(
+                                  selectedHistoryPoint.point.timestamp,
+                                )
+                              : formatTooltipTime(
+                                  selectedHistoryPoint.point.timestamp,
+                                )}
+                          </Text>
+                          <Text style={styles.historyTooltipTop}>
+                            Ylä{" "}
+                            {roundTemperature(
+                              getTopTemperature(selectedHistoryPoint.point),
+                            ).toFixed(1)}{" "}
+                            °C
+                          </Text>
+                          <Text style={styles.historyTooltipBottom}>
+                            Ala{" "}
+                            {roundTemperature(
+                              getBottomTemperature(selectedHistoryPoint.point),
+                            ).toFixed(1)}{" "}
+                            °C
+                          </Text>
+                          <Text style={styles.historyTooltipAverage}>
+                            70/30{" "}
+                            {roundTemperature(
+                              getAverageTemperature(selectedHistoryPoint.point),
+                            ).toFixed(1)}{" "}
+                            °C
+                          </Text>
+                        </Animated.View>
+                      </>
+                    ) : null}
+
+                    <View style={styles.historyColumns}>
+                      {visibleHistory.map((point, index) => {
+                        const topTemperature = getTopTemperature(point);
+                        const bottomTemperature = getBottomTemperature(point);
+                        const averageTemperature = getAverageTemperature(point);
+                        const defaultXAxisLabel = formatHour(point.timestamp);
+                        const dayXAxisLabel = dayXAxisLabels?.get(index);
+                        const xAxisLabel =
+                          dayXAxisLabel?.text ?? defaultXAxisLabel;
+                        const { bottomBottom, topBottom } =
+                          getAdjustedPointBottoms(
+                            topTemperature,
+                            bottomTemperature,
+                          );
+
+                        return (
                           <View
-                            style={[
-                              styles.tempDot,
-                              styles.topTempDot,
-                              { bottom: topBottom },
-                            ]}
-                          />
-                          <View
-                            style={[
-                              styles.tempDot,
-                              styles.bottomTempDot,
-                              { bottom: bottomBottom },
-                            ]}
-                          />
-                          <View
-                            style={[
-                              styles.tempDot,
-                              styles.averageTempDot,
-                              { bottom: getPointBottom(averageTemperature) },
-                            ]}
-                          />
-                          {(isDayView
-                            ? dayXAxisLabel
-                            : shouldShowXAxisLabel(
-                                index,
-                                visibleHistory.length,
-                              )) ? (
-                            <Text
+                            accessibilityLabel={`${xAxisLabel}, yläanturi ${topTemperature} astetta, ala-anturi ${bottomTemperature} astetta, painotettu lämpö ${averageTemperature} astetta`}
+                            key={point.timestamp}
+                            style={styles.historyColumn}
+                          >
+                            <View
                               style={[
-                                styles.hourLabel,
-                                dayXAxisLabel?.align === "left" &&
-                                  styles.hourLabelLeft,
-                                dayXAxisLabel?.align === "right" &&
-                                  styles.hourLabelRight,
+                                styles.tempDot,
+                                styles.topTempDot,
+                                { bottom: topBottom },
                               ]}
-                            >
-                              {xAxisLabel}
-                            </Text>
-                          ) : null}
-                        </View>
-                      );
-                    })}
+                            />
+                            <View
+                              style={[
+                                styles.tempDot,
+                                styles.bottomTempDot,
+                                { bottom: bottomBottom },
+                              ]}
+                            />
+                            <View
+                              style={[
+                                styles.tempDot,
+                                styles.averageTempDot,
+                                { bottom: getPointBottom(averageTemperature) },
+                              ]}
+                            />
+                            {(isDayView
+                              ? dayXAxisLabel
+                              : shouldShowXAxisLabel(
+                                  index,
+                                  visibleHistory.length,
+                                )) ? (
+                              <Text
+                                style={[
+                                  styles.hourLabel,
+                                  dayXAxisLabel?.align === "left" &&
+                                    styles.hourLabelLeft,
+                                  dayXAxisLabel?.align === "right" &&
+                                    styles.hourLabelRight,
+                                ]}
+                              >
+                                {xAxisLabel}
+                              </Text>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
                   </View>
-                </View>
+                </GestureDetector>
               </View>
             </>
           )}
