@@ -47,7 +47,8 @@ type TemperatureHistoryPoint = {
 type SelectedHistoryPoint = {
   index: number;
   point: TemperatureHistoryPoint;
-  x: number;
+  pointX: number;
+  touchX: number;
 };
 
 type SelectedInletTrendSlot = {
@@ -72,7 +73,8 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
-const tooltipWidth = 144;
+const tooltipWidth = 88;
+const tooltipTouchGap = 12;
 const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
 const bottomTemperatureColor = "#60A5FA";
@@ -888,7 +890,12 @@ export default function TemperatureHistoryScreen() {
     backgroundRefreshingTab === selectedTab;
   const selectedTooltipLeft = selectedHistoryPoint
     ? Math.min(
-        Math.max(selectedHistoryPoint.x - tooltipWidth / 2, 0),
+        Math.max(
+          selectedHistoryPoint.touchX < chartWidth / 2
+            ? selectedHistoryPoint.touchX + tooltipTouchGap
+            : selectedHistoryPoint.touchX - tooltipTouchGap - tooltipWidth,
+          0,
+        ),
         Math.max(chartWidth - tooltipWidth, 0),
       )
     : 0;
@@ -973,7 +980,8 @@ export default function TemperatureHistoryScreen() {
       setSelectedHistoryPoint({
         index: nearestIndex,
         point: chartData[nearestIndex],
-        x: columnWidth * nearestIndex + columnWidth / 2,
+        pointX: columnWidth * nearestIndex + columnWidth / 2,
+        touchX,
       });
     },
     [chartWidth, visibleHistory],
@@ -1141,6 +1149,7 @@ export default function TemperatureHistoryScreen() {
                   onMoveShouldSetResponder={() => true}
                   onResponderGrant={updateSelectedHistoryPoint}
                   onResponderMove={updateSelectedHistoryPoint}
+                  onResponderTerminationRequest={() => false}
                   onStartShouldSetResponder={() => true}
                   style={styles.chartArea}
                 >
@@ -1177,7 +1186,7 @@ export default function TemperatureHistoryScreen() {
                         pointerEvents="none"
                         style={[
                           styles.selectedMarkerLine,
-                          { left: selectedHistoryPoint.x },
+                          { left: selectedHistoryPoint.pointX },
                         ]}
                       />
                       <View
@@ -1754,10 +1763,10 @@ const styles = StyleSheet.create({
   historyTooltip: {
     backgroundColor: "rgba(5,8,22,0.92)",
     borderColor: "rgba(255,255,255,0.18)",
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
     bottom: tooltipBottomOffset,
     position: "absolute",
     width: tooltipWidth,
@@ -1765,22 +1774,22 @@ const styles = StyleSheet.create({
   },
   historyTooltipTime: {
     color: "#f7fbff",
-    fontSize: 12,
+    fontSize: 9,
     fontWeight: "900",
-    marginBottom: 4,
+    marginBottom: 2,
   },
-  historyTooltipTop: { color: topTemperatureColor, fontSize: 11, fontWeight: "900" },
+  historyTooltipTop: { color: topTemperatureColor, fontSize: 9, fontWeight: "900" },
   historyTooltipBottom: {
     color: bottomTemperatureColor,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: "900",
-    marginTop: 2,
+    marginTop: 1,
   },
   historyTooltipAverage: {
     color: averageTemperatureColor,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: "900",
-    marginTop: 2,
+    marginTop: 1,
   },
   hourLabel: {
     bottom: -52,
