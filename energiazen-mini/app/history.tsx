@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  GestureResponderEvent,
   InteractionManager,
   Pressable,
   ScrollView,
@@ -945,12 +944,6 @@ export default function TemperatureHistoryScreen() {
   const isSelectedTabLoading =
     (selectedTab === "24h" ? isLoading24h : isLoadingDay) ||
     backgroundRefreshingTab === selectedTab;
-  const selectedInletTrendTooltipLeft = selectedInletTrendSlot
-    ? Math.min(
-        Math.max(selectedInletTrendSlot.x - tooltipWidth / 2, 0),
-        Math.max(inletTrendChartWidth - tooltipWidth, 0),
-      )
-    : 0;
   const lineSegments = useMemo(
     () => getChartLineSegments(visibleHistory, chartWidth),
     [chartWidth, visibleHistory],
@@ -967,6 +960,12 @@ export default function TemperatureHistoryScreen() {
     () => getInletTrendLineSegments(inletTrendSlots, inletTrendChartWidth),
     [inletTrendChartWidth, inletTrendSlots],
   );
+  const selectedInletTrendTooltipLeft = selectedInletTrendSlot
+    ? Math.min(
+        Math.max(selectedInletTrendSlot.x - tooltipWidth / 2, 0),
+        Math.max(inletTrendChartWidth - tooltipWidth, 0),
+      )
+    : 0;
   const dayXAxisLabels = useMemo(
     () => (isDayView ? getDayXAxisLabels(visibleHistory) : null),
     [isDayView, visibleHistory],
@@ -1068,13 +1067,13 @@ export default function TemperatureHistoryScreen() {
   );
 
   const updateSelectedInletTrendSlot = useCallback(
-    (event: GestureResponderEvent) => {
+    (locationX: number) => {
       if (inletTrendChartWidth <= 0 || inletTrendSlots.length === 0) {
         return;
       }
 
       const touchX = Math.min(
-        Math.max(event.nativeEvent.locationX, 0),
+        Math.max(locationX, 0),
         inletTrendChartWidth,
       );
       const columnWidth = inletTrendChartWidth / inletTrendSlots.length;
@@ -1090,6 +1089,50 @@ export default function TemperatureHistoryScreen() {
       });
     },
     [inletTrendChartWidth, inletTrendSlots],
+  );
+
+  useEffect(() => {
+    if (!selectedInletTrendSlot) {
+      return;
+    }
+
+    const nextIndex = inletTrendSlots.findIndex(
+      (slot) => slot.weekStart === selectedInletTrendSlot.slot.weekStart,
+    );
+
+    if (nextIndex < 0 || inletTrendChartWidth <= 0) {
+      setSelectedInletTrendSlot(null);
+      return;
+    }
+
+    const nextSlot = inletTrendSlots[nextIndex];
+    const columnWidth = inletTrendChartWidth / inletTrendSlots.length;
+    const nextX = columnWidth * nextIndex + columnWidth / 2;
+
+    if (
+      selectedInletTrendSlot.index !== nextIndex ||
+      selectedInletTrendSlot.slot !== nextSlot ||
+      selectedInletTrendSlot.x !== nextX
+    ) {
+      setSelectedInletTrendSlot({ index: nextIndex, slot: nextSlot, x: nextX });
+    }
+  }, [inletTrendChartWidth, inletTrendSlots, selectedInletTrendSlot]);
+
+  const inletTrendChartGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-6, 6])
+        .failOffsetY([-8, 8])
+        .onBegin((event) => updateSelectedInletTrendSlot(event.x))
+        .onStart((event) => updateSelectedInletTrendSlot(event.x))
+        .onUpdate((event) => updateSelectedInletTrendSlot(event.x))
+        .onFinalize((_event, success) => {
+          if (!success) {
+            setSelectedInletTrendSlot(null);
+          }
+        })
+        .runOnJS(true),
+    [updateSelectedInletTrendSlot],
   );
 
   return (
@@ -1438,99 +1481,97 @@ export default function TemperatureHistoryScreen() {
                   ))}
                 </View>
 
-                <View
-                  onLayout={(event) =>
-                    setInletTrendChartWidth(event.nativeEvent.layout.width)
-                  }
-                  onMoveShouldSetResponder={() => true}
-                  onResponderGrant={updateSelectedInletTrendSlot}
-                  onResponderMove={updateSelectedInletTrendSlot}
-                  onStartShouldSetResponder={() => true}
-                  style={styles.inletTrendChartArea}
-                >
-                  {inletTrendScale.map((value) => (
-                    <View
-                      key={value}
-                      style={[
-                        styles.gridLine,
-                        { bottom: getInletTrendPointBottom(value) },
-                      ]}
-                    />
-                  ))}
-
-                  {inletTrendLineSegments.map((segment) => (
-                    <View
-                      key={segment.key}
-                      style={[
-                        styles.inletTrendLine,
-                        {
-                          height: segment.height,
-                          left: segment.left,
-                          top: segment.top,
-                          transform: [{ rotateZ: segment.angle }],
-                          width: segment.width,
-                        },
-                      ]}
-                    />
-                  ))}
-
-                  {selectedInletTrendSlot ? (
-                    <>
+                <GestureDetector gesture={inletTrendChartGesture}>
+                  <View
+                    onLayout={(event) =>
+                      setInletTrendChartWidth(event.nativeEvent.layout.width)
+                    }
+                    style={styles.inletTrendChartArea}
+                  >
+                    {inletTrendScale.map((value) => (
                       <View
-                        pointerEvents="none"
+                        key={value}
                         style={[
-                          styles.inletTrendSelectedMarkerLine,
-                          { left: selectedInletTrendSlot.x },
+                          styles.gridLine,
+                          { bottom: getInletTrendPointBottom(value) },
                         ]}
                       />
-                      <View
-                        pointerEvents="none"
-                        style={[
-                          styles.inletTrendTooltip,
-                          { left: selectedInletTrendTooltipLeft },
-                        ]}
-                      >
-                        <Text style={styles.inletTrendTooltipTime}>
-                          {formatInletTrendWeekRangeLabel(
-                            selectedInletTrendSlot.slot.weekStart,
-                          )}
-                        </Text>
-                        <Text style={styles.inletTrendTooltipValue}>
-                          {selectedInletTrendSlot.slot.minimumInletTempC === null
-                            ? "Ei vahvistettua lukemaa"
-                            : `Alin ${selectedInletTrendSlot.slot.minimumInletTempC} °C`}
-                        </Text>
-                      </View>
-                    </>
-                  ) : null}
-
-                  <View style={styles.inletTrendColumns}>
-                    {inletTrendSlots.map((slot) => (
-                      <View
-                        accessibilityLabel={
-                          slot.minimumInletTempC === null
-                            ? `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, ei vahvistettua lukemaa`
-                            : `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
-                        }
-                        key={slot.weekStart}
-                        style={styles.inletTrendColumn}
-                      >
-                        {slot.minimumInletTempC === null ? null : (
-                          <View
-                            style={[
-                              styles.inletTrendDot,
-                              {
-                                bottom: getInletTrendPointBottom(
-                                  slot.minimumInletTempC,
-                                ),
-                              },
-                            ]}
-                          />
-                        )}
-                      </View>
                     ))}
+
+                    {inletTrendLineSegments.map((segment) => (
+                      <View
+                        key={segment.key}
+                        style={[
+                          styles.inletTrendLine,
+                          {
+                            height: segment.height,
+                            left: segment.left,
+                            top: segment.top,
+                            transform: [{ rotateZ: segment.angle }],
+                            width: segment.width,
+                          },
+                        ]}
+                      />
+                    ))}
+
+                    {selectedInletTrendSlot ? (
+                      <>
+                        <View
+                          pointerEvents="none"
+                          style={[
+                            styles.inletTrendSelectedMarkerLine,
+                            { left: selectedInletTrendSlot.x },
+                          ]}
+                        />
+                        <View
+                          pointerEvents="none"
+                          style={[
+                            styles.inletTrendTooltip,
+                            { left: selectedInletTrendTooltipLeft },
+                          ]}
+                        >
+                          <Text style={styles.inletTrendTooltipTime}>
+                            {formatInletTrendWeekRangeLabel(
+                              selectedInletTrendSlot.slot.weekStart,
+                            )}
+                          </Text>
+                          <Text style={styles.inletTrendTooltipValue}>
+                            {selectedInletTrendSlot.slot.minimumInletTempC === null
+                              ? "Ei vahvistettua lukemaa"
+                              : `Alin ${selectedInletTrendSlot.slot.minimumInletTempC} °C`}
+                          </Text>
+                        </View>
+                      </>
+                    ) : null}
+
+                    <View style={styles.inletTrendColumns}>
+                      {inletTrendSlots.map((slot) => (
+                        <View
+                          accessibilityLabel={
+                            slot.minimumInletTempC === null
+                              ? `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, ei vahvistettua lukemaa`
+                              : `Viikko ${formatInletTrendWeekRangeLabel(slot.weekStart)}, alin tulovesilämpötila ${slot.minimumInletTempC} astetta`
+                          }
+                          key={slot.weekStart}
+                          style={styles.inletTrendColumn}
+                        >
+                          {slot.minimumInletTempC === null ? null : (
+                            <View
+                              style={[
+                                styles.inletTrendDot,
+                                {
+                                  bottom: getInletTrendPointBottom(
+                                    slot.minimumInletTempC,
+                                  ),
+                                },
+                              ]}
+                            />
+                          )}
+                        </View>
+                      ))}
+                    </View>
                   </View>
-                </View>
+                </GestureDetector>
               </View>
             )}
 
