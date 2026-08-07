@@ -42,6 +42,13 @@ function learningStatus(count: number) {
   return count > 0 ? ({ tone: "good", value: "Dataa saatavilla" } as const) : ({ tone: "warning", value: "Odottaa dataa" } as const);
 }
 
+function qualityMetric(quality: "valid" | "degraded" | "invalid" | undefined): DashboardMetric {
+  if (quality === "valid") return { label: "Tilan laatu", tone: "good", value: "Valid" };
+  if (quality === "degraded") return { label: "Tilan laatu", tone: "warning", value: "Degraded" };
+  if (quality === "invalid") return { label: "Tilan laatu", tone: "warning", value: "Invalid" };
+  return { label: "Tilan laatu", tone: "muted", value: NOT_AVAILABLE };
+}
+
 export default function EnergyModelDashboardScreen() {
   const router = useRouter();
   const [data, setData] = useState<EnergyModelDashboardData | null>(null);
@@ -103,6 +110,10 @@ export default function EnergyModelDashboardScreen() {
             name: "Tasapainossa",
           }
     : null;
+  const v2State = data?.v2TankState;
+  const v2TimestampLabel = v2State?.timestamp
+    ? dateTimeFormatter.format(new Date(v2State.timestamp))
+    : NOT_AVAILABLE;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -113,7 +124,7 @@ export default function EnergyModelDashboardScreen() {
             <Text style={styles.backText}>‹</Text>
           </Pressable>
           <View>
-            <Text style={styles.eyebrow}>DEVELOPER · V1</Text>
+            <Text style={styles.eyebrow}>DEVELOPER · V1 + V2</Text>
             <Text style={styles.heading}>EnergyModel Dashboard</Text>
           </View>
         </View>
@@ -166,6 +177,25 @@ export default function EnergyModelDashboardScreen() {
                 </Text>
               </View>
             </DashboardCard>
+            <DashboardCard title="⚡ EnergyModel V2 Diagnostics" metrics={[
+              { label: "Suihkuarvio", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "Käyttökelpoinen energia", value: formatNumber(v2State?.usableEnergy.kwh, 2, "kWh") },
+              { label: "Välittömästi käytettävä energia", value: formatNumber(v2State?.immediateEnergy.kwh, 2, "kWh") },
+              { label: "Varastoitu energia", value: formatNumber(v2State?.storedEnergy.kwh, 2, "kWh") },
+              { label: "Varaenergia", value: formatNumber(v2State?.reserveEnergy.kwh, 2, "kWh") },
+              { label: "Energian epävarmuus", value: formatNumber(v2State?.uncertainty.energyKwh, 2, "kWh") },
+              { label: "Ylälämpötilan epävarmuus", value: formatNumber(v2State?.uncertainty.topTemperatureC, 1, "°C") },
+              { label: "Alalämpötilan epävarmuus", value: formatNumber(v2State?.uncertainty.bottomTemperatureC, 1, "°C") },
+              qualityMetric(v2State?.quality),
+              { label: "Epävarmuuden syyt", value: v2State ? (v2State.uncertainty.reasons.length ? v2State.uncertainty.reasons.join(", ") : "Ei syitä") : NOT_AVAILABLE },
+              { label: "Yläsolmun lämpötila", value: formatNumber(v2State?.topNodeTemperatureC, 1, "°C") },
+              { label: "Alasolmun lämpötila", value: formatNumber(v2State?.bottomNodeTemperatureC, 1, "°C") },
+              { label: "Tuloveden lämpötila", value: formatNumber(v2State?.inletTemperatureC, 1, "°C") },
+              { label: "Yläkerroksen massa", value: formatNumber(v2State?.layerMassesKg.top, 1, "kg") },
+              { label: "Alakerroksen massa", value: formatNumber(v2State?.layerMassesKg.bottom, 1, "kg") },
+              { label: "Malli", value: "EnergyModel V2" },
+              { label: "Viimeisin laskenta", value: v2TimestampLabel },
+            ]} />
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
               { label: "Ala-anturi", value: typeof data.latest?.bottom_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.bottom_temp, latestAt) },

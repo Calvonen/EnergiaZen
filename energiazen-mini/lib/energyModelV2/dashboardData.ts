@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { estimateRecoveryDropPerHour } from "../heatingRecoveryDrop";
-import { topSensorMovedAt } from "./sensorGeometry";
+import { runEnergyModelCoreReplay, type TankState } from "./energyModelCore";
+import { sensorGeometryEpochs, topSensorMovedAt } from "./sensorGeometry";
 
 type DashboardReading = {
   bottom_temp: number | null;
@@ -20,6 +21,7 @@ export type EnergyModelDashboardData = {
   v1Readings: number;
   v2Readings: number;
   waterDraws: number;
+  v2TankState: TankState | null;
 };
 
 const EXPECTED_INTERVAL_MS = 60 * 1000;
@@ -95,7 +97,17 @@ export async function fetchEnergyModelDashboardData(): Promise<EnergyModelDashbo
     recoverySamples: estimateRecoveryDropPerHour(readings).sampleCount,
     v1Readings,
     v2Readings,
+    v2TankState: calculateDashboardV2TankState(readings),
   };
+}
+
+export function calculateDashboardV2TankState(readings: DashboardReading[]) {
+  if (readings.length === 0) return null;
+
+  return runEnergyModelCoreReplay({
+    readings,
+    sensorGeometryEpochs,
+  }).finalState;
 }
 
 async function fetchReadingsSince(windowStart: string) {
