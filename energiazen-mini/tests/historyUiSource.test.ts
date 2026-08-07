@@ -135,6 +135,7 @@ export function runHistoryUiSourceTests() {
       temperatureHistorySource.includes(".activeOffsetX([-6, 6])") &&
       temperatureHistorySource.includes(".failOffsetY([-8, 8])") &&
       temperatureHistorySource.includes(".onUpdate((event) => updateSelectedHistoryPoint(event.x))") &&
+      temperatureHistorySource.includes(".onFinalize(() => setSelectedHistoryPoint(null))") &&
       !temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
       !temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
       temperatureHistorySource.includes("currentPoint?.index === nearestIndex") &&

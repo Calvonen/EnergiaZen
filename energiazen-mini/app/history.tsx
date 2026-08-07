@@ -15,7 +15,6 @@ import { useRouter } from "expo-router";
 import {
   Gesture,
   GestureDetector,
-  GestureHandlerRootView,
 } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -1014,6 +1013,7 @@ export default function TemperatureHistoryScreen() {
         .onBegin((event) => updateSelectedHistoryPoint(event.x))
         .onStart((event) => updateSelectedHistoryPoint(event.x))
         .onUpdate((event) => updateSelectedHistoryPoint(event.x))
+        .onFinalize(() => setSelectedHistoryPoint(null))
         .runOnJS(true),
     [updateSelectedHistoryPoint],
   );
@@ -1044,7 +1044,7 @@ export default function TemperatureHistoryScreen() {
   );
 
   return (
-    <GestureHandlerRootView style={styles.screen}>
+    <View style={styles.screen}>
       <View style={[styles.glow, styles.greenGlow]} />
       <View style={[styles.glow, styles.blueGlow]} />
 
@@ -1520,7 +1520,7 @@ export default function TemperatureHistoryScreen() {
           </View>
         ) : null}
       </ScrollView>
-    </GestureHandlerRootView>
+    </View>
   );
 }
 
