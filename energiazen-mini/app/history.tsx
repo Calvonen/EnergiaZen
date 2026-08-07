@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   GestureResponderEvent,
   InteractionManager,
   Pressable,
@@ -48,7 +49,6 @@ type SelectedHistoryPoint = {
   index: number;
   point: TemperatureHistoryPoint;
   pointX: number;
-  touchX: number;
 };
 
 type SelectedInletTrendSlot = {
@@ -73,7 +73,7 @@ const chartHeight = 190;
 const chartMinTemp = defaultSettings.minTankTemperature;
 const chartMaxTemp = 70;
 const closePointOffset = 2;
-const tooltipWidth = 88;
+const tooltipWidth = 104;
 const tooltipTouchGap = 12;
 const topTemperatureColor = "#FF8A4C";
 const averageTemperatureColor = "#2DD4BF";
@@ -533,6 +533,7 @@ export default function TemperatureHistoryScreen() {
   const [backgroundRefreshingTab, setBackgroundRefreshingTab] =
     useState<HistoryTab | null>(null);
   const [chartWidth, setChartWidth] = useState(0);
+  const historyTooltipLeft = useRef(new Animated.Value(0)).current;
   const [selectedHistoryPoint, setSelectedHistoryPoint] =
     useState<SelectedHistoryPoint | null>(null);
   const [weeklyInletTrend, setWeeklyInletTrend] = useState<
@@ -888,17 +889,6 @@ export default function TemperatureHistoryScreen() {
   const isSelectedTabLoading =
     (selectedTab === "24h" ? isLoading24h : isLoadingDay) ||
     backgroundRefreshingTab === selectedTab;
-  const selectedTooltipLeft = selectedHistoryPoint
-    ? Math.min(
-        Math.max(
-          selectedHistoryPoint.touchX < chartWidth / 2
-            ? selectedHistoryPoint.touchX + tooltipTouchGap
-            : selectedHistoryPoint.touchX - tooltipTouchGap - tooltipWidth,
-          0,
-        ),
-        Math.max(chartWidth - tooltipWidth, 0),
-      )
-    : 0;
   const selectedInletTrendTooltipLeft = selectedInletTrendSlot
     ? Math.min(
         Math.max(selectedInletTrendSlot.x - tooltipWidth / 2, 0),
@@ -977,14 +967,31 @@ export default function TemperatureHistoryScreen() {
         chartData.length - 1,
       );
 
-      setSelectedHistoryPoint({
-        index: nearestIndex,
-        point: chartData[nearestIndex],
-        pointX: columnWidth * nearestIndex + columnWidth / 2,
-        touchX,
-      });
+      const tooltipLeft = Math.min(
+        Math.max(
+          touchX < chartWidth / 2
+            ? touchX + tooltipTouchGap
+            : touchX - tooltipTouchGap - tooltipWidth,
+          0,
+        ),
+        Math.max(chartWidth - tooltipWidth, 0),
+      );
+
+      // Keep continuous pointer tracking outside React state. Updating state for
+      // every native move used to reconcile the entire chart before the next
+      // event, which made a single drag advance in short, delayed bursts.
+      historyTooltipLeft.setValue(tooltipLeft);
+      setSelectedHistoryPoint((currentPoint) =>
+        currentPoint?.index === nearestIndex
+          ? currentPoint
+          : {
+              index: nearestIndex,
+              point: chartData[nearestIndex],
+              pointX: columnWidth * nearestIndex + columnWidth / 2,
+            },
+      );
     },
-    [chartWidth, visibleHistory],
+    [chartWidth, historyTooltipLeft, visibleHistory],
   );
 
   const updateSelectedInletTrendSlot = useCallback(
@@ -1189,11 +1196,11 @@ export default function TemperatureHistoryScreen() {
                           { left: selectedHistoryPoint.pointX },
                         ]}
                       />
-                      <View
+                      <Animated.View
                         pointerEvents="none"
                         style={[
                           styles.historyTooltip,
-                          { left: selectedTooltipLeft },
+                          { left: historyTooltipLeft },
                         ]}
                       >
                         <Text style={styles.historyTooltipTime}>
@@ -1226,7 +1233,7 @@ export default function TemperatureHistoryScreen() {
                           ).toFixed(1)}{" "}
                           °C
                         </Text>
-                      </View>
+                      </Animated.View>
                     </>
                   ) : null}
 
