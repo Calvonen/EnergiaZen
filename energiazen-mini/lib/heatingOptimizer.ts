@@ -41,12 +41,35 @@ export type HeatingOptimizationSettingsSource = {
 };
 
 export type StratifiedShowersEstimate = {
+  energyTemperatureRange: number;
   energyRatio: number;
   fillRatio: number;
+  fullTankTemp: number;
+  minimumUsableTopTemperature: number;
   showersLeft: number;
   topUsability: number;
+  topUsabilityTemperatureRange: number;
   weightedTemperature: number;
 };
+
+export type StratifiedShowerLimitingFactor = {
+  factor: "balanced" | "energyRatio" | "topUsability";
+  value: number;
+};
+
+export function getStratifiedShowerLimitingFactor(
+  estimate: Pick<StratifiedShowersEstimate, "energyRatio" | "topUsability">,
+): StratifiedShowerLimitingFactor {
+  if (estimate.energyRatio < estimate.topUsability) {
+    return { factor: "energyRatio", value: estimate.energyRatio };
+  }
+
+  if (estimate.topUsability < estimate.energyRatio) {
+    return { factor: "topUsability", value: estimate.topUsability };
+  }
+
+  return { factor: "balanced", value: estimate.energyRatio };
+}
 
 export type ConsumptionSpike = {
   drop: number;
@@ -342,10 +365,14 @@ export function calculateStratifiedShowersLeft({
   const showersLeft = fillRatio * fullTankShowers;
 
   return {
+    energyTemperatureRange,
     energyRatio,
     fillRatio,
+    fullTankTemp,
+    minimumUsableTopTemperature,
     showersLeft,
     topUsability,
+    topUsabilityTemperatureRange,
     weightedTemperature,
   };
 }
