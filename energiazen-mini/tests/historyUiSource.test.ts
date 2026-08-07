@@ -129,6 +129,15 @@ export function runHistoryUiSourceTests() {
     "paivavalitsin estaa tulevaisuuden, ei sisalla pikavalintoja ja tyhja paiva nayttaa tyhjan tilan",
   );
   assertSource(
+    temperatureHistorySource.includes("const tooltipWidth = 88") &&
+      temperatureHistorySource.includes("selectedHistoryPoint.touchX < chartWidth / 2") &&
+      temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
+      temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
+      temperatureHistorySource.includes("touchX,") &&
+      temperatureHistorySource.includes("pointX:"),
+    "lampohistorian pieni tooltip seuraa kosketusta, vaihtaa puolta ja pitaa aktiivisen pisteen erillaan kosketuksesta",
+  );
+  assertSource(
     !homeSource.includes("Viimeisin jakso") &&
       homeSource.includes("heatingPlanPresentation.selectedHours") &&
       homeSource.includes("heatingPlanPresentation.forecastSummary"),
