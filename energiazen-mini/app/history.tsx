@@ -882,6 +882,11 @@ export default function TemperatureHistoryScreen() {
 
     return nextVisibleHistory;
   }, [history24h, historyDay, isInteractionComplete, selectedTab]);
+
+  useEffect(() => {
+    setSelectedHistoryPoint(null);
+  }, [chartWidth, visibleHistory]);
+
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
   const isDayView = selectedTab === "day";

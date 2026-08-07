@@ -134,6 +134,7 @@ export function runHistoryUiSourceTests() {
       temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
       temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
       temperatureHistorySource.includes("currentPoint?.index === nearestIndex") &&
+      temperatureHistorySource.includes("}, [chartWidth, visibleHistory]);") &&
       temperatureHistorySource.includes("pointX:"),
     "lampohistorian tooltip seuraa kosketusta ilman koko kuvaajan renderointia jokaisella liikkeella",
   );
