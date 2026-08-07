@@ -2,6 +2,8 @@ import { runTankReadingsReplay } from "./replayEngine";
 import type { ReplayStepContext } from "./replayEngine";
 import type { SensorGeometryEpoch } from "./sensorGeometry";
 
+const INLET_TEMPERATURE_ESTIMATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 export type TankObservation = {
   bottomTempC: number | null;
   heating: boolean | null;
@@ -238,21 +240,69 @@ export function runEnergyModelCoreReplay({
   readings: Parameters<typeof runTankReadingsReplay<TankState | null>>[0];
   sensorGeometryEpochs: SensorGeometryEpoch[];
 }) {
-  return runTankReadingsReplay<TankState | null>(readings, {
-    initialState: null,
-    modelVersion: "energy-model-core-v1",
-    sensorGeometryEpochs,
-    step: (state, context) => {
-      const observation = createTankObservationFromReplayStep(context);
-      const nextState = state === null || context.segmentMinutes === null
-        ? calculateTankStateFromObservation({
-            geometry: context.geometry,
-            observation,
-          })
-        : advanceState(state, observation, context.segmentMinutes);
+  return runTankReadingsReplay<TankState | null>(
+    applyEstimatedInletTemperatures(readings),
+    {
+      initialState: null,
+      modelVersion: "energy-model-core-v1",
+      sensorGeometryEpochs,
+      step: (state, context) => {
+        const observation = createTankObservationFromReplayStep(context);
+        const nextState = state === null || context.segmentMinutes === null
+          ? calculateTankStateFromObservation({
+              geometry: context.geometry,
+              observation,
+            })
+          : advanceState(state, observation, context.segmentMinutes);
 
-      return { state: nextState };
+        return { state: nextState };
+      },
     },
+  );
+}
+
+/**
+ * Replaces the inlet sensor value with the lowest available measurement from
+ * the preceding seven days. EnergyModelCore then remains unaware of how its
+ * inlet temperature was estimated and its physics stay unchanged.
+ */
+export function applyEstimatedInletTemperatures<
+  T extends Parameters<typeof runTankReadingsReplay<TankState | null>>[0][number],
+>(readings: T[]): T[] {
+  const orderedReadings = [...readings].sort((first, second) =>
+    String(first.created_at).localeCompare(String(second.created_at)),
+  );
+  const minimumCandidates: Array<{ temperatureC: number; timestampMs: number }> = [];
+
+  return orderedReadings.map((reading) => {
+    const timestampMs = new Date(String(reading.created_at)).getTime();
+    const windowStartMs = timestampMs - INLET_TEMPERATURE_ESTIMATE_WINDOW_MS;
+
+    while (
+      minimumCandidates.length > 0 &&
+      minimumCandidates[0].timestampMs < windowStartMs
+    ) {
+      minimumCandidates.shift();
+    }
+
+    if (isFiniteNumber(reading.inlet_temp) && Number.isFinite(timestampMs)) {
+      while (
+        minimumCandidates.length > 0 &&
+        minimumCandidates[minimumCandidates.length - 1].temperatureC >= reading.inlet_temp
+      ) {
+        minimumCandidates.pop();
+      }
+      minimumCandidates.push({
+        temperatureC: reading.inlet_temp,
+        timestampMs,
+      });
+    }
+
+    return {
+      ...reading,
+      // With no usable history, retaining the raw value preserves the old behavior.
+      inlet_temp: minimumCandidates[0]?.temperatureC ?? reading.inlet_temp,
+    };
   });
 }
 

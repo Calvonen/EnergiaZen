@@ -14,6 +14,7 @@ type DashboardReading = {
 
 export type EnergyModelDashboardData = {
   coolingPeriods: number;
+  estimatedInletTemperature: number | null;
   fullHeatings: number;
   latest: DashboardReading | null;
   missingMeasurements: number;
@@ -92,13 +93,15 @@ export async function fetchEnergyModelDashboardData(): Promise<EnergyModelDashbo
     countReadings(topSensorMovedAt),
     countReadings(undefined, topSensorMovedAt),
   ]);
+  const v2TankState = calculateDashboardV2TankState(readings);
   return {
     ...summarizeDashboardReadings(readings),
+    estimatedInletTemperature: v2TankState?.inletTemperatureC ?? null,
     latest: readings.at(-1) ?? null,
     recoverySamples: estimateRecoveryDropPerHour(readings).sampleCount,
     v1Readings,
     v2Readings,
-    v2TankState: calculateDashboardV2TankState(readings),
+    v2TankState,
   };
 }
 
