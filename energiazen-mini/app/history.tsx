@@ -10,8 +10,8 @@ import {
   Text,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { debugLog } from "@/lib/debug";
 import { defaultSettings } from "@/lib/settings";
@@ -501,7 +501,7 @@ function getInletTrendLineSegments(
 }
 
 export default function TemperatureHistoryScreen() {
-  const router = useRouter();
+  const insets = useSafeAreaInsets();
   const mountedAtRef = useRef(getPerformanceNow());
   const initialTabRef = useRef<HistoryTab>("24h");
   const firstRenderLoggedRef = useRef(false);
@@ -1029,17 +1029,11 @@ export default function TemperatureHistoryScreen() {
       <View style={[styles.glow, styles.greenGlow]} />
       <View style={[styles.glow, styles.blueGlow]} />
 
-      <Pressable
-        accessibilityLabel="Palaa etusivulle"
-        accessibilityRole="button"
-        onPress={() => router.back()}
-        style={styles.backButton}
-      >
-        <Text style={styles.backButtonText}>←</Text>
-      </Pressable>
-
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 8 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
@@ -1511,7 +1505,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 32,
     paddingHorizontal: 20,
-    paddingTop: 40,
   },
   glow: {
     borderRadius: 999,
@@ -1524,26 +1517,6 @@ const styles = StyleSheet.create({
   },
   greenGlow: { backgroundColor: "#54eaa0", right: -150, top: 80 },
   blueGlow: { backgroundColor: "#5aa7ff", bottom: 70, left: -170 },
-  backButton: {
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(255,255,255,0.18)",
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 40,
-    justifyContent: "center",
-    left: 18,
-    position: "absolute",
-    top: 48,
-    width: 40,
-    zIndex: 20,
-  },
-  backButtonText: {
-    color: "#f7fbff",
-    fontSize: 26,
-    fontWeight: "900",
-    lineHeight: 30,
-  },
   header: { alignItems: "center", marginBottom: 8 },
   title: {
     color: "#f7fbff",
