@@ -136,7 +136,10 @@ export function runHistoryUiSourceTests() {
       temperatureHistorySource.includes(".failOffsetY([-8, 8])") &&
       temperatureHistorySource.includes(".onUpdate((event) => updateSelectedHistoryPoint(event.x))") &&
       !temperatureHistorySource.includes(".onFinalize(() => setSelectedHistoryPoint(null))") &&
-      temperatureHistorySource.includes("point.timestamp === currentPoint.point.timestamp") &&
+      temperatureHistorySource.includes(".onFinalize((_event, success) => {") &&
+      temperatureHistorySource.includes("if (!success) {") &&
+      temperatureHistorySource.includes("point.timestamp === selectedHistoryPoint.point.timestamp") &&
+      temperatureHistorySource.includes("historyTooltipLeft.setValue(nextTooltipLeft)") &&
       temperatureHistorySource.includes("return () => setSelectedHistoryPoint(null)") &&
       !temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
       !temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&

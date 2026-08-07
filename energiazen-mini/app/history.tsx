@@ -889,35 +889,54 @@ export default function TemperatureHistoryScreen() {
   }, [history24h, historyDay, isInteractionComplete, selectedTab]);
 
   useEffect(() => {
-    setSelectedHistoryPoint((currentPoint) => {
-      if (!currentPoint) {
-        return null;
-      }
+    if (!selectedHistoryPoint) {
+      return;
+    }
 
-      const nextIndex = visibleHistory.findIndex(
-        (point) => point.timestamp === currentPoint.point.timestamp,
+    const nextIndex = visibleHistory.findIndex(
+      (point) => point.timestamp === selectedHistoryPoint.point.timestamp,
+    );
+
+    if (nextIndex < 0) {
+      setSelectedHistoryPoint(null);
+      return;
+    }
+
+    const nextPoint = visibleHistory[nextIndex];
+    const nextPointX = chartWidth > 0
+      ? (chartWidth / visibleHistory.length) * (nextIndex + 0.5)
+      : selectedHistoryPoint.pointX;
+
+    if (chartWidth > 0) {
+      const nextTooltipLeft = Math.min(
+        Math.max(
+          nextPointX < chartWidth / 2
+            ? nextPointX + tooltipTouchGap
+            : nextPointX - tooltipTouchGap - tooltipWidth,
+          0,
+        ),
+        Math.max(chartWidth - tooltipWidth, 0),
       );
+      historyTooltipLeft.setValue(nextTooltipLeft);
+    }
 
-      if (nextIndex < 0) {
-        return null;
-      }
-
-      const nextPoint = visibleHistory[nextIndex];
-      const nextPointX = chartWidth > 0
-        ? (chartWidth / visibleHistory.length) * (nextIndex + 0.5)
-        : currentPoint.pointX;
-
-      return currentPoint.index === nextIndex &&
-        currentPoint.point === nextPoint &&
-        currentPoint.pointX === nextPointX
-        ? currentPoint
-        : {
-            index: nextIndex,
-            point: nextPoint,
-            pointX: nextPointX,
-          };
-    });
-  }, [chartWidth, visibleHistory]);
+    if (
+      selectedHistoryPoint.index !== nextIndex ||
+      selectedHistoryPoint.point !== nextPoint ||
+      selectedHistoryPoint.pointX !== nextPointX
+    ) {
+      setSelectedHistoryPoint({
+        index: nextIndex,
+        point: nextPoint,
+        pointX: nextPointX,
+      });
+    }
+  }, [
+    chartWidth,
+    historyTooltipLeft,
+    selectedHistoryPoint,
+    visibleHistory,
+  ]);
 
   const latestPoint = visibleHistory[visibleHistory.length - 1];
   const chartScale = useMemo(() => [70, 60, 50, 40, 30, 20, 10], []);
@@ -1039,6 +1058,11 @@ export default function TemperatureHistoryScreen() {
         .onBegin((event) => updateSelectedHistoryPoint(event.x))
         .onStart((event) => updateSelectedHistoryPoint(event.x))
         .onUpdate((event) => updateSelectedHistoryPoint(event.x))
+        .onFinalize((_event, success) => {
+          if (!success) {
+            setSelectedHistoryPoint(null);
+          }
+        })
         .runOnJS(true),
     [updateSelectedHistoryPoint],
   );
