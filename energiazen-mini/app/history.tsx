@@ -799,12 +799,11 @@ export default function TemperatureHistoryScreen() {
     useCallback(() => {
       if (selectedTab === "24h") {
         void loadHistoryTab("24h", true);
-        return;
-      }
-
-      if (isTodayHelsinkiDay(selectedDayKey)) {
+      } else if (isTodayHelsinkiDay(selectedDayKey)) {
         void loadDayHistory(selectedDayKey, true);
       }
+
+      return () => setSelectedHistoryPoint(null);
     }, [loadDayHistory, loadHistoryTab, selectedDayKey, selectedTab]),
   );
 
@@ -890,7 +889,34 @@ export default function TemperatureHistoryScreen() {
   }, [history24h, historyDay, isInteractionComplete, selectedTab]);
 
   useEffect(() => {
-    setSelectedHistoryPoint(null);
+    setSelectedHistoryPoint((currentPoint) => {
+      if (!currentPoint) {
+        return null;
+      }
+
+      const nextIndex = visibleHistory.findIndex(
+        (point) => point.timestamp === currentPoint.point.timestamp,
+      );
+
+      if (nextIndex < 0) {
+        return null;
+      }
+
+      const nextPoint = visibleHistory[nextIndex];
+      const nextPointX = chartWidth > 0
+        ? (chartWidth / visibleHistory.length) * (nextIndex + 0.5)
+        : currentPoint.pointX;
+
+      return currentPoint.index === nextIndex &&
+        currentPoint.point === nextPoint &&
+        currentPoint.pointX === nextPointX
+        ? currentPoint
+        : {
+            index: nextIndex,
+            point: nextPoint,
+            pointX: nextPointX,
+          };
+    });
   }, [chartWidth, visibleHistory]);
 
   const latestPoint = visibleHistory[visibleHistory.length - 1];
@@ -1013,7 +1039,6 @@ export default function TemperatureHistoryScreen() {
         .onBegin((event) => updateSelectedHistoryPoint(event.x))
         .onStart((event) => updateSelectedHistoryPoint(event.x))
         .onUpdate((event) => updateSelectedHistoryPoint(event.x))
-        .onFinalize(() => setSelectedHistoryPoint(null))
         .runOnJS(true),
     [updateSelectedHistoryPoint],
   );
