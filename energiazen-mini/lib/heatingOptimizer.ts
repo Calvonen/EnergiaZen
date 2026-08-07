@@ -41,10 +41,14 @@ export type HeatingOptimizationSettingsSource = {
 };
 
 export type StratifiedShowersEstimate = {
+  energyTemperatureRange: number;
   energyRatio: number;
   fillRatio: number;
+  fullTankTemp: number;
+  minimumUsableTopTemperature: number;
   showersLeft: number;
   topUsability: number;
+  topUsabilityTemperatureRange: number;
   weightedTemperature: number;
 };
 
@@ -342,10 +346,14 @@ export function calculateStratifiedShowersLeft({
   const showersLeft = fillRatio * fullTankShowers;
 
   return {
+    energyTemperatureRange,
     energyRatio,
     fillRatio,
+    fullTankTemp,
+    minimumUsableTopTemperature,
     showersLeft,
     topUsability,
+    topUsabilityTemperatureRange,
     weightedTemperature,
   };
 }

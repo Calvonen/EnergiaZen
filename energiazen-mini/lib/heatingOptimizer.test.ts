@@ -380,6 +380,8 @@ export function runHeatingOptimizerUnitTests() {
     });
 
     assertClose(estimate.weightedTemperature, 47, "vanha korttikaava kayttaa 70/30 painotusta");
+    assertClose(estimate.fullTankTemp, 70, "diagnostiikka palauttaa kaytetyn tayden varaajan lampotilan");
+    assertClose(estimate.energyTemperatureRange, 60, "diagnostiikka palauttaa energialampotila-alueen");
     assertClose(
       estimate.energyRatio,
       (47 - 10) / (70 - 10),
@@ -390,6 +392,8 @@ export function runHeatingOptimizerUnitTests() {
       (50 - 42) / (70 - 42),
       "vanha korttikaava kayttaa 42 asteen topUsability-rajaa",
     );
+    assertClose(estimate.minimumUsableTopTemperature, 42, "diagnostiikka palauttaa ylaanturin kaytettavyysrajan");
+    assertClose(estimate.topUsabilityTemperatureRange, 28, "diagnostiikka palauttaa ylaanturin kaytettavyysalueen");
     assertClose(
       estimate.showersLeft,
       ((47 - 10) / (70 - 10)) * ((50 - 42) / (70 - 42)) * 6,
