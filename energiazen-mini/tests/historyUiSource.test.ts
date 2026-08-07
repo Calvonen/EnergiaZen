@@ -135,13 +135,18 @@ export function runHistoryUiSourceTests() {
       temperatureHistorySource.includes(".activeOffsetX([-6, 6])") &&
       temperatureHistorySource.includes(".failOffsetY([-8, 8])") &&
       temperatureHistorySource.includes(".onUpdate((event) => updateSelectedHistoryPoint(event.x))") &&
-      temperatureHistorySource.includes(".onFinalize(() => setSelectedHistoryPoint(null))") &&
+      !temperatureHistorySource.includes(".onFinalize(() => setSelectedHistoryPoint(null))") &&
+      temperatureHistorySource.includes(".onFinalize((_event, success) => {") &&
+      temperatureHistorySource.includes("if (!success) {") &&
+      temperatureHistorySource.includes("point.timestamp === selectedHistoryPoint.point.timestamp") &&
+      temperatureHistorySource.includes("historyTooltipLeft.setValue(nextTooltipLeft)") &&
+      temperatureHistorySource.includes("return () => setSelectedHistoryPoint(null)") &&
       !temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
       !temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
       temperatureHistorySource.includes("currentPoint?.index === nearestIndex") &&
       temperatureHistorySource.includes("[chartWidth, historyTooltipLeft, visibleHistory]") &&
       temperatureHistorySource.includes("pointX:"),
-    "lampohistorian tooltip kayttaa natiivia vaakasuuntaista pan-eletta ilman responder-logiikkaa",
+    "lampohistorian tooltip kayttaa natiivia vaakasuuntaista pan-eletta, ja valinta sailyy eleen jalkeen",
   );
   assertSource(
     !homeSource.includes("Viimeisin jakso") &&
