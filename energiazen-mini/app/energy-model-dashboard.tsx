@@ -10,7 +10,10 @@ import {
   fetchEnergyModelDashboardData,
 } from "@/lib/energyModelV2/dashboardData";
 import { sensorGeometryV2, topSensorMovedAt } from "@/lib/energyModelV2/sensorGeometry";
-import { calculateStratifiedShowersLeft } from "@/lib/heatingOptimizer";
+import {
+  calculateStratifiedShowersLeft,
+  getStratifiedShowerLimitingFactor,
+} from "@/lib/heatingOptimizer";
 import { EnergiaZenSettings, loadSettings } from "@/lib/settings";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -31,6 +34,10 @@ function formatNumber(value: number | null | undefined, digits: number, unit: st
   return typeof value === "number" && Number.isFinite(value)
     ? `${value.toFixed(digits)}${unit ? ` ${unit}` : ""}`
     : NOT_AVAILABLE;
+}
+
+function formatFinnishRatio(value: number) {
+  return value.toFixed(2).replace(".", ",");
 }
 
 function sensorStatus(value: number | null | undefined, latestAt?: string): DashboardMetric["tone"] {
@@ -86,6 +93,25 @@ export default function EnergyModelDashboardScreen() {
           topTemperature: data.latest.top_temp,
         })
       : null;
+  const limitingFactor = showerEstimate
+    ? getStratifiedShowerLimitingFactor(showerEstimate)
+    : null;
+  const limitingFactorContent = limitingFactor
+    ? limitingFactor.factor === "energyRatio"
+      ? {
+          explanation: "Varaajan käytettävissä olevan energian suhde rajoittaa suihkuarviota tällä hetkellä yläosan käyttökelpoisuutta enemmän.",
+          name: "Energiasuhde",
+        }
+      : limitingFactor.factor === "topUsability"
+        ? {
+            explanation: "Varaajan yläosan käyttökelpoisuus rajoittaa suihkuarviota tällä hetkellä energiasuhdetta enemmän.",
+            name: "Yläosan käyttökelpoisuus",
+          }
+        : {
+            explanation: "Energiasuhde ja yläosan käyttökelpoisuus rajoittavat suihkuarviota yhtä paljon, joten yhtä suurinta rajoitetta ei ole.",
+            name: "Tasapainossa",
+          }
+    : null;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -131,7 +157,24 @@ export default function EnergyModelDashboardScreen() {
               { label: "Usable energy", value: NOT_AVAILABLE, tone: "muted" },
               { label: "Model used", value: "EnergyModel V1" },
               { label: "Last calculation", value: calculatedAt ? calculationTimeFormatter.format(calculatedAt) : NOT_AVAILABLE },
-            ]} />
+            ]}>
+              <View style={styles.limitingFactorSection}>
+                <Text style={styles.limitingFactorTitle}>🚿 Arviota rajoittava tekijä</Text>
+                <Text style={styles.limitingFactorName}>{limitingFactorContent?.name ?? NOT_AVAILABLE}</Text>
+                <Text style={styles.limitingFactorLabel}>Nykyinen arvo</Text>
+                <Text style={styles.limitingFactorValue}>
+                  {limitingFactor ? formatFinnishRatio(limitingFactor.value) : NOT_AVAILABLE}
+                </Text>
+                <Text style={styles.limitingFactorLabel}>Vaikutus</Text>
+                <Text style={styles.limitingFactorImpact}>
+                  {limitingFactor ? (limitingFactor.factor === "balanced" ? "Yhtä suuri" : "Suurin V1-rajoite") : NOT_AVAILABLE}
+                </Text>
+                <Text style={styles.limitingFactorLabel}>Selitys</Text>
+                <Text style={styles.limitingFactorExplanation}>
+                  {limitingFactorContent?.explanation ?? NOT_AVAILABLE}
+                </Text>
+              </View>
+            </DashboardCard>
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
               { label: "Ala-anturi", value: typeof data.latest?.bottom_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.bottom_temp, latestAt) },
@@ -182,4 +225,11 @@ const styles = StyleSheet.create({
   errorTitle: { color: "#ff9aa4", fontSize: 15, fontWeight: "900" },
   errorText: { color: "#c9a5ad", fontSize: 13, marginTop: 5 },
   placeholder: { color: "#7889aa", fontSize: 13, fontWeight: "700", paddingBottom: 18 },
+  limitingFactorSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 18, paddingTop: 18 },
+  limitingFactorTitle: { color: "#36f4d4", fontSize: 14, fontWeight: "900", marginBottom: 12 },
+  limitingFactorName: { color: "#fff", fontSize: 17, fontWeight: "900", marginBottom: 16 },
+  limitingFactorLabel: { color: "#7889aa", fontSize: 11, fontWeight: "800", letterSpacing: 0.6, marginTop: 10, textTransform: "uppercase" },
+  limitingFactorValue: { color: "#eaf1ff", fontSize: 20, fontWeight: "900", marginTop: 3 },
+  limitingFactorImpact: { color: "#ffcf70", fontSize: 14, fontWeight: "900", marginTop: 4 },
+  limitingFactorExplanation: { color: "#b8c5df", fontSize: 13, fontWeight: "600", lineHeight: 19, marginTop: 5 },
 });

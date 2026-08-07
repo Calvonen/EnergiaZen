@@ -4,6 +4,7 @@ import {
   estimateHeatingGainPerHour,
   getEffectiveDrop,
   getHeatingOptimizationSegmentHours,
+  getStratifiedShowerLimitingFactor,
   HeatingOptimizationHour,
   HeatingOptimizationSettings,
   optimizeHeatingPlan,
@@ -130,6 +131,21 @@ function reading(
 }
 
 export function runHeatingOptimizerUnitTests() {
+  assertEqual(
+    getStratifiedShowerLimitingFactor({ energyRatio: 0.71, topUsability: 0.82 }),
+    { factor: "energyRatio", value: 0.71 },
+    "pienempi energiasuhde tunnistetaan suihkuarvion rajoitteeksi",
+  );
+  assertEqual(
+    getStratifiedShowerLimitingFactor({ energyRatio: 0.88, topUsability: 0.63 }),
+    { factor: "topUsability", value: 0.63 },
+    "pienempi ylaosan kayttokelpoisuus tunnistetaan suihkuarvion rajoitteeksi",
+  );
+  assertEqual(
+    getStratifiedShowerLimitingFactor({ energyRatio: 0.75, topUsability: 0.75 }),
+    { factor: "balanced", value: 0.75 },
+    "yhta suuret kertoimet raportoidaan tasapainoisina",
+  );
   {
     const runStartThresholdScenario = (
       currentShowers: number,
