@@ -1,8 +1,4 @@
-import {
-  applyEstimatedInletTemperatures,
-  runEnergyModelCoreReplay,
-  type TankState,
-} from "./energyModelCore";
+import { runEnergyModelCoreReplay, type TankState } from "./energyModelCore";
 import { sensorGeometryEpochs, type SensorGeometryEpoch } from "./sensorGeometry";
 
 export type DashboardReplayReading = {
@@ -17,7 +13,7 @@ export function calculateDashboardV2TankState(
   readings: DashboardReplayReading[],
 ): TankState | null {
   const currentEpoch = getCurrentSensorGeometryEpoch();
-  const currentEpochReadings = applyEstimatedInletTemperatures(readings)
+  const currentEpochReadings = readings
     .filter((reading) => isReadingInEpoch(reading, currentEpoch))
     .sort((first, second) => first.created_at.localeCompare(second.created_at));
   const firstCompleteReadingIndex = currentEpochReadings.findIndex(

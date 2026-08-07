@@ -40,15 +40,28 @@ export function runDashboardReplayUnitTests() {
     "dashboard replay uses the seven-day minimum inlet temperature instead of the latest raw value",
   );
 
-  const eightDaysLater = new Date(new Date(afterCurrentEpoch).getTime() + 8 * 24 * 60 * 60 * 1000).toISOString();
-  const stateAfterEstimateExpires = calculateDashboardV2TankState([
+  const dailyWarmReadings = Array.from({ length: 9 }, (_, index) => ({
+    ...completeReading,
+    created_at: new Date(
+      new Date(afterCurrentEpoch).getTime() + (index + 1) * 24 * 60 * 60 * 1000,
+    ).toISOString(),
+    inlet_temp: 21,
+  }));
+  const rawReadingsAcrossEstimateExpiry = [
     { ...completeReading, inlet_temp: 8 },
-    { ...completeReading, created_at: eightDaysLater, inlet_temp: 21 },
-  ]);
+    ...dailyWarmReadings,
+  ];
+  const stateAfterEstimateExpires = calculateDashboardV2TankState(
+    rawReadingsAcrossEstimateExpiry,
+  );
 
   assert(
     stateAfterEstimateExpires?.inletTemperatureC === 21,
-    "dashboard replay excludes inlet measurements older than seven days",
+    "a derived inlet estimate never renews its timestamp as a new measurement",
+  );
+  assert(
+    rawReadingsAcrossEstimateExpiry[1].inlet_temp === 21,
+    "inlet estimates do not overwrite raw replay readings",
   );
 
   const stateWithoutCurrentCompleteReading = calculateDashboardV2TankState([

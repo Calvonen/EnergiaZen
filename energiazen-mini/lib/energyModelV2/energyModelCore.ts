@@ -1,4 +1,4 @@
-import { runTankReadingsReplay } from "./replayEngine";
+import { normalizeReplayReadings, runTankReadingsReplay } from "./replayEngine";
 import type { ReplayStepContext } from "./replayEngine";
 import type { SensorGeometryEpoch } from "./sensorGeometry";
 
@@ -240,14 +240,22 @@ export function runEnergyModelCoreReplay({
   readings: Parameters<typeof runTankReadingsReplay<TankState | null>>[0];
   sensorGeometryEpochs: SensorGeometryEpoch[];
 }) {
+  const orderedReadings = normalizeReplayReadings(readings);
+  const estimatedInletTemperatures = calculateEstimatedInletTemperatures(orderedReadings);
+
   return runTankReadingsReplay<TankState | null>(
-    applyEstimatedInletTemperatures(readings),
+    orderedReadings,
     {
       initialState: null,
       modelVersion: "energy-model-core-v1",
       sensorGeometryEpochs,
       step: (state, context) => {
-        const observation = createTankObservationFromReplayStep(context);
+        const rawObservation = createTankObservationFromReplayStep(context);
+        const observation = {
+          ...rawObservation,
+          inletTempC:
+            estimatedInletTemperatures[context.index] ?? rawObservation.inletTempC,
+        };
         const nextState = state === null || context.segmentMinutes === null
           ? calculateTankStateFromObservation({
               geometry: context.geometry,
@@ -262,16 +270,13 @@ export function runEnergyModelCoreReplay({
 }
 
 /**
- * Replaces the inlet sensor value with the lowest available measurement from
- * the preceding seven days. EnergyModelCore then remains unaware of how its
- * inlet temperature was estimated and its physics stay unchanged.
+ * Calculates the lowest real inlet measurement from the preceding seven days
+ * for each reading. The returned estimates are kept separate from the source
+ * readings so a derived value can never become a new measurement.
  */
-export function applyEstimatedInletTemperatures<
-  T extends Parameters<typeof runTankReadingsReplay<TankState | null>>[0][number],
->(readings: T[]): T[] {
-  const orderedReadings = [...readings].sort((first, second) =>
-    String(first.created_at).localeCompare(String(second.created_at)),
-  );
+export function calculateEstimatedInletTemperatures(
+  orderedReadings: ReturnType<typeof normalizeReplayReadings>,
+): Array<number | null> {
   const minimumCandidates: Array<{ temperatureC: number; timestampMs: number }> = [];
 
   return orderedReadings.map((reading) => {
@@ -298,11 +303,8 @@ export function applyEstimatedInletTemperatures<
       });
     }
 
-    return {
-      ...reading,
-      // With no usable history, retaining the raw value preserves the old behavior.
-      inlet_temp: minimumCandidates[0]?.temperatureC ?? reading.inlet_temp,
-    };
+    // With no usable history, retaining the raw value preserves the old behavior.
+    return minimumCandidates[0]?.temperatureC ?? reading.inlet_temp ?? null;
   });
 }
 
