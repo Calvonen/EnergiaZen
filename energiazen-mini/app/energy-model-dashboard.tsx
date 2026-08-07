@@ -20,13 +20,6 @@ const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
   timeStyle: "short",
 });
-const calculationTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
-  hour: "2-digit",
-  hour12: false,
-  minute: "2-digit",
-  second: "2-digit",
-  timeZone: "Europe/Helsinki",
-});
 
 const NOT_AVAILABLE = "Not available";
 
@@ -53,7 +46,6 @@ export default function EnergyModelDashboardScreen() {
   const router = useRouter();
   const [data, setData] = useState<EnergyModelDashboardData | null>(null);
   const [settings, setSettings] = useState<EnergiaZenSettings | null>(null);
-  const [calculatedAt, setCalculatedAt] = useState<Date | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -67,7 +59,6 @@ export default function EnergyModelDashboardScreen() {
       ]);
       setData(dashboardData);
       setSettings(savedSettings);
-      setCalculatedAt(new Date());
     } catch (loadError) {
       console.warn("Failed to load EnergyModel Dashboard", loadError);
       setError(true);
@@ -156,7 +147,7 @@ export default function EnergyModelDashboardScreen() {
               { label: "Context · Inlet temperature", value: formatNumber(data.latest?.inlet_temp, 1, "°C") },
               { label: "Usable energy", value: NOT_AVAILABLE, tone: "muted" },
               { label: "Model used", value: "EnergyModel V1" },
-              { label: "Last calculation", value: calculatedAt ? calculationTimeFormatter.format(calculatedAt) : NOT_AVAILABLE },
+              { label: "Last calculation", value: latestLabel },
             ]}>
               <View style={styles.limitingFactorSection}>
                 <Text style={styles.limitingFactorTitle}>🚿 Arviota rajoittava tekijä</Text>
