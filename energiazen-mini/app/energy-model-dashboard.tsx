@@ -177,24 +177,26 @@ export default function EnergyModelDashboardScreen() {
                 </Text>
               </View>
             </DashboardCard>
-            <DashboardCard title="⚡ EnergyModel V2 Diagnostics" metrics={[
+            <DashboardCard title="⚡ EnergyModel V2 Diagnostics" metrics={v2State ? [
               { label: "Suihkuarvio", value: NOT_AVAILABLE, tone: "muted" },
-              { label: "Käyttökelpoinen energia", value: formatNumber(v2State?.usableEnergy.kwh, 2, "kWh") },
-              { label: "Välittömästi käytettävä energia", value: formatNumber(v2State?.immediateEnergy.kwh, 2, "kWh") },
-              { label: "Varastoitu energia", value: formatNumber(v2State?.storedEnergy.kwh, 2, "kWh") },
-              { label: "Varaenergia", value: formatNumber(v2State?.reserveEnergy.kwh, 2, "kWh") },
-              { label: "Energian epävarmuus", value: formatNumber(v2State?.uncertainty.energyKwh, 2, "kWh") },
-              { label: "Ylälämpötilan epävarmuus", value: formatNumber(v2State?.uncertainty.topTemperatureC, 1, "°C") },
-              { label: "Alalämpötilan epävarmuus", value: formatNumber(v2State?.uncertainty.bottomTemperatureC, 1, "°C") },
-              qualityMetric(v2State?.quality),
-              { label: "Epävarmuuden syyt", value: v2State ? (v2State.uncertainty.reasons.length ? v2State.uncertainty.reasons.join(", ") : "Ei syitä") : NOT_AVAILABLE },
-              { label: "Yläsolmun lämpötila", value: formatNumber(v2State?.topNodeTemperatureC, 1, "°C") },
-              { label: "Alasolmun lämpötila", value: formatNumber(v2State?.bottomNodeTemperatureC, 1, "°C") },
-              { label: "Tuloveden lämpötila", value: formatNumber(v2State?.inletTemperatureC, 1, "°C") },
-              { label: "Yläkerroksen massa", value: formatNumber(v2State?.layerMassesKg.top, 1, "kg") },
-              { label: "Alakerroksen massa", value: formatNumber(v2State?.layerMassesKg.bottom, 1, "kg") },
+              { label: "Käyttökelpoinen energia", value: formatNumber(v2State.usableEnergy.kwh, 2, "kWh") },
+              { label: "Välittömästi käytettävä energia", value: formatNumber(v2State.immediateEnergy.kwh, 2, "kWh") },
+              { label: "Varastoitu energia", value: formatNumber(v2State.storedEnergy.kwh, 2, "kWh") },
+              { label: "Varaenergia", value: formatNumber(v2State.reserveEnergy.kwh, 2, "kWh") },
+              { label: "Energian epävarmuus", value: formatNumber(v2State.uncertainty.energyKwh, 2, "kWh") },
+              { label: "Ylälämpötilan epävarmuus", value: formatNumber(v2State.uncertainty.topTemperatureC, 1, "°C") },
+              { label: "Alalämpötilan epävarmuus", value: formatNumber(v2State.uncertainty.bottomTemperatureC, 1, "°C") },
+              qualityMetric(v2State.quality),
+              { label: "Epävarmuuden syyt", value: v2State.uncertainty.reasons.length ? v2State.uncertainty.reasons.join(", ") : "Ei syitä" },
+              { label: "Yläsolmun lämpötila", value: formatNumber(v2State.topNodeTemperatureC, 1, "°C") },
+              { label: "Alasolmun lämpötila", value: formatNumber(v2State.bottomNodeTemperatureC, 1, "°C") },
+              { label: "Tuloveden lämpötila", value: formatNumber(v2State.inletTemperatureC, 1, "°C") },
+              { label: "Yläkerroksen massa", value: formatNumber(v2State.layerMassesKg.top, 1, "kg") },
+              { label: "Alakerroksen massa", value: formatNumber(v2State.layerMassesKg.bottom, 1, "kg") },
               { label: "Malli", value: "EnergyModel V2" },
               { label: "Viimeisin laskenta", value: v2TimestampLabel },
+            ] : [
+              { label: "Tila", value: "Ei riittävästi dataa", tone: "warning" },
             ]} />
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
