@@ -10,8 +10,9 @@ import {
   Text,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { debugLog } from "@/lib/debug";
 import { defaultSettings } from "@/lib/settings";
@@ -501,6 +502,7 @@ function getInletTrendLineSegments(
 }
 
 export default function TemperatureHistoryScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const mountedAtRef = useRef(getPerformanceNow());
   const initialTabRef = useRef<HistoryTab>("24h");
@@ -1029,22 +1031,26 @@ export default function TemperatureHistoryScreen() {
       <View style={[styles.glow, styles.greenGlow]} />
       <View style={[styles.glow, styles.blueGlow]} />
 
-      <Pressable
-        accessibilityLabel="Palaa etusivulle"
-        accessibilityRole="button"
-        onPress={() => router.back()}
-        style={styles.backButton}
-      >
-        <Text style={styles.backButtonText}>←</Text>
-      </Pressable>
-
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Lämpöhistoria</Text>
-          <Text style={styles.subtitle}>Varaajan ylä- ja ala-anturi</Text>
+          <Pressable
+            accessibilityLabel="Palaa etusivulle"
+            accessibilityRole="button"
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Text style={styles.backButtonText}>‹</Text>
+          </Pressable>
+          <View>
+            <Text style={styles.title}>Lämpöhistoria</Text>
+            <Text style={styles.subtitle}>Varaajan ylä- ja ala-anturi</Text>
+          </View>
         </View>
 
         <View style={styles.tabSelector}>
@@ -1511,7 +1517,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 32,
     paddingHorizontal: 20,
-    paddingTop: 72,
   },
   glow: {
     borderRadius: 999,
@@ -1524,39 +1529,41 @@ const styles = StyleSheet.create({
   },
   greenGlow: { backgroundColor: "#54eaa0", right: -150, top: 80 },
   blueGlow: { backgroundColor: "#5aa7ff", bottom: 70, left: -170 },
+  header: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 14,
+    marginBottom: 6,
+    width: "100%",
+  },
   backButton: {
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(255,255,255,0.18)",
-    borderRadius: 999,
+    borderColor: "rgba(255,255,255,0.15)",
+    borderRadius: 22,
     borderWidth: 1,
     height: 44,
     justifyContent: "center",
-    left: 18,
-    position: "absolute",
-    top: 48,
     width: 44,
-    zIndex: 20,
   },
   backButtonText: {
-    color: "#f7fbff",
-    fontSize: 26,
-    fontWeight: "900",
-    lineHeight: 30,
+    color: "#fff",
+    fontSize: 34,
+    fontWeight: "700",
+    lineHeight: 36,
+    marginTop: -3,
   },
-  header: { alignItems: "center", marginBottom: 18 },
   title: {
     color: "#f7fbff",
     fontSize: 28,
     fontWeight: "900",
     letterSpacing: -0.4,
-    textAlign: "center",
   },
   subtitle: {
     color: "#b9d7ff",
     fontSize: 15,
     fontWeight: "700",
-    marginTop: 5,
+    marginTop: 2,
     textAlign: "center",
   },
   tabSelector: {
@@ -1566,8 +1573,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: "row",
     gap: 6,
-    marginBottom: 16,
-    padding: 5,
+    marginBottom: 8,
+    padding: 3,
     width: "100%",
   },
   tabButton: {
@@ -1576,7 +1583,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 7,
   },
   activeTabButton: {
     backgroundColor: "rgba(54,244,212,0.18)",
@@ -1648,10 +1655,11 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.12)",
     borderRadius: 24,
     borderWidth: 1,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     width: "100%",
   },
-  summaryRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  summaryRow: { flexDirection: "row", gap: 10, marginBottom: 6 },
   summaryPill: {
     backgroundColor: "rgba(5,8,22,0.46)",
     borderColor: "rgba(255,255,255,0.12)",
@@ -1689,7 +1697,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
-    marginBottom: 16,
+    marginBottom: 6,
   },
   legendTop: { color: topTemperatureColor, fontSize: 12, fontWeight: "900" },
   legendBottom: { color: bottomTemperatureColor, fontSize: 12, fontWeight: "900" },
