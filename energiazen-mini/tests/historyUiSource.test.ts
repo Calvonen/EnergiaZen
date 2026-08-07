@@ -131,12 +131,16 @@ export function runHistoryUiSourceTests() {
   assertSource(
     temperatureHistorySource.includes("const tooltipWidth = 104") &&
       temperatureHistorySource.includes("historyTooltipLeft.setValue(tooltipLeft)") &&
-      temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
-      temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
+      temperatureHistorySource.includes("Gesture.Pan()") &&
+      temperatureHistorySource.includes(".activeOffsetX([-6, 6])") &&
+      temperatureHistorySource.includes(".failOffsetY([-8, 8])") &&
+      temperatureHistorySource.includes(".onUpdate((event) => updateSelectedHistoryPoint(event.x))") &&
+      !temperatureHistorySource.includes("onResponderMove={updateSelectedHistoryPoint}") &&
+      !temperatureHistorySource.includes("onResponderTerminationRequest={() => false}") &&
       temperatureHistorySource.includes("currentPoint?.index === nearestIndex") &&
-      temperatureHistorySource.includes("}, [chartWidth, visibleHistory]);") &&
+      temperatureHistorySource.includes("[chartWidth, historyTooltipLeft, visibleHistory]") &&
       temperatureHistorySource.includes("pointX:"),
-    "lampohistorian tooltip seuraa kosketusta ilman koko kuvaajan renderointia jokaisella liikkeella",
+    "lampohistorian tooltip kayttaa natiivia vaakasuuntaista pan-eletta ilman responder-logiikkaa",
   );
   assertSource(
     !homeSource.includes("Viimeisin jakso") &&
