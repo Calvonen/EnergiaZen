@@ -43,6 +43,7 @@ import { runSensorGeometryUnitTests } from "../lib/energyModelV2/sensorGeometry.
 import { runReplayEngineUnitTests } from "../lib/energyModelV2/replayEngine.test";
 import { runEnergyModelCoreUnitTests } from "../lib/energyModelV2/energyModelCore.test";
 import { runReplayValidationUnitTests } from "../lib/energyModelV2/replayValidation.test";
+import { runDashboardReplayUnitTests } from "../lib/energyModelV2/dashboardReplay.test";
 import { runHomeResumeRefreshSourceTests } from "../tests/homeResumeRefreshSource.test";
 
 async function runTests() {
@@ -92,9 +93,10 @@ async function runTests() {
   runReplayEngineUnitTests();
   runEnergyModelCoreUnitTests();
   runReplayValidationUnitTests();
+  runDashboardReplayUnitTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore and replayValidation tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation and dashboardReplay tests passed",
   );
 }
 
