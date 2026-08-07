@@ -10,11 +10,28 @@ import {
   fetchEnergyModelDashboardData,
 } from "@/lib/energyModelV2/dashboardData";
 import { sensorGeometryV2, topSensorMovedAt } from "@/lib/energyModelV2/sensorGeometry";
+import { calculateStratifiedShowersLeft } from "@/lib/heatingOptimizer";
+import { EnergiaZenSettings, loadSettings } from "@/lib/settings";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
   timeStyle: "short",
 });
+const calculationTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "2-digit",
+  hour12: false,
+  minute: "2-digit",
+  second: "2-digit",
+  timeZone: "Europe/Helsinki",
+});
+
+const NOT_AVAILABLE = "Not available";
+
+function formatNumber(value: number | null | undefined, digits: number, unit: string) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(digits)}${unit ? ` ${unit}` : ""}`
+    : NOT_AVAILABLE;
+}
 
 function sensorStatus(value: number | null | undefined, latestAt?: string): DashboardMetric["tone"] {
   if (typeof value !== "number" || !latestAt) return "warning";
@@ -28,6 +45,8 @@ function learningStatus(count: number) {
 export default function EnergyModelDashboardScreen() {
   const router = useRouter();
   const [data, setData] = useState<EnergyModelDashboardData | null>(null);
+  const [settings, setSettings] = useState<EnergiaZenSettings | null>(null);
+  const [calculatedAt, setCalculatedAt] = useState<Date | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -35,7 +54,13 @@ export default function EnergyModelDashboardScreen() {
     setLoading(true);
     setError(false);
     try {
-      setData(await fetchEnergyModelDashboardData());
+      const [dashboardData, savedSettings] = await Promise.all([
+        fetchEnergyModelDashboardData(),
+        loadSettings(),
+      ]);
+      setData(dashboardData);
+      setSettings(savedSettings);
+      setCalculatedAt(new Date());
     } catch (loadError) {
       console.warn("Failed to load EnergyModel Dashboard", loadError);
       setError(true);
@@ -48,6 +73,19 @@ export default function EnergyModelDashboardScreen() {
 
   const latestAt = data?.latest?.created_at;
   const latestLabel = latestAt ? dateTimeFormatter.format(new Date(latestAt)) : "Ei mittauksia";
+  const showerEstimate =
+    typeof data?.latest?.top_temp === "number" &&
+    typeof data.latest.bottom_temp === "number" &&
+    settings
+      ? calculateStratifiedShowersLeft({
+          bottomTemperature: data.latest.bottom_temp,
+          fullTankAverageTemperature: settings.fullTankAverageTemperature,
+          fullTankShowers: settings.fullTankShowers,
+          maxTankTemperature: settings.maxTankTemperature,
+          minTankTemperature: settings.minTankTemperature,
+          topTemperature: data.latest.top_temp,
+        })
+      : null;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -73,6 +111,27 @@ export default function EnergyModelDashboardScreen() {
 
         {data ? (
           <View style={styles.grid}>
+            <DashboardCard title="🚿 Shower Calculation" metrics={[
+              { label: "Input · Top sensor", value: formatNumber(data.latest?.top_temp, 1, "°C") },
+              { label: "Input · Bottom sensor", value: formatNumber(data.latest?.bottom_temp, 1, "°C") },
+              { label: "1 · Weighted temperature", value: formatNumber(showerEstimate?.weightedTemperature, 2, "°C") },
+              { label: "Input · Full tank average", value: formatNumber(settings?.fullTankAverageTemperature, 1, "°C") },
+              { label: "Input · Maximum temperature", value: formatNumber(settings?.maxTankTemperature, 1, "°C") },
+              { label: "2 · Effective full tank temp", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "Input · Minimum temperature", value: formatNumber(settings?.minTankTemperature, 1, "°C") },
+              { label: "3 · Energy temperature range", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "4 · Energy ratio", value: formatNumber(showerEstimate?.energyRatio, 3, "") },
+              { label: "5 · Minimum usable top", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "6 · Top usability range", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "7 · Top usability", value: formatNumber(showerEstimate?.topUsability, 3, "") },
+              { label: "8 · Fill ratio", value: formatNumber(showerEstimate?.fillRatio, 3, "") },
+              { label: "Input · Full tank setting", value: formatNumber(settings?.fullTankShowers, 1, "showers") },
+              { label: "9 · Current estimate", value: formatNumber(showerEstimate?.showersLeft, 1, "showers") },
+              { label: "Context · Inlet temperature", value: formatNumber(data.latest?.inlet_temp, 1, "°C") },
+              { label: "Usable energy", value: NOT_AVAILABLE, tone: "muted" },
+              { label: "Model used", value: "EnergyModel V1" },
+              { label: "Last calculation", value: calculatedAt ? calculationTimeFormatter.format(calculatedAt) : NOT_AVAILABLE },
+            ]} />
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
               { label: "Ala-anturi", value: typeof data.latest?.bottom_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.bottom_temp, latestAt) },
