@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { debugLog } from "@/lib/debug";
@@ -502,6 +503,7 @@ function getInletTrendLineSegments(
 
 export default function TemperatureHistoryScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const mountedAtRef = useRef(getPerformanceNow());
   const initialTabRef = useRef<HistoryTab>("24h");
   const firstRenderLoggedRef = useRef(false);
@@ -1032,13 +1034,23 @@ export default function TemperatureHistoryScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingTop: insets.top + 8 },
+          { paddingTop: insets.top },
         ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Lämpöhistoria</Text>
-          <Text style={styles.subtitle}>Varaajan ylä- ja ala-anturi</Text>
+          <Pressable
+            accessibilityLabel="Palaa etusivulle"
+            accessibilityRole="button"
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Text style={styles.backButtonText}>‹</Text>
+          </Pressable>
+          <View>
+            <Text style={styles.title}>Lämpöhistoria</Text>
+            <Text style={styles.subtitle}>Varaajan ylä- ja ala-anturi</Text>
+          </View>
         </View>
 
         <View style={styles.tabSelector}>
@@ -1517,13 +1529,35 @@ const styles = StyleSheet.create({
   },
   greenGlow: { backgroundColor: "#54eaa0", right: -150, top: 80 },
   blueGlow: { backgroundColor: "#5aa7ff", bottom: 70, left: -170 },
-  header: { alignItems: "center", marginBottom: 8 },
+  header: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 14,
+    marginBottom: 6,
+    width: "100%",
+  },
+  backButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.15)",
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  backButtonText: {
+    color: "#fff",
+    fontSize: 34,
+    fontWeight: "700",
+    lineHeight: 36,
+    marginTop: -3,
+  },
   title: {
     color: "#f7fbff",
     fontSize: 28,
     fontWeight: "900",
     letterSpacing: -0.4,
-    textAlign: "center",
   },
   subtitle: {
     color: "#b9d7ff",
