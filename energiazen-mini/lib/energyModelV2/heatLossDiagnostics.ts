@@ -16,6 +16,7 @@ export const COLD_INLET_MARGIN_C = 2;
 export const MIN_COLD_INLET_DURATION_MINUTES = 3;
 export const INLET_RECOVERY_MARGIN_C = 4;
 export const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
+export const MIN_TANK_STABILIZATION_MINUTES = 15;
 export const PRE_WATER_DRAW_GUARD_MINUTES = 20;
 
 export type WaterDrawDetectionKind = "rapid_drop" | "cold_inlet";
@@ -49,6 +50,7 @@ export type HeatLossRejectionReason =
   | "water_draw"
   | "pre_water_draw_guard"
   | "inlet_recovery"
+  | "tank_stabilization"
   | "inlet_temperature_change"
   | "missing_inlet_data"
   | "rapid_temperature_change"
@@ -96,6 +98,9 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   let recoveringAfterWaterDraw = false;
   let recoveryPeriodStartIndex: number | null = null;
   let warmRecoveryStartTime: number | null = null;
+  let stabilizingAfterRecovery = false;
+  let stabilizationPeriodStartIndex: number | null = null;
+  let stableTankStartTime: number | null = null;
 
   const finishPeriod = (endIndex: number) => {
     if (periodStartIndex === null || endIndex <= periodStartIndex) return;
@@ -121,7 +126,17 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     waterDrawDetectionKind,
   });
 
+  const finishStabilization = (endIndex: number) => {
+    if (stabilizationPeriodStartIndex !== null && endIndex >= stabilizationPeriodStartIndex) {
+      rejectBoundary("tank_stabilization", stabilizationPeriodStartIndex, endIndex);
+    }
+    stabilizingAfterRecovery = false;
+    stabilizationPeriodStartIndex = null;
+    stableTankStartTime = null;
+  };
+
   const enterRecovery = (startIndex: number) => {
+    if (stabilizingAfterRecovery) finishStabilization(startIndex - 1);
     recoveringAfterWaterDraw = true;
     recoveryPeriodStartIndex ??= startIndex;
     warmRecoveryStartTime = null;
@@ -135,6 +150,13 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     recoveringAfterWaterDraw = false;
     recoveryPeriodStartIndex = null;
     warmRecoveryStartTime = null;
+  };
+
+  const enterStabilization = (startIndex: number) => {
+    stabilizingAfterRecovery = true;
+    stabilizationPeriodStartIndex = startIndex;
+    stableTankStartTime = new Date(steps[startIndex].reading.created_at).getTime();
+    periodStartIndex = null;
   };
 
   // Record each merged guard as one meaningful diagnostic segment. The guard
@@ -209,6 +231,32 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       if (time - warmRecoveryStartTime < MIN_INLET_RECOVERY_DURATION_MINUTES * 60_000) continue;
 
       finishRecovery(index - 1);
+      enterStabilization(index);
+      continue;
+    }
+    if (stabilizingAfterRecovery) {
+      const stepReason = getStepRejectionReason(steps[index]);
+      const transitionReason = stepReason ? null : getTransitionRejectionReason(
+        steps[index - 1],
+        steps[index],
+        recentSteps(steps, index),
+      );
+      if (transitionReason === "water_draw") {
+        rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+        enterRecovery(index + 1);
+        continue;
+      }
+      if (stepReason || transitionReason) {
+        rejectBoundary(stepReason ?? transitionReason!, Math.max(0, index - 1), index);
+        stableTankStartTime = null;
+        continue;
+      }
+
+      const time = new Date(steps[index].reading.created_at).getTime();
+      stableTankStartTime ??= time;
+      if (time - stableTankStartTime < MIN_TANK_STABILIZATION_MINUTES * 60_000) continue;
+
+      finishStabilization(index - 1);
       periodStartIndex = index;
       continue;
     }
@@ -236,6 +284,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     }
   }
   if (recoveringAfterWaterDraw) finishRecovery(steps.length - 1);
+  if (stabilizingAfterRecovery) finishStabilization(steps.length - 1);
   finishPeriod(steps.length - 1);
 
   const rates = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
@@ -508,6 +557,7 @@ function countRejections(rejections: RejectedHeatLossObservation[]) {
     heating_detected: 0,
     inlet_temperature_change: 0,
     inlet_recovery: 0,
+    tank_stabilization: 0,
     measurement_gap: 0,
     missing_inlet_data: 0,
     rapid_temperature_change: 0,
