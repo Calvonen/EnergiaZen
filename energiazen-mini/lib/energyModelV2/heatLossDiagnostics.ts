@@ -81,6 +81,8 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
 function isCleanTransition(previous: DiagnosticStep, current: DiagnosticStep) {
   if (
     previous.reading.heating !== false || current.reading.heating !== false ||
+    !isFiniteNumber(previous.reading.inlet_temp) ||
+    !isFiniteNumber(current.reading.inlet_temp) ||
     previous.state?.quality !== "valid" || current.state?.quality !== "valid" ||
     current.segmentMinutes === null || current.segmentMinutes <= 0 ||
     current.segmentMinutes > MAX_SEGMENT_MINUTES

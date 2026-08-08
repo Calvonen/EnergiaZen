@@ -128,15 +128,36 @@ export function runDashboardReplayUnitTests() {
     "heat-loss diagnostics excludes a raw inlet water-draw signature even when the estimated inlet stays stable",
   );
 
-  const missingInletReplay = calculateDashboardV2Replay(
-    coolingReadings.map((reading, index) => ({
-      ...reading,
-      inlet_temp: index === 10 ? null : reading.inlet_temp,
-    })),
+  const missingInletReadings: DashboardReplayReading[] = Array.from(
+    { length: 31 },
+    (_, minute) => ({
+      bottom_temp: 45 - minute / 100,
+      created_at: new Date(
+        new Date(coolingStart).getTime() + minute * 60_000,
+      ).toISOString(),
+      heating: false,
+      inlet_temp: minute === 15 ? null : 12,
+      top_temp: 60 - minute / 100,
+    }),
+  );
+  const missingInletReplay = calculateDashboardV2Replay(missingInletReadings);
+  assert(
+    missingInletReplay.heatLossDiagnostics.observations.length === 2,
+    "missing raw inlet data splits otherwise usable heat-loss observations",
   );
   assert(
-    missingInletReplay.heatLossDiagnostics.observations.length === 0,
-    "heat-loss diagnostics excludes periods where missing raw inlet data makes water-draw detection uncertain",
+    missingInletReplay.heatLossDiagnostics.observations[0].startedAt ===
+      missingInletReadings[0].created_at &&
+      missingInletReplay.heatLossDiagnostics.observations[0].endedAt ===
+        missingInletReadings[14].created_at,
+    "the first observation ends at the last complete reading before missing inlet data",
+  );
+  assert(
+    missingInletReplay.heatLossDiagnostics.observations[1].startedAt ===
+      missingInletReadings[16].created_at &&
+      missingInletReplay.heatLossDiagnostics.observations[1].endedAt ===
+        missingInletReadings[30].created_at,
+    "the second observation starts at the first complete reading after missing inlet data",
   );
 
   const mixingReplay = calculateDashboardV2Replay(Array.from({ length: 21 }, (_, minutes) => ({
