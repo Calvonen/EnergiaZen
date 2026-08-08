@@ -170,6 +170,22 @@ export function runDashboardReplayUnitTests() {
       inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.pre_water_draw_guard === 1,
     "a candidate wholly inside the rapid-drop guard is excluded",
   );
+  const initialGuardAcceptance = inletSignatureReplay.heatLossDiagnostics.acceptance;
+  const initialGuardRejectionCounts = Object.values(initialGuardAcceptance.rejectionCounts);
+  assert(
+    !Object.prototype.hasOwnProperty.call(initialGuardAcceptance.rejectionCounts, "null") &&
+      initialGuardRejectionCounts.every(Number.isFinite),
+    "an initial guard creates neither a null rejection count nor a NaN count",
+  );
+  assert(
+    initialGuardAcceptance.latestRejections.every(({ reason }) => reason !== null),
+    "an initial guard never exposes a null reason in recent diagnostics",
+  );
+  assert(
+    initialGuardAcceptance.examinedCount === initialGuardAcceptance.acceptedCount +
+      initialGuardRejectionCounts.reduce((sum, count) => sum + count, 0),
+    "an initial guard does not inflate examined count with an artificial boundary",
+  );
   assert(
     inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 1,
     "heat-loss diagnostics records a water-draw signature rejection",

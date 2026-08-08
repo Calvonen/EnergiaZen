@@ -144,11 +144,12 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     rejectBoundary("pre_water_draw_guard", startIndex, endIndex));
 
   const initialColdPeriod = coldInletPeriodByStart.get(0);
+  const initialReason = steps.length ? getStepRejectionReason(steps[0]) : null;
   if (initialColdPeriod) {
     rejectBoundary("water_draw", 0, initialColdPeriod.endIndex, "cold_inlet");
     enterRecovery(initialColdPeriod.endIndex + 1);
-  } else if (steps.length && periodStartIndex === null) {
-    rejectBoundary(getStepRejectionReason(steps[0])!, 0, 0);
+  } else if (periodStartIndex === null && initialReason) {
+    rejectBoundary(initialReason, 0, 0);
   }
 
   for (let index = 1; index < steps.length; index += 1) {
