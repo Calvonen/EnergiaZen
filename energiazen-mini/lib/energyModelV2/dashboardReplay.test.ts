@@ -492,6 +492,10 @@ export function runDashboardReplayUnitTests() {
       tenStableMinutesReplay.heatLossDiagnostics.acceptance.rejectionCounts.tank_stabilization === 1,
     "ten stable tank minutes after inlet recovery do not start a candidate",
   );
+  assert(
+    tenStableMinutesReplay.waterDrawEvents.length === 0,
+    "a water draw is not finalized before the post-recovery tank state stabilizes",
+  );
 
   const stabilizedReplay = calculateDashboardV2Replay([
     ...stabilizationReadings,
@@ -511,6 +515,26 @@ export function runDashboardReplayUnitTests() {
       stabilizedReplay.heatLossDiagnostics.observations[0].startedAt ===
         stabilizationReadings[25].created_at,
     "fifteen stable top and bottom minutes permit a new heat-loss candidate",
+  );
+  const stabilizedWaterDraw = stabilizedReplay.waterDrawEvents[0];
+  assert(
+    stabilizedReplay.waterDrawEvents.length === 1 &&
+      stabilizedWaterDraw.detectionKinds.length === 1 &&
+      stabilizedWaterDraw.detectionKinds[0] === "rapid_drop",
+    "water draw, recovery, and stabilization form one diagnostic event",
+  );
+  assert(
+    stabilizedWaterDraw.startedAt === stabilizationReadings[5].created_at &&
+      stabilizedWaterDraw.endedAt === stabilizationReadings[6].created_at &&
+      stabilizedWaterDraw.stabilizedAt === stabilizationReadings[25].created_at,
+    "the diagnostic keeps draw boundaries separate from its stabilized energy endpoint",
+  );
+  assert(
+    stabilizedWaterDraw.energyBeforeKwh > stabilizedWaterDraw.energyAfterStabilizationKwh &&
+      stabilizedWaterDraw.rawEnergyChangeKwh < 0 &&
+      stabilizedWaterDraw.estimatedNaturalLossKwh !== null &&
+      stabilizedWaterDraw.estimatedWaterDrawNetEnergyKwh !== null,
+    "a stabilized draw reports energy endpoints, raw change, natural loss, and net draw energy",
   );
 
   const rapidChangeDuringStabilization: DashboardReplayReading[] = Array.from(

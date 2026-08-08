@@ -328,7 +328,37 @@ export default function EnergyModelDashboardScreen() {
               { label: "Viimeisin laskenta", value: v2TimestampLabel },
             ] : [
               { label: "Tila", value: "Ei riittävästi dataa", tone: "warning" },
-            ]} />
+            ]}>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🚰 Viimeisimmät vedenkäyttötapahtumat</Text>
+                {data.waterDrawEvents.length ? (
+                  data.waterDrawEvents.slice(-10).reverse().map((event) => (
+                    <View key={`${event.startedAt}-${event.stabilizedAt}`} style={styles.observationCard}>
+                      <Text style={styles.observationTime}>
+                        🚰 {dateTimeFormatter.format(new Date(event.startedAt))} – {dateTimeFormatter.format(new Date(event.endedAt))}
+                      </Text>
+                      {[
+                        ["Kesto", formatDuration(event.durationMinutes)],
+                        ["Havainto", event.detectionKinds.join(" / ")],
+                        ["Energia ennen tapahtumaa", formatNumber(event.energyBeforeKwh, 2, "kWh")],
+                        ["Energia stabiloitumisen jälkeen", formatNumber(event.energyAfterStabilizationKwh, 2, "kWh")],
+                        ["Stabiloitunut", dateTimeFormatter.format(new Date(event.stabilizedAt))],
+                        ["Raakamuutos", formatNumber(event.rawEnergyChangeKwh, 2, "kWh")],
+                        ["Luonnollinen lämpöhäviö tapahtumaikkunassa", formatNumber(event.estimatedNaturalLossKwh, 2, "kWh")],
+                        ["Vedenkäytön nettoenergia", formatNumber(event.estimatedWaterDrawNetEnergyKwh, 2, "kWh")],
+                      ].map(([label, value]) => (
+                        <View key={label} style={styles.observationMetricRow}>
+                          <Text style={styles.observationMetricLabel}>{label}</Text>
+                          <Text style={styles.observationMetricValue}>{value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noRejections}>Ei stabiloituneita vedenkäyttötapahtumia</Text>
+                )}
+              </View>
+            </DashboardCard>
             <DashboardCard title="📉 Lämpöhäviödiagnostiikka" metrics={[
               { label: "Hyväksyttyjä havaintoja", value: String(data.heatLossDiagnostics.observations.length) },
               { label: "Viimeisin havainto", value: data.heatLossDiagnostics.latestObservation ? `${dateTimeFormatter.format(new Date(data.heatLossDiagnostics.latestObservation.startedAt))} – ${dateTimeFormatter.format(new Date(data.heatLossDiagnostics.latestObservation.endedAt))}` : NOT_AVAILABLE },
