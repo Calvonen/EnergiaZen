@@ -157,7 +157,7 @@ export function runDashboardReplayUnitTests() {
   );
 
   const coolingStart = new Date(new Date(topSensorMovedAt).getTime() + 60_000).toISOString();
-  const coolingReadings: DashboardReplayReading[] = Array.from({ length: 21 }, (_, minutes) => ({
+  const coolingReadings: DashboardReplayReading[] = Array.from({ length: 47 }, (_, minutes) => ({
     bottom_temp: 45 - minutes / 100,
     created_at: new Date(new Date(coolingStart).getTime() + minutes * 60_000).toISOString(),
     heating: false,
@@ -176,7 +176,7 @@ export function runDashboardReplayUnitTests() {
       coolingReplay.heatLossDiagnostics.acceptance.acceptedCount === 1,
     "heat-loss diagnostics counts every examined and accepted period",
   );
-  assert(observation?.durationMinutes === 20, "heat-loss observation includes its duration");
+  assert(observation?.durationMinutes === 46, "heat-loss observation includes its duration");
   assert(
     typeof observation?.energyLossKwhPerHour === "number" && observation.energyLossKwhPerHour > 0,
     "heat-loss observation includes a realistic hourly loss",
@@ -184,6 +184,47 @@ export function runDashboardReplayUnitTests() {
   assert(
     observation?.usableEnergyStartKwh !== undefined && observation.usableEnergyEndKwh !== undefined,
     "heat-loss observation captures usable energy endpoints",
+  );
+
+  const coolingReadingsForDuration = (durationSeconds: number): DashboardReplayReading[] => {
+    const sampleSeconds = [
+      ...Array.from(
+        { length: Math.floor(durationSeconds / 60) + 1 },
+        (_, minute) => minute * 60,
+      ),
+      ...(durationSeconds % 60 === 0 ? [] : [durationSeconds]),
+    ];
+
+    return sampleSeconds.map((elapsedSeconds, index) => ({
+      bottom_temp: 45 - elapsedSeconds / 6_000,
+      created_at: new Date(new Date(coolingStart).getTime() + elapsedSeconds * 1_000).toISOString(),
+      heating: false,
+      inlet_temp: index === 0 ? 12 : 15,
+      top_temp: 60 - elapsedSeconds / 6_000,
+    }));
+  };
+  const justUnderMinimumReplay = calculateDashboardV2Replay(coolingReadingsForDuration(44 * 60 + 59));
+  const exactMinimumReplay = calculateDashboardV2Replay(coolingReadingsForDuration(45 * 60));
+  const overMinimumReplay = calculateDashboardV2Replay(coolingReadingsForDuration(46 * 60));
+
+  assert(
+    justUnderMinimumReplay.heatLossDiagnostics.observations.length === 0 &&
+      justUnderMinimumReplay.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 1,
+    "a 44 minute 59 second heat-loss candidate is rejected as too short",
+  );
+  assert(
+    exactMinimumReplay.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 0,
+    "an exact 45 minute heat-loss candidate proceeds past the duration check",
+  );
+  assert(
+    overMinimumReplay.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 0,
+    "a 46 minute heat-loss candidate proceeds past the duration check",
+  );
+  assert(
+    [coolingReplay, exactMinimumReplay, overMinimumReplay].every((replay) =>
+      replay.heatLossDiagnostics.observations.every(({ durationMinutes }) => durationMinutes >= 45)
+    ),
+    "dashboard diagnostics never include accepted 16, 24, 27, or other sub-45-minute observations",
   );
 
   const heatingReplay = calculateDashboardV2Replay(
@@ -292,21 +333,21 @@ export function runDashboardReplayUnitTests() {
   );
 
   const guardedLongCoolingReadings: DashboardReplayReading[] = Array.from(
-    { length: 81 },
+    { length: 86 },
     (_, minute) => ({
       bottom_temp: 45 - minute / 100,
       created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
       heating: false,
-      inlet_temp: minute === 0 ? 12 : minute === 60 ? 12 : 17,
+      inlet_temp: minute === 0 ? 12 : minute === 65 ? 12 : 17,
       top_temp: 60 - minute / 100,
     }),
   );
   const guardedLongCoolingReplay = calculateDashboardV2Replay(guardedLongCoolingReadings);
   assert(
-    guardedLongCoolingReplay.heatLossDiagnostics.observations[0]?.durationMinutes === 40 &&
+    guardedLongCoolingReplay.heatLossDiagnostics.observations[0]?.durationMinutes === 45 &&
       guardedLongCoolingReplay.heatLossDiagnostics.observations[0]?.endedAt ===
-        guardedLongCoolingReadings[40].created_at,
-    "a rapid drop trims exactly twenty minutes from a sixty-minute candidate",
+        guardedLongCoolingReadings[45].created_at,
+    "a rapid drop trims exactly twenty minutes from a sixty-five-minute candidate",
   );
 
   const shortGuardRemainderReadings = guardedLongCoolingReadings.slice(0, 47).map(
@@ -356,12 +397,12 @@ export function runDashboardReplayUnitTests() {
 
   const delayedColdInletReadings = guardedLongCoolingReadings.map((reading, minute) => ({
     ...reading,
-    inlet_temp: minute === 0 ? 12 : minute >= 40 && minute <= 44 ? 13 : 17,
+    inlet_temp: minute === 0 ? 12 : minute >= 65 && minute <= 69 ? 13 : 17,
   }));
   const delayedColdInletReplay = calculateDashboardV2Replay(delayedColdInletReadings);
   assert(
     delayedColdInletReplay.heatLossDiagnostics.observations[0]?.endedAt ===
-      delayedColdInletReadings[20].created_at,
+      delayedColdInletReadings[45].created_at,
     "the cold-inlet guard is based on the cold candidate start, not its delayed confirmation",
   );
   assert(
@@ -452,7 +493,19 @@ export function runDashboardReplayUnitTests() {
     "ten stable tank minutes after inlet recovery do not start a candidate",
   );
 
-  const stabilizedReplay = calculateDashboardV2Replay(stabilizationReadings);
+  const stabilizedReplay = calculateDashboardV2Replay([
+    ...stabilizationReadings,
+    ...Array.from({ length: 35 }, (_, offset) => {
+      const minute = offset + 36;
+      return {
+        bottom_temp: 45 - minute / 100,
+        created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+        heating: false,
+        inlet_temp: 17,
+        top_temp: 60 - minute / 100,
+      };
+    }),
+  ]);
   assert(
     stabilizedReplay.heatLossDiagnostics.observations.length === 1 &&
       stabilizedReplay.heatLossDiagnostics.observations[0].startedAt ===
@@ -461,7 +514,7 @@ export function runDashboardReplayUnitTests() {
   );
 
   const rapidChangeDuringStabilization: DashboardReplayReading[] = Array.from(
-    { length: 48 },
+    { length: 83 },
     (_, minute) => ({
       bottom_temp: 45 - minute / 100 - (minute >= 20 ? 1 : 0),
       created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
@@ -572,10 +625,9 @@ export function runDashboardReplayUnitTests() {
   }));
   const splitByRapidChange = calculateDashboardV2Replay(rapidChangeReadings);
   assert(
-    splitByRapidChange.heatLossDiagnostics.observations.length === 2 &&
-      splitByRapidChange.heatLossDiagnostics.observations[0].endedAt === rapidChangeReadings[19].created_at &&
-      splitByRapidChange.heatLossDiagnostics.observations[1].startedAt === rapidChangeReadings[21].created_at,
-    "a rapid temperature transition is a boundary and is not crossed by an observation",
+    splitByRapidChange.heatLossDiagnostics.observations.length === 0 &&
+      splitByRapidChange.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 2,
+    "a rapid temperature transition splits both sub-45-minute candidates",
   );
 
   const gapReadings = longCoolingReadings.map((reading, minute) => ({
@@ -587,25 +639,19 @@ export function runDashboardReplayUnitTests() {
   }));
   const splitByGap = calculateDashboardV2Replay(gapReadings);
   assert(
-    splitByGap.heatLossDiagnostics.observations.length === 2 &&
-      splitByGap.heatLossDiagnostics.observations.every((item) => item.durationMinutes >= 19),
-    "a measurement gap preserves usable cooling candidates on both sides without crossing the gap",
+    splitByGap.heatLossDiagnostics.observations.length === 0 &&
+      splitByGap.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 2,
+    "a measurement gap does not admit sub-45-minute cooling candidates on either side",
   );
 
-  const shortBeforeHeatingReadings = coolingReadings.concat(
-    Array.from({ length: 5 }, (_, offset) => ({
-      ...coolingReadings[coolingReadings.length - 1],
-      bottom_temp: 44.79 - offset / 100,
-      created_at: new Date(new Date(coolingStart).getTime() + (21 + offset) * 60_000).toISOString(),
-      top_temp: 59.79 - offset / 100,
-    })),
-  ).map((reading, index) => ({ ...reading, heating: index === 5 }));
+  const shortBeforeHeatingReadings = coolingReadingsForDuration(51 * 60)
+    .map((reading, index) => ({ ...reading, heating: index === 5 }));
   const splitWithShortCandidate = calculateDashboardV2Replay(shortBeforeHeatingReadings);
   assert(
     splitWithShortCandidate.heatLossDiagnostics.observations.length === 1 &&
       splitWithShortCandidate.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 1 &&
       splitWithShortCandidate.heatLossDiagnostics.acceptance.rejectionCounts.heating_detected === 1,
-    "only the short side of a disturbance boundary is rejected as too short",
+    "only the sub-45-minute side of a disturbance boundary is rejected as too short",
   );
 
   const missingInletReadings: DashboardReplayReading[] = Array.from(
@@ -627,22 +673,9 @@ export function runDashboardReplayUnitTests() {
     "missing inlet data creates one boundary without a recovery measurement gap",
   );
   assert(
-    missingInletReplay.heatLossDiagnostics.observations.length === 2,
-    "missing raw inlet data splits otherwise usable heat-loss observations",
-  );
-  assert(
-    missingInletReplay.heatLossDiagnostics.observations[0].startedAt ===
-      missingInletReadings[0].created_at &&
-      missingInletReplay.heatLossDiagnostics.observations[0].endedAt ===
-        missingInletReadings[14].created_at,
-    "the first observation ends at the last complete reading before missing inlet data",
-  );
-  assert(
-    missingInletReplay.heatLossDiagnostics.observations[1].startedAt ===
-      missingInletReadings[16].created_at &&
-      missingInletReplay.heatLossDiagnostics.observations[1].endedAt ===
-        missingInletReadings[30].created_at,
-    "the second observation starts at the first complete reading after missing inlet data",
+    missingInletReplay.heatLossDiagnostics.observations.length === 0 &&
+      missingInletReplay.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 2,
+    "missing raw inlet data leaves both sub-45-minute sides rejected",
   );
 
   const mixingReplay = calculateDashboardV2Replay(Array.from({ length: 21 }, (_, minutes) => ({
@@ -653,9 +686,10 @@ export function runDashboardReplayUnitTests() {
     top_temp: 60 - (minutes / 20) * 0.4,
   })));
   assert(
-    mixingReplay.heatLossDiagnostics.observations.length === 1 &&
+    mixingReplay.heatLossDiagnostics.observations.length === 0 &&
+      mixingReplay.heatLossDiagnostics.acceptance.rejectionCounts.too_short >= 1 &&
       mixingReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1,
-    "compensating node movement becomes a boundary without discarding the clean period before it",
+    "compensating node movement becomes a boundary without admitting the short period before it",
   );
 
   const inletMinimumTimestamp = new Date(
