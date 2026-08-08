@@ -293,7 +293,11 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     acceptance: {
       acceptedCount: observations.length,
       examinedCount: observations.length + rejections.length,
-      latestRejections: mergeLatestRejections(rejections, observations),
+      latestRejections: mergeLatestRejections(
+        rejections,
+        observations,
+        steps.map(({ reading }) => reading.created_at),
+      ),
       rejectionCounts: countRejections(rejections),
       waterDrawDetectionCounts: countWaterDrawDetections(rejections),
     },
@@ -313,7 +317,8 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
  */
 export function mergeLatestRejections(
   rejections: RejectedHeatLossObservation[],
-  acceptedObservations: HeatLossObservation[],
+  acceptedObservations: Pick<HeatLossObservation, "startedAt" | "endedAt">[],
+  sampleTimestamps: string[],
   limit = 3,
 ): RejectedHeatLossObservation[] {
   const chronological = [...rejections].sort(
@@ -331,8 +336,16 @@ export function mergeLatestRejections(
     );
     const isContinuous = previous && Number.isFinite(previousEnd) && Number.isFinite(currentStart) &&
       currentStart - previousEnd <= LATEST_REJECTION_MERGE_TOLERANCE_MS;
+    const hasContinuousSampling = previous && samplingIsContinuous(
+      previous.startedAt,
+      rejection.endedAt,
+      sampleTimestamps,
+    );
 
-    if (previous?.reason === rejection.reason && isContinuous && !hasAcceptedObservationBetween) {
+    if (
+      previous?.reason === rejection.reason && isContinuous && hasContinuousSampling &&
+      !hasAcceptedObservationBetween
+    ) {
       if (Date.parse(rejection.endedAt) > previousEnd) previous.endedAt = rejection.endedAt;
       return;
     }
@@ -340,6 +353,19 @@ export function mergeLatestRejections(
   });
 
   return merged.slice(-limit).reverse();
+}
+
+function samplingIsContinuous(startedAt: string, endedAt: string, sampleTimestamps: string[]) {
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  const samples = sampleTimestamps
+    .map(Date.parse)
+    .filter((timestamp) => timestamp >= start && timestamp <= end)
+    .sort((left, right) => left - right);
+  if (!samples.length || samples[0] !== start || samples[samples.length - 1] !== end) return false;
+  return samples.every((timestamp, index) =>
+    index === 0 || timestamp - samples[index - 1] <= MAX_SEGMENT_MINUTES * 60_000
+  );
 }
 
 function getStepRejectionReason(step: DiagnosticStep): HeatLossRejectionReason | null {

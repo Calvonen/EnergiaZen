@@ -2,7 +2,6 @@ import { calculateDashboardV2Replay, calculateDashboardV2TankState, type Dashboa
 import { topSensorMovedAt } from "./sensorGeometry";
 import {
   mergeLatestRejections,
-  type HeatLossObservation,
   type HeatLossRejectionReason,
   type RejectedHeatLossObservation,
 } from "./heatLossDiagnostics";
@@ -21,12 +20,15 @@ export function runDashboardReplayUnitTests() {
     startedAt: new Date(Date.UTC(2026, 0, 1, 17, startMinute)).toISOString(),
     endedAt: new Date(Date.UTC(2026, 0, 1, 17, endMinute)).toISOString(),
   });
+  const samples = (...minutes: number[]) => minutes.map((minute) =>
+    new Date(Date.UTC(2026, 0, 1, 17, minute)).toISOString()
+  );
   const consecutiveHeating = [
     rejection("heating_detected", 23, 24),
     rejection("heating_detected", 24, 25),
     rejection("heating_detected", 25, 26),
   ];
-  const mergedHeating = mergeLatestRejections(consecutiveHeating, []);
+  const mergedHeating = mergeLatestRejections(consecutiveHeating, [], samples(23, 24, 25, 26));
   assert(
     mergedHeating.length === 1 &&
       mergedHeating[0].startedAt === consecutiveHeating[0].startedAt &&
@@ -37,24 +39,27 @@ export function runDashboardReplayUnitTests() {
     mergeLatestRejections([
       rejection("heating_detected", 10, 11),
       rejection("heating_detected", 20, 21),
-    ], []).length === 2,
+    ], [], samples(10, 11, 20, 21)).length === 2,
     "same-reason rejections separated by a long gap remain separate events",
   );
   assert(
     mergeLatestRejections([
       rejection("heating_detected", 10, 11),
       rejection("measurement_gap", 11, 12),
-    ], []).length === 2,
+    ], [], samples(10, 11, 12)).length === 2,
     "consecutive rejections with different reasons remain separate events",
   );
   (["pre_water_draw_guard", "inlet_recovery", "tank_stabilization"] as const).forEach((reason) => {
     assert(
-      mergeLatestRejections([rejection(reason, 10, 11), rejection(reason, 11, 12)], []).length === 1,
+      mergeLatestRejections(
+        [rejection(reason, 10, 11), rejection(reason, 11, 12)],
+        [],
+        samples(10, 11, 12),
+      ).length === 1,
       `${reason} rejections merge only with the same reason`,
     );
   });
   const acceptedBetween = {
-    ...({} as HeatLossObservation),
     startedAt: new Date(Date.UTC(2026, 0, 1, 17, 11, 10)).toISOString(),
     endedAt: new Date(Date.UTC(2026, 0, 1, 17, 11, 50)).toISOString(),
   };
@@ -62,8 +67,25 @@ export function runDashboardReplayUnitTests() {
     mergeLatestRejections([
       rejection("heating_detected", 10, 11),
       rejection("heating_detected", 12, 13),
-    ], [acceptedBetween]).length === 2,
+    ], [acceptedBetween], samples(10, 11, 12, 13)).length === 2,
     "an accepted heat-loss observation prevents rejection events from merging",
+  );
+  const sparseHeating = [
+    rejection("heating_detected", 0, 10),
+    rejection("heating_detected", 10, 20),
+  ];
+  assert(
+    mergeLatestRejections(sparseHeating, [], samples(0, 10, 20)).length === 2,
+    "same-reason boundaries do not merge across underlying ten-minute sampling gaps",
+  );
+  const minuteHeating = [
+    rejection("heating_detected", 0, 1),
+    rejection("heating_detected", 1, 2),
+    rejection("heating_detected", 2, 3),
+  ];
+  assert(
+    mergeLatestRejections(minuteHeating, [], samples(0, 1, 2, 3)).length === 1,
+    "one-minute heating samples are presented as one continuous event",
   );
 
   const beforeCurrentEpoch = new Date(
