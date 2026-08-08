@@ -15,11 +15,25 @@ import {
   getStratifiedShowerLimitingFactor,
 } from "@/lib/heatingOptimizer";
 import { EnergiaZenSettings, loadSettings } from "@/lib/settings";
-import type { HeatLossRejectionReason } from "@/lib/energyModelV2/heatLossDiagnostics";
+import type {
+  HeatLossObservation,
+  HeatLossRejectionReason,
+} from "@/lib/energyModelV2/heatLossDiagnostics";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
   timeStyle: "short",
+});
+
+const observationDateFormatter = new Intl.DateTimeFormat("fi-FI", {
+  day: "numeric",
+  month: "numeric",
+  year: "numeric",
+});
+
+const observationTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
+  hour: "numeric",
+  minute: "2-digit",
 });
 
 const NOT_AVAILABLE = "Not available";
@@ -42,6 +56,68 @@ function formatNumber(value: number | null | undefined, digits: number, unit: st
 
 function formatFinnishRatio(value: number) {
   return value.toFixed(2).replace(".", ",");
+}
+
+function formatObservationRange(observation: HeatLossObservation) {
+  const start = new Date(observation.startedAt);
+  const end = new Date(observation.endedAt);
+  const endLabel = start.toDateString() === end.toDateString()
+    ? observationTimeFormatter.format(end)
+    : `${observationDateFormatter.format(end)} klo ${observationTimeFormatter.format(end)}`;
+  return `${observationDateFormatter.format(start)} klo ${observationTimeFormatter.format(start)}–${endLabel}`;
+}
+
+function formatDuration(minutes: number) {
+  const roundedMinutes = Math.round(minutes);
+  const hours = Math.floor(roundedMinutes / 60);
+  const remainder = roundedMinutes % 60;
+  return [hours ? `${hours} h` : null, remainder ? `${remainder} min` : null]
+    .filter(Boolean)
+    .join(" ") || "0 min";
+}
+
+const storedEnergyBands = [
+  { label: "< 4 kWh", maximum: 4 },
+  { label: "4–7 kWh", maximum: 7 },
+  { label: "7–10 kWh", maximum: 10 },
+  { label: "≥ 10 kWh", maximum: Number.POSITIVE_INFINITY },
+];
+
+function HeatLossTrend({ observations }: { observations: HeatLossObservation[] }) {
+  const [chartWidth, setChartWidth] = useState(0);
+  if (!observations.length) return null;
+
+  const energies = observations.map(({ storedEnergyStartKwh }) => storedEnergyStartKwh);
+  const losses = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
+  const minimumEnergy = Math.min(...energies);
+  const maximumEnergy = Math.max(...energies);
+  const maximumLoss = Math.max(...losses);
+  const plotWidth = Math.max(0, chartWidth - 42);
+  const plotHeight = 130;
+
+  return (
+    <View style={styles.trendSection}>
+      <Text style={styles.diagnosticsSubtitle}>📈 Häviötrendi</Text>
+      <Text style={styles.trendDescription}>Alkutilan energia → mitattu lämpöhäviö</Text>
+      <View onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} style={styles.chart}>
+        <View style={styles.chartYAxis} />
+        <View style={styles.chartXAxis} />
+        {chartWidth > 0 ? observations.map((observation) => {
+          const energyRange = maximumEnergy - minimumEnergy;
+          const x = 34 + (energyRange
+            ? (observation.storedEnergyStartKwh - minimumEnergy) / energyRange
+            : 0.5) * plotWidth;
+          const y = 8 + (maximumLoss
+            ? 1 - observation.energyLossKwhPerHour / maximumLoss
+            : 0.5) * (plotHeight - 16);
+          return <View key={`${observation.startedAt}-point`} style={[styles.chartPoint, { left: x - 4, top: y - 4 }]} />;
+        }) : null}
+        <Text style={styles.chartYLabel}>kWh/h</Text>
+        <Text style={styles.chartXMinimum}>{minimumEnergy.toFixed(1)}</Text>
+        <Text style={styles.chartXMaximum}>{maximumEnergy.toFixed(1)} kWh</Text>
+      </View>
+    </View>
+  );
 }
 
 function sensorStatus(value: number | null | undefined, latestAt?: string): DashboardMetric["tone"] {
@@ -249,6 +325,52 @@ export default function EnergyModelDashboardScreen() {
                   <Text style={styles.noRejections}>Ei hylättyjä havaintoja</Text>
                 )}
               </View>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🌡 Lämpöhäviö energiatason mukaan</Text>
+                {storedEnergyBands.map((band, index) => {
+                  const minimum = index ? storedEnergyBands[index - 1].maximum : Number.NEGATIVE_INFINITY;
+                  const matches = data.heatLossDiagnostics.observations.filter(
+                    ({ storedEnergyStartKwh }) => storedEnergyStartKwh >= minimum && storedEnergyStartKwh < band.maximum,
+                  );
+                  if (!matches.length) return null;
+                  const average = matches.reduce((sum, item) => sum + item.energyLossKwhPerHour, 0) / matches.length;
+                  return (
+                    <View key={band.label} style={styles.energyBandRow}>
+                      <Text style={styles.energyBandLabel}>{band.label}</Text>
+                      <Text style={styles.energyBandValue}>{average.toFixed(3)} kWh/h</Text>
+                      <Text style={styles.energyBandCount}>(n={matches.length})</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              <HeatLossTrend observations={data.heatLossDiagnostics.observations} />
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>✅ Viimeisimmät hyväksytyt havainnot</Text>
+                {data.heatLossDiagnostics.observations.length ? (
+                  data.heatLossDiagnostics.observations.slice(-10).reverse().map((observation) => (
+                    <View key={observation.startedAt} style={styles.observationCard}>
+                      <Text style={styles.observationTime}>✅ {formatObservationRange(observation)}</Text>
+                      {[
+                        ["Kesto", formatDuration(observation.durationMinutes)],
+                        ["Ylälämpö alussa", formatNumber(observation.topNodeTemperatureC, 1, "°C")],
+                        ["Alalämpö alussa", formatNumber(observation.bottomNodeTemperatureC, 1, "°C")],
+                        ["Tulovesi", formatNumber(observation.estimatedInletTemperatureC, 1, "°C")],
+                        ["Energia alussa", formatNumber(observation.storedEnergyStartKwh, 2, "kWh")],
+                        ["Energia lopussa", formatNumber(observation.storedEnergyEndKwh, 2, "kWh")],
+                        ["Häviö", formatNumber(observation.energyLossKwh, 2, "kWh")],
+                        ["Häviönopeus", formatNumber(observation.energyLossKwhPerHour, 3, "kWh/h")],
+                      ].map(([label, value]) => (
+                        <View key={label} style={styles.observationMetricRow}>
+                          <Text style={styles.observationMetricLabel}>{label}</Text>
+                          <Text style={styles.observationMetricValue}>{value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noRejections}>Ei hyväksyttyjä havaintoja</Text>
+                )}
+              </View>
             </DashboardCard>
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
@@ -318,4 +440,24 @@ const styles = StyleSheet.create({
   rejectionTime: { color: "#eaf1ff", fontSize: 12, fontWeight: "800" },
   rejectionReason: { color: "#ffcf70", fontSize: 13, fontWeight: "800", marginTop: 5 },
   noRejections: { color: "#7889aa", fontSize: 13, fontWeight: "700", marginTop: 8 },
+  observationSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 18, paddingTop: 18 },
+  diagnosticsSubtitle: { color: "#36f4d4", fontSize: 14, fontWeight: "900", marginBottom: 14 },
+  energyBandRow: { alignItems: "center", flexDirection: "row", gap: 8, minHeight: 34 },
+  energyBandLabel: { color: "#b8c5df", flex: 1, fontSize: 13, fontWeight: "700" },
+  energyBandValue: { color: "#fff", fontSize: 13, fontWeight: "900" },
+  energyBandCount: { color: "#7889aa", fontSize: 12, fontWeight: "700", width: 42 },
+  observationCard: { backgroundColor: "rgba(54,244,212,0.05)", borderColor: "rgba(54,244,212,0.16)", borderRadius: 14, borderWidth: 1, marginTop: 10, padding: 12 },
+  observationTime: { color: "#eaf1ff", fontSize: 13, fontWeight: "900", marginBottom: 9 },
+  observationMetricRow: { alignItems: "center", flexDirection: "row", gap: 12, minHeight: 27 },
+  observationMetricLabel: { color: "#9fb0d2", flex: 1, fontSize: 12, fontWeight: "700" },
+  observationMetricValue: { color: "#fff", fontSize: 12, fontWeight: "900", textAlign: "right" },
+  trendSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 20, paddingTop: 18 },
+  trendDescription: { color: "#7889aa", fontSize: 11, fontWeight: "700", marginBottom: 8, marginTop: -8 },
+  chart: { height: 154, position: "relative" },
+  chartYAxis: { backgroundColor: "rgba(255,255,255,0.18)", bottom: 24, left: 32, position: "absolute", top: 4, width: 1 },
+  chartXAxis: { backgroundColor: "rgba(255,255,255,0.18)", bottom: 24, left: 32, position: "absolute", right: 4, height: 1 },
+  chartPoint: { backgroundColor: "#36f4d4", borderColor: "#bafff3", borderRadius: 5, borderWidth: 1, height: 9, position: "absolute", width: 9 },
+  chartYLabel: { color: "#7889aa", fontSize: 9, fontWeight: "800", left: 0, position: "absolute", top: 1 },
+  chartXMinimum: { bottom: 4, color: "#7889aa", fontSize: 9, fontWeight: "700", left: 28, position: "absolute" },
+  chartXMaximum: { bottom: 4, color: "#7889aa", fontSize: 9, fontWeight: "700", position: "absolute", right: 0 },
 });
