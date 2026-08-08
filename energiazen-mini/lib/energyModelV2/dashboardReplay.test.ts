@@ -79,7 +79,7 @@ export function runDashboardReplayUnitTests() {
     bottom_temp: 45 - minutes / 100,
     created_at: new Date(new Date(coolingStart).getTime() + minutes * 60_000).toISOString(),
     heating: false,
-    inlet_temp: 12,
+    inlet_temp: minutes === 0 ? 12 : 15,
     top_temp: 60 - minutes / 100,
   }));
   const coolingReplay = calculateDashboardV2Replay(coolingReadings);
@@ -173,12 +173,16 @@ export function runDashboardReplayUnitTests() {
     inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 1,
     "heat-loss diagnostics records a water-draw signature rejection",
   );
+  assert(
+    inletSignatureReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.rapid_drop === 1,
+    "the existing rapid-drop detector remains attributed independently",
+  );
 
   const longCoolingReadings: DashboardReplayReading[] = Array.from({ length: 41 }, (_, minute) => ({
     bottom_temp: 45 - minute / 100,
     created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
     heating: false,
-    inlet_temp: minute === 19 ? 20 : 12,
+    inlet_temp: minute === 0 ? 12 : minute === 19 ? 20 : 15,
     top_temp: 60 - minute / 100,
   }));
   const splitByWaterDraw = calculateDashboardV2Replay(longCoolingReadings);
@@ -189,6 +193,71 @@ export function runDashboardReplayUnitTests() {
     "a water draw splits a long cooling period into usable candidates on both sides",
   );
 
+  const coldInletReadings: DashboardReplayReading[] = Array.from({ length: 41 }, (_, minute) => ({
+    bottom_temp: 45 - minute / 100,
+    created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+    heating: false,
+    inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 20 ? 13 + (minute % 2) * 0.8 : 15,
+    top_temp: 60 - minute / 100,
+  }));
+
+  const coldReplayStart = calculateDashboardV2Replay(coldInletReadings.map((reading) => ({
+    ...reading,
+    inlet_temp: 14,
+  })));
+  assert(
+    coldReplayStart.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 0,
+    "a replay that starts with raw inlet equal to its new estimate does not self-seed a cold-inlet draw",
+  );
+
+  const varyingColdReplayStart = calculateDashboardV2Replay(coldInletReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: 13.2 + (minute % 2) * 0.5,
+  })));
+  assert(
+    varyingColdReplayStart.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 0,
+    "several initially cold minutes do not trigger without an earlier valid idle baseline",
+  );
+
+  const coldInletReplay = calculateDashboardV2Replay(coldInletReadings);
+  assert(
+    coldInletReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 1,
+    "five minutes of raw inlet readings within two degrees of the estimate is a water draw",
+  );
+  assert(
+    coldInletReplay.heatLossDiagnostics.observations.length === 2 &&
+      coldInletReplay.heatLossDiagnostics.observations[0].endedAt === coldInletReadings[14].created_at &&
+      coldInletReplay.heatLossDiagnostics.observations[1].startedAt === coldInletReadings[21].created_at,
+    "a confirmed cold-inlet period preserves the clean candidate before it and permits recovery after it",
+  );
+
+  const shortColdInletReplay = calculateDashboardV2Replay(coldInletReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 17 ? 13.8 : 15,
+  })));
+  assert(
+    shortColdInletReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 0,
+    "a cold inlet dip lasting only two minutes does not trigger the duration detector",
+  );
+
+  const showerLikeReplay = calculateDashboardV2Replay(coldInletReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 25 ? 12.2 + (minute % 2) * 0.8 : 15,
+  })));
+  assert(
+    showerLikeReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 1,
+    "a ten-minute shower-like cold inlet period is reliably detected",
+  );
+
+  const unchangedBottomReplay = calculateDashboardV2Replay(coldInletReadings.map((reading) => ({
+    ...reading,
+    bottom_temp: 45,
+  })));
+  assert(
+    unchangedBottomReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 1,
+    "cold-inlet water draw detection does not depend on a bottom-temperature change",
+  );
+
   const repeatedWaterDrawReadings: DashboardReplayReading[] = Array.from(
     { length: 41 },
     (_, minute) => ({
@@ -197,7 +266,7 @@ export function runDashboardReplayUnitTests() {
         new Date(coolingStart).getTime() + minute * 60_000,
       ).toISOString(),
       heating: false,
-      inlet_temp: minute === 14 || minute === 17 ? 20 : 12,
+      inlet_temp: minute === 0 ? 12 : minute === 14 || minute === 17 ? 20 : 15,
       top_temp: 60 - minute / 100,
     }),
   );
@@ -219,7 +288,7 @@ export function runDashboardReplayUnitTests() {
 
   const rapidChangeReadings = longCoolingReadings.map((reading, minute) => ({
     ...reading,
-    inlet_temp: 12,
+    inlet_temp: minute === 0 ? 12 : 15,
     top_temp: reading.top_temp! - (minute >= 20 ? 1 : 0),
   }));
   const splitByRapidChange = calculateDashboardV2Replay(rapidChangeReadings);
@@ -232,7 +301,7 @@ export function runDashboardReplayUnitTests() {
 
   const gapReadings = longCoolingReadings.map((reading, minute) => ({
     ...reading,
-    inlet_temp: 12,
+    inlet_temp: minute === 0 ? 12 : 15,
     created_at: new Date(
       new Date(coolingStart).getTime() + (minute + (minute >= 20 ? 3 : 0)) * 60_000,
     ).toISOString(),
@@ -268,7 +337,7 @@ export function runDashboardReplayUnitTests() {
         new Date(coolingStart).getTime() + minute * 60_000,
       ).toISOString(),
       heating: false,
-      inlet_temp: minute === 15 ? null : 12,
+      inlet_temp: minute === 15 ? null : minute === 0 ? 12 : 15,
       top_temp: 60 - minute / 100,
     }),
   );
@@ -301,7 +370,7 @@ export function runDashboardReplayUnitTests() {
     bottom_temp: 45 + (minutes / 20) * 0.3,
     created_at: new Date(new Date(coolingStart).getTime() + minutes * 60_000).toISOString(),
     heating: false,
-    inlet_temp: 12,
+    inlet_temp: minutes === 0 ? 12 : 15,
     top_temp: 60 - (minutes / 20) * 0.4,
   })));
   assert(
@@ -326,7 +395,7 @@ export function runDashboardReplayUnitTests() {
           (7 * 24 * 60 - 60 + minute) * 60_000,
       ).toISOString(),
       heating: false,
-      inlet_temp: 12.8,
+      inlet_temp: minute === 0 ? 12.8 : 15.8,
       top_temp: 60 - minute * 0.002,
     })),
   ];
@@ -334,9 +403,9 @@ export function runDashboardReplayUnitTests() {
     inletBaselineExpiryReadings,
   );
   const fixedBaselineReplay = calculateDashboardV2Replay(
-    inletBaselineExpiryReadings.map((reading) => ({
+    inletBaselineExpiryReadings.map((reading, index) => ({
       ...reading,
-      inlet_temp: 12,
+      inlet_temp: index <= 1 ? reading.inlet_temp : 15.8,
     })),
   );
   const baselineExpiryObservation =

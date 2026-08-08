@@ -12,6 +12,10 @@ const MAX_INLET_CHANGE_C = 1;
 const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SENSOR_RISE_C = 0.2;
 const MAX_NATURAL_LOSS_KWH_PER_HOUR = 0.5;
+export const COLD_INLET_MARGIN_C = 2;
+export const MIN_COLD_INLET_DURATION_MINUTES = 3;
+
+export type WaterDrawDetectionKind = "rapid_drop" | "cold_inlet";
 
 export type HeatLossObservation = {
   bottomNodeTemperatureC: number;
@@ -50,6 +54,7 @@ export type RejectedHeatLossObservation = {
   endedAt: string;
   reason: HeatLossRejectionReason;
   startedAt: string;
+  waterDrawDetectionKind?: WaterDrawDetectionKind;
 };
 
 export type HeatLossAcceptanceDiagnostics = {
@@ -57,6 +62,7 @@ export type HeatLossAcceptanceDiagnostics = {
   examinedCount: number;
   latestRejections: RejectedHeatLossObservation[];
   rejectionCounts: Record<HeatLossRejectionReason, number>;
+  waterDrawDetectionCounts: Record<WaterDrawDetectionKind, number>;
 };
 
 type DiagnosticStep = {
@@ -70,7 +76,13 @@ type DiagnosticStep = {
 export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDiagnostics {
   const observations: HeatLossObservation[] = [];
   const rejections: RejectedHeatLossObservation[] = [];
-  let periodStartIndex: number | null = steps.length && !getStepRejectionReason(steps[0]) ? 0 : null;
+  const coldInletPeriods = findColdInletPeriods(steps);
+  const coldInletPeriodByStart = new Map(coldInletPeriods.map((period) => [period.startIndex, period]));
+  const coldInletIndexes = new Set(coldInletPeriods.flatMap(({ startIndex, endIndex }) =>
+    Array.from({ length: endIndex - startIndex + 1 }, (_, offset) => startIndex + offset)
+  ));
+  let periodStartIndex: number | null = steps.length &&
+    !getStepRejectionReason(steps[0]) && !coldInletIndexes.has(0) ? 0 : null;
 
   const finishPeriod = (endIndex: number) => {
     if (periodStartIndex === null || endIndex <= periodStartIndex) return;
@@ -88,17 +100,36 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     reason: HeatLossRejectionReason,
     startIndex: number,
     endIndex: number,
+    waterDrawDetectionKind?: WaterDrawDetectionKind,
   ) => rejections.push({
     endedAt: steps[endIndex].reading.created_at,
     reason,
     startedAt: steps[startIndex].reading.created_at,
+    waterDrawDetectionKind,
   });
 
-  if (steps.length && periodStartIndex === null) {
+  const initialColdPeriod = coldInletPeriodByStart.get(0);
+  if (initialColdPeriod) {
+    rejectBoundary("water_draw", 0, initialColdPeriod.endIndex, "cold_inlet");
+  } else if (steps.length && periodStartIndex === null) {
     rejectBoundary(getStepRejectionReason(steps[0])!, 0, 0);
   }
 
   for (let index = 1; index < steps.length; index += 1) {
+    const coldPeriod = coldInletPeriodByStart.get(index);
+    if (coldPeriod) {
+      finishPeriod(index - 1);
+      rejectBoundary("water_draw", index, coldPeriod.endIndex, "cold_inlet");
+      periodStartIndex = null;
+      continue;
+    }
+    if (coldInletIndexes.has(index)) continue;
+    if (coldInletIndexes.has(index - 1)) {
+      const recoveryReason = getStepRejectionReason(steps[index]);
+      periodStartIndex = recoveryReason ? null : index;
+      if (recoveryReason) rejectBoundary(recoveryReason, index, index);
+      continue;
+    }
     const stepReason = getStepRejectionReason(steps[index]);
     const transitionReason = stepReason ? null : getTransitionRejectionReason(
       steps[index - 1],
@@ -112,7 +143,8 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
 
     if (reason) {
       finishPeriod(index - 1);
-      rejectBoundary(reason, Math.max(0, index - 1), index);
+      rejectBoundary(reason, Math.max(0, index - 1), index,
+        reason === "water_draw" ? "rapid_drop" : undefined);
       // A transition separates two valid readings. The current reading is the
       // first valid anchor on its far side; a bad reading itself is skipped.
       periodStartIndex = stepReason || reason === "water_draw" ? null : index;
@@ -129,6 +161,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       examinedCount: observations.length + rejections.length,
       latestRejections: rejections.slice(-3).reverse(),
       rejectionCounts: countRejections(rejections),
+      waterDrawDetectionCounts: countWaterDrawDetections(rejections),
     },
     averageLossKwhPerHour: rates.length
       ? round(rates.reduce((sum, rate) => sum + rate, 0) / rates.length)
@@ -149,6 +182,58 @@ function getStepRejectionReason(step: DiagnosticStep): HeatLossRejectionReason |
     !step.state
   ) return "measurement_gap";
   return null;
+}
+
+type ColdInletPeriod = { startIndex: number; endIndex: number };
+
+function findColdInletPeriods(steps: DiagnosticStep[]): ColdInletPeriod[] {
+  const periods: ColdInletPeriod[] = [];
+  let startIndex: number | null = null;
+  let candidateBaselineC: number | null = null;
+  let priorIdleBaselineC: number | null = null;
+
+  const finish = (endIndex: number) => {
+    if (startIndex === null) return;
+    const durationMs = new Date(steps[endIndex].reading.created_at).getTime() -
+      new Date(steps[startIndex].reading.created_at).getTime();
+    if (durationMs >= MIN_COLD_INLET_DURATION_MINUTES * 60_000) {
+      periods.push({ startIndex, endIndex });
+    }
+    startIndex = null;
+    candidateBaselineC = null;
+  };
+
+  steps.forEach((step, index) => {
+    const rawInletC = step.reading.inlet_temp;
+    const estimatedInletC = step.state?.inletTemperatureC;
+    const previousTime = index > 0 ? new Date(steps[index - 1].reading.created_at).getTime() : NaN;
+    const currentTime = new Date(step.reading.created_at).getTime();
+    const followsContinuously = startIndex === null || (
+      currentTime > previousTime && currentTime - previousTime <= MAX_SEGMENT_MINUTES * 60_000
+    );
+    const isValid = !getStepRejectionReason(step) &&
+      isFiniteNumber(rawInletC) && isFiniteNumber(estimatedInletC);
+    const isCold = isValid && isFiniteNumber(candidateBaselineC) &&
+      rawInletC <= candidateBaselineC + COLD_INLET_MARGIN_C;
+
+    if (!isCold || !followsContinuously) finish(index - 1);
+    if (
+      startIndex === null && isValid && isFiniteNumber(priorIdleBaselineC) &&
+      rawInletC <= priorIdleBaselineC + COLD_INLET_MARGIN_C
+    ) {
+      startIndex = index;
+      candidateBaselineC = priorIdleBaselineC;
+    } else if (
+      startIndex === null && isValid &&
+      rawInletC > estimatedInletC + COLD_INLET_MARGIN_C
+    ) {
+      // A baseline learned from this warm idle sample predates any later cold
+      // candidate. A replay that starts cold therefore cannot self-seed a draw.
+      priorIdleBaselineC = estimatedInletC;
+    }
+  });
+  if (steps.length) finish(steps.length - 1);
+  return periods;
 }
 
 function getTransitionRejectionReason(
@@ -299,6 +384,17 @@ function countRejections(rejections: RejectedHeatLossObservation[]) {
     water_draw: 0,
   };
   rejections.forEach(({ reason }) => { counts[reason] += 1; });
+  return counts;
+}
+
+function countWaterDrawDetections(rejections: RejectedHeatLossObservation[]) {
+  const counts: Record<WaterDrawDetectionKind, number> = {
+    cold_inlet: 0,
+    rapid_drop: 0,
+  };
+  rejections.forEach(({ waterDrawDetectionKind }) => {
+    if (waterDrawDetectionKind) counts[waterDrawDetectionKind] += 1;
+  });
   return counts;
 }
 

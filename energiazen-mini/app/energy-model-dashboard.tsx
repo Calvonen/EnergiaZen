@@ -303,6 +303,8 @@ export default function EnergyModelDashboardScreen() {
                       label,
                       data.heatLossDiagnostics.acceptance.rejectionCounts[reason as HeatLossRejectionReason],
                     ]),
+                    ["↳ 🚿 Vedenkäyttö – nopea pudotus", data.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.rapid_drop],
+                    ["↳ 🚿 Vedenkäyttö – pitkä kylmä inlet", data.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet],
                   ].map(([label, value]) => (
                     <View key={String(label)} style={styles.acceptanceMetricRow}>
                       <Text style={styles.acceptanceMetricLabel}>{label}</Text>
