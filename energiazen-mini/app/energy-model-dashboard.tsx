@@ -19,6 +19,10 @@ import type {
   HeatLossObservation,
   HeatLossRejectionReason,
 } from "@/lib/energyModelV2/heatLossDiagnostics";
+import {
+  predictDiagnosticHeatLoss,
+  type DiagnosticHeatLossModel,
+} from "@/lib/energyModelV2/heatLossModel";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -86,7 +90,13 @@ const storedEnergyBands = [
   { label: "≥ 10 kWh", maximum: Number.POSITIVE_INFINITY },
 ];
 
-function HeatLossTrend({ observations }: { observations: HeatLossObservation[] }) {
+function HeatLossTrend({
+  model,
+  observations,
+}: {
+  model: DiagnosticHeatLossModel | null;
+  observations: HeatLossObservation[];
+}) {
   const [chartWidth, setChartWidth] = useState(0);
   if (!observations.length) return null;
 
@@ -94,9 +104,26 @@ function HeatLossTrend({ observations }: { observations: HeatLossObservation[] }
   const losses = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
   const minimumEnergy = Math.min(...energies);
   const maximumEnergy = Math.max(...energies);
-  const maximumLoss = Math.max(...losses);
+  const fittedEndpointLosses = model
+    ? [minimumEnergy, maximumEnergy].map((energy) => predictDiagnosticHeatLoss(model, energy))
+    : [];
+  const maximumLoss = Math.max(...losses, ...fittedEndpointLosses, 0);
   const plotWidth = Math.max(0, chartWidth - 42);
   const plotHeight = 130;
+  const chartX = (energy: number) => 34 + (maximumEnergy - minimumEnergy
+    ? (energy - minimumEnergy) / (maximumEnergy - minimumEnergy)
+    : 0.5) * plotWidth;
+  const chartY = (loss: number) => 8 + (maximumLoss
+    ? 1 - Math.max(0, loss) / maximumLoss
+    : 0.5) * (plotHeight - 16);
+  const trendStart = model ? { x: chartX(minimumEnergy), y: chartY(fittedEndpointLosses[0]) } : null;
+  const trendEnd = model ? { x: chartX(maximumEnergy), y: chartY(fittedEndpointLosses[1]) } : null;
+  const trendLength = trendStart && trendEnd
+    ? Math.hypot(trendEnd.x - trendStart.x, trendEnd.y - trendStart.y)
+    : 0;
+  const trendAngle = trendStart && trendEnd
+    ? Math.atan2(trendEnd.y - trendStart.y, trendEnd.x - trendStart.x) * 180 / Math.PI
+    : 0;
 
   return (
     <View style={styles.trendSection}>
@@ -105,14 +132,17 @@ function HeatLossTrend({ observations }: { observations: HeatLossObservation[] }
       <View onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} style={styles.chart}>
         <View style={styles.chartYAxis} />
         <View style={styles.chartXAxis} />
+        {chartWidth > 0 && trendStart && trendEnd ? (
+          <View style={[styles.chartTrendLine, {
+            left: (trendStart.x + trendEnd.x - trendLength) / 2,
+            top: (trendStart.y + trendEnd.y) / 2,
+            transform: [{ rotate: `${trendAngle}deg` }],
+            width: trendLength,
+          }]} />
+        ) : null}
         {chartWidth > 0 ? observations.map((observation) => {
-          const energyRange = maximumEnergy - minimumEnergy;
-          const x = 34 + (energyRange
-            ? (observation.storedEnergyStartKwh - minimumEnergy) / energyRange
-            : 0.5) * plotWidth;
-          const y = 8 + (maximumLoss
-            ? 1 - observation.energyLossKwhPerHour / maximumLoss
-            : 0.5) * (plotHeight - 16);
+          const x = chartX(observation.storedEnergyStartKwh);
+          const y = chartY(observation.energyLossKwhPerHour);
           return <View key={`${observation.startedAt}-point`} style={[styles.chartPoint, { left: x - 4, top: y - 4 }]} />;
         }) : null}
         <Text style={styles.chartYLabel}>kWh/h</Text>
@@ -295,6 +325,11 @@ export default function EnergyModelDashboardScreen() {
               { label: "Keskimääräinen häviö", value: formatNumber(data.heatLossDiagnostics.averageLossKwhPerHour, 3, "kWh/h") },
               { label: "Suurin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.maximumLossKwhPerHour, 3, "kWh/h") },
               { label: "Pienin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.minimumLossKwhPerHour, 3, "kWh/h") },
+              { label: "Mallin havainnot", value: data.heatLossDiagnostics.model ? String(data.heatLossDiagnostics.model.observationCount) : NOT_AVAILABLE },
+              { label: "Mallin vakiotermi", value: formatNumber(data.heatLossDiagnostics.model?.interceptKwhPerHour, 4, "kWh/h") },
+              { label: "Mallin kulmakerroin", value: formatNumber(data.heatLossDiagnostics.model?.slopeKwhPerHourPerKwh, 4, "(kWh/h)/kWh") },
+              { label: "Predicted vs measured MAE", value: formatNumber(data.heatLossDiagnostics.model?.meanAbsoluteErrorKwhPerHour, 4, "kWh/h") },
+              { label: "Predicted vs measured RMSE", value: formatNumber(data.heatLossDiagnostics.model?.rootMeanSquaredErrorKwhPerHour, 4, "kWh/h") },
             ]}>
               <View style={styles.acceptanceSection}>
                 <Text style={styles.acceptanceTitle}>🔍 Havaintojen hyväksyntä</Text>
@@ -348,7 +383,10 @@ export default function EnergyModelDashboardScreen() {
                   );
                 })}
               </View>
-              <HeatLossTrend observations={data.heatLossDiagnostics.observations} />
+              <HeatLossTrend
+                model={data.heatLossDiagnostics.model}
+                observations={data.heatLossDiagnostics.observations}
+              />
               <View style={styles.observationSection}>
                 <Text style={styles.diagnosticsSubtitle}>✅ Viimeisimmät hyväksytyt havainnot</Text>
                 {data.heatLossDiagnostics.observations.length ? (
@@ -462,6 +500,7 @@ const styles = StyleSheet.create({
   chartYAxis: { backgroundColor: "rgba(255,255,255,0.18)", bottom: 24, left: 32, position: "absolute", top: 4, width: 1 },
   chartXAxis: { backgroundColor: "rgba(255,255,255,0.18)", bottom: 24, left: 32, position: "absolute", right: 4, height: 1 },
   chartPoint: { backgroundColor: "#36f4d4", borderColor: "#bafff3", borderRadius: 5, borderWidth: 1, height: 9, position: "absolute", width: 9 },
+  chartTrendLine: { backgroundColor: "#ffcf70", height: 2, position: "absolute" },
   chartYLabel: { color: "#7889aa", fontSize: 9, fontWeight: "800", left: 0, position: "absolute", top: 1 },
   chartXMinimum: { bottom: 4, color: "#7889aa", fontSize: 9, fontWeight: "700", left: 28, position: "absolute" },
   chartXMaximum: { bottom: 4, color: "#7889aa", fontSize: 9, fontWeight: "700", position: "absolute", right: 0 },

@@ -42,6 +42,7 @@ import { runTankReadingFreshnessUnitTests } from "../lib/tankReadingFreshness.te
 import { runSensorGeometryUnitTests } from "../lib/energyModelV2/sensorGeometry.test";
 import { runReplayEngineUnitTests } from "../lib/energyModelV2/replayEngine.test";
 import { runEnergyModelCoreUnitTests } from "../lib/energyModelV2/energyModelCore.test";
+import { runHeatLossModelUnitTests } from "../lib/energyModelV2/heatLossModel.test";
 import { runReplayValidationUnitTests } from "../lib/energyModelV2/replayValidation.test";
 import { runDashboardReplayUnitTests } from "../lib/energyModelV2/dashboardReplay.test";
 import { runHomeResumeRefreshSourceTests } from "../tests/homeResumeRefreshSource.test";
@@ -92,6 +93,7 @@ async function runTests() {
   runSensorGeometryUnitTests();
   runReplayEngineUnitTests();
   runEnergyModelCoreUnitTests();
+  runHeatLossModelUnitTests();
   runReplayValidationUnitTests();
   runDashboardReplayUnitTests();
 

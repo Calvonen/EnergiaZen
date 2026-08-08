@@ -86,6 +86,8 @@
     "lib/energyModelV2/replayEngine.test.ts",
     "lib/energyModelV2/energyModelCore.ts",
     "lib/energyModelV2/energyModelCore.test.ts",
+    "lib/energyModelV2/heatLossModel.ts",
+    "lib/energyModelV2/heatLossModel.test.ts",
     "lib/energyModelV2/dashboardReplay.ts",
     "lib/energyModelV2/dashboardReplay.test.ts",
     "lib/energyModelV2/replayValidation.ts",
