@@ -189,6 +189,8 @@ type ColdInletPeriod = { startIndex: number; endIndex: number };
 function findColdInletPeriods(steps: DiagnosticStep[]): ColdInletPeriod[] {
   const periods: ColdInletPeriod[] = [];
   let startIndex: number | null = null;
+  let candidateBaselineC: number | null = null;
+  let priorIdleBaselineC: number | null = null;
 
   const finish = (endIndex: number) => {
     if (startIndex === null) return;
@@ -198,6 +200,7 @@ function findColdInletPeriods(steps: DiagnosticStep[]): ColdInletPeriod[] {
       periods.push({ startIndex, endIndex });
     }
     startIndex = null;
+    candidateBaselineC = null;
   };
 
   steps.forEach((step, index) => {
@@ -208,12 +211,26 @@ function findColdInletPeriods(steps: DiagnosticStep[]): ColdInletPeriod[] {
     const followsContinuously = startIndex === null || (
       currentTime > previousTime && currentTime - previousTime <= MAX_SEGMENT_MINUTES * 60_000
     );
-    const isCold = !getStepRejectionReason(step) &&
-      isFiniteNumber(rawInletC) && isFiniteNumber(estimatedInletC) &&
-      rawInletC <= estimatedInletC + COLD_INLET_MARGIN_C;
+    const isValid = !getStepRejectionReason(step) &&
+      isFiniteNumber(rawInletC) && isFiniteNumber(estimatedInletC);
+    const isCold = isValid && isFiniteNumber(candidateBaselineC) &&
+      rawInletC <= candidateBaselineC + COLD_INLET_MARGIN_C;
 
     if (!isCold || !followsContinuously) finish(index - 1);
-    if (isCold && startIndex === null) startIndex = index;
+    if (
+      startIndex === null && isValid && isFiniteNumber(priorIdleBaselineC) &&
+      rawInletC <= priorIdleBaselineC + COLD_INLET_MARGIN_C
+    ) {
+      startIndex = index;
+      candidateBaselineC = priorIdleBaselineC;
+    } else if (
+      startIndex === null && isValid &&
+      rawInletC > estimatedInletC + COLD_INLET_MARGIN_C
+    ) {
+      // A baseline learned from this warm idle sample predates any later cold
+      // candidate. A replay that starts cold therefore cannot self-seed a draw.
+      priorIdleBaselineC = estimatedInletC;
+    }
   });
   if (steps.length) finish(steps.length - 1);
   return periods;

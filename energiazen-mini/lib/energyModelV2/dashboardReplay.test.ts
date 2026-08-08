@@ -173,6 +173,10 @@ export function runDashboardReplayUnitTests() {
     inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 1,
     "heat-loss diagnostics records a water-draw signature rejection",
   );
+  assert(
+    inletSignatureReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.rapid_drop === 1,
+    "the existing rapid-drop detector remains attributed independently",
+  );
 
   const longCoolingReadings: DashboardReplayReading[] = Array.from({ length: 41 }, (_, minute) => ({
     bottom_temp: 45 - minute / 100,
@@ -196,6 +200,25 @@ export function runDashboardReplayUnitTests() {
     inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 20 ? 13 + (minute % 2) * 0.8 : 15,
     top_temp: 60 - minute / 100,
   }));
+
+  const coldReplayStart = calculateDashboardV2Replay(coldInletReadings.map((reading) => ({
+    ...reading,
+    inlet_temp: 14,
+  })));
+  assert(
+    coldReplayStart.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 0,
+    "a replay that starts with raw inlet equal to its new estimate does not self-seed a cold-inlet draw",
+  );
+
+  const varyingColdReplayStart = calculateDashboardV2Replay(coldInletReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: 13.2 + (minute % 2) * 0.5,
+  })));
+  assert(
+    varyingColdReplayStart.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 0,
+    "several initially cold minutes do not trigger without an earlier valid idle baseline",
+  );
+
   const coldInletReplay = calculateDashboardV2Replay(coldInletReadings);
   assert(
     coldInletReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 1,
