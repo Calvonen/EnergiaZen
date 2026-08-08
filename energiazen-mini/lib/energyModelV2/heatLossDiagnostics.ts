@@ -46,6 +46,28 @@ export type HeatLossDiagnostics = {
   minimumLossKwhPerHour: number | null;
   model: DiagnosticHeatLossModel | null;
   observations: HeatLossObservation[];
+  waterDrawEvents: WaterDrawEnergyDiagnostic[];
+};
+
+export type WaterDrawEnergyDiagnostic = {
+  detectionKinds: WaterDrawDetectionKind[];
+  diagnosticWindowMinutes: number;
+  durationMinutes: number;
+  endedAt: string;
+  energyAfterStabilizationKwh: number;
+  energyBeforeKwh: number;
+  estimatedNaturalLossKwh: number | null;
+  estimatedWaterDrawNetEnergyKwh: number | null;
+  rawEnergyChangeKwh: number;
+  stabilizedAt: string;
+  startedAt: string;
+};
+
+type PendingWaterDrawEvent = {
+  detectionKinds: Set<WaterDrawDetectionKind>;
+  endedAt: string;
+  energyBeforeKwh: number;
+  startedAt: string;
 };
 
 export type HeatLossRejectionReason =
@@ -86,6 +108,9 @@ type DiagnosticStep = {
 export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDiagnostics {
   const observations: HeatLossObservation[] = [];
   const rejections: RejectedHeatLossObservation[] = [];
+  const completedWaterDrawEvents: Array<Omit<WaterDrawEnergyDiagnostic,
+    "estimatedNaturalLossKwh" | "estimatedWaterDrawNetEnergyKwh">> = [];
+  let pendingWaterDrawEvent: PendingWaterDrawEvent | null = null;
   const coldInletPeriods = findColdInletPeriods(steps);
   const coldInletPeriodByStart = new Map(coldInletPeriods.map((period) => [period.startIndex, period]));
   const coldInletIndexes = new Set(coldInletPeriods.flatMap(({ startIndex, endIndex }) =>
@@ -129,13 +154,45 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     waterDrawDetectionKind,
   });
 
-  const finishStabilization = (endIndex: number) => {
+  const finishStabilization = (endIndex: number, stabilizedIndex?: number) => {
     if (stabilizationPeriodStartIndex !== null && endIndex >= stabilizationPeriodStartIndex) {
       rejectBoundary("tank_stabilization", stabilizationPeriodStartIndex, endIndex);
     }
     stabilizingAfterRecovery = false;
     stabilizationPeriodStartIndex = null;
     stableTankStartTime = null;
+    const stabilizedState = stabilizedIndex === undefined ? null : steps[stabilizedIndex]?.state;
+    if (pendingWaterDrawEvent && stabilizedState && stabilizedIndex !== undefined) {
+      const stabilizedAt = steps[stabilizedIndex].reading.created_at;
+      completedWaterDrawEvents.push({
+        detectionKinds: [...pendingWaterDrawEvent.detectionKinds],
+        diagnosticWindowMinutes: (Date.parse(stabilizedAt) - Date.parse(pendingWaterDrawEvent.startedAt)) / 60_000,
+        durationMinutes: (Date.parse(pendingWaterDrawEvent.endedAt) - Date.parse(pendingWaterDrawEvent.startedAt)) / 60_000,
+        endedAt: pendingWaterDrawEvent.endedAt,
+        energyAfterStabilizationKwh: stabilizedState.storedEnergy.kwh,
+        energyBeforeKwh: pendingWaterDrawEvent.energyBeforeKwh,
+        rawEnergyChangeKwh: round(stabilizedState.storedEnergy.kwh - pendingWaterDrawEvent.energyBeforeKwh),
+        stabilizedAt,
+        startedAt: pendingWaterDrawEvent.startedAt,
+      });
+      pendingWaterDrawEvent = null;
+    }
+  };
+
+  const recordWaterDraw = (startIndex: number, endIndex: number, kind: WaterDrawDetectionKind) => {
+    const beforeState = steps[Math.max(0, startIndex - 1)]?.state ?? steps[startIndex]?.state;
+    if (!beforeState) return;
+    if (!pendingWaterDrawEvent) {
+      pendingWaterDrawEvent = {
+        detectionKinds: new Set([kind]),
+        endedAt: steps[endIndex].reading.created_at,
+        energyBeforeKwh: beforeState.storedEnergy.kwh,
+        startedAt: steps[startIndex].reading.created_at,
+      };
+    } else {
+      pendingWaterDrawEvent.detectionKinds.add(kind);
+      pendingWaterDrawEvent.endedAt = steps[endIndex].reading.created_at;
+    }
   };
 
   const enterRecovery = (startIndex: number) => {
@@ -172,6 +229,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   const initialReason = steps.length ? getStepRejectionReason(steps[0]) : null;
   if (initialColdPeriod) {
     rejectBoundary("water_draw", 0, initialColdPeriod.endIndex, "cold_inlet");
+    recordWaterDraw(0, initialColdPeriod.endIndex, "cold_inlet");
     enterRecovery(initialColdPeriod.endIndex + 1);
   } else if (periodStartIndex === null && initialReason) {
     rejectBoundary(initialReason, 0, 0);
@@ -182,6 +240,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     if (coldPeriod) {
       finishPeriod(index - 1);
       rejectBoundary("water_draw", index, coldPeriod.endIndex, "cold_inlet");
+      recordWaterDraw(index, coldPeriod.endIndex, "cold_inlet");
       enterRecovery(coldPeriod.endIndex + 1);
       continue;
     }
@@ -191,6 +250,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     if (rapidDropStartsHere) {
       finishPeriod(index - 1);
       rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+      recordWaterDraw(Math.max(0, index - 1), index, "rapid_drop");
       enterRecovery(index + 1);
       continue;
     }
@@ -210,6 +270,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       );
       if (transitionReason === "water_draw") {
         rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+        recordWaterDraw(Math.max(0, index - 1), index, "rapid_drop");
         warmRecoveryStartTime = null;
         continue;
       }
@@ -246,6 +307,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       );
       if (transitionReason === "water_draw") {
         rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+        recordWaterDraw(Math.max(0, index - 1), index, "rapid_drop");
         enterRecovery(index + 1);
         continue;
       }
@@ -259,7 +321,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       stableTankStartTime ??= time;
       if (time - stableTankStartTime < MIN_TANK_STABILIZATION_MINUTES * 60_000) continue;
 
-      finishStabilization(index - 1);
+      finishStabilization(index - 1, index);
       periodStartIndex = index;
       continue;
     }
@@ -282,6 +344,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       // first valid anchor on its far side; a bad reading itself is skipped.
       periodStartIndex = stepReason || reason === "water_draw" ? null : index;
       if (reason === "water_draw") enterRecovery(index + 1);
+      if (reason === "water_draw") recordWaterDraw(Math.max(0, index - 1), index, "rapid_drop");
     } else if (periodStartIndex === null) {
       periodStartIndex = index;
     }
@@ -291,6 +354,24 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   finishPeriod(steps.length - 1);
 
   const rates = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
+  const model = fitDiagnosticHeatLossModel(observations);
+  const waterDrawEvents = completedWaterDrawEvents.map((event): WaterDrawEnergyDiagnostic => {
+    const lossRate = model
+      ? Math.max(0, model.interceptKwhPerHour + model.slopeKwhPerHourPerKwh * event.energyBeforeKwh)
+      : rates.length
+        ? rates.reduce((sum, rate) => sum + rate, 0) / rates.length
+        : null;
+    const estimatedNaturalLossKwh = lossRate === null
+      ? null
+      : round(lossRate * event.diagnosticWindowMinutes / 60);
+    return {
+      ...event,
+      estimatedNaturalLossKwh,
+      estimatedWaterDrawNetEnergyKwh: estimatedNaturalLossKwh === null
+        ? null
+        : round(event.energyBeforeKwh - event.energyAfterStabilizationKwh - estimatedNaturalLossKwh),
+    };
+  });
   return {
     acceptance: {
       acceptedCount: observations.length,
@@ -309,8 +390,9 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     latestObservation: observations[observations.length - 1] ?? null,
     maximumLossKwhPerHour: rates.length ? Math.max(...rates) : null,
     minimumLossKwhPerHour: rates.length ? Math.min(...rates) : null,
-    model: fitDiagnosticHeatLossModel(observations),
+    model,
     observations,
+    waterDrawEvents,
   };
 }
 

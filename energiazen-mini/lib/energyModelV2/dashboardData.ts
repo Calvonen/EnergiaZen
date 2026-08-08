@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import { estimateRecoveryDropPerHour } from "../heatingRecoveryDrop";
 import { calculateDashboardV2Replay } from "./dashboardReplay";
 import type { TankState } from "./energyModelCore";
-import type { HeatLossDiagnostics } from "./heatLossDiagnostics";
+import type { HeatLossDiagnostics, WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
 import { topSensorMovedAt } from "./sensorGeometry";
 
 type DashboardReading = {
@@ -25,6 +25,7 @@ export type EnergyModelDashboardData = {
   v1Readings: number;
   v2Readings: number;
   waterDraws: number;
+  waterDrawEvents: WaterDrawEnergyDiagnostic[];
   v2TankState: TankState | null;
 };
 
@@ -106,6 +107,7 @@ export async function fetchEnergyModelDashboardData(): Promise<EnergyModelDashbo
     v1Readings,
     v2Readings,
     v2TankState,
+    waterDrawEvents: v2Replay.waterDrawEvents,
   };
 }
 
