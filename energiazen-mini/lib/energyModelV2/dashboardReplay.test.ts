@@ -1,4 +1,4 @@
-import { calculateDashboardV2TankState, type DashboardReplayReading } from "./dashboardReplay";
+import { calculateDashboardV2Replay, calculateDashboardV2TankState, type DashboardReplayReading } from "./dashboardReplay";
 import { topSensorMovedAt } from "./sensorGeometry";
 
 function assert(condition: boolean, message: string) {
@@ -72,5 +72,82 @@ export function runDashboardReplayUnitTests() {
   assert(
     stateWithoutCurrentCompleteReading === null,
     "dashboard replay does not initialize from a previous geometry epoch",
+  );
+
+  const coolingStart = new Date(new Date(topSensorMovedAt).getTime() + 60_000).toISOString();
+  const coolingReadings: DashboardReplayReading[] = Array.from({ length: 21 }, (_, minutes) => ({
+    bottom_temp: 45 - minutes / 100,
+    created_at: new Date(new Date(coolingStart).getTime() + minutes * 60_000).toISOString(),
+    heating: false,
+    inlet_temp: 12,
+    top_temp: 60 - minutes / 100,
+  }));
+  const coolingReplay = calculateDashboardV2Replay(coolingReadings);
+  const observation = coolingReplay.heatLossDiagnostics.latestObservation;
+
+  assert(
+    coolingReplay.heatLossDiagnostics.observations.length === 1,
+    "heat-loss diagnostics accepts a stable no-heating period",
+  );
+  assert(observation?.durationMinutes === 20, "heat-loss observation includes its duration");
+  assert(
+    typeof observation?.energyLossKwhPerHour === "number" && observation.energyLossKwhPerHour > 0,
+    "heat-loss observation includes a realistic hourly loss",
+  );
+  assert(
+    observation?.usableEnergyStartKwh !== undefined && observation.usableEnergyEndKwh !== undefined,
+    "heat-loss observation captures usable energy endpoints",
+  );
+
+  const heatingReplay = calculateDashboardV2Replay(
+    coolingReadings.map((reading, index) => ({ ...reading, heating: index === 10 })),
+  );
+  assert(
+    heatingReplay.heatLossDiagnostics.observations.length === 0,
+    "heat-loss diagnostics excludes periods containing heating",
+  );
+
+  const waterDrawReplay = calculateDashboardV2Replay(
+    coolingReadings.map((reading, index) =>
+      index === 10 ? { ...reading, top_temp: 55 } : reading,
+    ),
+  );
+  assert(
+    waterDrawReplay.heatLossDiagnostics.observations.length === 0,
+    "heat-loss diagnostics excludes rapid sensor changes",
+  );
+
+  const inletSignatureReplay = calculateDashboardV2Replay(
+    coolingReadings.map((reading, index) => ({
+      ...reading,
+      inlet_temp: index === 0 ? 10 : index < 14 ? 20 : 15,
+    })),
+  );
+  assert(
+    inletSignatureReplay.heatLossDiagnostics.observations.length === 0,
+    "heat-loss diagnostics excludes a raw inlet water-draw signature even when the estimated inlet stays stable",
+  );
+
+  const missingInletReplay = calculateDashboardV2Replay(
+    coolingReadings.map((reading, index) => ({
+      ...reading,
+      inlet_temp: index === 10 ? null : reading.inlet_temp,
+    })),
+  );
+  assert(
+    missingInletReplay.heatLossDiagnostics.observations.length === 0,
+    "heat-loss diagnostics excludes periods where missing raw inlet data makes water-draw detection uncertain",
+  );
+
+  const mixingReplay = calculateDashboardV2Replay(Array.from({ length: 21 }, (_, minutes) => ({
+    bottom_temp: 45 + (minutes / 20) * 0.3,
+    created_at: new Date(new Date(coolingStart).getTime() + minutes * 60_000).toISOString(),
+    heating: false,
+    inlet_temp: 12,
+    top_temp: 60 - (minutes / 20) * 0.4,
+  })));
+  assert(
+    mixingReplay.heatLossDiagnostics.observations.length === 0,
+    "heat-loss diagnostics excludes compensating node movement that can hide water use or mixing",
   );
 }
