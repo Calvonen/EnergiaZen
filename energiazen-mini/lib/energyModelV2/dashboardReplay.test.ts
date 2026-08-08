@@ -130,6 +130,34 @@ export function runDashboardReplayUnitTests() {
     "heat-loss diagnostics records a rapid temperature change rejection",
   );
 
+  const temperatureJumpAfterGapReplay = calculateDashboardV2Replay([
+    { ...completeReading, created_at: coolingStart },
+    {
+      ...completeReading,
+      created_at: new Date(new Date(coolingStart).getTime() + 3 * 60_000).toISOString(),
+      top_temp: completeReading.top_temp! - 1,
+    },
+  ]);
+  assert(
+    temperatureJumpAfterGapReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 1 &&
+      temperatureJumpAfterGapReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 0,
+    "a temperature jump after a gap longer than two minutes is classified as a measurement gap",
+  );
+
+  const temperatureJumpWithinIntervalReplay = calculateDashboardV2Replay([
+    { ...completeReading, created_at: coolingStart },
+    {
+      ...completeReading,
+      created_at: new Date(new Date(coolingStart).getTime() + 2 * 60_000).toISOString(),
+      top_temp: completeReading.top_temp! - 1,
+    },
+  ]);
+  assert(
+    temperatureJumpWithinIntervalReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1 &&
+      temperatureJumpWithinIntervalReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 0,
+    "a temperature jump within a two-minute interval remains a rapid temperature change",
+  );
+
   const inletSignatureReplay = calculateDashboardV2Replay(
     coolingReadings.map((reading, index) => ({
       ...reading,

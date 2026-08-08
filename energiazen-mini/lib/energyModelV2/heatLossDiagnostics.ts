@@ -129,15 +129,17 @@ function getTransitionRejectionReason(
     return "missing_inlet_data";
   }
   if (
+    current.segmentMinutes === null || current.segmentMinutes <= 0 ||
+    current.segmentMinutes > MAX_SEGMENT_MINUTES
+  ) return "measurement_gap";
+  if (
     isFiniteNumber(previous.reading.top_temp) && isFiniteNumber(current.reading.top_temp) &&
     Math.abs(current.reading.top_temp - previous.reading.top_temp) > MAX_SENSOR_CHANGE_C ||
     isFiniteNumber(previous.reading.bottom_temp) && isFiniteNumber(current.reading.bottom_temp) &&
     Math.abs(current.reading.bottom_temp - previous.reading.bottom_temp) > MAX_SENSOR_CHANGE_C
   ) return "rapid_temperature_change";
   if (
-    previous.state?.quality !== "valid" || current.state?.quality !== "valid" ||
-    current.segmentMinutes === null || current.segmentMinutes <= 0 ||
-    current.segmentMinutes > MAX_SEGMENT_MINUTES
+    previous.state?.quality !== "valid" || current.state?.quality !== "valid"
   ) return "measurement_gap";
 
   const values = [
