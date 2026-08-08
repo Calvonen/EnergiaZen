@@ -5,6 +5,7 @@ import {
 import type { ReplayReading } from "./replayEngine";
 import type { SensorGeometryEpoch } from "./sensorGeometry";
 import { detectsWaterDraw, waterDrawDetectionLimits } from "../waterDrawDetection";
+import { fitDiagnosticHeatLossModel, type DiagnosticHeatLossModel } from "./heatLossModel";
 
 const MAX_SEGMENT_MINUTES = 2;
 const MIN_OBSERVATION_MINUTES = 45;
@@ -43,6 +44,7 @@ export type HeatLossDiagnostics = {
   latestObservation: HeatLossObservation | null;
   maximumLossKwhPerHour: number | null;
   minimumLossKwhPerHour: number | null;
+  model: DiagnosticHeatLossModel | null;
   observations: HeatLossObservation[];
 };
 
@@ -307,6 +309,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     latestObservation: observations[observations.length - 1] ?? null,
     maximumLossKwhPerHour: rates.length ? Math.max(...rates) : null,
     minimumLossKwhPerHour: rates.length ? Math.min(...rates) : null,
+    model: fitDiagnosticHeatLossModel(observations),
     observations,
   };
 }
