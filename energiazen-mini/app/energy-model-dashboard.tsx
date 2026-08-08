@@ -15,6 +15,7 @@ import {
   getStratifiedShowerLimitingFactor,
 } from "@/lib/heatingOptimizer";
 import { EnergiaZenSettings, loadSettings } from "@/lib/settings";
+import type { HeatLossRejectionReason } from "@/lib/energyModelV2/heatLossDiagnostics";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -22,6 +23,16 @@ const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
 });
 
 const NOT_AVAILABLE = "Not available";
+
+const heatLossRejectionLabels: Record<HeatLossRejectionReason, string> = {
+  heating_detected: "🔥 Lämmitys havaittu",
+  inlet_temperature_change: "🌡 Tuloveden muutos",
+  measurement_gap: "📶 Mittauskatkos",
+  missing_inlet_data: "📡 Puuttuva tulovesidata",
+  rapid_temperature_change: "📉 Liian nopea lämpömuutos",
+  too_short: "⏱ Liian lyhyt havainto",
+  water_draw: "🚿 Vedenkäyttö",
+};
 
 function formatNumber(value: number | null | undefined, digits: number, unit: string) {
   return typeof value === "number" && Number.isFinite(value)
@@ -205,7 +216,40 @@ export default function EnergyModelDashboardScreen() {
               { label: "Keskimääräinen häviö", value: formatNumber(data.heatLossDiagnostics.averageLossKwhPerHour, 3, "kWh/h") },
               { label: "Suurin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.maximumLossKwhPerHour, 3, "kWh/h") },
               { label: "Pienin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.minimumLossKwhPerHour, 3, "kWh/h") },
-            ]} />
+            ]}>
+              <View style={styles.acceptanceSection}>
+                <Text style={styles.acceptanceTitle}>🔍 Havaintojen hyväksyntä</Text>
+                <View style={styles.acceptanceMetrics}>
+                  {[
+                    ["Tutkittuja jaksoja", data.heatLossDiagnostics.acceptance.examinedCount],
+                    ["✅ Hyväksyttyjä", data.heatLossDiagnostics.acceptance.acceptedCount],
+                    ...Object.entries(heatLossRejectionLabels).map(([reason, label]) => [
+                      label,
+                      data.heatLossDiagnostics.acceptance.rejectionCounts[reason as HeatLossRejectionReason],
+                    ]),
+                  ].map(([label, value]) => (
+                    <View key={String(label)} style={styles.acceptanceMetricRow}>
+                      <Text style={styles.acceptanceMetricLabel}>{label}</Text>
+                      <Text style={styles.acceptanceMetricValue}>{value}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <Text style={styles.rejectionsTitle}>Viimeisimmät hylkäykset</Text>
+                {data.heatLossDiagnostics.acceptance.latestRejections.length ? (
+                  data.heatLossDiagnostics.acceptance.latestRejections.map((rejection) => (
+                    <View key={`${rejection.startedAt}-${rejection.reason}`} style={styles.rejectionRow}>
+                      <Text style={styles.rejectionTime}>
+                        ❌ {dateTimeFormatter.format(new Date(rejection.startedAt))} – {dateTimeFormatter.format(new Date(rejection.endedAt))}
+                      </Text>
+                      <Text style={styles.rejectionReason}>{heatLossRejectionLabels[rejection.reason]}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noRejections}>Ei hylättyjä havaintoja</Text>
+                )}
+              </View>
+            </DashboardCard>
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
               { label: "Ala-anturi", value: typeof data.latest?.bottom_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.bottom_temp, latestAt) },
@@ -263,4 +307,15 @@ const styles = StyleSheet.create({
   limitingFactorValue: { color: "#eaf1ff", fontSize: 20, fontWeight: "900", marginTop: 3 },
   limitingFactorImpact: { color: "#ffcf70", fontSize: 14, fontWeight: "900", marginTop: 4 },
   limitingFactorExplanation: { color: "#b8c5df", fontSize: 13, fontWeight: "600", lineHeight: 19, marginTop: 5 },
+  acceptanceSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 18, paddingTop: 18 },
+  acceptanceTitle: { color: "#36f4d4", fontSize: 14, fontWeight: "900", marginBottom: 14 },
+  acceptanceMetrics: { gap: 9 },
+  acceptanceMetricRow: { alignItems: "center", flexDirection: "row", gap: 12, justifyContent: "space-between" },
+  acceptanceMetricLabel: { color: "#b8c5df", flex: 1, fontSize: 13, fontWeight: "700" },
+  acceptanceMetricValue: { color: "#fff", fontSize: 14, fontWeight: "900" },
+  rejectionsTitle: { color: "#fff", fontSize: 14, fontWeight: "900", marginBottom: 4, marginTop: 22 },
+  rejectionRow: { borderTopColor: "rgba(255,255,255,0.08)", borderTopWidth: 1, paddingVertical: 12 },
+  rejectionTime: { color: "#eaf1ff", fontSize: 12, fontWeight: "800" },
+  rejectionReason: { color: "#ffcf70", fontSize: 13, fontWeight: "800", marginTop: 5 },
+  noRejections: { color: "#7889aa", fontSize: 13, fontWeight: "700", marginTop: 8 },
 });

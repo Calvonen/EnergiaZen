@@ -89,6 +89,11 @@ export function runDashboardReplayUnitTests() {
     coolingReplay.heatLossDiagnostics.observations.length === 1,
     "heat-loss diagnostics accepts a stable no-heating period",
   );
+  assert(
+    coolingReplay.heatLossDiagnostics.acceptance.examinedCount === 1 &&
+      coolingReplay.heatLossDiagnostics.acceptance.acceptedCount === 1,
+    "heat-loss diagnostics counts every examined and accepted period",
+  );
   assert(observation?.durationMinutes === 20, "heat-loss observation includes its duration");
   assert(
     typeof observation?.energyLossKwhPerHour === "number" && observation.energyLossKwhPerHour > 0,
@@ -106,6 +111,10 @@ export function runDashboardReplayUnitTests() {
     heatingReplay.heatLossDiagnostics.observations.length === 0,
     "heat-loss diagnostics excludes periods containing heating",
   );
+  assert(
+    heatingReplay.heatLossDiagnostics.acceptance.rejectionCounts.heating_detected === 1,
+    "heat-loss diagnostics records heating as the first rejection reason",
+  );
 
   const waterDrawReplay = calculateDashboardV2Replay(
     coolingReadings.map((reading, index) =>
@@ -115,6 +124,38 @@ export function runDashboardReplayUnitTests() {
   assert(
     waterDrawReplay.heatLossDiagnostics.observations.length === 0,
     "heat-loss diagnostics excludes rapid sensor changes",
+  );
+  assert(
+    waterDrawReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1,
+    "heat-loss diagnostics records a rapid temperature change rejection",
+  );
+
+  const temperatureJumpAfterGapReplay = calculateDashboardV2Replay([
+    { ...completeReading, created_at: coolingStart },
+    {
+      ...completeReading,
+      created_at: new Date(new Date(coolingStart).getTime() + 3 * 60_000).toISOString(),
+      top_temp: completeReading.top_temp! - 1,
+    },
+  ]);
+  assert(
+    temperatureJumpAfterGapReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 1 &&
+      temperatureJumpAfterGapReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 0,
+    "a temperature jump after a gap longer than two minutes is classified as a measurement gap",
+  );
+
+  const temperatureJumpWithinIntervalReplay = calculateDashboardV2Replay([
+    { ...completeReading, created_at: coolingStart },
+    {
+      ...completeReading,
+      created_at: new Date(new Date(coolingStart).getTime() + 2 * 60_000).toISOString(),
+      top_temp: completeReading.top_temp! - 1,
+    },
+  ]);
+  assert(
+    temperatureJumpWithinIntervalReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1 &&
+      temperatureJumpWithinIntervalReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 0,
+    "a temperature jump within a two-minute interval remains a rapid temperature change",
   );
 
   const inletSignatureReplay = calculateDashboardV2Replay(
@@ -126,6 +167,10 @@ export function runDashboardReplayUnitTests() {
   assert(
     inletSignatureReplay.heatLossDiagnostics.observations.length === 0,
     "heat-loss diagnostics excludes a raw inlet water-draw signature even when the estimated inlet stays stable",
+  );
+  assert(
+    inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 1,
+    "heat-loss diagnostics records a water-draw signature rejection",
   );
 
   const missingInletReadings: DashboardReplayReading[] = Array.from(
@@ -141,6 +186,10 @@ export function runDashboardReplayUnitTests() {
     }),
   );
   const missingInletReplay = calculateDashboardV2Replay(missingInletReadings);
+  assert(
+    missingInletReplay.heatLossDiagnostics.acceptance.rejectionCounts.missing_inlet_data === 1,
+    "heat-loss diagnostics records missing inlet data and groups the interrupted period",
+  );
   assert(
     missingInletReplay.heatLossDiagnostics.observations.length === 2,
     "missing raw inlet data splits otherwise usable heat-loss observations",
