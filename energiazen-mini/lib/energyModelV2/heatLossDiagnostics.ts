@@ -7,7 +7,7 @@ import type { SensorGeometryEpoch } from "./sensorGeometry";
 import { detectsWaterDraw, waterDrawDetectionLimits } from "../waterDrawDetection";
 
 const MAX_SEGMENT_MINUTES = 2;
-const MIN_OBSERVATION_MINUTES = 10;
+const MIN_OBSERVATION_MINUTES = 45;
 const MAX_INLET_CHANGE_C = 1;
 const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SENSOR_RISE_C = 0.2;
