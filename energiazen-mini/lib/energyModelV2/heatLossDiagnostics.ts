@@ -87,7 +87,8 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     Array.from({ length: endIndex - startIndex + 1 }, (_, offset) => startIndex + offset)
   ));
   const waterDrawStartIndexes = findWaterDrawStartIndexes(steps, coldInletPeriods, coldInletIndexes);
-  const preWaterDrawGuardIndexes = findPreWaterDrawGuardIndexes(steps, waterDrawStartIndexes);
+  const stepTimes = steps.map(({ reading }) => new Date(reading.created_at).getTime());
+  const preWaterDrawGuardIndexes = findPreWaterDrawGuardIndexes(stepTimes, waterDrawStartIndexes);
   const preWaterDrawGuardPeriods = findContiguousPeriods(preWaterDrawGuardIndexes);
   let periodStartIndex: number | null = steps.length &&
     !getStepRejectionReason(steps[0]) && !coldInletIndexes.has(0) &&
@@ -405,17 +406,18 @@ function findWaterDrawStartIndexes(
   return indexes;
 }
 
-function findPreWaterDrawGuardIndexes(steps: DiagnosticStep[], waterDrawStartIndexes: Set<number>) {
+function findPreWaterDrawGuardIndexes(stepTimes: number[], waterDrawStartIndexes: Set<number>) {
   const indexes = new Set<number>();
   waterDrawStartIndexes.forEach((waterDrawStartIndex) => {
-    const startTime = new Date(steps[waterDrawStartIndex].reading.created_at).getTime();
+    const startTime = stepTimes[waterDrawStartIndex];
     const cutoffTime = startTime - PRE_WATER_DRAW_GUARD_MINUTES * 60_000;
     // The sample on the cutoff is retained as the clean candidate's final
-    // anchor. Every later pre-draw sample is protected.
-    steps.forEach((step, index) => {
-      const time = new Date(step.reading.created_at).getTime();
-      if (time > cutoffTime && time < startTime) indexes.add(index);
-    });
+    // anchor. Since replay readings are ordered, only walk backward through
+    // the samples that can be inside this draw's guard window.
+    for (let index = waterDrawStartIndex - 1; index >= 0; index -= 1) {
+      if (stepTimes[index] <= cutoffTime) break;
+      if (stepTimes[index] < startTime) indexes.add(index);
+    }
   });
   return indexes;
 }
