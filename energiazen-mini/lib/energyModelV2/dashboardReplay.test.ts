@@ -112,8 +112,9 @@ export function runDashboardReplayUnitTests() {
     "heat-loss diagnostics excludes periods containing heating",
   );
   assert(
-    heatingReplay.heatLossDiagnostics.acceptance.rejectionCounts.heating_detected === 1,
-    "heat-loss diagnostics records heating as the first rejection reason",
+    heatingReplay.heatLossDiagnostics.acceptance.rejectionCounts.heating_detected === 1 &&
+      heatingReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 0,
+    "a heating reading creates one heating boundary without a recovery measurement gap",
   );
 
   const waterDrawReplay = calculateDashboardV2Replay(
@@ -188,6 +189,34 @@ export function runDashboardReplayUnitTests() {
     "a water draw splits a long cooling period into usable candidates on both sides",
   );
 
+  const repeatedWaterDrawReadings: DashboardReplayReading[] = Array.from(
+    { length: 41 },
+    (_, minute) => ({
+      bottom_temp: 45 - minute / 100,
+      created_at: new Date(
+        new Date(coolingStart).getTime() + minute * 60_000,
+      ).toISOString(),
+      heating: false,
+      inlet_temp: minute === 14 || minute === 17 ? 20 : 12,
+      top_temp: 60 - minute / 100,
+    }),
+  );
+  const repeatedWaterDrawReplay = calculateDashboardV2Replay(
+    repeatedWaterDrawReadings,
+  );
+  assert(
+    repeatedWaterDrawReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 2,
+    "each inlet drop creates its own water-draw boundary inside one five-minute window",
+  );
+  assert(
+    repeatedWaterDrawReplay.heatLossDiagnostics.observations.length === 2 &&
+      repeatedWaterDrawReplay.heatLossDiagnostics.observations[0].endedAt ===
+        repeatedWaterDrawReadings[14].created_at &&
+      repeatedWaterDrawReplay.heatLossDiagnostics.observations[1].startedAt ===
+        repeatedWaterDrawReadings[19].created_at,
+    "candidates cross neither repeated water draw and clean cooling after the second draw survives",
+  );
+
   const rapidChangeReadings = longCoolingReadings.map((reading, minute) => ({
     ...reading,
     inlet_temp: 12,
@@ -245,8 +274,9 @@ export function runDashboardReplayUnitTests() {
   );
   const missingInletReplay = calculateDashboardV2Replay(missingInletReadings);
   assert(
-    missingInletReplay.heatLossDiagnostics.acceptance.rejectionCounts.missing_inlet_data === 1,
-    "heat-loss diagnostics records missing inlet data and groups the interrupted period",
+    missingInletReplay.heatLossDiagnostics.acceptance.rejectionCounts.missing_inlet_data === 1 &&
+      missingInletReplay.heatLossDiagnostics.acceptance.rejectionCounts.measurement_gap === 0,
+    "missing inlet data creates one boundary without a recovery measurement gap",
   );
   assert(
     missingInletReplay.heatLossDiagnostics.observations.length === 2,

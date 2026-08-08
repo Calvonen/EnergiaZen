@@ -156,19 +156,16 @@ function getTransitionRejectionReason(
   current: DiagnosticStep,
   waterDrawWindow: DiagnosticStep[],
 ): HeatLossRejectionReason | null {
-  if (getStepRejectionReason(previous)) return "measurement_gap";
+  const elapsedMinutes = (
+    new Date(current.reading.created_at).getTime() -
+    new Date(previous.reading.created_at).getTime()
+  ) / 60_000;
   if (
-    current.segmentMinutes === null || current.segmentMinutes <= 0 ||
-    current.segmentMinutes > MAX_SEGMENT_MINUTES
+    !Number.isFinite(elapsedMinutes) || elapsedMinutes <= 0 ||
+    elapsedMinutes > MAX_SEGMENT_MINUTES
   ) return "measurement_gap";
-  const waterDrawSamples = waterDrawWindow.map((step) => ({
-    inletTemperatureC: step.reading.inlet_temp ?? null,
-    time: new Date(step.reading.created_at).getTime(),
-  }));
-  if (
-    detectsWaterDraw(waterDrawSamples) &&
-    !detectsWaterDraw(waterDrawSamples.slice(0, -1))
-  ) return "water_draw";
+  if (getStepRejectionReason(previous)) return null;
+  if (currentSampleStartsWaterDraw(waterDrawWindow)) return "water_draw";
   if (
     isFiniteNumber(previous.reading.top_temp) && isFiniteNumber(current.reading.top_temp) &&
     Math.abs(current.reading.top_temp - previous.reading.top_temp) > MAX_SENSOR_CHANGE_C ||
@@ -194,6 +191,21 @@ function getTransitionRejectionReason(
     Math.abs(current.state.bottomNodeTemperatureC! - previous.state.bottomNodeTemperatureC!) > MAX_SENSOR_CHANGE_C
   ) return "rapid_temperature_change";
   return null;
+}
+
+function currentSampleStartsWaterDraw(waterDrawWindow: DiagnosticStep[]) {
+  const current = waterDrawWindow[waterDrawWindow.length - 1].reading.inlet_temp;
+  const previous = waterDrawWindow[waterDrawWindow.length - 2]?.reading.inlet_temp;
+  if (
+    !isFiniteNumber(current) ||
+    !isFiniteNumber(previous) ||
+    current >= previous
+  ) return false;
+
+  return waterDrawWindow.slice(0, -1).some(({ reading }) =>
+    isFiniteNumber(reading.inlet_temp) &&
+    reading.inlet_temp - current >= waterDrawDetectionLimits.minDropCelsius
+  );
 }
 
 function recentSteps(steps: DiagnosticStep[], endIndex: number) {
