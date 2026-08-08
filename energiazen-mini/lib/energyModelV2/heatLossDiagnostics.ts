@@ -14,6 +14,8 @@ const MAX_SENSOR_RISE_C = 0.2;
 const MAX_NATURAL_LOSS_KWH_PER_HOUR = 0.5;
 export const COLD_INLET_MARGIN_C = 2;
 export const MIN_COLD_INLET_DURATION_MINUTES = 3;
+export const INLET_RECOVERY_MARGIN_C = 4;
+export const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
 
 export type WaterDrawDetectionKind = "rapid_drop" | "cold_inlet";
 
@@ -44,6 +46,7 @@ export type HeatLossDiagnostics = {
 export type HeatLossRejectionReason =
   | "heating_detected"
   | "water_draw"
+  | "inlet_recovery"
   | "inlet_temperature_change"
   | "missing_inlet_data"
   | "rapid_temperature_change"
@@ -83,6 +86,9 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   ));
   let periodStartIndex: number | null = steps.length &&
     !getStepRejectionReason(steps[0]) && !coldInletIndexes.has(0) ? 0 : null;
+  let recoveringAfterWaterDraw = false;
+  let recoveryPeriodStartIndex: number | null = null;
+  let warmRecoveryStartTime: number | null = null;
 
   const finishPeriod = (endIndex: number) => {
     if (periodStartIndex === null || endIndex <= periodStartIndex) return;
@@ -108,9 +114,26 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     waterDrawDetectionKind,
   });
 
+  const enterRecovery = (startIndex: number) => {
+    recoveringAfterWaterDraw = true;
+    recoveryPeriodStartIndex ??= startIndex;
+    warmRecoveryStartTime = null;
+    periodStartIndex = null;
+  };
+
+  const finishRecovery = (endIndex: number) => {
+    if (recoveryPeriodStartIndex !== null && endIndex >= recoveryPeriodStartIndex) {
+      rejectBoundary("inlet_recovery", recoveryPeriodStartIndex, endIndex);
+    }
+    recoveringAfterWaterDraw = false;
+    recoveryPeriodStartIndex = null;
+    warmRecoveryStartTime = null;
+  };
+
   const initialColdPeriod = coldInletPeriodByStart.get(0);
   if (initialColdPeriod) {
     rejectBoundary("water_draw", 0, initialColdPeriod.endIndex, "cold_inlet");
+    enterRecovery(initialColdPeriod.endIndex + 1);
   } else if (steps.length && periodStartIndex === null) {
     rejectBoundary(getStepRejectionReason(steps[0])!, 0, 0);
   }
@@ -120,14 +143,45 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     if (coldPeriod) {
       finishPeriod(index - 1);
       rejectBoundary("water_draw", index, coldPeriod.endIndex, "cold_inlet");
-      periodStartIndex = null;
+      enterRecovery(coldPeriod.endIndex + 1);
       continue;
     }
     if (coldInletIndexes.has(index)) continue;
-    if (coldInletIndexes.has(index - 1)) {
-      const recoveryReason = getStepRejectionReason(steps[index]);
-      periodStartIndex = recoveryReason ? null : index;
-      if (recoveryReason) rejectBoundary(recoveryReason, index, index);
+
+    if (recoveringAfterWaterDraw) {
+      const stepReason = getStepRejectionReason(steps[index]);
+      const transitionReason = stepReason ? null : getTransitionRejectionReason(
+        steps[index - 1],
+        steps[index],
+        recentSteps(steps, index),
+      );
+      if (transitionReason === "water_draw") {
+        rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+        warmRecoveryStartTime = null;
+        continue;
+      }
+      if (stepReason || transitionReason) {
+        rejectBoundary(stepReason ?? transitionReason!, Math.max(0, index - 1), index);
+        warmRecoveryStartTime = null;
+        continue;
+      }
+
+      const rawInletC = steps[index].reading.inlet_temp;
+      const estimatedInletC = steps[index].state?.inletTemperatureC;
+      const time = new Date(steps[index].reading.created_at).getTime();
+      const previousTime = new Date(steps[index - 1].reading.created_at).getTime();
+      const isContinuouslyWarm = isFiniteNumber(rawInletC) && isFiniteNumber(estimatedInletC) &&
+        rawInletC >= estimatedInletC + INLET_RECOVERY_MARGIN_C &&
+        time > previousTime && time - previousTime <= MAX_SEGMENT_MINUTES * 60_000;
+      if (!isContinuouslyWarm) {
+        warmRecoveryStartTime = null;
+        continue;
+      }
+      warmRecoveryStartTime ??= time;
+      if (time - warmRecoveryStartTime < MIN_INLET_RECOVERY_DURATION_MINUTES * 60_000) continue;
+
+      finishRecovery(index - 1);
+      periodStartIndex = index;
       continue;
     }
     const stepReason = getStepRejectionReason(steps[index]);
@@ -148,10 +202,12 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       // A transition separates two valid readings. The current reading is the
       // first valid anchor on its far side; a bad reading itself is skipped.
       periodStartIndex = stepReason || reason === "water_draw" ? null : index;
+      if (reason === "water_draw") enterRecovery(index + 1);
     } else if (periodStartIndex === null) {
       periodStartIndex = index;
     }
   }
+  if (recoveringAfterWaterDraw) finishRecovery(steps.length - 1);
   finishPeriod(steps.length - 1);
 
   const rates = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
@@ -377,6 +433,7 @@ function countRejections(rejections: RejectedHeatLossObservation[]) {
   const counts: Record<HeatLossRejectionReason, number> = {
     heating_detected: 0,
     inlet_temperature_change: 0,
+    inlet_recovery: 0,
     measurement_gap: 0,
     missing_inlet_data: 0,
     rapid_temperature_change: 0,

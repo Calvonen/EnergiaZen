@@ -40,6 +40,7 @@ const NOT_AVAILABLE = "Not available";
 
 const heatLossRejectionLabels: Record<HeatLossRejectionReason, string> = {
   heating_detected: "🔥 Lämmitys havaittu",
+  inlet_recovery: "♻️ Vedenkäytön jälkeinen palautuminen",
   inlet_temperature_change: "🌡 Tuloveden muutos",
   measurement_gap: "📶 Mittauskatkos",
   missing_inlet_data: "📡 Puuttuva tulovesidata",

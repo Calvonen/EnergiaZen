@@ -182,14 +182,14 @@ export function runDashboardReplayUnitTests() {
     bottom_temp: 45 - minute / 100,
     created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
     heating: false,
-    inlet_temp: minute === 0 ? 12 : minute === 19 ? 20 : 15,
+    inlet_temp: minute === 0 ? 12 : minute === 19 ? 22 : 17,
     top_temp: 60 - minute / 100,
   }));
   const splitByWaterDraw = calculateDashboardV2Replay(longCoolingReadings);
   assert(
       splitByWaterDraw.heatLossDiagnostics.observations.length === 2 &&
       splitByWaterDraw.heatLossDiagnostics.observations[0].endedAt === longCoolingReadings[19].created_at &&
-      splitByWaterDraw.heatLossDiagnostics.observations[1].startedAt === longCoolingReadings[21].created_at,
+      splitByWaterDraw.heatLossDiagnostics.observations[1].startedAt === longCoolingReadings[24].created_at,
     "a water draw splits a long cooling period into usable candidates on both sides",
   );
 
@@ -197,7 +197,7 @@ export function runDashboardReplayUnitTests() {
     bottom_temp: 45 - minute / 100,
     created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
     heating: false,
-    inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 20 ? 13 + (minute % 2) * 0.8 : 15,
+    inlet_temp: minute === 0 ? 12.1 : minute >= 15 && minute <= 20 ? 13 + (minute % 2) * 0.8 : 17,
     top_temp: 60 - minute / 100,
   }));
 
@@ -227,7 +227,7 @@ export function runDashboardReplayUnitTests() {
   assert(
     coldInletReplay.heatLossDiagnostics.observations.length === 2 &&
       coldInletReplay.heatLossDiagnostics.observations[0].endedAt === coldInletReadings[14].created_at &&
-      coldInletReplay.heatLossDiagnostics.observations[1].startedAt === coldInletReadings[21].created_at,
+      coldInletReplay.heatLossDiagnostics.observations[1].startedAt === coldInletReadings[24].created_at,
     "a confirmed cold-inlet period preserves the clean candidate before it and permits recovery after it",
   );
 
@@ -258,6 +258,80 @@ export function runDashboardReplayUnitTests() {
     "cold-inlet water draw detection does not depend on a bottom-temperature change",
   );
 
+  const recoveryReadings: DashboardReplayReading[] = Array.from({ length: 65 }, (_, minute) => ({
+    bottom_temp: 45 - minute / 100,
+    created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+    heating: false,
+    // The first warm attempt lasts only one minute. A second draw resets it,
+    // after which four readings provide three continuous warm minutes.
+    inlet_temp: minute === 0 ? 12.1
+      : (minute >= 15 && minute <= 34) || (minute >= 37 && minute <= 42) ? 13
+      : 17,
+    top_temp: 60 - minute / 100,
+  }));
+  const recoveryReplay = calculateDashboardV2Replay(recoveryReadings);
+  assert(
+    recoveryReplay.heatLossDiagnostics.acceptance.waterDrawDetectionCounts.cold_inlet === 2,
+    "two cold-inlet draws before recovery remain independently detected",
+  );
+  assert(
+    recoveryReplay.heatLossDiagnostics.acceptance.rejectionCounts.inlet_recovery === 1,
+    "one continuous recovery interval is diagnosed across both draws",
+  );
+  assert(
+    recoveryReplay.heatLossDiagnostics.observations.length === 2 &&
+      recoveryReplay.heatLossDiagnostics.observations[0].endedAt === recoveryReadings[14].created_at &&
+      recoveryReplay.heatLossDiagnostics.observations[1].startedAt === recoveryReadings[46].created_at,
+    "twenty cold minutes, a one-minute warm attempt, and a second draw yield no heat-loss data before three warm minutes",
+  );
+
+  const recoveryDisturbanceReadings: DashboardReplayReading[] = Array.from(
+    { length: 45 },
+    (_, minute) => ({
+      bottom_temp: 45 - minute / 100,
+      created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+      heating: false,
+      inlet_temp: minute === 0 ? 12 : minute === 14 ? 22 : minute === 15 ? 13 : 17,
+      top_temp: 60 - minute / 100,
+    }),
+  );
+  const assertRecoveryDisturbance = (
+    readings: DashboardReplayReading[],
+    reason: "heating_detected" | "missing_inlet_data" | "measurement_gap" | "rapid_temperature_change",
+  ) => {
+    const replay = calculateDashboardV2Replay(readings);
+    assert(
+      replay.heatLossDiagnostics.acceptance.rejectionCounts[reason] === 1,
+      `${reason} inside inlet recovery remains visible in diagnostics`,
+    );
+    assert(
+      replay.heatLossDiagnostics.acceptance.rejectionCounts.inlet_recovery === 1 &&
+        replay.heatLossDiagnostics.observations.length === 2 &&
+        replay.heatLossDiagnostics.observations[1].startedAt ===
+          readings[reason === "rapid_temperature_change" ? 23 : 22].created_at,
+      `${reason} resets the warm timer without ending recovery`,
+    );
+  };
+
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    heating: minute === 18,
+  })), "heating_detected");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: minute === 18 ? null : reading.inlet_temp,
+  })), "missing_inlet_data");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    created_at: new Date(
+      new Date(reading.created_at).getTime() + (minute >= 18 ? 3 * 60_000 : 0),
+    ).toISOString(),
+  })), "measurement_gap");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    top_temp: reading.top_temp! - (minute >= 18 ? 1 : 0),
+  })), "rapid_temperature_change");
+
   const repeatedWaterDrawReadings: DashboardReplayReading[] = Array.from(
     { length: 41 },
     (_, minute) => ({
@@ -266,7 +340,7 @@ export function runDashboardReplayUnitTests() {
         new Date(coolingStart).getTime() + minute * 60_000,
       ).toISOString(),
       heating: false,
-      inlet_temp: minute === 0 ? 12 : minute === 14 || minute === 17 ? 20 : 15,
+      inlet_temp: minute === 0 ? 12 : minute === 14 || minute === 17 ? 22 : 17,
       top_temp: 60 - minute / 100,
     }),
   );
@@ -282,7 +356,7 @@ export function runDashboardReplayUnitTests() {
       repeatedWaterDrawReplay.heatLossDiagnostics.observations[0].endedAt ===
         repeatedWaterDrawReadings[14].created_at &&
       repeatedWaterDrawReplay.heatLossDiagnostics.observations[1].startedAt ===
-        repeatedWaterDrawReadings[19].created_at,
+        repeatedWaterDrawReadings[22].created_at,
     "candidates cross neither repeated water draw and clean cooling after the second draw survives",
   );
 
