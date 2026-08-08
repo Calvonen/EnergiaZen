@@ -19,10 +19,8 @@ import type {
   HeatLossObservation,
   HeatLossRejectionReason,
 } from "@/lib/energyModelV2/heatLossDiagnostics";
-import {
-  predictDiagnosticHeatLoss,
-  type DiagnosticHeatLossModel,
-} from "@/lib/energyModelV2/heatLossModel";
+import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
+import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -104,20 +102,32 @@ function HeatLossTrend({
   const losses = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
   const minimumEnergy = Math.min(...energies);
   const maximumEnergy = Math.max(...energies);
-  const fittedEndpointLosses = model
-    ? [minimumEnergy, maximumEnergy].map((energy) => predictDiagnosticHeatLoss(model, energy))
-    : [];
-  const maximumLoss = Math.max(...losses, ...fittedEndpointLosses, 0);
+  const fittedSegment = model
+    ? getVisibleHeatLossTrendSegment(model, minimumEnergy, maximumEnergy)
+    : null;
+  const maximumLoss = Math.max(
+    ...losses,
+    ...(fittedSegment
+      ? [fittedSegment.start.lossKwhPerHour, fittedSegment.end.lossKwhPerHour]
+      : []),
+    0,
+  );
   const plotWidth = Math.max(0, chartWidth - 42);
   const plotHeight = 130;
   const chartX = (energy: number) => 34 + (maximumEnergy - minimumEnergy
     ? (energy - minimumEnergy) / (maximumEnergy - minimumEnergy)
     : 0.5) * plotWidth;
   const chartY = (loss: number) => 8 + (maximumLoss
-    ? 1 - Math.max(0, loss) / maximumLoss
+    ? 1 - loss / maximumLoss
     : 0.5) * (plotHeight - 16);
-  const trendStart = model ? { x: chartX(minimumEnergy), y: chartY(fittedEndpointLosses[0]) } : null;
-  const trendEnd = model ? { x: chartX(maximumEnergy), y: chartY(fittedEndpointLosses[1]) } : null;
+  const trendStart = fittedSegment ? {
+    x: chartX(fittedSegment.start.energyKwh),
+    y: chartY(fittedSegment.start.lossKwhPerHour),
+  } : null;
+  const trendEnd = fittedSegment ? {
+    x: chartX(fittedSegment.end.energyKwh),
+    y: chartY(fittedSegment.end.lossKwhPerHour),
+  } : null;
   const trendLength = trendStart && trendEnd
     ? Math.hypot(trendEnd.x - trendStart.x, trendEnd.y - trendStart.y)
     : 0;
