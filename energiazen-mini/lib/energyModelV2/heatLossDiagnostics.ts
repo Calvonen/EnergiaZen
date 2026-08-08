@@ -12,6 +12,7 @@ const MAX_INLET_CHANGE_C = 1;
 const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SENSOR_RISE_C = 0.2;
 const MAX_NATURAL_LOSS_KWH_PER_HOUR = 0.5;
+const LATEST_REJECTION_MERGE_TOLERANCE_MS = 2 * 60_000;
 export const COLD_INLET_MARGIN_C = 2;
 export const MIN_COLD_INLET_DURATION_MINUTES = 3;
 export const INLET_RECOVERY_MARGIN_C = 4;
@@ -292,7 +293,11 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     acceptance: {
       acceptedCount: observations.length,
       examinedCount: observations.length + rejections.length,
-      latestRejections: rejections.slice(-3).reverse(),
+      latestRejections: mergeLatestRejections(
+        rejections,
+        observations,
+        steps.map(({ reading }) => reading.created_at),
+      ),
       rejectionCounts: countRejections(rejections),
       waterDrawDetectionCounts: countWaterDrawDetections(rejections),
     },
@@ -304,6 +309,63 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     minimumLossKwhPerHour: rates.length ? Math.min(...rates) : null,
     observations,
   };
+}
+
+/**
+ * Turns sampling-level rejection boundaries into user-facing diagnostic events.
+ * Raw rejections remain untouched for acceptance and count diagnostics.
+ */
+export function mergeLatestRejections(
+  rejections: RejectedHeatLossObservation[],
+  acceptedObservations: Pick<HeatLossObservation, "startedAt" | "endedAt">[],
+  sampleTimestamps: string[],
+  limit = 3,
+): RejectedHeatLossObservation[] {
+  const chronological = [...rejections].sort(
+    (left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt),
+  );
+  const merged: RejectedHeatLossObservation[] = [];
+
+  chronological.forEach((rejection) => {
+    const previous = merged[merged.length - 1];
+    const previousEnd = previous ? Date.parse(previous.endedAt) : NaN;
+    const currentStart = Date.parse(rejection.startedAt);
+    const hasAcceptedObservationBetween = previous && acceptedObservations.some((observation) =>
+      Date.parse(observation.endedAt) > previousEnd &&
+      Date.parse(observation.startedAt) < currentStart
+    );
+    const isContinuous = previous && Number.isFinite(previousEnd) && Number.isFinite(currentStart) &&
+      currentStart - previousEnd <= LATEST_REJECTION_MERGE_TOLERANCE_MS;
+    const hasContinuousSampling = previous && samplingIsContinuous(
+      previous.startedAt,
+      rejection.endedAt,
+      sampleTimestamps,
+    );
+
+    if (
+      previous?.reason === rejection.reason && isContinuous && hasContinuousSampling &&
+      !hasAcceptedObservationBetween
+    ) {
+      if (Date.parse(rejection.endedAt) > previousEnd) previous.endedAt = rejection.endedAt;
+      return;
+    }
+    merged.push({ ...rejection });
+  });
+
+  return merged.slice(-limit).reverse();
+}
+
+function samplingIsContinuous(startedAt: string, endedAt: string, sampleTimestamps: string[]) {
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  const samples = sampleTimestamps
+    .map(Date.parse)
+    .filter((timestamp) => timestamp >= start && timestamp <= end)
+    .sort((left, right) => left - right);
+  if (!samples.length || samples[0] !== start || samples[samples.length - 1] !== end) return false;
+  return samples.every((timestamp, index) =>
+    index === 0 || timestamp - samples[index - 1] <= MAX_SEGMENT_MINUTES * 60_000
+  );
 }
 
 function getStepRejectionReason(step: DiagnosticStep): HeatLossRejectionReason | null {
