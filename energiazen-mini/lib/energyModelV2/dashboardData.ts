@@ -1,7 +1,8 @@
 import { supabase } from "@/lib/supabase";
 import { estimateRecoveryDropPerHour } from "../heatingRecoveryDrop";
-import { calculateDashboardV2TankState } from "./dashboardReplay";
+import { calculateDashboardV2Replay } from "./dashboardReplay";
 import type { TankState } from "./energyModelCore";
+import type { HeatLossDiagnostics } from "./heatLossDiagnostics";
 import { topSensorMovedAt } from "./sensorGeometry";
 
 type DashboardReading = {
@@ -16,6 +17,7 @@ export type EnergyModelDashboardData = {
   coolingPeriods: number;
   estimatedInletTemperature: number | null;
   fullHeatings: number;
+  heatLossDiagnostics: HeatLossDiagnostics;
   latest: DashboardReading | null;
   missingMeasurements: number;
   recoverySamples: number;
@@ -93,10 +95,12 @@ export async function fetchEnergyModelDashboardData(): Promise<EnergyModelDashbo
     countReadings(topSensorMovedAt),
     countReadings(undefined, topSensorMovedAt),
   ]);
-  const v2TankState = calculateDashboardV2TankState(readings);
+  const v2Replay = calculateDashboardV2Replay(readings);
+  const v2TankState = v2Replay.tankState;
   return {
     ...summarizeDashboardReadings(readings),
     estimatedInletTemperature: v2TankState?.inletTemperatureC ?? null,
+    heatLossDiagnostics: v2Replay.heatLossDiagnostics,
     latest: readings.at(-1) ?? null,
     recoverySamples: estimateRecoveryDropPerHour(readings).sampleCount,
     v1Readings,

@@ -1,5 +1,6 @@
 import { runEnergyModelCoreReplay, type TankState } from "./energyModelCore";
 import { sensorGeometryEpochs, type SensorGeometryEpoch } from "./sensorGeometry";
+import { collectHeatLossDiagnostics, type HeatLossDiagnostics } from "./heatLossDiagnostics";
 
 export type DashboardReplayReading = {
   bottom_temp: number | null;
@@ -12,6 +13,13 @@ export type DashboardReplayReading = {
 export function calculateDashboardV2TankState(
   readings: DashboardReplayReading[],
 ): TankState | null {
+  return calculateDashboardV2Replay(readings).tankState;
+}
+
+export function calculateDashboardV2Replay(readings: DashboardReplayReading[]): {
+  heatLossDiagnostics: HeatLossDiagnostics;
+  tankState: TankState | null;
+} {
   const currentEpoch = getCurrentSensorGeometryEpoch();
   const currentEpochReadings = readings
     .filter((reading) => isReadingInEpoch(reading, currentEpoch))
@@ -20,12 +28,20 @@ export function calculateDashboardV2TankState(
     isCompleteV2Reading,
   );
 
-  if (firstCompleteReadingIndex === -1) return null;
+  if (firstCompleteReadingIndex === -1) return {
+    heatLossDiagnostics: collectHeatLossDiagnostics([]),
+    tankState: null,
+  };
 
-  return runEnergyModelCoreReplay({
+  const replay = runEnergyModelCoreReplay({
     readings: currentEpochReadings.slice(firstCompleteReadingIndex),
     sensorGeometryEpochs: [currentEpoch],
-  }).finalState;
+  });
+
+  return {
+    heatLossDiagnostics: collectHeatLossDiagnostics(replay.steps),
+    tankState: replay.finalState,
+  };
 }
 
 function getCurrentSensorGeometryEpoch(): SensorGeometryEpoch {

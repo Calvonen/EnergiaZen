@@ -199,6 +199,13 @@ export default function EnergyModelDashboardScreen() {
             ] : [
               { label: "Tila", value: "Ei riittävästi dataa", tone: "warning" },
             ]} />
+            <DashboardCard title="📉 Lämpöhäviödiagnostiikka" metrics={[
+              { label: "Hyväksyttyjä havaintoja", value: String(data.heatLossDiagnostics.observations.length) },
+              { label: "Viimeisin havainto", value: data.heatLossDiagnostics.latestObservation ? `${dateTimeFormatter.format(new Date(data.heatLossDiagnostics.latestObservation.startedAt))} – ${dateTimeFormatter.format(new Date(data.heatLossDiagnostics.latestObservation.endedAt))}` : NOT_AVAILABLE },
+              { label: "Keskimääräinen häviö", value: formatNumber(data.heatLossDiagnostics.averageLossKwhPerHour, 3, "kWh/h") },
+              { label: "Suurin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.maximumLossKwhPerHour, 3, "kWh/h") },
+              { label: "Pienin havaittu häviö", value: formatNumber(data.heatLossDiagnostics.minimumLossKwhPerHour, 3, "kWh/h") },
+            ]} />
             <DashboardCard title="Data Quality" metrics={[
               { label: "Yläanturi", value: typeof data.latest?.top_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.top_temp, latestAt) },
               { label: "Ala-anturi", value: typeof data.latest?.bottom_temp === "number" ? "OK" : "Puuttuu", tone: sensorStatus(data.latest?.bottom_temp, latestAt) },
