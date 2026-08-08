@@ -285,6 +285,53 @@ export function runDashboardReplayUnitTests() {
     "twenty cold minutes, a one-minute warm attempt, and a second draw yield no heat-loss data before three warm minutes",
   );
 
+  const recoveryDisturbanceReadings: DashboardReplayReading[] = Array.from(
+    { length: 45 },
+    (_, minute) => ({
+      bottom_temp: 45 - minute / 100,
+      created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+      heating: false,
+      inlet_temp: minute === 0 ? 12 : minute === 14 ? 22 : minute === 15 ? 13 : 17,
+      top_temp: 60 - minute / 100,
+    }),
+  );
+  const assertRecoveryDisturbance = (
+    readings: DashboardReplayReading[],
+    reason: "heating_detected" | "missing_inlet_data" | "measurement_gap" | "rapid_temperature_change",
+  ) => {
+    const replay = calculateDashboardV2Replay(readings);
+    assert(
+      replay.heatLossDiagnostics.acceptance.rejectionCounts[reason] === 1,
+      `${reason} inside inlet recovery remains visible in diagnostics`,
+    );
+    assert(
+      replay.heatLossDiagnostics.acceptance.rejectionCounts.inlet_recovery === 1 &&
+        replay.heatLossDiagnostics.observations.length === 2 &&
+        replay.heatLossDiagnostics.observations[1].startedAt ===
+          readings[reason === "rapid_temperature_change" ? 23 : 22].created_at,
+      `${reason} resets the warm timer without ending recovery`,
+    );
+  };
+
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    heating: minute === 18,
+  })), "heating_detected");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: minute === 18 ? null : reading.inlet_temp,
+  })), "missing_inlet_data");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    created_at: new Date(
+      new Date(reading.created_at).getTime() + (minute >= 18 ? 3 * 60_000 : 0),
+    ).toISOString(),
+  })), "measurement_gap");
+  assertRecoveryDisturbance(recoveryDisturbanceReadings.map((reading, minute) => ({
+    ...reading,
+    top_temp: reading.top_temp! - (minute >= 18 ? 1 : 0),
+  })), "rapid_temperature_change");
+
   const repeatedWaterDrawReadings: DashboardReplayReading[] = Array.from(
     { length: 41 },
     (_, minute) => ({

@@ -161,6 +161,7 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
         continue;
       }
       if (stepReason || transitionReason) {
+        rejectBoundary(stepReason ?? transitionReason!, Math.max(0, index - 1), index);
         warmRecoveryStartTime = null;
         continue;
       }
