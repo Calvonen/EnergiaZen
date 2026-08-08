@@ -4,7 +4,7 @@ import {
 } from "./energyModelCore";
 import type { ReplayReading } from "./replayEngine";
 import type { SensorGeometryEpoch } from "./sensorGeometry";
-import { detectsWaterDraw } from "../waterDrawDetection";
+import { detectsWaterDraw, waterDrawDetectionLimits } from "../waterDrawDetection";
 
 const MAX_SEGMENT_MINUTES = 2;
 const MIN_OBSERVATION_MINUTES = 10;
@@ -70,15 +70,12 @@ type DiagnosticStep = {
 export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDiagnostics {
   const observations: HeatLossObservation[] = [];
   const rejections: RejectedHeatLossObservation[] = [];
-  let periodStartIndex = 0;
-  let periodReason: HeatLossRejectionReason | null | undefined;
+  let periodStartIndex: number | null = steps.length && !getStepRejectionReason(steps[0]) ? 0 : null;
 
   const finishPeriod = (endIndex: number) => {
-    if (endIndex <= periodStartIndex) return;
+    if (periodStartIndex === null || endIndex <= periodStartIndex) return;
     const candidateSteps = steps.slice(periodStartIndex, endIndex + 1);
-    const result = periodReason
-      ? { reason: periodReason }
-      : evaluateObservation(candidateSteps);
+    const result = evaluateObservation(candidateSteps);
     if ("observation" in result) observations.push(result.observation);
     else rejections.push({
       endedAt: candidateSteps[candidateSteps.length - 1].reading.created_at,
@@ -87,18 +84,43 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     });
   };
 
+  const rejectBoundary = (
+    reason: HeatLossRejectionReason,
+    startIndex: number,
+    endIndex: number,
+  ) => rejections.push({
+    endedAt: steps[endIndex].reading.created_at,
+    reason,
+    startedAt: steps[startIndex].reading.created_at,
+  });
+
+  if (steps.length && periodStartIndex === null) {
+    rejectBoundary(getStepRejectionReason(steps[0])!, 0, 0);
+  }
+
   for (let index = 1; index < steps.length; index += 1) {
-    const reason = getTransitionRejectionReason(steps[index - 1], steps[index]);
-    if (periodReason === undefined) {
-      periodReason = reason;
-      periodStartIndex = index - 1;
-    } else if (reason !== periodReason) {
+    const stepReason = getStepRejectionReason(steps[index]);
+    const transitionReason = stepReason ? null : getTransitionRejectionReason(
+      steps[index - 1],
+      steps[index],
+      recentSteps(steps, index),
+    );
+    const candidateRise = periodStartIndex === null || stepReason || transitionReason
+      ? false
+      : hasRapidRise(steps[periodStartIndex], steps[index]);
+    const reason = stepReason ?? transitionReason ?? (candidateRise ? "rapid_temperature_change" : null);
+
+    if (reason) {
       finishPeriod(index - 1);
-      periodStartIndex = index - 1;
-      periodReason = reason;
+      rejectBoundary(reason, Math.max(0, index - 1), index);
+      // A transition separates two valid readings. The current reading is the
+      // first valid anchor on its far side; a bad reading itself is skipped.
+      periodStartIndex = stepReason || reason === "water_draw" ? null : index;
+    } else if (periodStartIndex === null) {
+      periodStartIndex = index;
     }
   }
-  if (periodReason !== undefined) finishPeriod(steps.length - 1);
+  finishPeriod(steps.length - 1);
 
   const rates = observations.map(({ energyLossKwhPerHour }) => energyLossKwhPerHour);
   return {
@@ -118,20 +140,32 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   };
 }
 
+function getStepRejectionReason(step: DiagnosticStep): HeatLossRejectionReason | null {
+  if (step.reading.heating !== false) return "heating_detected";
+  if (!isFiniteNumber(step.reading.inlet_temp)) return "missing_inlet_data";
+  if (
+    !isFiniteNumber(step.reading.top_temp) ||
+    !isFiniteNumber(step.reading.bottom_temp) ||
+    !step.state
+  ) return "measurement_gap";
+  return null;
+}
+
 function getTransitionRejectionReason(
   previous: DiagnosticStep,
   current: DiagnosticStep,
+  waterDrawWindow: DiagnosticStep[],
 ): HeatLossRejectionReason | null {
-  if (previous.reading.heating !== false || current.reading.heating !== false) {
-    return "heating_detected";
-  }
-  if (!isFiniteNumber(previous.reading.inlet_temp) || !isFiniteNumber(current.reading.inlet_temp)) {
-    return "missing_inlet_data";
-  }
+  const elapsedMinutes = (
+    new Date(current.reading.created_at).getTime() -
+    new Date(previous.reading.created_at).getTime()
+  ) / 60_000;
   if (
-    current.segmentMinutes === null || current.segmentMinutes <= 0 ||
-    current.segmentMinutes > MAX_SEGMENT_MINUTES
+    !Number.isFinite(elapsedMinutes) || elapsedMinutes <= 0 ||
+    elapsedMinutes > MAX_SEGMENT_MINUTES
   ) return "measurement_gap";
+  if (getStepRejectionReason(previous)) return null;
+  if (currentSampleStartsWaterDraw(waterDrawWindow)) return "water_draw";
   if (
     isFiniteNumber(previous.reading.top_temp) && isFiniteNumber(current.reading.top_temp) &&
     Math.abs(current.reading.top_temp - previous.reading.top_temp) > MAX_SENSOR_CHANGE_C ||
@@ -157,6 +191,42 @@ function getTransitionRejectionReason(
     Math.abs(current.state.bottomNodeTemperatureC! - previous.state.bottomNodeTemperatureC!) > MAX_SENSOR_CHANGE_C
   ) return "rapid_temperature_change";
   return null;
+}
+
+function currentSampleStartsWaterDraw(waterDrawWindow: DiagnosticStep[]) {
+  const current = waterDrawWindow[waterDrawWindow.length - 1].reading.inlet_temp;
+  const previous = waterDrawWindow[waterDrawWindow.length - 2]?.reading.inlet_temp;
+  if (
+    !isFiniteNumber(current) ||
+    !isFiniteNumber(previous) ||
+    current >= previous
+  ) return false;
+
+  return waterDrawWindow.slice(0, -1).some(({ reading }) =>
+    isFiniteNumber(reading.inlet_temp) &&
+    reading.inlet_temp - current >= waterDrawDetectionLimits.minDropCelsius
+  );
+}
+
+function recentSteps(steps: DiagnosticStep[], endIndex: number) {
+  const endTime = new Date(steps[endIndex].reading.created_at).getTime();
+  let startIndex = endIndex;
+  while (
+    startIndex > 0 &&
+    endTime - new Date(steps[startIndex - 1].reading.created_at).getTime() <=
+      waterDrawDetectionLimits.windowMinutes * 60_000
+  ) startIndex -= 1;
+  return steps.slice(startIndex, endIndex + 1);
+}
+
+function hasRapidRise(start: DiagnosticStep, current: DiagnosticStep) {
+  return isFiniteNumber(start.state?.topNodeTemperatureC) &&
+    isFiniteNumber(start.state?.bottomNodeTemperatureC) &&
+    isFiniteNumber(current.state?.topNodeTemperatureC) &&
+    isFiniteNumber(current.state?.bottomNodeTemperatureC) && (
+      current.state.topNodeTemperatureC > start.state.topNodeTemperatureC + MAX_SENSOR_RISE_C ||
+      current.state.bottomNodeTemperatureC > start.state.bottomNodeTemperatureC + MAX_SENSOR_RISE_C
+    );
 }
 
 function evaluateObservation(candidateSteps: DiagnosticStep[]):
