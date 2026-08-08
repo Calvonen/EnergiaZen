@@ -126,8 +126,8 @@ export function runDashboardReplayUnitTests() {
     "heat-loss diagnostics excludes rapid sensor changes",
   );
   assert(
-    waterDrawReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1,
-    "heat-loss diagnostics records a rapid temperature change rejection",
+    waterDrawReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change >= 1,
+    "heat-loss diagnostics records the rapid temperature change boundaries",
   );
 
   const temperatureJumpAfterGapReplay = calculateDashboardV2Replay([
@@ -165,12 +165,70 @@ export function runDashboardReplayUnitTests() {
     })),
   );
   assert(
-    inletSignatureReplay.heatLossDiagnostics.observations.length === 0,
-    "heat-loss diagnostics excludes a raw inlet water-draw signature even when the estimated inlet stays stable",
+    inletSignatureReplay.heatLossDiagnostics.observations.length === 1,
+    "a raw inlet water-draw signature preserves the usable candidate before the draw",
   );
   assert(
     inletSignatureReplay.heatLossDiagnostics.acceptance.rejectionCounts.water_draw === 1,
     "heat-loss diagnostics records a water-draw signature rejection",
+  );
+
+  const longCoolingReadings: DashboardReplayReading[] = Array.from({ length: 41 }, (_, minute) => ({
+    bottom_temp: 45 - minute / 100,
+    created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+    heating: false,
+    inlet_temp: minute === 19 ? 20 : 12,
+    top_temp: 60 - minute / 100,
+  }));
+  const splitByWaterDraw = calculateDashboardV2Replay(longCoolingReadings);
+  assert(
+      splitByWaterDraw.heatLossDiagnostics.observations.length === 2 &&
+      splitByWaterDraw.heatLossDiagnostics.observations[0].endedAt === longCoolingReadings[19].created_at &&
+      splitByWaterDraw.heatLossDiagnostics.observations[1].startedAt === longCoolingReadings[21].created_at,
+    "a water draw splits a long cooling period into usable candidates on both sides",
+  );
+
+  const rapidChangeReadings = longCoolingReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: 12,
+    top_temp: reading.top_temp! - (minute >= 20 ? 1 : 0),
+  }));
+  const splitByRapidChange = calculateDashboardV2Replay(rapidChangeReadings);
+  assert(
+    splitByRapidChange.heatLossDiagnostics.observations.length === 2 &&
+      splitByRapidChange.heatLossDiagnostics.observations[0].endedAt === rapidChangeReadings[19].created_at &&
+      splitByRapidChange.heatLossDiagnostics.observations[1].startedAt === rapidChangeReadings[21].created_at,
+    "a rapid temperature transition is a boundary and is not crossed by an observation",
+  );
+
+  const gapReadings = longCoolingReadings.map((reading, minute) => ({
+    ...reading,
+    inlet_temp: 12,
+    created_at: new Date(
+      new Date(coolingStart).getTime() + (minute + (minute >= 20 ? 3 : 0)) * 60_000,
+    ).toISOString(),
+  }));
+  const splitByGap = calculateDashboardV2Replay(gapReadings);
+  assert(
+    splitByGap.heatLossDiagnostics.observations.length === 2 &&
+      splitByGap.heatLossDiagnostics.observations.every((item) => item.durationMinutes >= 19),
+    "a measurement gap preserves usable cooling candidates on both sides without crossing the gap",
+  );
+
+  const shortBeforeHeatingReadings = coolingReadings.concat(
+    Array.from({ length: 5 }, (_, offset) => ({
+      ...coolingReadings[coolingReadings.length - 1],
+      bottom_temp: 44.79 - offset / 100,
+      created_at: new Date(new Date(coolingStart).getTime() + (21 + offset) * 60_000).toISOString(),
+      top_temp: 59.79 - offset / 100,
+    })),
+  ).map((reading, index) => ({ ...reading, heating: index === 5 }));
+  const splitWithShortCandidate = calculateDashboardV2Replay(shortBeforeHeatingReadings);
+  assert(
+    splitWithShortCandidate.heatLossDiagnostics.observations.length === 1 &&
+      splitWithShortCandidate.heatLossDiagnostics.acceptance.rejectionCounts.too_short === 1 &&
+      splitWithShortCandidate.heatLossDiagnostics.acceptance.rejectionCounts.heating_detected === 1,
+    "only the short side of a disturbance boundary is rejected as too short",
   );
 
   const missingInletReadings: DashboardReplayReading[] = Array.from(
@@ -217,8 +275,9 @@ export function runDashboardReplayUnitTests() {
     top_temp: 60 - (minutes / 20) * 0.4,
   })));
   assert(
-    mixingReplay.heatLossDiagnostics.observations.length === 0,
-    "heat-loss diagnostics excludes compensating node movement that can hide water use or mixing",
+    mixingReplay.heatLossDiagnostics.observations.length === 1 &&
+      mixingReplay.heatLossDiagnostics.acceptance.rejectionCounts.rapid_temperature_change === 1,
+    "compensating node movement becomes a boundary without discarding the clean period before it",
   );
 
   const inletMinimumTimestamp = new Date(
