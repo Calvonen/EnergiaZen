@@ -1,5 +1,9 @@
-import type { TankState } from "./energyModelCore";
+import {
+  calculateTankStateFromObservation,
+  type TankState,
+} from "./energyModelCore";
 import type { ReplayReading } from "./replayEngine";
+import type { SensorGeometryEpoch } from "./sensorGeometry";
 import { detectsWaterDraw } from "../waterDrawDetection";
 
 const MAX_SEGMENT_MINUTES = 2;
@@ -33,6 +37,7 @@ export type HeatLossDiagnostics = {
 };
 
 type DiagnosticStep = {
+  geometry: SensorGeometryEpoch;
   reading: ReplayReading;
   segmentMinutes: number | null;
   state: TankState | null;
@@ -99,8 +104,19 @@ function createObservation(candidateSteps: DiagnosticStep[]): HeatLossObservatio
   const start = candidateSteps[0];
   const end = candidateSteps[candidateSteps.length - 1];
   if (!start.state || !end.state) return null;
+  const inletBaselineC = start.state.inletTemperatureC;
+  if (!isFiniteNumber(inletBaselineC)) return null;
+  const startEnergyState = calculateEnergyStateWithInletBaseline(
+    start,
+    inletBaselineC,
+  );
+  const endEnergyState = calculateEnergyStateWithInletBaseline(
+    end,
+    inletBaselineC,
+  );
+  if (!startEnergyState || !endEnergyState) return null;
   const durationMinutes = (new Date(end.reading.created_at).getTime() - new Date(start.reading.created_at).getTime()) / 60000;
-  const energyLossKwh = start.state.storedEnergy.kwh - end.state.storedEnergy.kwh;
+  const energyLossKwh = startEnergyState.storedEnergy.kwh - endEnergyState.storedEnergy.kwh;
   const lossRate = energyLossKwh / (durationMinutes / 60);
 
   if (
@@ -118,7 +134,6 @@ function createObservation(candidateSteps: DiagnosticStep[]): HeatLossObservatio
       step.state.topNodeTemperatureC > start.state!.topNodeTemperatureC! + MAX_SENSOR_RISE_C ||
       step.state.bottomNodeTemperatureC > start.state!.bottomNodeTemperatureC! + MAX_SENSOR_RISE_C
     ) ||
-    !isFiniteNumber(start.state.inletTemperatureC) ||
     !isFiniteNumber(start.state.topNodeTemperatureC) ||
     !isFiniteNumber(start.state.bottomNodeTemperatureC)
   ) return null;
@@ -129,14 +144,36 @@ function createObservation(candidateSteps: DiagnosticStep[]): HeatLossObservatio
     endedAt: end.reading.created_at,
     energyLossKwh: round(energyLossKwh),
     energyLossKwhPerHour: round(lossRate),
-    estimatedInletTemperatureC: start.state.inletTemperatureC,
+    estimatedInletTemperatureC: inletBaselineC,
     startedAt: start.reading.created_at,
-    storedEnergyEndKwh: end.state.storedEnergy.kwh,
-    storedEnergyStartKwh: start.state.storedEnergy.kwh,
+    storedEnergyEndKwh: endEnergyState.storedEnergy.kwh,
+    storedEnergyStartKwh: startEnergyState.storedEnergy.kwh,
     topNodeTemperatureC: start.state.topNodeTemperatureC,
-    usableEnergyEndKwh: end.state.usableEnergy.kwh,
-    usableEnergyStartKwh: start.state.usableEnergy.kwh,
+    usableEnergyEndKwh: endEnergyState.usableEnergy.kwh,
+    usableEnergyStartKwh: startEnergyState.usableEnergy.kwh,
   };
+}
+
+function calculateEnergyStateWithInletBaseline(
+  step: DiagnosticStep,
+  inletBaselineC: number,
+) {
+  if (
+    !step.state ||
+    !isFiniteNumber(step.state.topNodeTemperatureC) ||
+    !isFiniteNumber(step.state.bottomNodeTemperatureC)
+  ) return null;
+
+  return calculateTankStateFromObservation({
+    geometry: step.geometry,
+    observation: {
+      bottomTempC: step.state.bottomNodeTemperatureC,
+      heating: false,
+      inletTempC: inletBaselineC,
+      timestamp: step.reading.created_at,
+      topTempC: step.state.topNodeTemperatureC,
+    },
+  });
 }
 
 function isFiniteNumber(value: unknown): value is number {

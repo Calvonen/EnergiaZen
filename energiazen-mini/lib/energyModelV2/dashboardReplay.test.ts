@@ -150,4 +150,54 @@ export function runDashboardReplayUnitTests() {
     mixingReplay.heatLossDiagnostics.observations.length === 0,
     "heat-loss diagnostics excludes compensating node movement that can hide water use or mixing",
   );
+
+  const inletMinimumTimestamp = new Date(
+    new Date(topSensorMovedAt).getTime() + 60_000,
+  );
+  const inletBaselineExpiryReadings: DashboardReplayReading[] = [
+    {
+      ...completeReading,
+      created_at: inletMinimumTimestamp.toISOString(),
+      inlet_temp: 12,
+    },
+    ...Array.from({ length: 121 }, (_, minute) => ({
+      bottom_temp: 45 - minute * 0.002,
+      created_at: new Date(
+        inletMinimumTimestamp.getTime() +
+          (7 * 24 * 60 - 60 + minute) * 60_000,
+      ).toISOString(),
+      heating: false,
+      inlet_temp: 12.8,
+      top_temp: 60 - minute * 0.002,
+    })),
+  ];
+  const baselineExpiryReplay = calculateDashboardV2Replay(
+    inletBaselineExpiryReadings,
+  );
+  const fixedBaselineReplay = calculateDashboardV2Replay(
+    inletBaselineExpiryReadings.map((reading) => ({
+      ...reading,
+      inlet_temp: 12,
+    })),
+  );
+  const baselineExpiryObservation =
+    baselineExpiryReplay.heatLossDiagnostics.latestObservation;
+  const fixedBaselineObservation =
+    fixedBaselineReplay.heatLossDiagnostics.latestObservation;
+
+  assert(
+    baselineExpiryReplay.tankState?.inletTemperatureC === 12.8,
+    "the replay inlet estimate changes when the old seven-day minimum expires",
+  );
+  assert(
+    baselineExpiryObservation?.estimatedInletTemperatureC === 12,
+    "the heat-loss observation locks the inlet estimate from its first step",
+  );
+  assert(
+    baselineExpiryObservation !== null && fixedBaselineObservation !== null &&
+      baselineExpiryObservation.energyLossKwh === fixedBaselineObservation.energyLossKwh &&
+      baselineExpiryObservation.storedEnergyStartKwh === fixedBaselineObservation.storedEnergyStartKwh &&
+      baselineExpiryObservation.storedEnergyEndKwh === fixedBaselineObservation.storedEnergyEndKwh,
+    "observation endpoint energies use one inlet baseline even when the replay estimate changes",
+  );
 }
