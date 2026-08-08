@@ -1,5 +1,6 @@
 import { calculateDashboardV2Replay, calculateDashboardV2TankState, type DashboardReplayReading } from "./dashboardReplay";
-import { topSensorMovedAt } from "./sensorGeometry";
+import { calculateTankStateFromObservation } from "./energyModelCore";
+import { sensorGeometryV2, topSensorMovedAt } from "./sensorGeometry";
 import {
   mergeLatestRejections,
   type HeatLossRejectionReason,
@@ -535,6 +536,49 @@ export function runDashboardReplayUnitTests() {
       stabilizedWaterDraw.estimatedNaturalLossKwh !== null &&
       stabilizedWaterDraw.estimatedWaterDrawNetEnergyKwh !== null,
     "a stabilized draw reports energy endpoints, raw change, natural loss, and net draw energy",
+  );
+  const energyAt = (reading: DashboardReplayReading, inletTempC: number) =>
+    calculateTankStateFromObservation({
+      geometry: sensorGeometryV2,
+      observation: {
+        bottomTempC: reading.bottom_temp,
+        heating: false,
+        inletTempC,
+        timestamp: reading.created_at,
+        topTempC: reading.top_temp,
+      },
+    }).storedEnergy.kwh;
+  assert(
+    stabilizedWaterDraw.energyBeforeKwh === energyAt(stabilizationReadings[5], 12),
+    "rapid-drop energy and timestamp use the caller-provided pre-drop anchor without moving back another reading",
+  );
+  assert(
+    stabilizedWaterDraw.energyAfterStabilizationKwh === energyAt(stabilizationReadings[25], 12) &&
+      stabilizedWaterDraw.energyAfterStabilizationKwh !== energyAt(stabilizationReadings[25], 12.8),
+    "both event endpoints retain the pre-draw inlet baseline when a later rolling estimate differs",
+  );
+
+  const heatingDuringEventReplay = calculateDashboardV2Replay(
+    [
+      ...stabilizationReadings.map((reading, minute) => ({
+        ...reading,
+        heating: minute === 12,
+      })),
+      ...Array.from({ length: 35 }, (_, offset) => {
+        const minute = offset + 36;
+        return {
+          bottom_temp: 45 - minute / 100,
+          created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+          heating: false,
+          inlet_temp: 17,
+          top_temp: 60 - minute / 100,
+        };
+      }),
+    ],
+  );
+  assert(
+    heatingDuringEventReplay.waterDrawEvents.length === 0,
+    "heating between draw detection and stabilization excludes the energy observation and its net energy",
   );
 
   const rapidChangeDuringStabilization: DashboardReplayReading[] = Array.from(

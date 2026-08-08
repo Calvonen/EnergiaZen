@@ -67,6 +67,7 @@ type PendingWaterDrawEvent = {
   detectionKinds: Set<WaterDrawDetectionKind>;
   endedAt: string;
   energyBeforeKwh: number;
+  inletBaselineC: number;
   startedAt: string;
 };
 
@@ -161,7 +162,13 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     stabilizingAfterRecovery = false;
     stabilizationPeriodStartIndex = null;
     stableTankStartTime = null;
-    const stabilizedState = stabilizedIndex === undefined ? null : steps[stabilizedIndex]?.state;
+    const stabilizedStep = stabilizedIndex === undefined ? null : steps[stabilizedIndex];
+    const stabilizedState = pendingWaterDrawEvent && stabilizedStep
+      ? calculateEnergyStateWithInletBaseline(
+          stabilizedStep,
+          pendingWaterDrawEvent.inletBaselineC,
+        )
+      : null;
     if (pendingWaterDrawEvent && stabilizedState && stabilizedIndex !== undefined) {
       const stabilizedAt = steps[stabilizedIndex].reading.created_at;
       completedWaterDrawEvents.push({
@@ -180,13 +187,25 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   };
 
   const recordWaterDraw = (startIndex: number, endIndex: number, kind: WaterDrawDetectionKind) => {
-    const beforeState = steps[Math.max(0, startIndex - 1)]?.state ?? steps[startIndex]?.state;
+    const startStep = steps[startIndex];
+    const inletBaselineC = startStep?.state?.inletTemperatureC;
+    const heatingDuringDetection = steps
+      .slice(startIndex, endIndex + 1)
+      .some((step) => step.reading.heating === true);
+    if (
+      !startStep ||
+      startStep.reading.heating !== false ||
+      heatingDuringDetection ||
+      !isFiniteNumber(inletBaselineC)
+    ) return;
+    const beforeState = calculateEnergyStateWithInletBaseline(startStep, inletBaselineC);
     if (!beforeState) return;
     if (!pendingWaterDrawEvent) {
       pendingWaterDrawEvent = {
         detectionKinds: new Set([kind]),
         endedAt: steps[endIndex].reading.created_at,
         energyBeforeKwh: beforeState.storedEnergy.kwh,
+        inletBaselineC,
         startedAt: steps[startIndex].reading.created_at,
       };
     } else {
@@ -236,6 +255,9 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   }
 
   for (let index = 1; index < steps.length; index += 1) {
+    if (pendingWaterDrawEvent && steps[index].reading.heating === true) {
+      pendingWaterDrawEvent = null;
+    }
     const coldPeriod = coldInletPeriodByStart.get(index);
     if (coldPeriod) {
       finishPeriod(index - 1);
