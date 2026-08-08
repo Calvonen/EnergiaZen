@@ -16,6 +16,7 @@ export const COLD_INLET_MARGIN_C = 2;
 export const MIN_COLD_INLET_DURATION_MINUTES = 3;
 export const INLET_RECOVERY_MARGIN_C = 4;
 export const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
+export const PRE_WATER_DRAW_GUARD_MINUTES = 20;
 
 export type WaterDrawDetectionKind = "rapid_drop" | "cold_inlet";
 
@@ -46,6 +47,7 @@ export type HeatLossDiagnostics = {
 export type HeatLossRejectionReason =
   | "heating_detected"
   | "water_draw"
+  | "pre_water_draw_guard"
   | "inlet_recovery"
   | "inlet_temperature_change"
   | "missing_inlet_data"
@@ -84,8 +86,13 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
   const coldInletIndexes = new Set(coldInletPeriods.flatMap(({ startIndex, endIndex }) =>
     Array.from({ length: endIndex - startIndex + 1 }, (_, offset) => startIndex + offset)
   ));
+  const waterDrawStartIndexes = findWaterDrawStartIndexes(steps, coldInletPeriods, coldInletIndexes);
+  const stepTimes = steps.map(({ reading }) => new Date(reading.created_at).getTime());
+  const preWaterDrawGuardIndexes = findPreWaterDrawGuardIndexes(stepTimes, waterDrawStartIndexes);
+  const preWaterDrawGuardPeriods = findContiguousPeriods(preWaterDrawGuardIndexes);
   let periodStartIndex: number | null = steps.length &&
-    !getStepRejectionReason(steps[0]) && !coldInletIndexes.has(0) ? 0 : null;
+    !getStepRejectionReason(steps[0]) && !coldInletIndexes.has(0) &&
+    !preWaterDrawGuardIndexes.has(0) ? 0 : null;
   let recoveringAfterWaterDraw = false;
   let recoveryPeriodStartIndex: number | null = null;
   let warmRecoveryStartTime: number | null = null;
@@ -130,12 +137,19 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     warmRecoveryStartTime = null;
   };
 
+  // Record each merged guard as one meaningful diagnostic segment. The guard
+  // may contain another draw; merging prevents one event from producing a
+  // rejection for every individual reading.
+  preWaterDrawGuardPeriods.forEach(({ startIndex, endIndex }) =>
+    rejectBoundary("pre_water_draw_guard", startIndex, endIndex));
+
   const initialColdPeriod = coldInletPeriodByStart.get(0);
+  const initialReason = steps.length ? getStepRejectionReason(steps[0]) : null;
   if (initialColdPeriod) {
     rejectBoundary("water_draw", 0, initialColdPeriod.endIndex, "cold_inlet");
     enterRecovery(initialColdPeriod.endIndex + 1);
-  } else if (steps.length && periodStartIndex === null) {
-    rejectBoundary(getStepRejectionReason(steps[0])!, 0, 0);
+  } else if (periodStartIndex === null && initialReason) {
+    rejectBoundary(initialReason, 0, 0);
   }
 
   for (let index = 1; index < steps.length; index += 1) {
@@ -147,6 +161,20 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       continue;
     }
     if (coldInletIndexes.has(index)) continue;
+
+    const rapidDropStartsHere = waterDrawStartIndexes.has(index);
+    if (rapidDropStartsHere) {
+      finishPeriod(index - 1);
+      rejectBoundary("water_draw", Math.max(0, index - 1), index, "rapid_drop");
+      enterRecovery(index + 1);
+      continue;
+    }
+
+    if (preWaterDrawGuardIndexes.has(index)) {
+      finishPeriod(index - 1);
+      periodStartIndex = null;
+      continue;
+    }
 
     if (recoveringAfterWaterDraw) {
       const stepReason = getStepRejectionReason(steps[index]);
@@ -360,6 +388,52 @@ function recentSteps(steps: DiagnosticStep[], endIndex: number) {
   return steps.slice(startIndex, endIndex + 1);
 }
 
+function findWaterDrawStartIndexes(
+  steps: DiagnosticStep[],
+  coldInletPeriods: ColdInletPeriod[],
+  coldInletIndexes: Set<number>,
+) {
+  const indexes = new Set(coldInletPeriods.map(({ startIndex }) => startIndex));
+  for (let index = 1; index < steps.length; index += 1) {
+    if (coldInletIndexes.has(index) || getStepRejectionReason(steps[index])) continue;
+    const elapsedMs = new Date(steps[index].reading.created_at).getTime() -
+      new Date(steps[index - 1].reading.created_at).getTime();
+    if (
+      elapsedMs > 0 && elapsedMs <= MAX_SEGMENT_MINUTES * 60_000 &&
+      !getStepRejectionReason(steps[index - 1]) &&
+      currentSampleStartsWaterDraw(recentSteps(steps, index))
+    ) indexes.add(index);
+  }
+  return indexes;
+}
+
+function findPreWaterDrawGuardIndexes(stepTimes: number[], waterDrawStartIndexes: Set<number>) {
+  const indexes = new Set<number>();
+  waterDrawStartIndexes.forEach((waterDrawStartIndex) => {
+    const startTime = stepTimes[waterDrawStartIndex];
+    const cutoffTime = startTime - PRE_WATER_DRAW_GUARD_MINUTES * 60_000;
+    // The sample on the cutoff is retained as the clean candidate's final
+    // anchor. Since replay readings are ordered, only walk backward through
+    // the samples that can be inside this draw's guard window.
+    for (let index = waterDrawStartIndex - 1; index >= 0; index -= 1) {
+      if (stepTimes[index] <= cutoffTime) break;
+      if (stepTimes[index] < startTime) indexes.add(index);
+    }
+  });
+  return indexes;
+}
+
+function findContiguousPeriods(indexes: Set<number>) {
+  const sorted = [...indexes].sort((a, b) => a - b);
+  const periods: { startIndex: number; endIndex: number }[] = [];
+  sorted.forEach((index) => {
+    const latest = periods[periods.length - 1];
+    if (latest && index === latest.endIndex + 1) latest.endIndex = index;
+    else periods.push({ startIndex: index, endIndex: index });
+  });
+  return periods;
+}
+
 function hasRapidRise(start: DiagnosticStep, current: DiagnosticStep) {
   return isFiniteNumber(start.state?.topNodeTemperatureC) &&
     isFiniteNumber(start.state?.bottomNodeTemperatureC) &&
@@ -437,6 +511,7 @@ function countRejections(rejections: RejectedHeatLossObservation[]) {
     measurement_gap: 0,
     missing_inlet_data: 0,
     rapid_temperature_change: 0,
+    pre_water_draw_guard: 0,
     too_short: 0,
     water_draw: 0,
   };
