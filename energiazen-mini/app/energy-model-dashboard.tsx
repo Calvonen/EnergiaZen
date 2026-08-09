@@ -24,6 +24,7 @@ import type {
 import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
 import { fetchWaterDrawLabels, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
+import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -195,11 +196,12 @@ export default function EnergyModelDashboardScreen() {
     setLoading(true);
     setError(false);
     try {
-      const [dashboardData, savedSettings, savedLabels] = await Promise.all([
-        fetchEnergyModelDashboardData(),
-        loadSettings(),
-        fetchWaterDrawLabels(),
-      ]);
+      const [dashboardData, savedSettings, savedLabels] = await loadDashboardResources({
+        fetchDashboardData: fetchEnergyModelDashboardData,
+        fetchLabels: fetchWaterDrawLabels,
+        loadDashboardSettings: loadSettings,
+        onLabelError: (labelError) => console.warn("Failed to load water draw labels", labelError),
+      });
       setData(dashboardData);
       setSettings(savedSettings);
       setLabels(savedLabels);
