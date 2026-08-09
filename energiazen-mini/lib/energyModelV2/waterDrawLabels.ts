@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
-import { waterDrawEventSnapshotRow, type WaterDrawEventSnapshot, type WaterDrawLabel, type WaterDrawLabelKind } from "./waterDrawLabelDomain";
+import { createWaterDrawLabelSummary, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawEventSnapshot, type WaterDrawLabel, type WaterDrawLabelCounts, type WaterDrawLabelKind, type WaterDrawLabelSummary } from "./waterDrawLabelDomain";
 export * from "./waterDrawLabelDomain";
 
 async function currentUserId() {
@@ -16,6 +16,18 @@ export async function fetchWaterDrawLabels(): Promise<WaterDrawLabel[]> {
     .eq("user_id", userId).order("event_started_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as WaterDrawLabel[];
+}
+
+export async function fetchWaterDrawLabelSummary(): Promise<WaterDrawLabelSummary> {
+  const userId = await currentUserId();
+  const entries = await Promise.all(waterDrawLabelOptions.map(async ({ label }) => {
+    const { count, error } = await supabase.from("water_draw_labels").select("id", { count: "exact", head: true })
+      .eq("user_id", userId).eq("label", label);
+    if (error) throw error;
+    if (count === null) throw new Error("Merkintöjen määrää ei saatu ladattua.");
+    return [label, count] as const;
+  }));
+  return createWaterDrawLabelSummary(Object.fromEntries(entries) as WaterDrawLabelCounts);
 }
 
 export async function saveWaterDrawLabel(event: WaterDrawEventSnapshot, label: WaterDrawLabelKind, note: string) {

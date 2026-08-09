@@ -1,5 +1,5 @@
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
-import { buildWaterDrawHistory, countWaterDrawLabels, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawLabel } from "./waterDrawLabelDomain";
+import { buildWaterDrawHistory, countWaterDrawLabels, createWaterDrawLabelSummary, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawLabel } from "./waterDrawLabelDomain";
 import { getSupabaseErrorDetails, waterDrawLabelErrorMessage } from "./supabaseError";
 
 function assert(condition: unknown, message: string) { if (!condition) throw new Error(message); }
@@ -29,6 +29,8 @@ export function runWaterDrawLabelUnitTests() {
   assert(counts.normal_shower === 2, "normal shower labels must be counted by kind");
   assert(counts.small_wash === 1 && counts.multiple_showers === 1, "each saved label must contribute to its own kind");
   assert(counts.long_hot_shower === 0 && counts.large_other_use === 0 && counts.unknown === 0, "unused label kinds must remain present with a zero count");
+  const overOnePage = createWaterDrawLabelSummary({ ...emptyCounts, normal_shower: 1001, unknown: 7 });
+  assert(overOnePage.total === 1008 && overOnePage.counts.normal_shower === 1001, "exact API counts beyond one response page must remain intact in the summary");
 
   const permissionError = { code: "42501", details: null, hint: null, message: "permission denied for table water_draw_labels" };
   assert(waterDrawLabelErrorMessage(permissionError) === "permission denied for table water_draw_labels (42501)", "plain PostgREST errors must show their message and code");

@@ -18,11 +18,16 @@ export type WaterDrawEventSnapshot = Pick<WaterDrawEnergyDiagnostic, "detectionK
 };
 export type WaterDrawHistoryEvent = WaterDrawEventSnapshot & { userLabel: WaterDrawLabel | null };
 export type WaterDrawLabelCounts = Record<WaterDrawLabelKind, number>;
+export type WaterDrawLabelSummary = { counts: WaterDrawLabelCounts; total: number };
 
 export function countWaterDrawLabels(labels: readonly Pick<WaterDrawLabel, "label">[]): WaterDrawLabelCounts {
   const counts = Object.fromEntries(waterDrawLabelOptions.map(({ label }) => [label, 0])) as WaterDrawLabelCounts;
   for (const savedLabel of labels) counts[savedLabel.label] += 1;
   return counts;
+}
+
+export function createWaterDrawLabelSummary(counts: WaterDrawLabelCounts): WaterDrawLabelSummary {
+  return { counts, total: waterDrawLabelOptions.reduce((total, { label }) => total + counts[label], 0) };
 }
 
 export function waterDrawEventKey(startedAt: string, endedAt: string) { return `${new Date(startedAt).toISOString()}|${new Date(endedAt).toISOString()}`; }
