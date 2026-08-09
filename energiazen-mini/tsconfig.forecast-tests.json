@@ -94,6 +94,7 @@
     "lib/energyModelV2/dashboardReplay.test.ts",
     "lib/energyModelV2/waterDrawLabelDomain.ts",
     "lib/energyModelV2/waterDrawLabels.test.ts",
+    "tests/waterDrawLabelSnapshotMigration.test.ts",
     "lib/energyModelV2/replayValidation.ts",
     "lib/energyModelV2/replayValidation.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
