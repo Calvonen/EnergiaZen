@@ -34,6 +34,19 @@ export function runWaterDrawLabelSnapshotMigrationTests() {
   assertSource(!source.includes("new.label =") && !source.includes("new.note ="),
     "snapshot-triggeri ei saa estaa labelin tai noten muuttamista");
 
+  const qualitySource = readFileSync(join(
+    process.cwd(),
+    "supabase/migrations/20260809050000_add_water_draw_energy_quality_snapshot.sql",
+  ), "utf8");
+  assertSource(qualitySource.includes("add column energy_reliable boolean") &&
+    qualitySource.includes("add column energy_quality_reason text"),
+  "energian luotettavuuden pitaa tallentua ground truth -snapshotiin");
+  assertSource(qualitySource.includes("new.energy_reliable = old.energy_reliable") &&
+    qualitySource.includes("new.energy_quality_reason = old.energy_quality_reason"),
+  "tallennetun energialaadun pitaa pysya muuttumattomana");
+  assertSource(!qualitySource.includes("update public.water_draw_labels"),
+    "migraatio ei saa muuttaa vanhojen snapshotien arvoja");
+
   const grantSource = readFileSync(join(
     process.cwd(),
     "supabase/migrations/20260809040000_grant_water_draw_label_permissions.sql",

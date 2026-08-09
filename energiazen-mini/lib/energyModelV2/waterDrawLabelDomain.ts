@@ -9,11 +9,12 @@ export const waterDrawLabelOptions = [
   { label: "unknown", title: "❓ En tiedä" },
 ] as const;
 export type WaterDrawLabelKind = typeof waterDrawLabelOptions[number]["label"];
-export type WaterDrawLabel = { created_at: string; detection_kinds: WaterDrawDetectionKind[] | null; duration_minutes: number | null; energy_after_stabilization_kwh: number | null; energy_before_kwh: number | null; estimated_natural_loss_kwh: number | null; estimated_water_draw_net_energy_kwh: number | null; event_ended_at: string; event_started_at: string; feature_snapshot_version: 2 | null; id: string; label: WaterDrawLabelKind; note: string | null; raw_energy_change_kwh: number | null; updated_at: string; user_id: string };
+export type WaterDrawLabel = { created_at: string; detection_kinds: WaterDrawDetectionKind[] | null; duration_minutes: number | null; energy_after_stabilization_kwh: number | null; energy_before_kwh: number | null; energy_quality_reason: WaterDrawEnergyDiagnostic["energyQualityReason"] | null; energy_reliable: boolean | null; estimated_natural_loss_kwh: number | null; estimated_water_draw_net_energy_kwh: number | null; event_ended_at: string; event_started_at: string; feature_snapshot_version: 2 | null; id: string; label: WaterDrawLabelKind; note: string | null; raw_energy_change_kwh: number | null; updated_at: string; user_id: string };
 export type LabeledWaterDrawEvent = WaterDrawEnergyDiagnostic & { userLabel: WaterDrawLabel | null };
-export type WaterDrawEventSnapshot = Pick<WaterDrawEnergyDiagnostic, "detectionKinds" | "durationMinutes" | "endedAt" | "estimatedNaturalLossKwh" | "estimatedWaterDrawNetEnergyKwh" | "startedAt"> & {
+export type WaterDrawEventSnapshot = Pick<WaterDrawEnergyDiagnostic, "detectionKinds" | "durationMinutes" | "endedAt" | "energyQualityReason" | "estimatedNaturalLossKwh" | "estimatedWaterDrawNetEnergyKwh" | "startedAt"> & {
   energyAfterStabilizationKwh: number | null;
   energyBeforeKwh: number | null;
+  energyReliable: boolean | null;
   rawEnergyChangeKwh: number | null;
 };
 export type WaterDrawHistoryEvent = WaterDrawEventSnapshot & { userLabel: WaterDrawLabel | null };
@@ -44,6 +45,8 @@ export function waterDrawEventSnapshotRow(event: WaterDrawEventSnapshot) {
     duration_minutes: event.durationMinutes,
     energy_after_stabilization_kwh: event.energyAfterStabilizationKwh,
     energy_before_kwh: event.energyBeforeKwh,
+    energy_quality_reason: event.energyQualityReason,
+    energy_reliable: event.energyReliable,
     estimated_natural_loss_kwh: event.estimatedNaturalLossKwh,
     estimated_water_draw_net_energy_kwh: event.estimatedWaterDrawNetEnergyKwh,
     event_ended_at: event.endedAt,
@@ -58,6 +61,8 @@ function labelSnapshot(label: WaterDrawLabel): WaterDrawHistoryEvent | null {
   return { detectionKinds: label.detection_kinds, durationMinutes: label.duration_minutes, endedAt: label.event_ended_at,
     energyAfterStabilizationKwh: label.energy_after_stabilization_kwh,
     energyBeforeKwh: label.energy_before_kwh,
+    energyQualityReason: label.energy_quality_reason,
+    energyReliable: label.energy_reliable,
     estimatedNaturalLossKwh: label.estimated_natural_loss_kwh,
     estimatedWaterDrawNetEnergyKwh: label.estimated_water_draw_net_energy_kwh,
     rawEnergyChangeKwh: label.raw_energy_change_kwh,

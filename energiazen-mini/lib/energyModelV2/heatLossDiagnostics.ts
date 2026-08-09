@@ -22,6 +22,7 @@ export const MIN_TANK_STABILIZATION_MINUTES = 15;
 export const PRE_WATER_DRAW_GUARD_MINUTES = 20;
 
 export type WaterDrawDetectionKind = "rapid_drop" | "cold_inlet";
+export type WaterDrawEnergyQualityReason = "tank_energy_rising";
 
 export type HeatLossObservation = {
   bottomNodeTemperatureC: number;
@@ -56,6 +57,8 @@ export type WaterDrawEnergyDiagnostic = {
   endedAt: string;
   energyAfterStabilizationKwh: number;
   energyBeforeKwh: number;
+  energyQualityReason: WaterDrawEnergyQualityReason | null;
+  energyReliable: boolean;
   estimatedNaturalLossKwh: number | null;
   estimatedWaterDrawNetEnergyKwh: number | null;
   rawEnergyChangeKwh: number;
@@ -64,11 +67,13 @@ export type WaterDrawEnergyDiagnostic = {
 };
 
 type PendingWaterDrawEvent = {
+  bottomNodeTemperatureBeforeC: number;
   detectionKinds: Set<WaterDrawDetectionKind>;
   endedAt: string;
   energyBeforeKwh: number;
   inletBaselineC: number;
   startedAt: string;
+  topNodeTemperatureBeforeC: number;
 };
 
 export type HeatLossRejectionReason =
@@ -171,6 +176,14 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
       : null;
     if (pendingWaterDrawEvent && stabilizedState && stabilizedIndex !== undefined) {
       const stabilizedAt = steps[stabilizedIndex].reading.created_at;
+      // Stabilization already requires 15 quiet minutes, so comparing its
+      // endpoint with the pre-draw anchor avoids reacting to one noisy sample.
+      // Reuse the heat-loss detector's existing 0.2 C sensor-rise tolerance.
+      const tankEnergyRising =
+        stabilizedState.topNodeTemperatureC! >
+          pendingWaterDrawEvent.topNodeTemperatureBeforeC + MAX_SENSOR_RISE_C ||
+        stabilizedState.bottomNodeTemperatureC! >
+          pendingWaterDrawEvent.bottomNodeTemperatureBeforeC + MAX_SENSOR_RISE_C;
       completedWaterDrawEvents.push({
         detectionKinds: [...pendingWaterDrawEvent.detectionKinds],
         diagnosticWindowMinutes: (Date.parse(stabilizedAt) - Date.parse(pendingWaterDrawEvent.startedAt)) / 60_000,
@@ -178,6 +191,8 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
         endedAt: pendingWaterDrawEvent.endedAt,
         energyAfterStabilizationKwh: stabilizedState.storedEnergy.kwh,
         energyBeforeKwh: pendingWaterDrawEvent.energyBeforeKwh,
+        energyQualityReason: tankEnergyRising ? "tank_energy_rising" : null,
+        energyReliable: !tankEnergyRising,
         rawEnergyChangeKwh: round(stabilizedState.storedEnergy.kwh - pendingWaterDrawEvent.energyBeforeKwh),
         stabilizedAt,
         startedAt: pendingWaterDrawEvent.startedAt,
@@ -202,11 +217,13 @@ export function collectHeatLossDiagnostics(steps: DiagnosticStep[]): HeatLossDia
     if (!beforeState) return;
     if (!pendingWaterDrawEvent) {
       pendingWaterDrawEvent = {
+        bottomNodeTemperatureBeforeC: beforeState.bottomNodeTemperatureC!,
         detectionKinds: new Set([kind]),
         endedAt: steps[endIndex].reading.created_at,
         energyBeforeKwh: beforeState.storedEnergy.kwh,
         inletBaselineC,
         startedAt: steps[startIndex].reading.created_at,
+        topNodeTemperatureBeforeC: beforeState.topNodeTemperatureC!,
       };
     } else {
       pendingWaterDrawEvent.detectionKinds.add(kind);

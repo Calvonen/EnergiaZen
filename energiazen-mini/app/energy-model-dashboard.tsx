@@ -360,6 +360,10 @@ export default function EnergyModelDashboardScreen() {
                         ["Raakamuutos", formatNumber(event.rawEnergyChangeKwh, 2, "kWh")],
                         ["Luonnollinen lämpöhäviö tapahtumaikkunassa", formatNumber(event.estimatedNaturalLossKwh, 2, "kWh")],
                         ["Vedenkäytön nettoenergia", formatNumber(event.estimatedWaterDrawNetEnergyKwh, 2, "kWh")],
+                        ["Energia-arvio", event.energyReliable ? "luotettava" : "epäluotettava"],
+                        ...(event.energyQualityReason === "tank_energy_rising"
+                          ? [["Syy", "varaajan energia nousi tapahtumaikkunassa"]]
+                          : []),
                       ].map(([label, value]) => (
                         <View key={label} style={styles.observationMetricRow}>
                           <Text style={styles.observationMetricLabel}>{label}</Text>
