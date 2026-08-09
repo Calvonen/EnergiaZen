@@ -47,6 +47,7 @@ import { runHeatLossChartUnitTests } from "../lib/energyModelV2/heatLossChart.te
 import { runReplayValidationUnitTests } from "../lib/energyModelV2/replayValidation.test";
 import { runDashboardReplayUnitTests } from "../lib/energyModelV2/dashboardReplay.test";
 import { runHomeResumeRefreshSourceTests } from "../tests/homeResumeRefreshSource.test";
+import { runWaterDrawLabelUnitTests } from "../lib/energyModelV2/waterDrawLabels.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -98,6 +99,7 @@ async function runTests() {
   runHeatLossChartUnitTests();
   runReplayValidationUnitTests();
   runDashboardReplayUnitTests();
+  runWaterDrawLabelUnitTests();
 
   console.log(
     "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation and dashboardReplay tests passed",
