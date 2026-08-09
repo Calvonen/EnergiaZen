@@ -1,5 +1,5 @@
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
-import { buildWaterDrawHistory, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, type WaterDrawLabel } from "./waterDrawLabelDomain";
+import { buildWaterDrawHistory, countWaterDrawLabels, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawLabel } from "./waterDrawLabelDomain";
 import { getSupabaseErrorDetails, waterDrawLabelErrorMessage } from "./supabaseError";
 
 function assert(condition: unknown, message: string) { if (!condition) throw new Error(message); }
@@ -18,6 +18,18 @@ const label = (overrides: Partial<WaterDrawLabel> = {}): WaterDrawLabel => ({
 });
 
 export function runWaterDrawLabelUnitTests() {
+  const emptyCounts = countWaterDrawLabels([]);
+  assert(waterDrawLabelOptions.every(({ label: kind }) => emptyCounts[kind] === 0), "all label kinds must have a zero count when there are no labels");
+  const counts = countWaterDrawLabels([
+    label({ label: "normal_shower" }),
+    label({ id: "label-2", label: "normal_shower" }),
+    label({ id: "label-3", label: "small_wash" }),
+    label({ id: "label-4", label: "multiple_showers" }),
+  ]);
+  assert(counts.normal_shower === 2, "normal shower labels must be counted by kind");
+  assert(counts.small_wash === 1 && counts.multiple_showers === 1, "each saved label must contribute to its own kind");
+  assert(counts.long_hot_shower === 0 && counts.large_other_use === 0 && counts.unknown === 0, "unused label kinds must remain present with a zero count");
+
   const permissionError = { code: "42501", details: null, hint: null, message: "permission denied for table water_draw_labels" };
   assert(waterDrawLabelErrorMessage(permissionError) === "permission denied for table water_draw_labels (42501)", "plain PostgREST errors must show their message and code");
   assert(getSupabaseErrorDetails(permissionError)?.code === "42501", "plain PostgREST error metadata must remain inspectable");
