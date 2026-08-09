@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { DashboardCard, DashboardMetric } from "@/components/developer-dashboard/dashboard-card";
+import { WaterDrawLabelModal } from "@/components/water-draw-label-modal";
 import {
   EnergyModelDashboardData,
   fetchEnergyModelDashboardData,
@@ -18,9 +19,11 @@ import { EnergiaZenSettings, loadSettings } from "@/lib/settings";
 import type {
   HeatLossObservation,
   HeatLossRejectionReason,
+  WaterDrawEnergyDiagnostic,
 } from "@/lib/energyModelV2/heatLossDiagnostics";
 import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
+import { fetchWaterDrawLabels, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -185,17 +188,21 @@ export default function EnergyModelDashboardScreen() {
   const [settings, setSettings] = useState<EnergiaZenSettings | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [labels, setLabels] = useState<WaterDrawLabel[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<WaterDrawEnergyDiagnostic | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
-      const [dashboardData, savedSettings] = await Promise.all([
+      const [dashboardData, savedSettings, savedLabels] = await Promise.all([
         fetchEnergyModelDashboardData(),
         loadSettings(),
+        fetchWaterDrawLabels(),
       ]);
       setData(dashboardData);
       setSettings(savedSettings);
+      setLabels(savedLabels);
     } catch (loadError) {
       console.warn("Failed to load EnergyModel Dashboard", loadError);
       setError(true);
@@ -241,6 +248,7 @@ export default function EnergyModelDashboardScreen() {
           }
     : null;
   const v2State = data?.v2TankState;
+  const labeledWaterDrawEvents = joinWaterDrawLabels(data?.waterDrawEvents ?? [], labels);
   const v2TimestampLabel = v2State?.timestamp
     ? dateTimeFormatter.format(new Date(v2State.timestamp))
     : NOT_AVAILABLE;
@@ -330,10 +338,14 @@ export default function EnergyModelDashboardScreen() {
               { label: "Tila", value: "Ei riittävästi dataa", tone: "warning" },
             ]}>
               <View style={styles.observationSection}>
-                <Text style={styles.diagnosticsSubtitle}>🚰 Viimeisimmät vedenkäyttötapahtumat</Text>
+                <View style={styles.sectionHeadingRow}>
+                  <Text style={styles.diagnosticsSubtitle}>🚰 Viimeisimmät vedenkäyttötapahtumat</Text>
+                  <Pressable onPress={() => router.push("/water-draw-history")}><Text style={styles.historyLink}>📋 Historia</Text></Pressable>
+                </View>
                 {data.waterDrawEvents.length ? (
-                  data.waterDrawEvents.slice(-10).reverse().map((event) => (
-                    <View key={`${event.startedAt}-${event.stabilizedAt}`} style={styles.observationCard}>
+                  labeledWaterDrawEvents.slice(-10).reverse().map((event) => (
+                    <Pressable accessibilityHint="Avaa käyttäjän ground truth -merkintä" accessibilityRole="button"
+                      key={`${event.startedAt}-${event.stabilizedAt}`} onPress={() => setSelectedEvent(event)} style={styles.observationCard}>
                       <Text style={styles.observationTime}>
                         🚰 {dateTimeFormatter.format(new Date(event.startedAt))} – {dateTimeFormatter.format(new Date(event.endedAt))}
                       </Text>
@@ -352,7 +364,12 @@ export default function EnergyModelDashboardScreen() {
                           <Text style={styles.observationMetricValue}>{value}</Text>
                         </View>
                       ))}
-                    </View>
+                      {event.userLabel ? <View style={styles.userLabelBox}>
+                        <Text style={styles.userLabelText}>🏷️ {getWaterDrawLabelTitle(event.userLabel.label)}</Text>
+                        {event.userLabel.note ? <Text style={styles.userLabelNote}>{event.userLabel.note}</Text> : null}
+                        <Text style={styles.groundTruthCaption}>Käyttäjän antama ground truth</Text>
+                      </View> : null}
+                    </Pressable>
                   ))
                 ) : (
                   <Text style={styles.noRejections}>Ei stabiloituneita vedenkäyttötapahtumia</Text>
@@ -486,6 +503,8 @@ export default function EnergyModelDashboardScreen() {
           </View>
         ) : null}
       </ScrollView>
+      <WaterDrawLabelModal event={selectedEvent} label={selectedEvent ? joinWaterDrawLabels([selectedEvent], labels)[0].userLabel : null}
+        onChanged={load} onClose={() => setSelectedEvent(null)} />
     </SafeAreaView>
   );
 }
@@ -525,6 +544,8 @@ const styles = StyleSheet.create({
   noRejections: { color: "#7889aa", fontSize: 13, fontWeight: "700", marginTop: 8 },
   observationSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 18, paddingTop: 18 },
   diagnosticsSubtitle: { color: "#36f4d4", fontSize: 14, fontWeight: "900", marginBottom: 14 },
+  sectionHeadingRow: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" },
+  historyLink: { color: "#ffcf70", fontSize: 12, fontWeight: "900" },
   energyBandRow: { alignItems: "center", flexDirection: "row", gap: 8, minHeight: 34 },
   energyBandLabel: { color: "#b8c5df", flex: 1, fontSize: 13, fontWeight: "700" },
   energyBandValue: { color: "#fff", fontSize: 13, fontWeight: "900" },
@@ -534,6 +555,10 @@ const styles = StyleSheet.create({
   observationMetricRow: { alignItems: "center", flexDirection: "row", gap: 12, minHeight: 27 },
   observationMetricLabel: { color: "#9fb0d2", flex: 1, fontSize: 12, fontWeight: "700" },
   observationMetricValue: { color: "#fff", fontSize: 12, fontWeight: "900", textAlign: "right" },
+  userLabelBox: { backgroundColor: "rgba(255,207,112,0.09)", borderRadius: 10, marginTop: 10, padding: 10 },
+  userLabelText: { color: "#ffcf70", fontSize: 13, fontWeight: "900" },
+  userLabelNote: { color: "#eaf1ff", fontSize: 12, marginTop: 5 },
+  groundTruthCaption: { color: "#7889aa", fontSize: 10, fontWeight: "700", marginTop: 5 },
   trendSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 20, paddingTop: 18 },
   trendDescription: { color: "#7889aa", fontSize: 11, fontWeight: "700", marginBottom: 8, marginTop: -8 },
   chart: { height: 154, position: "relative" },
