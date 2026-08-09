@@ -1,5 +1,6 @@
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
 import { buildWaterDrawHistory, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, type WaterDrawLabel } from "./waterDrawLabelDomain";
+import { getSupabaseErrorDetails, waterDrawLabelErrorMessage } from "./supabaseError";
 
 function assert(condition: unknown, message: string) { if (!condition) throw new Error(message); }
 const event = (startedAt: string, endedAt: string): WaterDrawEnergyDiagnostic => ({
@@ -17,6 +18,9 @@ const label = (overrides: Partial<WaterDrawLabel> = {}): WaterDrawLabel => ({
 });
 
 export function runWaterDrawLabelUnitTests() {
+  const permissionError = { code: "42501", details: null, hint: null, message: "permission denied for table water_draw_labels" };
+  assert(waterDrawLabelErrorMessage(permissionError) === "permission denied for table water_draw_labels (42501)", "plain PostgREST errors must show their message and code");
+  assert(getSupabaseErrorDetails(permissionError)?.code === "42501", "plain PostgREST error metadata must remain inspectable");
   const first = event("2026-08-09T10:00:00Z", "2026-08-09T10:05:00Z");
   const second = event("2026-08-09T11:00:00Z", "2026-08-09T11:08:00Z");
   assert(joinWaterDrawLabels([first], [])[0].userLabel === null, "unlabeled events must remain available");

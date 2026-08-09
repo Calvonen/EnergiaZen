@@ -33,4 +33,11 @@ export function runWaterDrawLabelSnapshotMigrationTests() {
     "legacy-rivi pitaa voida taydentaa kerran asettamalla feature_snapshot_version arvoksi 2");
   assertSource(!source.includes("new.label =") && !source.includes("new.note ="),
     "snapshot-triggeri ei saa estaa labelin tai noten muuttamista");
+
+  const grantSource = readFileSync(join(
+    process.cwd(),
+    "supabase/migrations/20260809040000_grant_water_draw_label_permissions.sql",
+  ), "utf8");
+  assertSource(grantSource.includes("grant select, insert, update, delete on table public.water_draw_labels to authenticated"),
+    "authenticated-roolilla pitaa olla upsertin vaatimat tauluoikeudet RLS-policyjen lisaksi");
 }

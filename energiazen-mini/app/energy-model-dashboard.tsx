@@ -341,8 +341,8 @@ export default function EnergyModelDashboardScreen() {
             ]}>
               <View style={styles.observationSection}>
                 <View style={styles.sectionHeadingRow}>
-                  <Text style={styles.diagnosticsSubtitle}>🚰 Viimeisimmät vedenkäyttötapahtumat</Text>
-                  <Pressable onPress={() => router.push("/water-draw-history")}><Text style={styles.historyLink}>📋 Historia</Text></Pressable>
+                  <Text style={[styles.diagnosticsSubtitle, styles.sectionHeadingTitle]}>🚰 Viimeisimmät vedenkäyttötapahtumat</Text>
+                  <Pressable onPress={() => router.push("/water-draw-history")} style={styles.historyLinkButton}><Text style={styles.historyLink}>📋 Historia</Text></Pressable>
                 </View>
                 {data.waterDrawEvents.length ? (
                   labeledWaterDrawEvents.slice(-10).reverse().map((event) => (
@@ -547,6 +547,8 @@ const styles = StyleSheet.create({
   observationSection: { borderTopColor: "rgba(255,255,255,0.12)", borderTopWidth: 1, paddingBottom: 18, paddingTop: 18 },
   diagnosticsSubtitle: { color: "#36f4d4", fontSize: 14, fontWeight: "900", marginBottom: 14 },
   sectionHeadingRow: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" },
+  sectionHeadingTitle: { flex: 1 },
+  historyLinkButton: { flexShrink: 0 },
   historyLink: { color: "#ffcf70", fontSize: 12, fontWeight: "900" },
   energyBandRow: { alignItems: "center", flexDirection: "row", gap: 8, minHeight: 34 },
   energyBandLabel: { color: "#b8c5df", flex: 1, fontSize: 13, fontWeight: "700" },
