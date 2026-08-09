@@ -534,8 +534,42 @@ export function runDashboardReplayUnitTests() {
     stabilizedWaterDraw.energyBeforeKwh > stabilizedWaterDraw.energyAfterStabilizationKwh &&
       stabilizedWaterDraw.rawEnergyChangeKwh < 0 &&
       stabilizedWaterDraw.estimatedNaturalLossKwh !== null &&
-      stabilizedWaterDraw.estimatedWaterDrawNetEnergyKwh !== null,
+      stabilizedWaterDraw.estimatedWaterDrawNetEnergyKwh !== null &&
+      stabilizedWaterDraw.energyReliable &&
+      stabilizedWaterDraw.energyQualityReason === null,
     "a stabilized draw reports energy endpoints, raw change, natural loss, and net draw energy",
+  );
+
+  const replayWithRecoveryRise = (risePerMinuteC: number) => calculateDashboardV2Replay([
+    ...stabilizationReadings.map((reading, minute) => ({
+      ...reading,
+      bottom_temp: (reading.bottom_temp as number) + Math.max(0, minute - 5) * risePerMinuteC,
+      top_temp: (reading.top_temp as number) + Math.max(0, minute - 5) * risePerMinuteC,
+    })),
+    ...Array.from({ length: 60 }, (_, offset) => {
+      const minute = offset + 36;
+      return {
+        bottom_temp: 45 - 0.35 + 30 * risePerMinuteC - (offset + 1) / 100,
+        created_at: new Date(new Date(coolingStart).getTime() + minute * 60_000).toISOString(),
+        heating: false,
+        inlet_temp: 17,
+        top_temp: 60 - 0.35 + 30 * risePerMinuteC - (offset + 1) / 100,
+      };
+    }),
+  ]);
+  const risingEnergyDraw = replayWithRecoveryRise(0.03).waterDrawEvents[0];
+  assert(
+    risingEnergyDraw?.energyAfterStabilizationKwh > risingEnergyDraw?.energyBeforeKwh &&
+      !risingEnergyDraw.energyReliable &&
+      risingEnergyDraw.energyQualityReason === "tank_energy_rising" &&
+      risingEnergyDraw.estimatedWaterDrawNetEnergyKwh !== null &&
+      risingEnergyDraw.estimatedWaterDrawNetEnergyKwh < 0,
+    "rising tank energy keeps the draw and raw net value but marks the energy feature unreliable",
+  );
+  const noisyEnergyDraw = replayWithRecoveryRise(0.019).waterDrawEvents[0];
+  assert(
+    noisyEnergyDraw?.energyReliable && noisyEnergyDraw.energyQualityReason === null,
+    "sensor movement within the existing 0.2 C rise tolerance does not reject energy quality",
   );
   const energyAt = (reading: DashboardReplayReading, inletTempC: number) =>
     calculateTankStateFromObservation({
