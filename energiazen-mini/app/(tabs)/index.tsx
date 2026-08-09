@@ -2940,6 +2940,28 @@ export default function HomeScreen() {
           />
         </View>
 
+        <Pressable
+          accessibilityHint="Avaa vedenkäyttöhistorian"
+          accessibilityLabel="Vedenkäyttöhistoria. Merkitse suihkut ja muu vedenkäyttö"
+          accessibilityRole="button"
+          android_ripple={{ color: "rgba(54,244,212,0.12)" }}
+          onPress={() => router.push("/water-draw-history")}
+          style={({ pressed }) => [
+            styles.waterDrawHistoryCard,
+            pressed && styles.waterDrawHistoryCardPressed,
+          ]}
+        >
+          <Text style={styles.waterDrawHistoryIcon}>📋</Text>
+          <View style={styles.waterDrawHistoryText}>
+            <Text style={styles.waterDrawHistoryTitle}>
+              Vedenkäyttöhistoria
+            </Text>
+            <Text style={styles.waterDrawHistorySubtitle}>
+              Merkitse suihkut ja muu vedenkäyttö
+            </Text>
+          </View>
+        </Pressable>
+
         <View style={styles.chartCard}>
           <View style={styles.daySelector}>
             {(["yesterday", "today", "tomorrow"] as const).map((day) => {
@@ -3494,6 +3516,44 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 14,
     width: "100%",
+  },
+  waterDrawHistoryCard: {
+    alignItems: "center",
+    backgroundColor: "rgba(38,217,210,0.12)",
+    borderColor: "rgba(38,217,210,0.42)",
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 14,
+    minHeight: 66,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    shadowColor: "#16bfc8",
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    width: "100%",
+  },
+  waterDrawHistoryCardPressed: {
+    opacity: 0.82,
+  },
+  waterDrawHistoryIcon: {
+    fontSize: 22,
+    lineHeight: 28,
+  },
+  waterDrawHistoryText: {
+    flex: 1,
+    gap: 2,
+  },
+  waterDrawHistoryTitle: {
+    color: "#f7fbff",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  waterDrawHistorySubtitle: {
+    color: "#9fc7ff",
+    fontSize: 12,
+    fontWeight: "600",
   },
   chartCard: {
     backgroundColor: "rgba(255,255,255,0.07)",
