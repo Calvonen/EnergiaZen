@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
-import type { WaterDrawEnergyDiagnostic } from "@/lib/energyModelV2/heatLossDiagnostics";
 import {
   deleteWaterDrawLabel,
   saveWaterDrawLabel,
   type WaterDrawLabel,
   type WaterDrawLabelKind,
+  type WaterDrawEventSnapshot,
   waterDrawLabelOptions,
 } from "@/lib/energyModelV2/waterDrawLabels";
 
 type Props = {
-  event: WaterDrawEnergyDiagnostic | null;
+  event: WaterDrawEventSnapshot | null;
   label: WaterDrawLabel | null;
   onClose: () => void;
   onChanged: () => void | Promise<void>;

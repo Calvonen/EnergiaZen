@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WaterDrawLabelModal } from "@/components/water-draw-label-modal";
 import { fetchEnergyModelDashboardData } from "@/lib/energyModelV2/dashboardData";
 import type { WaterDrawEnergyDiagnostic } from "@/lib/energyModelV2/heatLossDiagnostics";
-import { fetchWaterDrawLabels, filterWaterDrawHistory, getWaterDrawLabelTitle, joinWaterDrawLabels, type LabeledWaterDrawEvent, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
+import { buildWaterDrawHistory, fetchWaterDrawLabels, getWaterDrawLabelTitle, type WaterDrawHistoryEvent, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 
 const dateTime = new Intl.DateTimeFormat("fi-FI", { dateStyle: "short", timeStyle: "short" });
 const PAGE_SIZE = 50;
@@ -17,21 +17,26 @@ export default function WaterDrawHistoryScreen() {
   const [events, setEvents] = useState<WaterDrawEnergyDiagnostic[]>([]);
   const [labels, setLabels] = useState<WaterDrawLabel[]>([]);
   const [filter, setFilter] = useState<"labeled" | "all">("labeled");
-  const [selected, setSelected] = useState<LabeledWaterDrawEvent | null>(null);
+  const [selected, setSelected] = useState<WaterDrawHistoryEvent | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
+    const replayPromise = fetchEnergyModelDashboardData().catch((error) => {
+      console.warn("Failed to load replay events for water draw history", error);
+      return null;
+    });
     try {
-      const [dashboard, savedLabels] = await Promise.all([fetchEnergyModelDashboardData(), fetchWaterDrawLabels()]);
-      setEvents(dashboard.waterDrawEvents);
+      const savedLabels = await fetchWaterDrawLabels();
       setLabels(savedLabels);
     } finally { setLoading(false); }
+    const dashboard = await replayPromise;
+    if (dashboard) setEvents(dashboard.waterDrawEvents);
   }, []);
   useFocusEffect(useCallback(() => void load(), [load]));
 
-  const visible = useMemo(() => filterWaterDrawHistory(joinWaterDrawLabels(events, labels).reverse(), filter).slice(0, PAGE_SIZE), [events, filter, labels]);
-  const selectedLabel = selected ? joinWaterDrawLabels([selected], labels)[0].userLabel : null;
+  const visible = useMemo(() => buildWaterDrawHistory(events, labels, filter).slice(0, PAGE_SIZE), [events, filter, labels]);
+  const selectedLabel = selected?.userLabel ?? null;
 
   return <SafeAreaView style={styles.screen}>
     <ScrollView contentContainerStyle={styles.content}>
