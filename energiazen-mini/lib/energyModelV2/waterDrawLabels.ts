@@ -1,6 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
-import type { WaterDrawEventSnapshot, WaterDrawLabel, WaterDrawLabelKind } from "./waterDrawLabelDomain";
+import { waterDrawEventSnapshotRow, type WaterDrawEventSnapshot, type WaterDrawLabel, type WaterDrawLabelKind } from "./waterDrawLabelDomain";
 export * from "./waterDrawLabelDomain";
 
 async function currentUserId() {
@@ -21,11 +21,7 @@ export async function fetchWaterDrawLabels(): Promise<WaterDrawLabel[]> {
 export async function saveWaterDrawLabel(event: WaterDrawEventSnapshot, label: WaterDrawLabelKind, note: string) {
   const userId = await currentUserId();
   const { data, error } = await supabase.from("water_draw_labels").upsert({
-    event_ended_at: event.endedAt,
-    event_started_at: event.startedAt,
-    detection_kinds: event.detectionKinds,
-    duration_minutes: event.durationMinutes,
-    estimated_water_draw_net_energy_kwh: event.estimatedWaterDrawNetEnergyKwh,
+    ...waterDrawEventSnapshotRow(event),
     label,
     note: note.trim() || null,
     user_id: userId,
