@@ -9,6 +9,7 @@ import {
   type WaterDrawEventSnapshot,
   waterDrawLabelOptions,
 } from "@/lib/energyModelV2/waterDrawLabels";
+import { waterDrawLabelErrorMessage } from "@/lib/energyModelV2/supabaseError";
 
 type Props = {
   event: WaterDrawEventSnapshot | null;
@@ -37,7 +38,11 @@ export function WaterDrawLabelModal({ event, label, onChanged, onClose }: Props)
       await onChanged();
       onClose();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Merkinnän tallennus epäonnistui.");
+      // PostgrestError is a plain object, not necessarily an Error instance.
+      // Log the original object for dashboard diagnostics; the UI only renders
+      // its non-sensitive message and error code.
+      console.error("Water draw label operation failed", caught);
+      setError(waterDrawLabelErrorMessage(caught));
     } finally {
       setSaving(false);
     }

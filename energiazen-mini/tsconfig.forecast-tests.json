@@ -95,6 +95,7 @@
     "lib/energyModelV2/dashboardResources.ts",
     "lib/energyModelV2/dashboardResources.test.ts",
     "lib/energyModelV2/waterDrawLabelDomain.ts",
+    "lib/energyModelV2/supabaseError.ts",
     "lib/energyModelV2/waterDrawLabels.test.ts",
     "tests/waterDrawLabelSnapshotMigration.test.ts",
     "lib/energyModelV2/replayValidation.ts",
