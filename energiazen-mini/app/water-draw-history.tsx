@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WaterDrawLabelModal } from "@/components/water-draw-label-modal";
 import { fetchEnergyModelDashboardData } from "@/lib/energyModelV2/dashboardData";
 import type { WaterDrawEnergyDiagnostic } from "@/lib/energyModelV2/heatLossDiagnostics";
-import { buildWaterDrawHistory, fetchWaterDrawLabels, fetchWaterDrawLabelSummary, getWaterDrawLabelTitle, waterDrawLabelOptions, type WaterDrawHistoryEvent, type WaterDrawLabel, type WaterDrawLabelSummary } from "@/lib/energyModelV2/waterDrawLabels";
+import { buildWaterDrawHistory, fetchWaterDrawLabels, fetchWaterDrawLabelSummary, getWaterDrawEnergyQualityWarning, getWaterDrawLabelTitle, waterDrawLabelOptions, type WaterDrawHistoryEvent, type WaterDrawLabel, type WaterDrawLabelSummary } from "@/lib/energyModelV2/waterDrawLabels";
 
 const dateTime = new Intl.DateTimeFormat("fi-FI", { dateStyle: "short", timeStyle: "short" });
 const PAGE_SIZE = 50;
@@ -71,15 +71,20 @@ export default function WaterDrawHistoryScreen() {
         {(["labeled", "all"] as const).map((value) => <Pressable key={value} onPress={() => setFilter(value)}
           style={[styles.filter, filter === value && styles.filterActive]}><Text style={[styles.filterText, filter === value && styles.filterTextActive]}>{value === "labeled" ? "Merkityt" : "Kaikki"}</Text></Pressable>)}
       </View>
-      {loading ? <ActivityIndicator color="#36f4d4" style={styles.loader} /> : visible.length ? visible.map((event) => (
-        <Pressable key={`${event.startedAt}-${event.endedAt}`} onPress={() => setSelected(event)} style={styles.card}>
+      {loading ? <ActivityIndicator color="#36f4d4" style={styles.loader} /> : visible.length ? visible.map((event) => {
+        const energyQualityWarning = getWaterDrawEnergyQualityWarning(event);
+        return <Pressable key={`${event.startedAt}-${event.endedAt}`} onPress={() => setSelected(event)} style={styles.card}>
           <Text style={styles.time}>{dateTime.format(new Date(event.startedAt))}</Text>
           <Text style={event.userLabel ? styles.label : styles.unlabeled}>{event.userLabel ? `🏷️ ${getWaterDrawLabelTitle(event.userLabel.label)}` : "Ei käyttäjän merkintää"}</Text>
           <Text style={styles.details}>Kesto {Math.round(event.durationMinutes)} min · {event.estimatedWaterDrawNetEnergyKwh?.toFixed(2) ?? "–"} kWh</Text>
           <Text style={styles.details}>Havainto: {event.detectionKinds.join(" / ")}</Text>
+          {energyQualityWarning ? <View style={styles.energyQualityWarning}>
+            <Text style={styles.energyQualityWarningTitle}>{energyQualityWarning.title}</Text>
+            {energyQualityWarning.reason ? <Text style={styles.energyQualityWarningReason}>{energyQualityWarning.reason}</Text> : null}
+          </View> : null}
           {event.userLabel?.note ? <Text style={styles.note}>{event.userLabel.note}</Text> : null}
         </Pressable>
-      )) : <Text style={styles.empty}>{filter === "labeled" ? "Ei merkittyjä tapahtumia." : "Ei vedenkäyttötapahtumia."}</Text>}
+      }) : <Text style={styles.empty}>{filter === "labeled" ? "Ei merkittyjä tapahtumia." : "Ei vedenkäyttötapahtumia."}</Text>}
       <Text style={styles.limit}>Näytetään enintään {PAGE_SIZE} uusinta tapahtumaa.</Text>
     </ScrollView>
     <WaterDrawLabelModal event={selected} label={selectedLabel} onChanged={load} onClose={() => setSelected(null)} />
@@ -102,4 +107,7 @@ const styles = StyleSheet.create({
   summaryErrorText: { color: "#ff8d99", flex: 1, flexShrink: 1, fontSize: 13, fontWeight: "700" },
   filters: { backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 13, flexDirection: "row", marginBottom: 16, padding: 4 }, filter: { alignItems: "center", borderRadius: 10, flex: 1, padding: 10 }, filterActive: { backgroundColor: "#36f4d4" }, filterText: { color: "#9fb0d2", fontWeight: "900" }, filterTextActive: { color: "#07111d" },
   card: { backgroundColor: "#0c1326", borderColor: "rgba(255,255,255,0.1)", borderRadius: 14, borderWidth: 1, marginBottom: 10, padding: 14 }, time: { color: "#fff", fontSize: 14, fontWeight: "900" }, label: { color: "#ffcf70", fontSize: 13, fontWeight: "900", marginTop: 7 }, unlabeled: { color: "#7889aa", fontSize: 13, fontWeight: "800", marginTop: 7 }, details: { color: "#9fb0d2", fontSize: 12, fontWeight: "700", marginTop: 5 }, note: { color: "#eaf1ff", fontSize: 12, marginTop: 8 }, empty: { color: "#9fb0d2", fontWeight: "700", paddingVertical: 30, textAlign: "center" }, limit: { color: "#657495", fontSize: 11, marginTop: 8, textAlign: "center" }, loader: { marginTop: 50 },
+  energyQualityWarning: { backgroundColor: "rgba(255,183,77,0.09)", borderColor: "rgba(255,183,77,0.3)", borderRadius: 9, borderWidth: 1, marginTop: 10, padding: 10 },
+  energyQualityWarningTitle: { color: "#ffcf70", fontSize: 12, fontWeight: "900" },
+  energyQualityWarningReason: { color: "#eaf1ff", fontSize: 12, fontWeight: "700", marginTop: 4 },
 });

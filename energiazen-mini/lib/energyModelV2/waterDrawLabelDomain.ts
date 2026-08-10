@@ -20,6 +20,22 @@ export type WaterDrawEventSnapshot = Pick<WaterDrawEnergyDiagnostic, "detectionK
 export type WaterDrawHistoryEvent = WaterDrawEventSnapshot & { userLabel: WaterDrawLabel | null };
 export type WaterDrawLabelCounts = Record<WaterDrawLabelKind, number>;
 export type WaterDrawLabelSummary = { counts: WaterDrawLabelCounts; total: number };
+export type WaterDrawEnergyQualityWarning = { reason: string | null; title: string };
+
+export function getWaterDrawEnergyQualityReasonTitle(reason: WaterDrawEnergyDiagnostic["energyQualityReason"]) {
+  if (reason === "tank_energy_rising") return "Varaajan energia nousi tapahtumaikkunassa";
+  return null;
+}
+
+export function getWaterDrawEnergyQualityWarning(
+  event: Pick<WaterDrawEventSnapshot, "energyQualityReason" | "energyReliable">,
+): WaterDrawEnergyQualityWarning | null {
+  if (event.energyReliable !== false) return null;
+  return {
+    reason: getWaterDrawEnergyQualityReasonTitle(event.energyQualityReason),
+    title: "⚠️ Energia-arvio epäluotettava",
+  };
+}
 
 export function countWaterDrawLabels(labels: readonly Pick<WaterDrawLabel, "label">[]): WaterDrawLabelCounts {
   const counts = Object.fromEntries(waterDrawLabelOptions.map(({ label }) => [label, 0])) as WaterDrawLabelCounts;

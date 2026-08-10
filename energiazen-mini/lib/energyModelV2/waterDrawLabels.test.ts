@@ -1,5 +1,5 @@
 import type { WaterDrawEnergyDiagnostic } from "./heatLossDiagnostics";
-import { buildWaterDrawHistory, countWaterDrawLabels, createWaterDrawLabelSummary, filterWaterDrawHistory, joinWaterDrawLabels, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawLabel } from "./waterDrawLabelDomain";
+import { buildWaterDrawHistory, countWaterDrawLabels, createWaterDrawLabelSummary, filterWaterDrawHistory, getWaterDrawEnergyQualityWarning, joinWaterDrawLabels, waterDrawEventSnapshotRow, waterDrawLabelOptions, type WaterDrawLabel } from "./waterDrawLabelDomain";
 import { getSupabaseErrorDetails, waterDrawLabelErrorMessage } from "./supabaseError";
 
 function assert(condition: unknown, message: string) { if (!condition) throw new Error(message); }
@@ -69,4 +69,13 @@ export function runWaterDrawLabelUnitTests() {
   assert(currentHistory.length === 1 && new Date(currentHistory[0].startedAt).getTime() === new Date(first.startedAt).getTime(), "current replay events and labels must still join");
   const allHistory = buildWaterDrawHistory([first, second], [oldLabel, label()], "all");
   assert(allHistory.length === 3 && allHistory.some((item) => item.userLabel === null), "all history must combine stored labels and unlabeled replay events without duplicates");
+
+  const unreliableReplay = { ...second, energyQualityReason: "tank_energy_rising" as const, energyReliable: false };
+  const replayWarning = getWaterDrawEnergyQualityWarning(buildWaterDrawHistory([unreliableReplay], [], "all")[0]);
+  assert(replayWarning?.title === "⚠️ Energia-arvio epäluotettava" && replayWarning.reason === "Varaajan energia nousi tapahtumaikkunassa", "unreliable replay history must show its quality warning and reason");
+  const snapshotWarning = getWaterDrawEnergyQualityWarning(buildWaterDrawHistory([], [label({ energy_quality_reason: "tank_energy_rising", energy_reliable: false })], "labeled")[0]);
+  assert(snapshotWarning?.reason === "Varaajan energia nousi tapahtumaikkunassa", "stored label snapshot history must show the same quality reason");
+  assert(getWaterDrawEnergyQualityWarning(buildWaterDrawHistory([first], [], "all")[0]) === null, "reliable history must not show an unnecessary quality warning");
+  const legacyHistory = buildWaterDrawHistory([], [label({ energy_quality_reason: null, energy_reliable: null, feature_snapshot_version: null })], "labeled");
+  assert(getWaterDrawEnergyQualityWarning(legacyHistory[0]) === null, "legacy null quality must not be presented as reliable or unreliable");
 }
