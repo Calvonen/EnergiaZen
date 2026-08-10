@@ -23,7 +23,7 @@ import type {
 } from "@/lib/energyModelV2/heatLossDiagnostics";
 import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
-import { fetchWaterDrawLabels, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
+import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
@@ -361,8 +361,8 @@ export default function EnergyModelDashboardScreen() {
                         ["Luonnollinen lämpöhäviö tapahtumaikkunassa", formatNumber(event.estimatedNaturalLossKwh, 2, "kWh")],
                         ["Vedenkäytön nettoenergia", formatNumber(event.estimatedWaterDrawNetEnergyKwh, 2, "kWh")],
                         ["Energia-arvio", event.energyReliable ? "luotettava" : "epäluotettava"],
-                        ...(event.energyQualityReason === "tank_energy_rising"
-                          ? [["Syy", "varaajan energia nousi tapahtumaikkunassa"]]
+                        ...(getWaterDrawEnergyQualityReasonTitle(event.energyQualityReason)
+                          ? [["Syy", getWaterDrawEnergyQualityReasonTitle(event.energyQualityReason)!]]
                           : []),
                       ].map(([label, value]) => (
                         <View key={label} style={styles.observationMetricRow}>
