@@ -81,6 +81,7 @@ export function runTankMonitorAlertUnitTests() {
     shouldShowTankMonitorFault({
       ageMinutes: tankMonitorAlertThresholdMinutes + 1,
       hasInitialFetchSettled: false,
+      isFocusRefreshPending: true,
       isResumeRefreshPending: false,
     }),
     false,
@@ -90,6 +91,7 @@ export function runTankMonitorAlertUnitTests() {
     shouldShowTankMonitorFault({
       ageMinutes: 0,
       hasInitialFetchSettled: true,
+      isFocusRefreshPending: false,
       isResumeRefreshPending: false,
     }),
     false,
@@ -99,6 +101,7 @@ export function runTankMonitorAlertUnitTests() {
     shouldShowTankMonitorFault({
       ageMinutes: tankMonitorAlertThresholdMinutes + 1,
       hasInitialFetchSettled: true,
+      isFocusRefreshPending: false,
       isResumeRefreshPending: true,
     }),
     false,
@@ -108,9 +111,30 @@ export function runTankMonitorAlertUnitTests() {
     shouldShowTankMonitorFault({
       ageMinutes: tankMonitorAlertThresholdMinutes + 1,
       hasInitialFetchSettled: true,
+      isFocusRefreshPending: false,
       isResumeRefreshPending: false,
     }),
     true,
     "vanha lukema naytetaan vikana kun paluupaivitys on valmistunut",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: tankMonitorAlertThresholdMinutes + 1,
+      hasInitialFetchSettled: true,
+      isFocusRefreshPending: true,
+      isResumeRefreshPending: false,
+    }),
+    false,
+    "vanha cached lukema ei nayta varoitusta uuden focus-refreshin aikana",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: tankMonitorAlertThresholdMinutes + 1,
+      hasInitialFetchSettled: true,
+      isFocusRefreshPending: false,
+      isResumeRefreshPending: false,
+    }),
+    true,
+    "stale lukema nayttaa varoituksen focus-refreshin valmistuttua",
   );
 }

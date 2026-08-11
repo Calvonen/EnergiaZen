@@ -914,6 +914,9 @@ export default function HomeScreen() {
   const heatingPlanSaveChainRef = useRef(Promise.resolve());
   const latestHeatingPlanSaveVersionRef = useRef(0);
   const [loading, setLoading] = useState(true);
+  const focusRefreshGenerationRef = useRef(0);
+  const [isTankReadingFocusRefreshPending, setIsTankReadingFocusRefreshPending] =
+    useState(true);
   const [isTankReadingResumeRefreshPending, setIsTankReadingResumeRefreshPending] =
     useState(false);
   const handleSelectedDayChange = useCallback((day: DaySelection) => {
@@ -2231,6 +2234,7 @@ export default function HomeScreen() {
   const tankMonitorFault = shouldShowTankMonitorFault({
     ageMinutes: computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
     hasInitialFetchSettled: hasAttemptedTankReadingFetch,
+    isFocusRefreshPending: isTankReadingFocusRefreshPending,
     isResumeRefreshPending: isTankReadingResumeRefreshPending,
   });
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
@@ -2269,6 +2273,8 @@ export default function HomeScreen() {
 
       let tankReadingsRefreshInFlight: Promise<void> | null = null;
       let resumeRefreshPending = false;
+      let resumeRefreshGeneration = 0;
+      const focusRefreshGeneration = ++focusRefreshGenerationRef.current;
 
       function markTankReadingFetchAttempted() {
         if (!hasAttemptedTankReadingFetchRef.current) {
@@ -2528,7 +2534,15 @@ export default function HomeScreen() {
       };
 
       setLoading(true);
-      void refreshTankReadings();
+      setIsTankReadingFocusRefreshPending(true);
+      void refreshTankReadings().finally(() => {
+        if (
+          isActive &&
+          focusRefreshGenerationRef.current === focusRefreshGeneration
+        ) {
+          setIsTankReadingFocusRefreshPending(false);
+        }
+      });
 
       const tankReadingsInterval = setInterval(() => {
         void refreshTankReadings();
@@ -2549,6 +2563,9 @@ export default function HomeScreen() {
             // the app is suspended. Close the banner gate already here so a
             // foreground render cannot race the active-state callback.
             resumeRefreshPending = true;
+            // Invalidate resume A before a possible resume B is even
+            // created, so A cannot reopen B's warning gate.
+            resumeRefreshGeneration += 1;
             setIsTankReadingResumeRefreshPending(true);
           }
 
@@ -2556,16 +2573,25 @@ export default function HomeScreen() {
             // If a poll was already running when the app resumed, first let
             // it settle and then make a distinct foreground attempt. Only
             // that attempt is allowed to reopen stale/fault evaluation.
+            const generation = ++resumeRefreshGeneration;
             const refreshInFlightAtResume = tankReadingsRefreshInFlight;
             void (async () => {
               if (refreshInFlightAtResume) {
                 await refreshInFlightAtResume;
               }
-              if (!isActive || !resumeRefreshPending) {
+              if (
+                !isActive ||
+                generation !== resumeRefreshGeneration ||
+                AppState.currentState !== "active"
+              ) {
                 return;
               }
               await refreshTankReadings();
-              if (isActive && resumeRefreshPending) {
+              if (
+                isActive &&
+                resumeRefreshPending &&
+                generation === resumeRefreshGeneration
+              ) {
                 resumeRefreshPending = false;
                 setIsTankReadingResumeRefreshPending(false);
               }
@@ -2576,12 +2602,17 @@ export default function HomeScreen() {
 
       return () => {
         isActive = false;
+        focusRefreshGenerationRef.current += 1;
         // The screen can lose focus while the first refresh after resume is
         // still in flight. Its finally block deliberately ignores inactive
         // effects, so clear the banner gate here as part of the same focus
         // lifecycle. A later visit starts a new focus fetch, but that is no
         // longer the refresh belonging to the background -> active event.
         resumeRefreshPending = false;
+        resumeRefreshGeneration += 1;
+        // Leave the gate closed while Home is unfocused. The first render
+        // on the next focus is therefore protected before its effect runs.
+        setIsTankReadingFocusRefreshPending(true);
         setIsTankReadingResumeRefreshPending(false);
         clearInterval(tankReadingsInterval);
         appStateSubscription.remove();

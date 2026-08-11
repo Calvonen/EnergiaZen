@@ -44,14 +44,17 @@ export function isTankReadingStale(ageMinutes: number | null) {
 export function shouldShowTankMonitorFault({
   ageMinutes,
   hasInitialFetchSettled,
+  isFocusRefreshPending,
   isResumeRefreshPending,
 }: {
   ageMinutes: number | null;
   hasInitialFetchSettled: boolean;
+  isFocusRefreshPending: boolean;
   isResumeRefreshPending: boolean;
 }) {
   return (
     hasInitialFetchSettled &&
+    !isFocusRefreshPending &&
     !isResumeRefreshPending &&
     isTankReadingStale(ageMinutes)
   );

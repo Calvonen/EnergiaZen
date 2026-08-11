@@ -29,7 +29,9 @@ export function runHomeResumeRefreshSourceTests() {
   );
 
   assertSource(
-    focusEffectStart >= 0 && focusEffectEnd > focusEffectStart && cleanupStart >= 0,
+    focusEffectStart >= 0 &&
+      focusEffectEnd > focusEffectStart &&
+      cleanupStart >= 0,
     "etusivun tankkilukemien focus-efektin siivous pitää löytyä",
   );
   assertSource(
@@ -56,6 +58,32 @@ export function runHomeResumeRefreshSourceTests() {
           "setIsTankReadingResumeRefreshPending(false);",
         ),
     "foreground-portti saa avautua vasta erillisen refresh-attemptin valmistuttua",
+  );
+  assertSource(
+    focusEffectSource.includes(
+      "const focusRefreshGeneration = ++focusRefreshGenerationRef.current;",
+    ) &&
+      focusEffectSource.includes(
+        "setIsTankReadingFocusRefreshPending(true);",
+      ) &&
+      focusEffectSource.includes(
+        "focusRefreshGenerationRef.current === focusRefreshGeneration",
+      ) &&
+      focusEffectSource.includes("setIsTankReadingFocusRefreshPending(false);"),
+    "jokaisella Home-focuksella pitää olla oma refresh-portti ja generation",
+  );
+  assertSource(
+    focusEffectSource.includes(
+      "const generation = ++resumeRefreshGeneration;",
+    ) &&
+      focusEffectSource.includes("generation !== resumeRefreshGeneration") &&
+      focusEffectSource.includes("generation === resumeRefreshGeneration") &&
+      focusEffectSource.indexOf("resumeRefreshGeneration += 1;") <
+        focusEffectSource.indexOf(
+          "setIsTankReadingResumeRefreshPending(true);",
+          backgroundGateStart,
+        ),
+    "vain uusin resume-generation saa jatkaa refreshiin ja avata portin",
   );
   assertSource(
     cleanupSource.includes("resumeRefreshPending = false;") &&
