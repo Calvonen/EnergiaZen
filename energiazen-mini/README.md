@@ -275,3 +275,113 @@ Tarkista nykyinen tila:
 ```sql
 select * from public.device_monitor_state;
 ```
+
+## Lämmitysoptimoinnin backend shadow mode
+
+`run-heating-optimizer` ajaa saman lämmitysoptimoinnin kuin appi
+(`optimizeHeatingPlan()`, `lib/heatingOptimizer.ts`) backendissä, tuotanto-
+Supabasen hinta-, varaaja- ja asetusdatalla, mutta **ei kirjoita
+`heating_plans`-tauluun**. Jokainen ajo tallentaa yhden diagnostisen rivin
+`heating_plan_shadow_runs`-tauluun (suunniteltu tulos, verrattuna appin
+nykyiseen julkaisuun) - Shelly ja appi jatkavat toimimista täysin
+muuttumattomina. Tämä on tarkoituksella väliaikainen vaihe: backendistä
+tehdään ensisijainen kirjoittaja `heating_plans`-tauluun vasta erikseen
+hyväksyttävässä myöhemmässä muutoksessa.
+
+Optimizerin ja julkaisun turvamekanismit (current-hour preservation,
+unknown heating state, stale-input/valmiusgate, duplikaatti-/vanhentunut
+julkaisusuoja) tulevat suoraan appin omista, jo framework-riippumattomista
+moduuleista (`lib/heatingPlanPublication.ts`, uusi
+`lib/heatingPlanOrchestration.ts`) - ei kopioita. Ainoa aiempi RN-sidos
+(`lib/settings.ts`:n AsyncStorage) eriytettiin puhtaaksi
+`lib/settingsDefaults.ts`:ksi juuri tätä varten. Kaikki funktion oma logiikka
+on `supabase/functions/run-heating-optimizer/logic.ts`:ssä (ei
+Deno-only-APIeja, yksikkötestattu Node:n alla `logic.test.ts`:llä,
+mukana `npm test`:ssä); `index.ts` on ohut Supabase-IO-kuori (hakee inputit
+service role -oikeuksilla, kutsuu `logic.ts`:ää, tallentaa yhden
+shadow-rivin).
+
+**Tunnettu rajoitus:** `heating_control_settings`-taulussa ei tällä
+hetkellä ole kaikkia optimizerin tarvitsemia asetuksia (mm.
+`automaticMaxHeatingHours`, `safetyShowerReserve` puuttuvat - appin oikea
+asetuslähde on laitekohtainen `AsyncStorage`). Näiltä osin funktio käyttää
+`defaultSettings`-oletuksia, ja jokainen shadow-rivi kertoo tämän
+`settings_source`-sarakkeessa (`heating_control_settings+defaults` tai
+`defaults_only`) sen sijaan että väittäisi hiljaa täyttä yhteensopivuutta.
+
+Deployaa funktio:
+
+```bash
+supabase functions deploy run-heating-optimizer
+```
+
+Aja migraatiot linkitettyyn projektiin (luo `heating_plan_shadow_runs`-taulun
+ja diagnostisen ajastuksen - käyttää samoja `project_url`/
+`publishable_key`-Vault-secretejä jotka on jo luotu sähkön hintahaun
+ajastusta varten yllä):
+
+```bash
+supabase link --project-ref amyvzelzbvjvrevikvrp
+supabase db push
+```
+
+### Ajastus
+
+Migraatio luo jobin `run-heating-optimizer-shadow-hourly`, joka käynnistyy
+kerran tunnissa minuutilla 20 - 10 minuuttia `fetch-electricity-prices-hourly`
+(minuutti 10) jälkeen, jotta jokainen ajo näkee kyseisen tunnin tuoreimmat
+hinnat. Koska `tank_readings` päivittyy noin minuutin välein, sama tunnin
+välein toistuva ajo poimii myös aina tuoreen varaajalukeman - erillistä
+"muutaman kerran päivässä" -jobia ei tarvita. Ajastus on mitoitettu
+vertailutrendin keräämiseen, ei tuotantopäätöksiin - tarkista ennen
+mahdollista production write -vaihetta, tarvitaanko appin omaa
+uudelleenajotiheyttä lähempänä oleva ajastus.
+
+Tarkista jobi ja viimeisimmät ajot:
+
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'run-heating-optimizer-shadow-hourly';
+
+select *
+from cron.job_run_details
+where jobid = (
+  select jobid
+  from cron.job
+  where jobname = 'run-heating-optimizer-shadow-hourly'
+)
+order by start_time desc
+limit 10;
+```
+
+Tarkista viimeisimmät shadow-ajot ja niiden vertailu appin julkaisuun:
+
+```sql
+select
+  run_at,
+  today_plan_date,
+  today_planned_hours,
+  app_planned_hours_today,
+  planned_hours_match,
+  reason,
+  optimizer_valid,
+  settings_source,
+  uncertainty_reason
+from public.heating_plan_shadow_runs
+order by run_at desc
+limit 20;
+```
+
+`heating_plan_shadow_runs`-taulussa on RLS käytössä ilman client-policyja -
+sama malli kuin `device_monitor_state`:lla - vain `service_role` pääsee
+siihen käsiksi, koska data on toistaiseksi puhtaasti diagnostista eikä
+appissa ole sille vielä käyttöliittymää.
+
+Poista ajastus tarvittaessa:
+
+```sql
+select cron.unschedule(jobid)
+from cron.job
+where jobname = 'run-heating-optimizer-shadow-hourly';
+```
