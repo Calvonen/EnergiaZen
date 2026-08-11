@@ -2225,13 +2225,12 @@ export default function HomeScreen() {
   // tilan. Toisin kuin sahkoposti, tama lasketaan aina tuoreesta
   // tankUpdatedAt-arvosta, joten se katoaa automaattisesti heti kun uusi
   // lukema saapuu, eika vaadi erillista "palautunut"-tilaa.
-  // "loading" on true vain ihan ensimmäisen haun ajan (ks. useFocusEffect
-  // alla) - sita ennen tankUpdatedAt on vaistamatta viela null, koska
-  // mitaan ei ole ehditty hakea. Ilman tata ehtoa banneri vilahti
-  // virheellisesti nakyviin sovelluksen jokaisella kaynnistyksella.
+  // Attempt-state, rather than the broader loading flag, is the banner's
+  // initial-load gate: cached data may already be present, but it must not
+  // be judged stale until the first reading refresh has actually settled.
   const tankMonitorFault = shouldShowTankMonitorFault({
     ageMinutes: computeTankReadingUiAgeMinutes(tankUpdatedAt, currentTime),
-    hasInitialFetchSettled: !loading,
+    hasInitialFetchSettled: hasAttemptedTankReadingFetch,
     isResumeRefreshPending: isTankReadingResumeRefreshPending,
   });
   const cheapestHour = chartHourlyPrices.reduce<HourlyPrice | null>(
@@ -2268,7 +2267,7 @@ export default function HomeScreen() {
           },
         );
 
-      let tankReadingsRefreshInFlight = false;
+      let tankReadingsRefreshInFlight: Promise<void> | null = null;
       let resumeRefreshPending = false;
 
       function markTankReadingFetchAttempted() {
@@ -2278,13 +2277,7 @@ export default function HomeScreen() {
         }
       }
 
-      const refreshTankReadings = async () => {
-        if (tankReadingsRefreshInFlight) {
-          debugLog("tank_readings refresh skipped while request is in flight");
-          return;
-        }
-
-        tankReadingsRefreshInFlight = true;
+      const performTankReadingsRefresh = async () => {
         debugLog("tank_readings refreshed");
 
         try {
@@ -2513,16 +2506,25 @@ export default function HomeScreen() {
           // joko onnistuu tai lukema oikeasti vanhenee (30 min raja,
           // lib/tankMonitorAlert.ts).
         } finally {
-          tankReadingsRefreshInFlight = false;
-
           if (isActive) {
             setLoading(false);
-            if (resumeRefreshPending) {
-              resumeRefreshPending = false;
-              setIsTankReadingResumeRefreshPending(false);
-            }
           }
         }
+      };
+
+      const refreshTankReadings = () => {
+        if (tankReadingsRefreshInFlight) {
+          debugLog("tank_readings refresh joined while request is in flight");
+          return tankReadingsRefreshInFlight;
+        }
+
+        const refreshPromise = performTankReadingsRefresh().finally(() => {
+          if (tankReadingsRefreshInFlight === refreshPromise) {
+            tankReadingsRefreshInFlight = null;
+          }
+        });
+        tankReadingsRefreshInFlight = refreshPromise;
+        return refreshPromise;
       };
 
       setLoading(true);
@@ -2542,14 +2544,32 @@ export default function HomeScreen() {
             nextAppState === "active";
           previousAppState = nextAppState;
 
-          if (returnedFromBackground) {
+          if (nextAppState === "background" || nextAppState === "inactive") {
             // Cache data may have crossed the normal stale threshold while
-            // the app was suspended. Wait for this first active-state fetch
-            // to settle before evaluating the fault banner; its success and
-            // error paths retain all existing stale/fault semantics.
+            // the app is suspended. Close the banner gate already here so a
+            // foreground render cannot race the active-state callback.
             resumeRefreshPending = true;
             setIsTankReadingResumeRefreshPending(true);
-            void refreshTankReadings();
+          }
+
+          if (returnedFromBackground) {
+            // If a poll was already running when the app resumed, first let
+            // it settle and then make a distinct foreground attempt. Only
+            // that attempt is allowed to reopen stale/fault evaluation.
+            const refreshInFlightAtResume = tankReadingsRefreshInFlight;
+            void (async () => {
+              if (refreshInFlightAtResume) {
+                await refreshInFlightAtResume;
+              }
+              if (!isActive || !resumeRefreshPending) {
+                return;
+              }
+              await refreshTankReadings();
+              if (isActive && resumeRefreshPending) {
+                resumeRefreshPending = false;
+                setIsTankReadingResumeRefreshPending(false);
+              }
+            })();
           }
         },
       );

@@ -80,6 +80,24 @@ export function runTankMonitorAlertUnitTests() {
   assertEqual(
     shouldShowTankMonitorFault({
       ageMinutes: tankMonitorAlertThresholdMinutes + 1,
+      hasInitialFetchSettled: false,
+      isResumeRefreshPending: false,
+    }),
+    false,
+    "vanha valimuistilukema ei nayta varoitusta ensimmaisen haun aikana",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: 0,
+      hasInitialFetchSettled: true,
+      isResumeRefreshPending: false,
+    }),
+    false,
+    "tuoreeksi paivittynyt lukema ei nayta varoitusta haun valmistuttua",
+  );
+  assertEqual(
+    shouldShowTankMonitorFault({
+      ageMinutes: tankMonitorAlertThresholdMinutes + 1,
       hasInitialFetchSettled: true,
       isResumeRefreshPending: true,
     }),
