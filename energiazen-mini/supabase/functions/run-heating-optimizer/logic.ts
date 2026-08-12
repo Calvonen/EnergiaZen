@@ -6,56 +6,56 @@
 // does the Supabase reads/writes and calls into this file.
 //
 // Reuses the app's own optimizer/publication code directly (not a copy):
-// lib/heatingOptimizer.ts, lib/heatingOptimizationRun.ts,
-// lib/heatingPlanOrchestration.ts, lib/heatingPlanPublication.ts,
-// lib/tankTemperatureForecast.ts, lib/temperatureDropProfile.ts,
-// lib/settingsDefaults.ts, lib/heatingLogic.ts, lib/tankReadingFreshness.ts
-// - all already framework-agnostic (no React, no AsyncStorage; the one
-// prior AsyncStorage coupling in lib/settings.ts was split out into
-// lib/settingsDefaults.ts specifically so this function could import it).
-//
-// NOT independently verified against a real `supabase functions deploy` in
-// this environment (no Deno CLI available here) - the reach-outside-the-
-// function-directory relative imports below are Supabase's documented
-// bundling behavior, but that must be confirmed with a real deploy before
-// this is trusted operationally.
+// heatingOptimizer.ts, heatingOptimizationRun.ts, heatingPlanOrchestration.ts,
+// heatingPlanPublication.ts, tankTemperatureForecast.ts,
+// temperatureDropProfile.ts, settingsDefaults.ts, heatingLogic.ts,
+// tankReadingFreshness.ts, heatingGain.ts and their own transitive
+// dependencies. All framework-agnostic (no React, no AsyncStorage), and all
+// physically live under supabase/functions/_shared/ - NOT under lib/ -
+// because Supabase's `--use-api` deploy bundler only resolves relative
+// imports that stay inside supabase/functions/; an import reaching out to
+// ../../../lib/... fails to bundle with "Module not found" even though it
+// resolves fine locally under Node/tsc (see this PR's report). lib/ keeps a
+// same-named re-export shim at each of these paths so every existing app
+// import site is unaffected - supabase/functions/_shared/ is the one
+// physical source of truth, not a second implementation.
 import {
   optimizeHeatingPlan,
   type HeatingOptimizationHour,
   type HeatingOptimizationResult,
   type HeatingOptimizationSettings,
   type HeatingOptimizationSettingsSource,
-} from "../../../lib/heatingOptimizer";
-import { createHeatingOptimizationSettings } from "../../../lib/heatingOptimizer";
+} from "../_shared/heatingOptimizer";
+import { createHeatingOptimizationSettings } from "../_shared/heatingOptimizer";
 import {
   materializeHeatingOptimizationHours,
   shouldRunHeatingOptimization,
-} from "../../../lib/heatingOptimizationRun";
+} from "../_shared/heatingOptimizationRun";
 import {
   buildHeatingPlanPublicationDecision,
   computeNextUnknownHeatingAnchor,
   type HeatingPlanPublicationDecision,
-} from "../../../lib/heatingPlanOrchestration";
-import type { ComparableHeatingPlan } from "../../../lib/heatingPlanPublication";
+} from "../_shared/heatingPlanOrchestration";
+import type { ComparableHeatingPlan } from "../_shared/heatingPlanPublication";
 import {
   buildHourlyTemperatureDropProfileResult,
   fallbackHourlyTemperatureDrop,
   type HourlyTemperatureDropProfile,
   type TankTemperatureReading,
-} from "../../../lib/tankTemperatureForecast";
+} from "../_shared/tankTemperatureForecast";
 import {
   fetchLatestTemperatureDropProfile,
   selectTemperatureDropProfile,
   type TemperatureDropProfile,
-} from "../../../lib/temperatureDropProfile";
-import { isTankReadingFreshForCalculation } from "../../../lib/tankReadingFreshness";
-import { defaultSettings } from "../../../lib/settingsDefaults";
+} from "../_shared/temperatureDropProfile";
+import { isTankReadingFreshForCalculation } from "../_shared/tankReadingFreshness";
+import { defaultSettings } from "../_shared/settingsDefaults";
 import {
   getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
-} from "../../../lib/heatingLogic";
-import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../../../lib/heatingGain";
+} from "../_shared/heatingLogic";
+import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain";
 
 export type RawTankReading = {
   bottom_temp: number | null;
