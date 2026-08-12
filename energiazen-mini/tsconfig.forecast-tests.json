@@ -130,6 +130,7 @@
     "lib/energyModelV2/replayValidation.ts",
     "lib/energyModelV2/replayValidation.test.ts",
     "tests/edgeFunctionImportBoundaries.test.ts",
+    "tests/edgeFunctionRuntimeBindings.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts"
   ]
 }

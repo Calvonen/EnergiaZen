@@ -53,6 +53,7 @@ import { runHomeResumeRefreshSourceTests } from "../tests/homeResumeRefreshSourc
 import { runWaterDrawLabelUnitTests } from "../lib/energyModelV2/waterDrawLabels.test";
 import { runWaterDrawLabelSnapshotMigrationTests } from "../tests/waterDrawLabelSnapshotMigration.test";
 import { runEdgeFunctionImportBoundariesUnitTests } from "../tests/edgeFunctionImportBoundaries.test";
+import { runEdgeFunctionRuntimeBindingsUnitTests } from "../tests/edgeFunctionRuntimeBindings.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -110,9 +111,10 @@ async function runTests() {
   runWaterDrawLabelUnitTests();
   runWaterDrawLabelSnapshotMigrationTests();
   runEdgeFunctionImportBoundariesUnitTests();
+  runEdgeFunctionRuntimeBindingsUnitTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources and edgeFunctionImportBoundaries tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources, edgeFunctionImportBoundaries and edgeFunctionRuntimeBindings tests passed",
   );
 }
 

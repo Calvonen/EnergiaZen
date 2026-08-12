@@ -25,6 +25,7 @@ import {
   computeNextUnknownHeatingAnchor,
   createHeatingOptimizationSettings,
   fallbackHeatingGainPerHour,
+  fetchHeatingGainHistory,
   fetchLatestTemperatureDropProfile,
   getDateKeyOffset,
   getFinnishDateKey,
