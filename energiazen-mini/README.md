@@ -279,7 +279,8 @@ select * from public.device_monitor_state;
 ## Lämmitysoptimoinnin backend shadow mode
 
 `run-heating-optimizer` ajaa saman lämmitysoptimoinnin kuin appi
-(`optimizeHeatingPlan()`, `lib/heatingOptimizer.ts`) backendissä, tuotanto-
+(`optimizeHeatingPlan()`, `supabase/functions/_shared/heatingOptimizer.ts` -
+ks. alla miksi tämä ei asu `lib/`:ssä) backendissä, tuotanto-
 Supabasen hinta-, varaaja- ja asetusdatalla, mutta **ei kirjoita
 `heating_plans`-tauluun**. Jokainen ajo tallentaa yhden diagnostisen rivin
 `heating_plan_shadow_runs`-tauluun (suunniteltu tulos, verrattuna appin
@@ -291,15 +292,40 @@ hyväksyttävässä myöhemmässä muutoksessa.
 Optimizerin ja julkaisun turvamekanismit (current-hour preservation,
 unknown heating state, stale-input/valmiusgate, duplikaatti-/vanhentunut
 julkaisusuoja) tulevat suoraan appin omista, jo framework-riippumattomista
-moduuleista (`lib/heatingPlanPublication.ts`, uusi
-`lib/heatingPlanOrchestration.ts`) - ei kopioita. Ainoa aiempi RN-sidos
-(`lib/settings.ts`:n AsyncStorage) eriytettiin puhtaaksi
-`lib/settingsDefaults.ts`:ksi juuri tätä varten. Kaikki funktion oma logiikka
-on `supabase/functions/run-heating-optimizer/logic.ts`:ssä (ei
+moduuleista (`heatingPlanPublication.ts`, `heatingPlanOrchestration.ts`) -
+ei kopioita. Kaikki funktion oma logiikka on
+`supabase/functions/run-heating-optimizer/logic.ts`:ssä (ei
 Deno-only-APIeja, yksikkötestattu Node:n alla `logic.test.ts`:llä,
 mukana `npm test`:ssä); `index.ts` on ohut Supabase-IO-kuori (hakee inputit
 service role -oikeuksilla, kutsuu `logic.ts`:ää, tallentaa yhden
 shadow-rivin).
+
+**Jaettu domain-logiikka asuu `supabase/functions/_shared/`-hakemistossa,
+ei `lib/`:ssä.** `npx supabase functions deploy <nimi> --use-api`
+bundlaa vain `supabase/functions/`-hakemiston sisällä pysyvät importit -
+`../../../lib/...`-tyyppinen reitti ulos kyseisestä hakemistosta
+epäonnistuu bundlauksessa ("Module not found"), vaikka se tyyppitarkistuu
+ja läpäisee `npm test`:n täysin ongelmitta Node/tsc:n alla. Siksi
+`optimizeHeatingPlan()` ja sen koko riippuvuuspuu (`heatingOptimizer.ts`,
+`heatingOptimizationRun.ts`, `heatingPlanOrchestration.ts`,
+`heatingPlanPublication.ts`, `tankTemperatureForecast.ts`,
+`temperatureDropProfile.ts`, `settingsDefaults.ts`, `heatingLogic.ts`,
+`tankReadingFreshness.ts`, `heatingGain.ts`, `heatingGain.ts`:n omat
+riippuvuudet ja `energyModelV2/sensorGeometry.ts`) asuvat fyysisesti
+`supabase/functions/_shared/`:ssä - se on yksi ainoa lähde, ei toinen
+rinnakkainen toteutus. `lib/`-hakemistossa samannimiset tiedostot ovat
+ohuita `export * from "../supabase/functions/_shared/<nimi>"`
+-uudelleenvientejä, jotta jokainen appin olemassa oleva import-polku
+(mukaan lukien testit) toimii muuttumattomana. Jos jonkin näistä
+tiedostoista sisältöä muuttaa, muokkaa `_shared/`-versiota - `lib/`-versio
+on vain ohitus, ei erillinen kopio.
+
+`tests/edgeFunctionImportBoundaries.test.ts` (osa `npm test`:iä) tarkistaa
+staattisesti, ettei mikään `supabase/functions/`:n alla oleva `.ts`-tiedosto
+(pl. `.test.ts`) tuo mitään suhteellisella polulla kyseisen hakemiston
+ulkopuolelta - sama sääntö jota `--use-api`-bundleri noudattaa. Tämä
+havaitsee tämän luokan regression ilman oikeaa Deno CLI:tä tai
+tuotantodeployta.
 
 **Tunnettu rajoitus:** `heating_control_settings`-taulussa ei tällä
 hetkellä ole kaikkia optimizerin tarvitsemia asetuksia (mm.

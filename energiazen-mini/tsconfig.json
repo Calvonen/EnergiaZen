@@ -6,7 +6,14 @@
       "@/*": [
         "./*"
       ]
-    }
+    },
+    // supabase/functions/_shared/**/*.ts use explicit .ts import extensions
+    // (required by Supabase's Edge Function deploy bundler - see
+    // supabase/functions/README or the shadow-mode PR report). They're
+    // excluded below but still reached transitively through lib/'s
+    // re-export shims, so tsc still type-checks them here; noEmit (from
+    // expo/tsconfig.base) makes allowImportingTsExtensions valid.
+    "allowImportingTsExtensions": true
   },
   "include": [
     "**/*.ts",

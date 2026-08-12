@@ -1,34 +1,8 @@
-export const defaultAutomaticMaxHeatingHours = 3;
-export const defaultFixedHeatingHoursPerDay = 3;
-
-function normalizeHeatingHours(value: number | undefined, fallback: number) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(Math.max(Math.round(value), 1), 6)
-    : fallback;
-}
-
-export function normalizeStoredHeatingHours({
-  automaticMaxHeatingHours,
-  fixedHeatingHoursPerDay,
-  heatingHoursPerDay,
-}: {
-  automaticMaxHeatingHours?: number;
-  fixedHeatingHoursPerDay?: number;
-  heatingHoursPerDay?: number;
-}) {
-  const legacyHeatingHours = normalizeHeatingHours(
-    heatingHoursPerDay,
-    defaultAutomaticMaxHeatingHours,
-  );
-
-  return {
-    automaticMaxHeatingHours: normalizeHeatingHours(
-      automaticMaxHeatingHours,
-      legacyHeatingHours,
-    ),
-    fixedHeatingHoursPerDay: normalizeHeatingHours(
-      fixedHeatingHoursPerDay,
-      legacyHeatingHours,
-    ),
-  };
-}
+// Single source of truth lives in supabase/functions/_shared/heatingHourSettings.ts -
+// framework-agnostic domain logic shared between the app and the
+// run-heating-optimizer Edge Function. It lives under supabase/functions/
+// (not here) because Supabase's --use-api deploy bundler only resolves
+// imports that stay inside supabase/functions/ - see this repo's shadow-
+// mode PR report for the full reasoning. This file exists only so every
+// existing app import path keeps working unchanged.
+export * from "../supabase/functions/_shared/heatingHourSettings";

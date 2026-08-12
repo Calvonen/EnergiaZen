@@ -37,6 +37,7 @@ yarn-error.*
 *.tsbuildinfo
 .tmp-forecast-tests/
 .tmp-optimizer-simulator/
+.tmp-replay-validation/
 
 app-example
 
