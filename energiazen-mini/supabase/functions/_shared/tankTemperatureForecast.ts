@@ -1,7 +1,7 @@
 import {
   areTimestampsInSameSensorGeometryEpoch,
   filterToLatestSensorGeometryEpoch,
-} from "./energyModelV2/sensorGeometry";
+} from "./energyModelV2/sensorGeometry.ts";
 
 export type TankTemperatureReading = {
   created_at?: string | null;

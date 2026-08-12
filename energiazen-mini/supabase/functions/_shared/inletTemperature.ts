@@ -1,4 +1,4 @@
-import type { TankTemperatureReading } from "./tankTemperatureForecast";
+import type { TankTemperatureReading } from "./tankTemperatureForecast.ts";
 
 // Plausible range for a cold-water inlet sensor. Readings outside this are
 // almost certainly a disconnected/faulty sensor rather than a real

@@ -2,12 +2,12 @@ import {
   getHeatingOptimizationSegmentHours,
   type HeatingOptimizationHour,
   type HeatingOptimizationSettings,
-} from "./heatingOptimizer";
-import type { HeatingGainSource } from "./settingsDefaults";
+} from "./heatingOptimizer.ts";
+import type { HeatingGainSource } from "./settingsDefaults.ts";
 import type {
   TankTemperatureReading,
-} from "./tankTemperatureForecast";
-import { isTankReadingFreshForCalculation } from "./tankReadingFreshness";
+} from "./tankTemperatureForecast.ts";
+import { isTankReadingFreshForCalculation } from "./tankReadingFreshness.ts";
 
 export type HeatingOptimizationInputSnapshot = {
   currentBottomTemperature: number | null;

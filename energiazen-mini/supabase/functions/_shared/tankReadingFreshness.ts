@@ -2,7 +2,7 @@ import {
   computeTankReadingAgeMinutes,
   isTankReadingStale,
   tankMonitorAlertThresholdMinutes,
-} from "./tankMonitorAlert";
+} from "./tankMonitorAlert.ts";
 
 // Kuinka vanha tank_readings-lukema saa enintään olla, jotta sitä käytetään
 // suihkuarvioon, lämpötilaennusteeseen, automaattisen lämmitystarpeen

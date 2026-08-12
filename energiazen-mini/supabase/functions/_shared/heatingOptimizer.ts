@@ -2,12 +2,12 @@ import {
   fallbackHourlyTemperatureDrop,
   HourlyTemperatureDropProfile,
   TankTemperatureReading,
-} from "./tankTemperatureForecast";
-import { estimateHeatingGainPerHour } from "./heatingGain";
-import type { HeatingGainEstimate } from "./heatingGain";
+} from "./tankTemperatureForecast.ts";
+import { estimateHeatingGainPerHour } from "./heatingGain.ts";
+import type { HeatingGainEstimate } from "./heatingGain.ts";
 
-export { estimateHeatingGainPerHour } from "./heatingGain";
-export type { HeatingGainEstimate } from "./heatingGain";
+export { estimateHeatingGainPerHour } from "./heatingGain.ts";
+export type { HeatingGainEstimate } from "./heatingGain.ts";
 
 export type HeatingOptimizationHour = {
   date: Date;

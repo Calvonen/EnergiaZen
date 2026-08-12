@@ -1,10 +1,10 @@
-import { isValidInletTemperature } from "./inletTemperature";
-import type { TankTemperatureReading } from "./tankTemperatureForecast";
-import { detectsWaterDraw } from "./waterDrawDetection";
+import { isValidInletTemperature } from "./inletTemperature.ts";
+import type { TankTemperatureReading } from "./tankTemperatureForecast.ts";
+import { detectsWaterDraw } from "./waterDrawDetection.ts";
 import {
   areTimestampsInSameSensorGeometryEpoch,
   filterToLatestSensorGeometryEpoch,
-} from "./energyModelV2/sensorGeometry";
+} from "./energyModelV2/sensorGeometry.ts";
 
 export const heatingGainHistoryDays = 30;
 export const heatingGainHistoryPageSize = 1000;

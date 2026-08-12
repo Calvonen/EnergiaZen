@@ -8,14 +8,14 @@ import {
   defaultSafetyShowerReserve,
   defaultTargetShowerReserve,
   normalizeStoredShowerReserves,
-} from "./showerReserveSettings";
+} from "./showerReserveSettings.ts";
 import {
   defaultAutomaticMaxHeatingHours,
   defaultFixedHeatingHoursPerDay,
   normalizeStoredHeatingHours,
-} from "./heatingHourSettings";
+} from "./heatingHourSettings.ts";
 
-export { normalizeStoredShowerReserves } from "./showerReserveSettings";
+export { normalizeStoredShowerReserves } from "./showerReserveSettings.ts";
 
 export const defaultTankTemperature = 58;
 

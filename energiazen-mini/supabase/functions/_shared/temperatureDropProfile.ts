@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   fallbackHourlyTemperatureDrop,
   HourlyTemperatureDropProfile,
-} from "./tankTemperatureForecast";
+} from "./tankTemperatureForecast.ts";
 
 export type TemperatureDropProfileRow = {
   algorithm_version: string | null;

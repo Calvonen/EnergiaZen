@@ -1,4 +1,4 @@
-import { formatHelsinkiDateKey, getHelsinkiHourNumber } from "./heatingLogic";
+import { formatHelsinkiDateKey, getHelsinkiHourNumber } from "./heatingLogic.ts";
 
 export type ComparableHeatingPlan = {
   mode?: string | null;

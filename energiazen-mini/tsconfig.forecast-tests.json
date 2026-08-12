@@ -4,6 +4,7 @@
     "esModuleInterop": true,
     "module": "commonjs",
     "outDir": ".tmp-forecast-tests",
+    "rewriteRelativeImportExtensions": true,
     "paths": {
       "@/*": [
         "./*"

@@ -25,37 +25,37 @@ import {
   type HeatingOptimizationResult,
   type HeatingOptimizationSettings,
   type HeatingOptimizationSettingsSource,
-} from "../_shared/heatingOptimizer";
-import { createHeatingOptimizationSettings } from "../_shared/heatingOptimizer";
+} from "../_shared/heatingOptimizer.ts";
+import { createHeatingOptimizationSettings } from "../_shared/heatingOptimizer.ts";
 import {
   materializeHeatingOptimizationHours,
   shouldRunHeatingOptimization,
-} from "../_shared/heatingOptimizationRun";
+} from "../_shared/heatingOptimizationRun.ts";
 import {
   buildHeatingPlanPublicationDecision,
   computeNextUnknownHeatingAnchor,
   type HeatingPlanPublicationDecision,
-} from "../_shared/heatingPlanOrchestration";
-import type { ComparableHeatingPlan } from "../_shared/heatingPlanPublication";
+} from "../_shared/heatingPlanOrchestration.ts";
+import type { ComparableHeatingPlan } from "../_shared/heatingPlanPublication.ts";
 import {
   buildHourlyTemperatureDropProfileResult,
   fallbackHourlyTemperatureDrop,
   type HourlyTemperatureDropProfile,
   type TankTemperatureReading,
-} from "../_shared/tankTemperatureForecast";
+} from "../_shared/tankTemperatureForecast.ts";
 import {
   fetchLatestTemperatureDropProfile,
   selectTemperatureDropProfile,
   type TemperatureDropProfile,
-} from "../_shared/temperatureDropProfile";
-import { isTankReadingFreshForCalculation } from "../_shared/tankReadingFreshness";
-import { defaultSettings } from "../_shared/settingsDefaults";
+} from "../_shared/temperatureDropProfile.ts";
+import { isTankReadingFreshForCalculation } from "../_shared/tankReadingFreshness.ts";
+import { defaultSettings } from "../_shared/settingsDefaults.ts";
 import {
   getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
-} from "../_shared/heatingLogic";
-import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain";
+} from "../_shared/heatingLogic.ts";
+import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain.ts";
 
 export type RawTankReading = {
   bottom_temp: number | null;

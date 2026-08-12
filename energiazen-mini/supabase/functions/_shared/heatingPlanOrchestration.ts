@@ -12,7 +12,7 @@
 // optimizeHeatingPlan involved) is out of scope here - see
 // docs/PROJECT_CONTEXT.md and the backend-dependency notes in this repo's
 // heating-optimizer shadow mode PR for why.
-import type { HeatingOptimizationHour, HeatingOptimizationResult } from "./heatingOptimizer";
+import type { HeatingOptimizationHour, HeatingOptimizationResult } from "./heatingOptimizer.ts";
 import {
   computeNextUnknownHeatingAnchor,
   getChangedHeatingPlans,
@@ -20,8 +20,8 @@ import {
   shouldDeferHeatingPlanPublicationForUnknownStatus,
   type ComparableHeatingPlan,
   type UnknownHeatingAnchor,
-} from "./heatingPlanPublication";
-import { getHelsinkiHourNumber } from "./heatingLogic";
+} from "./heatingPlanPublication.ts";
+import { getHelsinkiHourNumber } from "./heatingLogic.ts";
 
 export type HeatingPlanDraft = {
   mode: "automatic";

@@ -1,13 +1,24 @@
-// Regression check for the class of bug that broke `npx supabase functions
-// deploy run-heating-optimizer --use-api`: an Edge Function (or a module it
-// imports) reaching outside supabase/functions/ via a relative import
-// (e.g. "../../../lib/heatingOptimizer"). Supabase's --use-api deploy
-// bundler only resolves relative imports that stay inside
-// supabase/functions/ - such an import type-checks and passes `npm test`
-// fine under Node/tsc, but fails to bundle for a real deploy with
-// "Module not found ... /source/lib/...". There is no Deno CLI in this
-// environment to run a real `supabase functions deploy` as a regression
-// test, so this statically re-derives the same containment rule the
+// Regression check for two classes of bug that broke real
+// `npx supabase functions deploy run-heating-optimizer --use-api` deploys,
+// neither of which `npm test`/tsc catches on their own:
+//
+// 1. A relative import escaping supabase/functions/ (e.g.
+//    "../../../lib/heatingOptimizer") - the --use-api deploy bundler only
+//    resolves relative imports that stay inside supabase/functions/, so
+//    this fails to bundle with "Module not found ... /source/lib/...".
+// 2. A relative import missing its explicit .ts extension (e.g.
+//    "./heatingOptimizer" instead of "./heatingOptimizer.ts") - the
+//    bundler does not do Node/esbuild-style extensionless resolution, so
+//    this fails to bundle with
+//    'Module not found ".../source/supabase/functions/_shared/heatingOptimizer"'
+//    even once the file is correctly placed under supabase/functions/.
+//
+// Both type-check and pass `npm test` fine under Node/tsc regardless (tsc's
+// classic/commonjs resolution neither cares about the functions/ boundary
+// nor requires the extension), which is exactly how both shipped past
+// local verification and only surfaced on a real deploy. There is no Deno
+// CLI in this environment to run a real `supabase functions deploy` as a
+// regression test, so this statically re-derives the same two rules the
 // bundler enforces, without needing network access or Deno.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
@@ -49,7 +60,8 @@ export function runEdgeFunctionImportBoundariesUnitTests() {
   const files = listDeployableSourceFiles(functionsRoot);
   assert(files.length > 0, "expected to find deployable .ts files under supabase/functions/");
 
-  const violations: string[] = [];
+  const escapeViolations: string[] = [];
+  const missingExtensionViolations: string[] = [];
 
   for (const file of files) {
     const source = readFileSync(join(process.cwd(), file), "utf8");
@@ -60,13 +72,17 @@ export function runEdgeFunctionImportBoundariesUnitTests() {
         relativeToFunctionsRoot === ".." || relativeToFunctionsRoot.startsWith(`..${"/"}`);
 
       if (escapesFunctionsRoot) {
-        violations.push(`${file} imports "${specifier}" -> resolves outside ${functionsRoot}/`);
+        escapeViolations.push(`${file} imports "${specifier}" -> resolves outside ${functionsRoot}/`);
+      }
+
+      if (!specifier.endsWith(".ts") && !specifier.endsWith(".tsx")) {
+        missingExtensionViolations.push(`${file} imports "${specifier}" (missing an explicit .ts extension)`);
       }
     }
   }
 
   assert(
-    violations.length === 0,
+    escapeViolations.length === 0,
     [
       "Found Edge Function source files with relative imports that escape supabase/functions/ - " +
         "these will fail `npx supabase functions deploy <name> --use-api` with " +
@@ -74,7 +90,19 @@ export function runEdgeFunctionImportBoundariesUnitTests() {
         "Move the target file under supabase/functions/_shared/ (with a re-export shim left at " +
         "its old lib/ path for existing app callers) instead of importing it from outside " +
         "supabase/functions/:",
-      ...violations,
+      ...escapeViolations,
+    ].join("\n"),
+  );
+
+  assert(
+    missingExtensionViolations.length === 0,
+    [
+      "Found Edge Function source files with relative imports missing an explicit .ts extension - " +
+        "the --use-api deploy bundler does not do extensionless resolution (unlike Node/tsc, which " +
+        "resolve these fine locally), so these fail to bundle with " +
+        '\'Module not found ".../source/supabase/functions/..."\' on a real deploy. ' +
+        'Add the extension, e.g. "./heatingOptimizer" -> "./heatingOptimizer.ts":',
+      ...missingExtensionViolations,
     ].join("\n"),
   );
 }
