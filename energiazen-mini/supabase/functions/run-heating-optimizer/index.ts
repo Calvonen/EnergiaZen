@@ -26,6 +26,7 @@ import {
   createHeatingOptimizationSettings,
   fallbackHeatingGainPerHour,
   fetchLatestTemperatureDropProfile,
+  getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
   latestPriceFetchedAt,
@@ -48,17 +49,6 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { headers: jsonHeaders, status });
 }
 
-// yyyy-mm-dd for a UTC instant shifted by offsetDays, read in Europe/Helsinki.
-function helsinkiDateKey(date: Date, offsetDays: number): string {
-  const shifted = new Date(date.getTime() + offsetDays * 24 * 60 * 60 * 1000);
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Helsinki",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(shifted);
-}
-
 Deno.serve(async (request) => {
   if (request.method !== "GET" && request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
@@ -79,8 +69,15 @@ Deno.serve(async (request) => {
     });
 
     const now = new Date();
-    const todayPlanDate = helsinkiDateKey(now, 0);
-    const tomorrowPlanDate = helsinkiDateKey(now, 1);
+    // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
+    // calendar days - unlike a fixed +24h instant shift, it stays correct
+    // across DST transitions (spring-forward/fall-back days are 23h/25h
+    // long in real time, so a literal 24h add can land on the wrong
+    // Helsinki calendar date). Same helper app/(tabs)/index.tsx uses for
+    // today/tomorrow (getChartDayKey, fetchHourlyPrices) - no parallel date
+    // logic here.
+    const todayPlanDate = getDateKeyOffset(0, now);
+    const tomorrowPlanDate = getDateKeyOffset(1, now);
     const priceWindowStartIso = new Date(
       now.getTime() - 24 * 60 * 60 * 1000,
     ).toISOString();

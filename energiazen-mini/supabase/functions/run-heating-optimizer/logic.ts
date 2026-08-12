@@ -50,7 +50,11 @@ import {
 } from "../../../lib/temperatureDropProfile";
 import { isTankReadingFreshForCalculation } from "../../../lib/tankReadingFreshness";
 import { defaultSettings } from "../../../lib/settingsDefaults";
-import { getFinnishDateKey, getHelsinkiHourNumber } from "../../../lib/heatingLogic";
+import {
+  getDateKeyOffset,
+  getFinnishDateKey,
+  getHelsinkiHourNumber,
+} from "../../../lib/heatingLogic";
 import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../../../lib/heatingGain";
 
 export type RawTankReading = {
@@ -315,6 +319,7 @@ export function runBackendHeatingOptimization({
 }
 
 export type ShadowRunRow = {
+  app_plan_mode: string | null;
   app_planned_hours_today: number[] | null;
   fallback_used: boolean;
   heating_status: boolean | null;
@@ -366,8 +371,15 @@ export function buildShadowRunRow({
   const appPlannedHours = appTodayPlan
     ? normalizePlanHoursForComparison(appTodayPlan.planned_hours)
     : null;
+  // The backend only ever runs the automatic optimizer, so a match/mismatch
+  // is only a meaningful signal against an app plan that was itself
+  // published in automatic mode. Comparing against a "fixed"-mode app plan
+  // would pollute planned_hours_match with coincidental true's and
+  // meaningless false's, since fixed mode never went through
+  // optimizeHeatingPlan() at all - see this PR's report.
+  const appPlanIsAutomatic = appTodayPlan?.mode === "automatic";
   const plannedHoursMatch =
-    todayPlannedHours && appPlannedHours
+    appPlanIsAutomatic && todayPlannedHours && appPlannedHours
       ? JSON.stringify(todayPlannedHours) === JSON.stringify(appPlannedHours)
       : null;
   const uncertaintyReason =
@@ -376,6 +388,7 @@ export function buildShadowRunRow({
       : null;
 
   return {
+    app_plan_mode: appTodayPlan?.mode ?? null,
     app_planned_hours_today: appPlannedHours,
     fallback_used: optimizerResult?.heatingGainEstimate.fallbackUsed ?? false,
     heating_status: heatingStatus,
@@ -429,7 +442,8 @@ export {
   fallbackHourlyTemperatureDrop,
   fetchHeatingGainHistory,
   fetchLatestTemperatureDropProfile,
+  getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
 };
-export type { TankTemperatureReading };
+export type { HeatingPlanPublicationDecision, TankTemperatureReading };

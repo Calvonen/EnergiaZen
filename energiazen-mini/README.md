@@ -309,6 +309,14 @@ asetuslähde on laitekohtainen `AsyncStorage`). Näiltä osin funktio käyttää
 `settings_source`-sarakkeessa (`heating_control_settings+defaults` tai
 `defaults_only`) sen sijaan että väittäisi hiljaa täyttä yhteensopivuutta.
 
+`planned_hours_match` vertaa backendin tulosta appin `heating_plans`-tauluun
+tallentamaan tämän päivän suunnitelmaan **vain** jos kyseinen appin
+suunnitelma on julkaistu automaattitilassa (`app_plan_mode = 'automatic'`) -
+backend ajaa aina vain automaattista optimizeria, joten vertailu appin
+`fixed`-tilan suunnitelmaan ei olisi mielekäs signaali. Muissa tapauksissa
+(`fixed`-tila, appin suunnitelmaa ei löytynyt) `planned_hours_match` on
+`null`; `app_plan_mode` kertoo kummasta on kyse.
+
 Deployaa funktio:
 
 ```bash
@@ -363,6 +371,7 @@ select
   today_plan_date,
   today_planned_hours,
   app_planned_hours_today,
+  app_plan_mode,
   planned_hours_match,
   reason,
   optimizer_valid,
