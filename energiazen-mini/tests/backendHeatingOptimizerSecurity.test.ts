@@ -62,6 +62,32 @@ type PriceSnapshotRow = {
   starts_at: string;
 };
 
+const priceSnapshotNow = "2026-08-13T10:30:00.000Z";
+const priceSnapshotToday = "2026-08-13";
+
+function getHelsinkiDateKey(value: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Europe/Helsinki",
+    year: "numeric",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function isRelevantHourlyPrice(row: PriceSnapshotRow) {
+  const dateKey = getHelsinkiDateKey(row.starts_at);
+  return (
+    row.region === "FI" &&
+    row.resolution_minutes === 60 &&
+    ((dateKey === priceSnapshotToday &&
+      new Date(row.ends_at).getTime() > new Date(priceSnapshotNow).getTime()) ||
+      dateKey === "2026-08-14")
+  );
+}
+
 function priceSnapshotMatches(
   expectedRows: PriceSnapshotRow[],
   currentRows: PriceSnapshotRow[],
@@ -69,7 +95,7 @@ function priceSnapshotMatches(
   if (expectedRows.length === 0) return false;
 
   const expectedKeys = new Set<string>();
-  return expectedRows.every((expected) => {
+  const expectedMatchesCurrent = expectedRows.every((expected) => {
     const key = `${expected.region}|${expected.starts_at}|${expected.resolution_minutes}`;
     if (
       expected.region !== "FI" ||
@@ -91,6 +117,18 @@ function priceSnapshotMatches(
       current.spot_price_cents_kwh === expected.spot_price_cents_kwh
     );
   });
+  if (!expectedMatchesCurrent) return false;
+
+  return currentRows.filter(isRelevantHourlyPrice).every((current) =>
+    expectedRows.some(
+      (expected) =>
+        expected.region === current.region &&
+        expected.starts_at === current.starts_at &&
+        expected.ends_at === current.ends_at &&
+        expected.resolution_minutes === current.resolution_minutes &&
+        expected.spot_price_cents_kwh === current.spot_price_cents_kwh,
+    ),
+  );
 }
 
 export function runBackendHeatingOptimizerSecurityTests() {
@@ -109,6 +147,13 @@ export function runBackendHeatingOptimizerSecurityTests() {
     join(
       process.cwd(),
       "supabase/migrations/20260813090000_recheck_backend_tank_and_price_snapshots.sql",
+    ),
+    "utf8",
+  );
+  const reversePriceMigration = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260813110000_reject_new_optimizer_price_intervals.sql",
     ),
     "utf8",
   );
@@ -258,6 +303,61 @@ export function runBackendHeatingOptimizerSecurityTests() {
       inputSnapshotMigration.includes("current_price.spot_price_cents_kwh is distinct from expected.spot_price_cents_kwh"),
     "RPC must compare only the canonical keys and values in the optimizer's hourly price window",
   );
+  const reverseConflictReturn = reversePriceMigration.lastIndexOf(
+    "return 'price_snapshot_conflict';",
+  );
+  const nestedFullSnapshotCall = reversePriceMigration.indexOf(
+    "return public.publish_backend_heating_optimizer_plans_checked_price_members(",
+  );
+  assertSource(
+    reversePriceMigration.includes("lock table public.electricity_prices in share mode") &&
+      reversePriceMigration.includes("current_price.region = 'FI'") &&
+      reversePriceMigration.includes("current_price.resolution_minutes = 60") &&
+      reversePriceMigration.includes(
+        "(current_price.starts_at at time zone 'Europe/Helsinki')::date",
+      ) &&
+      reversePriceMigration.includes("p_validated_plan_date") &&
+      reversePriceMigration.includes("current_price.ends_at > p_published_at") &&
+      reversePriceMigration.includes("p_validated_plan_date + 1"),
+    "reverse comparison must mirror the optimizer's remaining-today plus tomorrow FI/60-minute window",
+  );
+  assertSource(
+    reversePriceMigration.includes("from relevant_current current_price") &&
+      reversePriceMigration.includes("left join expected") &&
+      reversePriceMigration.includes("expected.starts_at = current_price.starts_at") &&
+      reversePriceMigration.includes("expected.ends_at = current_price.ends_at") &&
+      reversePriceMigration.includes(
+        "expected.spot_price_cents_kwh is not distinct from",
+      ) &&
+      reversePriceMigration.includes("where expected.starts_at is null") &&
+      reverseConflictReturn !== -1 &&
+      reverseConflictReturn < nestedFullSnapshotCall,
+    "every newly added or conflicting relevant current row must fail before the full write/healthy helper",
+  );
+  assertSource(
+    reversePriceMigration.includes(
+      "from public, anon, authenticated, service_role",
+    ) &&
+      reversePriceMigration.includes("security invoker") &&
+      reversePriceMigration.includes(
+        "grant execute on function public.publish_backend_heating_optimizer_plans(",
+      ) &&
+      reversePriceMigration.includes("to service_role") &&
+      !reversePriceMigration.includes("insert into public.heating_plans") &&
+      edgeSource.includes(
+        "(hasChangedPlans && canPublishPlan) || canValidateNoChanges",
+      ) &&
+      edgeSource.includes(
+        'successfulOutcome = hasChangedPlans ? "published" : "no_changes"',
+      ) &&
+      safeCompletionMigration.includes("insert into public.heating_plans") &&
+      safeCompletionMigration.includes("last_validated_plan_at = p_published_at") &&
+      safeCompletionMigration.includes("last_published_at = case") &&
+      safeCompletionMigration.includes(
+        "validated_plan_fingerprint = p_validated_plan_fingerprint",
+      ),
+    "reverse price conflicts must be atomic with both changed-plan and no_changes safe completion",
+  );
   const nestedSafeCall = inputSnapshotMigration.indexOf(
     "return public.publish_backend_heating_optimizer_plans_checked_relay_snapshot(",
   );
@@ -353,6 +453,12 @@ export function runBackendHeatingOptimizerSecurityTests() {
     spot_price_cents_kwh: 8,
     starts_at: "2026-08-15T10:00:00.000Z",
   };
+  const tomorrowPrice: PriceSnapshotRow = {
+    ...usedPrice,
+    ends_at: "2026-08-14T09:00:00.000Z",
+    spot_price_cents_kwh: 6.75,
+    starts_at: "2026-08-14T08:00:00.000Z",
+  };
   assertSource(
     priceSnapshotMatches([usedPrice], [usedPrice]),
     "unchanged used price snapshot must remain publishable",
@@ -376,6 +482,29 @@ export function runBackendHeatingOptimizerSecurityTests() {
   assertSource(
     priceSnapshotMatches([usedPrice], [usedPrice, unusedPrice]),
     "an unused future price row must not block publication",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], [
+      usedPrice,
+      {
+        ...usedPrice,
+        ends_at: "2026-08-13T12:00:00.000Z",
+        spot_price_cents_kwh: 5.5,
+        starts_at: "2026-08-13T11:00:00.000Z",
+      },
+    ]),
+    "a newly added relevant FI/60-minute interval must conflict",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], [usedPrice, tomorrowPrice]),
+    "a previously missing tomorrow hour must conflict when it appears",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], [
+      usedPrice,
+      { ...usedPrice, spot_price_cents_kwh: 8.25 },
+    ]),
+    "a duplicate conflicting relevant interval must conflict",
   );
   assertSource(
     priceSnapshotMatches([usedPrice], [

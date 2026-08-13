@@ -512,6 +512,15 @@ puuttuva arvo tai puuttuva käytetty hintarivi palauttaa hallitun
 plan-kirjoituksia, healthy-validointia ja heartbeat-aikaleimojen tai
 fingerprintin päivitystä.
 
+Hintasnapshot tarkistetaan molempiin suuntiin. Expected-rivien säilymisen
+lisäksi RPC muodostaa lukituksen alla authoritative FI/60 min current-setin
+täsmälleen optimizerin samasta ikkunasta: publication-hetkellä jäljellä olevat
+tämän päivän intervalit (`ends_at > p_published_at`) sekä kaikki Helsingin
+huomisen päivän intervalit. Jos tähän settiin on ilmestynyt rivi, jota Edge
+Functionin kanonisessa snapshotissa ei ollut, RPC palauttaa
+`price_snapshot_conflict`. Ikkunan ulkopuoliset tulevaisuuden rivit ja 15
+minuutin rivit eivät kuulu vertailuun.
+
 Normaali `tank_snapshot_conflict` retrytetään kerran saman backend-runin
 sisällä. Ennen retryä Edge Function varmistaa singleton-riviltä, että sama
 `current_run_id` + `current_run_started_at` omistaa ajon edelleen. Retry lukee
