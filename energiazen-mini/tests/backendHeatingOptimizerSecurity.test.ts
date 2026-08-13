@@ -7,19 +7,31 @@ function assertSource(condition: boolean, message: string) {
   }
 }
 
-type RelayReading = { created_at: string; heating: boolean | null };
+type TankReading = {
+  bottom_temp: number | null;
+  created_at: string;
+  heating: boolean | null;
+  top_temp: number | null;
+};
 
-function relaySnapshotMatches(
-  expected: RelayReading,
-  currentReadings: RelayReading[],
+function tankSnapshotMatches(
+  expected: TankReading,
+  currentReadings: TankReading[],
 ) {
-  if (expected.heating === null || currentReadings.length === 0) {
+  if (
+    expected.bottom_temp === null ||
+    expected.heating === null ||
+    expected.top_temp === null ||
+    currentReadings.length === 0
+  ) {
     return false;
   }
   const originalExists = currentReadings.some(
     (reading) =>
       reading.created_at === expected.created_at &&
-      reading.heating === expected.heating,
+      reading.heating === expected.heating &&
+      reading.top_temp === expected.top_temp &&
+      reading.bottom_temp === expected.bottom_temp,
   );
   const latestCreatedAt = currentReadings.reduce(
     (latest, reading) =>
@@ -33,8 +45,52 @@ function relaySnapshotMatches(
   return (
     originalExists &&
     latestCreatedAt >= expected.created_at &&
-    latestReadings.every((reading) => reading.heating === expected.heating)
+    latestReadings.every(
+      (reading) =>
+        reading.heating === expected.heating &&
+        reading.top_temp === expected.top_temp &&
+        reading.bottom_temp === expected.bottom_temp,
+    )
   );
+}
+
+type PriceSnapshotRow = {
+  ends_at: string;
+  region: string;
+  resolution_minutes: number;
+  spot_price_cents_kwh: number;
+  starts_at: string;
+};
+
+function priceSnapshotMatches(
+  expectedRows: PriceSnapshotRow[],
+  currentRows: PriceSnapshotRow[],
+) {
+  if (expectedRows.length === 0) return false;
+
+  const expectedKeys = new Set<string>();
+  return expectedRows.every((expected) => {
+    const key = `${expected.region}|${expected.starts_at}|${expected.resolution_minutes}`;
+    if (
+      expected.region !== "FI" ||
+      expected.resolution_minutes !== 60 ||
+      expectedKeys.has(key)
+    ) {
+      return false;
+    }
+    expectedKeys.add(key);
+
+    const current = currentRows.find(
+      (row) =>
+        row.region === expected.region &&
+        row.starts_at === expected.starts_at &&
+        row.resolution_minutes === expected.resolution_minutes,
+    );
+    return (
+      current?.ends_at === expected.ends_at &&
+      current.spot_price_cents_kwh === expected.spot_price_cents_kwh
+    );
+  });
 }
 
 export function runBackendHeatingOptimizerSecurityTests() {
@@ -46,6 +102,13 @@ export function runBackendHeatingOptimizerSecurityTests() {
     join(
       process.cwd(),
       "supabase/migrations/20260813070000_recheck_backend_relay_snapshot.sql",
+    ),
+    "utf8",
+  );
+  const inputSnapshotMigration = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260813090000_recheck_backend_tank_and_price_snapshots.sql",
     ),
     "utf8",
   );
@@ -98,84 +161,161 @@ export function runBackendHeatingOptimizerSecurityTests() {
   );
 
   assertSource(
-    relayMigration.includes("p_expected_relay_snapshot jsonb") &&
-      relayMigration.includes("expected_relay_created_at") &&
-      relayMigration.includes("expected_relay_heating") &&
-      edgeSource.includes("buildExpectedRelaySnapshot(latestReading)") &&
-      edgeSource.includes("p_expected_relay_snapshot: expectedRelaySnapshot"),
-    "Edge Function must pass reading identity and relay state to the publication transaction",
+    inputSnapshotMigration.includes("p_expected_tank_snapshot jsonb") &&
+      inputSnapshotMigration.includes("p_expected_price_snapshot jsonb") &&
+      edgeSource.includes("buildExpectedTankSnapshot(latestReading)") &&
+      edgeSource.includes("buildExpectedElectricityPriceSnapshot(") &&
+      edgeSource.includes("p_expected_tank_snapshot: expectedTankSnapshot") &&
+      edgeSource.includes("p_expected_price_snapshot: expectedPriceSnapshot"),
+    "Edge Function must pass exact tank and used-price snapshots to the publication transaction",
   );
   assertSource(
-    relayMigration.includes("lock table public.tank_readings in share mode") &&
-      relayMigration.includes("original_reading.created_at = expected_relay_created_at") &&
-      relayMigration.includes("latest_reading.created_at = latest_relay_created_at") &&
-      relayMigration.includes("latest_reading.heating is distinct from expected_relay_heating"),
-    "RPC must lock readings and compare the original and latest relay snapshots before completion",
+    inputSnapshotMigration.includes("lock table public.tank_readings in share mode") &&
+      inputSnapshotMigration.includes("lock table public.electricity_prices in share mode") &&
+      inputSnapshotMigration.includes("original_reading.created_at = expected_created_at") &&
+      inputSnapshotMigration.includes("latest_reading.heating is distinct from expected_heating") &&
+      inputSnapshotMigration.includes("latest_reading.top_temp is distinct from expected_top_temp") &&
+      inputSnapshotMigration.includes("latest_reading.bottom_temp is distinct from expected_bottom_temp"),
+    "RPC must lock inputs and compare every tank value used by the optimizer",
   );
   assertSource(
-    relayMigration.lastIndexOf("return 'relay_conflict';") <
-      relayMigration.indexOf(
-        "return public.publish_backend_heating_optimizer_plans_checked_snapshots(",
-      ) &&
+    inputSnapshotMigration.includes("from jsonb_to_recordset(p_expected_price_snapshot)") &&
+      inputSnapshotMigration.includes("current_price.region = expected.region") &&
+      inputSnapshotMigration.includes("current_price.starts_at = expected.starts_at") &&
+      inputSnapshotMigration.includes("current_price.resolution_minutes = expected.resolution_minutes") &&
+      inputSnapshotMigration.includes("current_price.ends_at is distinct from expected.ends_at") &&
+      inputSnapshotMigration.includes("current_price.spot_price_cents_kwh is distinct from expected.spot_price_cents_kwh"),
+    "RPC must compare only the canonical keys and values in the optimizer's hourly price window",
+  );
+  const nestedSafeCall = inputSnapshotMigration.indexOf(
+    "return public.publish_backend_heating_optimizer_plans_checked_relay_snapshot(",
+  );
+  assertSource(
+    inputSnapshotMigration.lastIndexOf("return 'tank_snapshot_conflict';") < nestedSafeCall &&
+      inputSnapshotMigration.lastIndexOf("return 'price_snapshot_conflict';") < nestedSafeCall &&
+      !inputSnapshotMigration.includes("insert into public.heating_plans") &&
       edgeSource.includes('publishCommitted === "relay_conflict"') &&
+      edgeSource.includes('publishCommitted === "tank_snapshot_conflict"') &&
+      edgeSource.includes('publishCommitted === "price_snapshot_conflict"') &&
       safeCompletionMigration.includes("insert into public.heating_plans") &&
       safeCompletionMigration.includes("last_published_at = case") &&
       safeCompletionMigration.includes("last_validated_plan_at = p_published_at") &&
       safeCompletionMigration.includes("validated_plan_fingerprint = p_validated_plan_fingerprint"),
-    "every relay conflict must return before the only plan-write and healthy timestamp/fingerprint helper",
+    "tank and price conflicts must return before the only plan-write and healthy completion helper",
   );
   assertSource(
-    relayMigration.includes(
-      "from public, anon, authenticated, service_role",
+    edgeSource.includes(
+      "(hasChangedPlans && canPublishPlan) || canValidateNoChanges",
     ) &&
-      relayMigration.includes("security invoker") &&
-      relayMigration.includes("grant execute on function public.publish_backend_heating_optimizer_plans(") &&
-      relayMigration.includes("to service_role"),
-    "the old no-relay signature must become a private helper while service_role can call only the relay-safe RPC",
+      edgeSource.includes(
+        'successfulOutcome = hasChangedPlans ? "published" : "no_changes"',
+      ) &&
+      edgeSource.includes("publication_conflict: publishCommitted") &&
+      edgeSource.includes("wrote_to_heating_plans: false"),
+    "changed-plan and no_changes completion must share snapshot checks and report zero writes on conflict",
+  );
+  assertSource(
+    inputSnapshotMigration.includes("from public, anon, authenticated, service_role") &&
+      inputSnapshotMigration.includes("security invoker") &&
+      inputSnapshotMigration.includes("grant execute on function public.publish_backend_heating_optimizer_plans(") &&
+      inputSnapshotMigration.includes("to service_role") &&
+      relayMigration.includes("p_expected_relay_snapshot jsonb"),
+    "the obsolete relay-only signature must be private while service_role can call only the full snapshot RPC",
   );
 
-  const falseSnapshot: RelayReading = {
+  const falseSnapshot: TankReading = {
+    bottom_temp: 41,
     created_at: "2026-08-13T10:00:00.000Z",
     heating: false,
+    top_temp: 52,
   };
-  const trueSnapshot: RelayReading = {
-    created_at: "2026-08-13T10:00:00.000Z",
-    heating: true,
-  };
+  const trueSnapshot: TankReading = { ...falseSnapshot, heating: true };
   assertSource(
-    relaySnapshotMatches(falseSnapshot, [falseSnapshot]),
-    "unchanged false relay snapshot must remain publishable",
+    tankSnapshotMatches(falseSnapshot, [falseSnapshot]),
+    "unchanged tank snapshot must remain publishable",
   );
   assertSource(
-    relaySnapshotMatches(trueSnapshot, [trueSnapshot]),
-    "unchanged true relay snapshot must remain publishable",
-  );
-  assertSource(
-    !relaySnapshotMatches(falseSnapshot, [
+    !tankSnapshotMatches(falseSnapshot, [
       falseSnapshot,
-      { created_at: "2026-08-13T10:01:00.000Z", heating: true },
+      { ...falseSnapshot, created_at: "2026-08-13T10:01:00.000Z", top_temp: 48 },
     ]),
-    "false to true relay transition must conflict",
+    "same relay state with changed top temperature must conflict",
   );
   assertSource(
-    !relaySnapshotMatches(trueSnapshot, [
+    !tankSnapshotMatches(falseSnapshot, [
+      falseSnapshot,
+      { ...falseSnapshot, bottom_temp: 37, created_at: "2026-08-13T10:01:00.000Z" },
+    ]),
+    "same relay state with changed bottom temperature must conflict",
+  );
+  assertSource(
+    !tankSnapshotMatches(trueSnapshot, [
       trueSnapshot,
-      { created_at: "2026-08-13T10:01:00.000Z", heating: false },
+      { ...trueSnapshot, created_at: "2026-08-13T10:01:00.000Z", heating: false },
     ]),
-    "true to false relay transition must conflict",
+    "same temperatures with changed relay state must conflict",
   );
   assertSource(
-    relaySnapshotMatches(falseSnapshot, [
+    tankSnapshotMatches(falseSnapshot, [
       falseSnapshot,
-      { created_at: "2026-08-13T10:01:00.000Z", heating: false },
+      { ...falseSnapshot, created_at: "2026-08-13T10:01:00.000Z" },
     ]),
-    "a newer reading with the same relay state must not create a needless conflict",
+    "a newer reading with identical relevant values must remain publishable",
   );
   assertSource(
-    !relaySnapshotMatches(
-      { created_at: "2026-08-13T10:00:00.000Z", heating: null },
-      [{ created_at: "2026-08-13T10:00:00.000Z", heating: null }],
-    ),
-    "unknown original relay state must remain fail-safe",
+    !tankSnapshotMatches({ ...falseSnapshot, top_temp: null }, [
+      { ...falseSnapshot, top_temp: null },
+    ]),
+    "unknown relevant temperature must remain fail-safe",
+  );
+
+  const usedPrice: PriceSnapshotRow = {
+    ends_at: "2026-08-13T11:00:00.000Z",
+    region: "FI",
+    resolution_minutes: 60,
+    spot_price_cents_kwh: 4.25,
+    starts_at: "2026-08-13T10:00:00.000Z",
+  };
+  const unusedPrice: PriceSnapshotRow = {
+    ...usedPrice,
+    ends_at: "2026-08-15T11:00:00.000Z",
+    spot_price_cents_kwh: 8,
+    starts_at: "2026-08-15T10:00:00.000Z",
+  };
+  assertSource(
+    priceSnapshotMatches([usedPrice], [usedPrice]),
+    "unchanged used price snapshot must remain publishable",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], [
+      { ...usedPrice, spot_price_cents_kwh: 9.5 },
+    ]),
+    "a changed used hourly price must conflict",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], []),
+    "a deleted used hourly price must conflict",
+  );
+  assertSource(
+    !priceSnapshotMatches([usedPrice], [
+      { ...usedPrice, ends_at: "2026-08-13T11:30:00.000Z" },
+    ]),
+    "a replacement row with conflicting interval data must conflict",
+  );
+  assertSource(
+    priceSnapshotMatches([usedPrice], [usedPrice, unusedPrice]),
+    "an unused future price row must not block publication",
+  );
+  assertSource(
+    priceSnapshotMatches([usedPrice], [
+      usedPrice,
+      {
+        ...usedPrice,
+        ends_at: "2026-08-13T10:15:00.000Z",
+        resolution_minutes: 15,
+        spot_price_cents_kwh: 99,
+      },
+    ]),
+    "15-minute rows must not interfere with the used 60-minute snapshot",
   );
 }

@@ -65,17 +65,21 @@ export type RawTankReading = {
   top_temp: number | null;
 };
 
-export type ExpectedRelaySnapshot = {
+export type ExpectedTankSnapshot = {
+  bottom_temp: number | null;
   created_at: string | null;
   heating: boolean | null;
+  top_temp: number | null;
 };
 
-export function buildExpectedRelaySnapshot(
+export function buildExpectedTankSnapshot(
   reading: RawTankReading | null,
-): ExpectedRelaySnapshot {
+): ExpectedTankSnapshot {
   return {
+    bottom_temp: reading?.bottom_temp ?? null,
     created_at: reading?.created_at ?? null,
     heating: reading?.heating ?? null,
+    top_temp: reading?.top_temp ?? null,
   };
 }
 
@@ -342,6 +346,29 @@ export function buildOptimizerHours(
     )
     .sort((first, second) => first.date.getTime() - second.date.getTime())
     .map(({ dateKey: _dateKey, ...hour }) => hour);
+}
+
+export type ExpectedElectricityPriceSnapshotRow = {
+  ends_at: string;
+  region: string;
+  resolution_minutes: 60;
+  spot_price_cents_kwh: number;
+  starts_at: string;
+};
+
+export function buildExpectedElectricityPriceSnapshot(
+  hours: HeatingOptimizationHour[],
+  region = "FI",
+): ExpectedElectricityPriceSnapshotRow[] {
+  return hours
+    .map((hour) => ({
+      ends_at: hour.endDate.toISOString(),
+      region,
+      resolution_minutes: 60 as const,
+      spot_price_cents_kwh: hour.price,
+      starts_at: hour.startDate,
+    }))
+    .sort((first, second) => first.starts_at.localeCompare(second.starts_at));
 }
 
 export type OptimizerReadinessCheck =

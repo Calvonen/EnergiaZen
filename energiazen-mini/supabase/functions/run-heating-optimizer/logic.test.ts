@@ -1,8 +1,9 @@
 import {
   buildHeatingPlanFingerprint,
+  buildExpectedElectricityPriceSnapshot,
   buildExpectedHeatingPlanVersions,
   buildExpectedOptimizerSettingsSnapshot,
-  buildExpectedRelaySnapshot,
+  buildExpectedTankSnapshot,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
@@ -100,24 +101,34 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     );
   }
   assertEqual(
-    buildExpectedRelaySnapshot({
+    buildExpectedTankSnapshot({
       bottom_temp: 45,
       created_at: "2026-08-13T10:00:00.000Z",
       heating: false,
       top_temp: 55,
     }),
-    { created_at: "2026-08-13T10:00:00.000Z", heating: false },
-    "relay snapshot must carry the optimizer's original reading identity and heating state",
+    {
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: false,
+      top_temp: 55,
+    },
+    "tank snapshot must carry every current reading value used by the optimizer",
   );
   assertEqual(
-    buildExpectedRelaySnapshot({
+    buildExpectedTankSnapshot({
       bottom_temp: 45,
       created_at: "2026-08-13T10:00:00.000Z",
       heating: null,
       top_temp: 55,
     }),
-    { created_at: "2026-08-13T10:00:00.000Z", heating: null },
-    "unknown original relay state must remain unknown for fail-safe rejection",
+    {
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: null,
+      top_temp: 55,
+    },
+    "unknown original relay state must remain unknown in the full tank snapshot",
   );
 
   {
@@ -431,6 +442,29 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       buildOptimizerHours(quarterHourRows, now, todayPlanDate, tomorrowPlanDate),
       [],
       "15-minute-only prices must leave the hourly optimizer not ready",
+    );
+    const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
+      completeTodayHours,
+    );
+    assertEqual(
+      expectedPriceSnapshot.length,
+      completeTodayHours.length,
+      "price snapshot must contain exactly the rows passed to the optimizer",
+    );
+    assertEqual(
+      expectedPriceSnapshot[0],
+      {
+        ends_at: completeTodayHours[0].endDate.toISOString(),
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: completeTodayHours[0].price,
+        starts_at: completeTodayHours[0].startDate,
+      },
+      "price snapshot must preserve each used interval and price canonically",
+    );
+    assert(
+      expectedPriceSnapshot.every((price) => price.resolution_minutes === 60),
+      "15-minute rows must never enter the hourly optimizer price snapshot",
     );
     assertEqual(
       checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours }),

@@ -18,9 +18,10 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   buildHeatingPlanPublicationDecision,
   buildHeatingPlanFingerprint,
+  buildExpectedElectricityPriceSnapshot,
   buildExpectedHeatingPlanVersions,
   buildExpectedOptimizerSettingsSnapshot,
-  buildExpectedRelaySnapshot,
+  buildExpectedTankSnapshot,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -465,15 +466,20 @@ Deno.serve(async (request) => {
         todayPlanDate,
       );
       const expectedSettings = buildExpectedOptimizerSettingsSnapshot(settingsRow);
-      const expectedRelaySnapshot = buildExpectedRelaySnapshot(latestReading);
+      const expectedTankSnapshot = buildExpectedTankSnapshot(latestReading);
+      const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
+        hours,
+        electricityPriceRegion,
+      );
       const successfulOutcome = hasChangedPlans ? "published" : "no_changes";
       const { data: publishCommitted, error: publishError } = await supabase.rpc(
         "publish_backend_heating_optimizer_plans",
         {
           p_changed_plans: decision.changedPlans,
           p_expected_plan_versions: expectedPlanVersions,
-          p_expected_relay_snapshot: expectedRelaySnapshot,
+          p_expected_price_snapshot: expectedPriceSnapshot,
           p_expected_settings: expectedSettings,
+          p_expected_tank_snapshot: expectedTankSnapshot,
           p_publish_reason: hasChangedPlans ? "valid plan published" : shadowRow.reason,
           p_published_at: now.toISOString(),
           p_run_id: runId,
@@ -513,7 +519,9 @@ Deno.serve(async (request) => {
       if (
         publishCommitted === "settings_conflict" ||
         publishCommitted === "plan_conflict" ||
-        publishCommitted === "relay_conflict"
+        publishCommitted === "relay_conflict" ||
+        publishCommitted === "tank_snapshot_conflict" ||
+        publishCommitted === "price_snapshot_conflict"
       ) {
         const failureCommitted = await completePublicationFailure(
           `publication_failed: ${publishCommitted}`,

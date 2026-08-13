@@ -500,11 +500,17 @@ Kumpikaan polku ei kirjoita plan-rivejä eikä päivitä validointi- tai
 julkaisuaikoja.
 
 RPC saa lisäksi optimizerin käyttämän latest tank reading -snapshotin
-(`created_at`, `heating`). Se lukitsee `tank_readings`-taulun lyhyen
-publication/no-change-transaktion loppuajaksi, varmistaa alkuperäisen readingin
-olemassaolon ja vertaa uusimman readingin relay-tilaa alkuperäiseen. Uudempi
-reading samalla `heating`-arvolla sallitaan; eri tai unknown relay-tila palauttaa
-`relay_conflict`in ennen plan-kirjoituksia ja heartbeat-validointia.
+(`created_at`, `heating`, `top_temp`, `bottom_temp`) sekä kanonisen, järjestetyn
+snapshotin juuri optimizerille annetuista 60 minuutin hintariveistä (`region`,
+`starts_at`, `ends_at`, `resolution_minutes`, `spot_price_cents_kwh`). Se
+lukitsee `tank_readings`- ja `electricity_prices`-taulut lyhyen publication/
+no-change-transaktion loppuajaksi. Uudempi tank reading sallitaan vain, jos
+kaikki optimizerin käyttämät arvot ovat täsmälleen samat; hintavertailu ei
+huomioi optimizerin ikkunan ulkopuolisia eikä 15 minuutin rivejä. Muutos,
+puuttuva arvo tai puuttuva käytetty hintarivi palauttaa hallitun
+`tank_snapshot_conflict`- tai `price_snapshot_conflict`-tuloksen ennen
+plan-kirjoituksia, healthy-validointia ja heartbeat-aikaleimojen tai
+fingerprintin päivitystä.
 
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
