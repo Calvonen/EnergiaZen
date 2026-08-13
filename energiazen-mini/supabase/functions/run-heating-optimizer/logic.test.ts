@@ -54,7 +54,7 @@ function priceRowsForDay(
     const startsAt = `${dateKey}T${String(hour).padStart(2, "0")}:00:00.000Z`;
     const endsAt = new Date(new Date(startsAt).getTime() + 60 * 60 * 1000).toISOString();
 
-    rows.push({ ends_at: endsAt, spot_price_cents_kwh: priceCentsPerKwh, starts_at: startsAt });
+    rows.push({ ends_at: endsAt, resolution_minutes: 60, spot_price_cents_kwh: priceCentsPerKwh, starts_at: startsAt });
   }
 
   return rows;
@@ -65,6 +65,7 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
   for (let cursor = start.getTime(); cursor < end.getTime(); cursor += 60 * 60 * 1000) {
     rows.push({
       ends_at: new Date(cursor + 60 * 60 * 1000).toISOString(),
+      resolution_minutes: 60,
       spot_price_cents_kwh: 4,
       starts_at: new Date(cursor).toISOString(),
     });
@@ -74,14 +75,39 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 
 export function runRunHeatingOptimizerLogicUnitTests() {
   assertEqual(
-    canMarkHeatingPlanValidated(true, true, true),
+    canMarkHeatingPlanValidated(true, true, false),
     true,
     "known heating=true may validate an otherwise valid unchanged plan",
   );
   assertEqual(
-    canMarkHeatingPlanValidated(false, true, true),
+    canMarkHeatingPlanValidated(false, true, false),
     true,
     "known heating=false may validate an otherwise valid unchanged plan",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, true),
+    false,
+    "a changed today plan must remain unvalidated",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, false),
+    true,
+    "unchanged today remains valid independently of optional tomorrow changes",
+  );
+  const optionalTomorrowChange = { plan_date: "2026-08-13" };
+  assertEqual(
+    canMarkHeatingPlanValidated(
+      false,
+      true,
+      [optionalTomorrowChange].some((plan) => plan.plan_date === "2026-08-12"),
+    ),
+    true,
+    "a tomorrow-only draft change must not block today's healthy validation",
+  );
+  assertEqual(
+    buildHeatingPlanFingerprint("2026-08-12", [2, 5]),
+    "2026-08-12|2,5",
+    "today validation fingerprints only the stored today plan identity",
   );
   for (const unknownHeating of [null, undefined]) {
     assertEqual(
@@ -251,6 +277,33 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       todayPlanDate,
       tomorrowPlanDate,
     );
+    const quarterHourRows = priceRowsBetween(
+      new Date("2026-08-12T11:00:00.000Z"),
+      new Date("2026-08-12T13:00:00.000Z"),
+    ).flatMap((row) => {
+      const start = new Date(row.starts_at).getTime();
+      return [0, 15, 30, 45].map((offsetMinutes) => ({
+        ...row,
+        ends_at: new Date(start + (offsetMinutes + 15) * 60 * 1000).toISOString(),
+        resolution_minutes: 15,
+        starts_at: new Date(start + offsetMinutes * 60 * 1000).toISOString(),
+      }));
+    });
+    assertEqual(
+      buildOptimizerHours(
+        [...todayPrices, ...quarterHourRows],
+        now,
+        todayPlanDate,
+        tomorrowPlanDate,
+      ).length,
+      completeTodayHours.length,
+      "mixed 15-minute rows must not disturb supported 60-minute optimizer input",
+    );
+    assertEqual(
+      buildOptimizerHours(quarterHourRows, now, todayPlanDate, tomorrowPlanDate),
+      [],
+      "15-minute-only prices must leave the hourly optimizer not ready",
+    );
     assertEqual(
       checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours }),
       { ok: true },
@@ -402,9 +455,9 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   // independent of how far into the future its rows happen to reach.
   assertEqual(
     latestPriceFetchedAt([
-      { ends_at: "x", fetched_at: "2026-08-12T09:00:00.000Z", spot_price_cents_kwh: 1, starts_at: "a" },
-      { ends_at: "x", fetched_at: "2026-08-12T13:10:00.000Z", spot_price_cents_kwh: 1, starts_at: "b" },
-      { ends_at: "x", fetched_at: null, spot_price_cents_kwh: 1, starts_at: "c" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: "2026-08-12T09:00:00.000Z", spot_price_cents_kwh: 1, starts_at: "a" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: "2026-08-12T13:10:00.000Z", spot_price_cents_kwh: 1, starts_at: "b" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: null, spot_price_cents_kwh: 1, starts_at: "c" },
     ]),
     "2026-08-12T13:10:00.000Z",
     "must report the newest fetched_at among the rows, ignoring rows without one",

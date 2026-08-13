@@ -76,6 +76,7 @@ export type RawHeatingControlSettingsRow = {
 export type RawElectricityPriceRow = {
   ends_at: string;
   fetched_at?: string | null;
+  resolution_minutes: number;
   spot_price_cents_kwh: number;
   starts_at: string;
 };
@@ -123,9 +124,9 @@ export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true 
 export function canMarkHeatingPlanValidated(
   heating: unknown,
   isValidReadyDecision: boolean,
-  hasNoChanges: boolean,
+  hasTodayChanges: boolean,
 ): boolean {
-  return typeof heating === "boolean" && isValidReadyDecision && hasNoChanges;
+  return typeof heating === "boolean" && isValidReadyDecision && !hasTodayChanges;
 }
 
 // automaticMaxHeatingHours and safetyShowerReserve are settings the
@@ -173,6 +174,7 @@ export function buildOptimizerHours(
   tomorrowPlanDate: string,
 ): HeatingOptimizationHour[] {
   return prices
+    .filter((price) => price.resolution_minutes === 60)
     .map((price) => {
       const date = new Date(price.starts_at);
       const endDate = new Date(price.ends_at);

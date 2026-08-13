@@ -215,8 +215,9 @@ Deno.serve(async (request) => {
       }),
       supabase
         .from("electricity_prices")
-        .select("starts_at,ends_at,spot_price_cents_kwh,fetched_at")
+        .select("starts_at,ends_at,spot_price_cents_kwh,fetched_at,resolution_minutes")
         .eq("region", electricityPriceRegion)
+        .eq("resolution_minutes", 60)
         .gte("starts_at", priceWindowStartIso)
         .order("starts_at", { ascending: true }),
       supabase
@@ -361,7 +362,8 @@ Deno.serve(async (request) => {
     const isNoChanges = canMarkHeatingPlanValidated(
       heating,
       isValidReadyDecision,
-      decision.status === "ready" && decision.changedPlans.length === 0,
+      decision.status === "ready" &&
+        decision.changedPlans.some((plan) => plan.plan_date === todayPlanDate),
     );
     const outcome = isNoChanges
       ? "no_changes"
