@@ -135,6 +135,59 @@ export function canMarkHeatingPlanValidated(
   return typeof heating === "boolean" && isValidReadyDecision && !hasTodayChanges;
 }
 
+export type OptimizerInputFetchFailureReason =
+  | "heating_gain_history_fetch_failed"
+  | "recovery_history_fetch_failed"
+  | "drop_profile_fetch_failed";
+
+export type OptimizerInputFetchResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: OptimizerInputFetchFailureReason; value: T };
+
+export function successfulOptimizerInputFetch<T>(
+  value: T,
+): OptimizerInputFetchResult<T> {
+  return { ok: true, value };
+}
+
+export function failedOptimizerInputFetch<T>(
+  reason: OptimizerInputFetchFailureReason,
+  fallbackValue: T,
+): OptimizerInputFetchResult<T> {
+  return { ok: false, reason, value: fallbackValue };
+}
+
+export type OptimizerInputFetchReadiness =
+  | { failedReasons: []; ok: true; reason: null }
+  | {
+      failedReasons: OptimizerInputFetchFailureReason[];
+      ok: false;
+      reason:
+        | OptimizerInputFetchFailureReason
+        | `optimizer_input_fetch_failed:${string}`;
+    };
+
+export function resolveOptimizerInputFetchReadiness(
+  fetches: readonly OptimizerInputFetchResult<unknown>[],
+): OptimizerInputFetchReadiness {
+  const failedReasons = fetches.flatMap((fetch) =>
+    fetch.ok ? [] : [fetch.reason],
+  );
+
+  if (failedReasons.length === 0) {
+    return { failedReasons: [], ok: true, reason: null };
+  }
+
+  return {
+    failedReasons,
+    ok: false,
+    reason:
+      failedReasons.length === 1
+        ? failedReasons[0]
+        : `optimizer_input_fetch_failed:${failedReasons.join(",")}`,
+  };
+}
+
 export type BackendPublicationReadiness =
   | { ok: true; reason: null }
   | {
@@ -144,8 +197,20 @@ export type BackendPublicationReadiness =
         | "control_mode_missing"
         | "control_mode_invalid"
         | "settings_missing"
-        | "settings_incomplete";
+        | "settings_incomplete"
+        | OptimizerInputFetchFailureReason
+        | `optimizer_input_fetch_failed:${string}`;
     };
+
+export function combineBackendPublicationReadiness(
+  settingsReadiness: BackendPublicationReadiness,
+  inputFetchReadiness: OptimizerInputFetchReadiness,
+): BackendPublicationReadiness {
+  if (!inputFetchReadiness.ok) {
+    return { ok: false, reason: inputFetchReadiness.reason };
+  }
+  return settingsReadiness;
+}
 
 export type OptimizerSettingsResolution = {
   heatingGainSource: "learned" | "fixed";

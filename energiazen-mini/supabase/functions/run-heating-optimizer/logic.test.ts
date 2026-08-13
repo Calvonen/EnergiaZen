@@ -8,13 +8,17 @@ import {
   buildStoredPlansMap,
   canMarkHeatingPlanValidated,
   checkOptimizerReadiness,
+  combineBackendPublicationReadiness,
   createHeatingOptimizationSettings,
+  failedOptimizerInputFetch,
   getDateKeyOffset,
   getHelsinkiDateStart,
   latestPriceFetchedAt,
   resolveHourlyDropProfile,
+  resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
   runBackendHeatingOptimization,
+  successfulOptimizerInputFetch,
   wasHeartbeatCompareAndSetCommitted,
   type HeatingPlanPublicationDecision,
   type RawElectricityPriceRow,
@@ -76,6 +80,81 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  {
+    const emptyGainHistory = successfulOptimizerInputFetch({ readings: [] });
+    const emptyRecoveryHistory = successfulOptimizerInputFetch({ readings: [] });
+    const missingDropProfile = successfulOptimizerInputFetch(null);
+    const successfulEmptyReadiness = resolveOptimizerInputFetchReadiness([
+      emptyGainHistory,
+      emptyRecoveryHistory,
+      missingDropProfile,
+    ]);
+
+    assertEqual(
+      successfulEmptyReadiness,
+      { failedReasons: [], ok: true, reason: null },
+      "successful empty optimizer inputs must remain publication-ready",
+    );
+    assertEqual(
+      [emptyGainHistory.value, emptyRecoveryHistory.value, missingDropProfile.value],
+      [{ readings: [] }, { readings: [] }, null],
+      "successful empty gain/recovery data and a missing drop profile keep intended fallback values",
+    );
+
+    for (const reason of [
+      "heating_gain_history_fetch_failed",
+      "recovery_history_fetch_failed",
+      "drop_profile_fetch_failed",
+    ] as const) {
+      const failedFetch = failedOptimizerInputFetch(reason, null);
+      assertEqual(
+        resolveOptimizerInputFetchReadiness([failedFetch]),
+        { failedReasons: [reason], ok: false, reason },
+        `${reason} must block publication and preserve its diagnostic reason`,
+      );
+      assertEqual(
+        failedFetch.value,
+        null,
+        `${reason} may still expose its fallback value for shadow calculation`,
+      );
+    }
+
+    const multipleFailures = resolveOptimizerInputFetchReadiness([
+      failedOptimizerInputFetch("heating_gain_history_fetch_failed", []),
+      failedOptimizerInputFetch("recovery_history_fetch_failed", []),
+      successfulOptimizerInputFetch(null),
+    ]);
+    assertEqual(
+      multipleFailures,
+      {
+        failedReasons: [
+          "heating_gain_history_fetch_failed",
+          "recovery_history_fetch_failed",
+        ],
+        ok: false,
+        reason:
+          "optimizer_input_fetch_failed:heating_gain_history_fetch_failed,recovery_history_fetch_failed",
+      },
+      "multiple optimizer input failures must retain every source in deterministic order",
+    );
+    assertEqual(
+      combineBackendPublicationReadiness(
+        { ok: true, reason: null },
+        multipleFailures,
+      ),
+      { ok: false, reason: multipleFailures.reason },
+      "input failure must close the central publication readiness gate",
+    );
+    assertEqual(
+      combineBackendPublicationReadiness(
+        { ok: false, reason: "settings_incomplete" },
+        successfulEmptyReadiness,
+      ),
+      { ok: false, reason: "settings_incomplete" },
+      "successful input fetches must preserve existing settings fail-safe behavior",
+    );
+  }
+
   assertEqual(
     canMarkHeatingPlanValidated(true, true, false),
     true,

@@ -468,6 +468,14 @@ tuntematon tai jokin näistä arvoista puuttuu, ajo voi yhä tallentaa
 diagnostiikan, mutta ei julkaise eikä merkitse automaattista suunnitelmaa
 healthy/validated-tilaan.
 
+Backend-primary erottaa optimizer-inputin onnistuneen tyhjän tuloksen
+teknisestä hakuvirheestä. Heating gain history, recovery history ja temperature
+drop profile voivat edelleen käyttää nykyisiä fallback-arvoja shadow-
+diagnostiikassa, mutta yhdenkin haun epäonnistuminen sulkee sekä changed-plan-
+julkaisun että `no_changes`-healthy-validoinnin. Heartbeat jää unhealthy/
+`deferred`-tilaan, eikä validointi-, fingerprint- tai julkaisuaika etene.
+Usean samanaikaisen hakuvirheen reason säilyttää kaikki epäonnistuneet lähteet.
+
 Publication-RPC tarkistaa saman tilan uudelleen transaktion sisällä juuri
 ennen plan-kirjoitusta tai `no_changes`-validointia. Edge Function välittää full settings -snapshotin
 value-by-value (`heating_need_mode`, optimizerin käyttäjäasetukset,

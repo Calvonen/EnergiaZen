@@ -201,6 +201,21 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
     "edge function must consult backend publication readiness",
   );
   assertSource(
+    edgeFunctionSource.includes("successfulOptimizerInputFetch") &&
+      edgeFunctionSource.includes("failedOptimizerInputFetch") &&
+      edgeFunctionSource.includes("heating_gain_history_fetch_failed") &&
+      edgeFunctionSource.includes("recovery_history_fetch_failed") &&
+      edgeFunctionSource.includes("drop_profile_fetch_failed"),
+    "optimizer input fetches must preserve success/failure separately from fallback values",
+  );
+  assertSource(
+    edgeFunctionSource.includes("resolveOptimizerInputFetchReadiness") &&
+      edgeFunctionSource.includes("combineBackendPublicationReadiness") &&
+      edgeFunctionSource.includes("settingsPublicationReadiness") &&
+      edgeFunctionSource.includes("inputFetchReadiness"),
+    "all required optimizer input fetches must feed one central publication readiness gate",
+  );
+  assertSource(
     edgeFunctionSource.includes("typeof heating === \"boolean\"") &&
       edgeFunctionSource.includes("isValidReadyDecision") &&
       edgeFunctionSource.includes("publicationReadiness.ok"),
@@ -238,6 +253,16 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
       edgeFunctionSource.includes("successfulOutcome = hasChangedPlans ? \"published\" : \"no_changes\"") &&
       edgeFunctionSource.includes("p_changed_plans: decision.changedPlans"),
     "no_changes must use the same snapshot-protected RPC as changed-plan publication",
+  );
+  assertSource(
+    edgeFunctionSource.includes("optimizer_input_fetch_failures: inputFetchReadiness.failedReasons") &&
+      edgeFunctionSource.includes("const invalidOutcome = !inputFetchReadiness.ok") &&
+      edgeFunctionSource.includes("!publicationReadiness.ok") &&
+      edgeFunctionSource.includes("p_health_status: \"unhealthy\"") &&
+      edgeFunctionSource.includes("p_validated_plan_at: null") &&
+      edgeFunctionSource.includes("p_validated_plan_fingerprint: null") &&
+      edgeFunctionSource.includes("p_validated_planned_hours: null"),
+    "fetch failure must remain diagnostic while changed/no_changes completion stays unhealthy and non-validating",
   );
   assertSource(
     edgeFunctionSource.includes("p_last_outcome: \"publication_failed\"") &&

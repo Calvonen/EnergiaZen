@@ -24,18 +24,22 @@ import {
   buildShadowRunRow,
   buildStoredPlansMap,
   canMarkHeatingPlanValidated,
+  combineBackendPublicationReadiness,
   computeNextUnknownHeatingAnchor,
   createHeatingOptimizationSettings,
   fallbackHeatingGainPerHour,
+  failedOptimizerInputFetch,
   fetchHeatingGainHistory,
   fetchLatestTemperatureDropProfile,
   getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
   latestPriceFetchedAt,
+  resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
   runBackendHeatingOptimization,
+  successfulOptimizerInputFetch,
   type RawElectricityPriceRow,
   type RawHeatingControlSettingsRow,
   type RawHeatingPlanRow,
@@ -216,10 +220,16 @@ Deno.serve(async (request) => {
           .range(from, to);
 
         return { data: (data ?? []) as TankTemperatureReading[], error };
-      }).catch((error: unknown) => {
-        console.warn("run-heating-optimizer: heating gain history fetch failed", error);
-        return { fetchedRowCount: 0, pageCount: 0, readings: [] as TankTemperatureReading[] };
-      }),
+      })
+        .then(successfulOptimizerInputFetch)
+        .catch((error: unknown) => {
+          console.warn("run-heating-optimizer: heating gain history fetch failed", error);
+          return failedOptimizerInputFetch("heating_gain_history_fetch_failed", {
+            fetchedRowCount: 0,
+            pageCount: 0,
+            readings: [] as TankTemperatureReading[],
+          });
+        }),
       fetchHeatingGainHistory(async (from, to) => {
         const { data, error } = await supabase
           .from("tank_readings")
@@ -229,10 +239,16 @@ Deno.serve(async (request) => {
           .range(from, to);
 
         return { data: (data ?? []) as TankTemperatureReading[], error };
-      }).catch((error: unknown) => {
-        console.warn("run-heating-optimizer: recovery readings fetch failed", error);
-        return { fetchedRowCount: 0, pageCount: 0, readings: [] as TankTemperatureReading[] };
-      }),
+      })
+        .then(successfulOptimizerInputFetch)
+        .catch((error: unknown) => {
+          console.warn("run-heating-optimizer: recovery readings fetch failed", error);
+          return failedOptimizerInputFetch("recovery_history_fetch_failed", {
+            fetchedRowCount: 0,
+            pageCount: 0,
+            readings: [] as TankTemperatureReading[],
+          });
+        }),
       supabase
         .from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,fetched_at,resolution_minutes")
@@ -244,10 +260,12 @@ Deno.serve(async (request) => {
         .from("heating_plans")
         .select("plan_date,planned_hours,mode,target_hours,updated_at")
         .in("plan_date", [todayPlanDate, tomorrowPlanDate]),
-      fetchLatestTemperatureDropProfile(supabase).catch((error: unknown) => {
-        console.warn("run-heating-optimizer: temperature drop profile fetch failed", error);
-        return null;
-      }),
+      fetchLatestTemperatureDropProfile(supabase)
+        .then(successfulOptimizerInputFetch)
+        .catch((error: unknown) => {
+          console.warn("run-heating-optimizer: temperature drop profile fetch failed", error);
+          return failedOptimizerInputFetch("drop_profile_fetch_failed", null);
+        }),
     ]);
 
     if (latestReadingResult.error) {
@@ -289,18 +307,27 @@ Deno.serve(async (request) => {
 
     const latestReading = (latestReadingResult.data ?? null) as RawTankReading | null;
     const settingsRow = (settingsResult.data ?? null) as RawHeatingControlSettingsRow | null;
-    const gainHistory = gainHistoryFetch.readings;
-    const recoveryReadings = recoveryReadingsFetch.readings;
+    const gainHistory = gainHistoryFetch.value.readings;
+    const recoveryReadings = recoveryReadingsFetch.value.readings;
     const prices = (priceResult.data ?? []) as RawElectricityPriceRow[];
     const heatingPlanRows = (heatingPlansResult.data ?? []) as RawHeatingPlanRow[];
     const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;
 
     const {
       heatingGainSource,
-      publicationReadiness,
+      publicationReadiness: settingsPublicationReadiness,
       settings: optimizerSettingsSource,
       settingsSource,
     } = resolveOptimizerSettings(settingsRow);
+    const inputFetchReadiness = resolveOptimizerInputFetchReadiness([
+      gainHistoryFetch,
+      recoveryReadingsFetch,
+      dropProfileResult,
+    ]);
+    const publicationReadiness = combineBackendPublicationReadiness(
+      settingsPublicationReadiness,
+      inputFetchReadiness,
+    );
     const optimizationSettings = createHeatingOptimizationSettings(
       optimizerSettingsSource,
       fallbackHeatingGainPerHour,
@@ -309,7 +336,7 @@ Deno.serve(async (request) => {
     const dropProfile = resolveHourlyDropProfile({
       localReadings: recoveryReadings,
       now,
-      storedProfile: dropProfileResult,
+      storedProfile: dropProfileResult.value,
     });
     const heating = latestReading?.heating ?? null;
     const run = runBackendHeatingOptimization({
@@ -357,7 +384,9 @@ Deno.serve(async (request) => {
       inputPriceFetchedAt: latestPriceFetchedAt(prices),
       now,
       optimizerResult: run.result,
-      readinessReason: run.readiness.ok ? null : run.readiness.reason,
+      readinessReason: inputFetchReadiness.ok
+        ? (run.readiness.ok ? null : run.readiness.reason)
+        : inputFetchReadiness.reason,
       settingsSource,
       tankReadingAt: latestReading?.created_at ?? null,
       todayPlanDate,
@@ -396,13 +425,15 @@ Deno.serve(async (request) => {
       typeof heating === "boolean" &&
       isValidReadyDecision &&
       publicationReadiness.ok;
-    const invalidOutcome = canValidateNoChanges
-      ? "no_changes"
-      : typeof heating !== "boolean"
-        ? "deferred"
-        : run.result?.valid === false
-          ? "optimizer_invalid"
-          : "deferred";
+    const invalidOutcome = !inputFetchReadiness.ok
+      ? "deferred"
+      : canValidateNoChanges
+        ? "no_changes"
+        : typeof heating !== "boolean"
+          ? "deferred"
+          : run.result?.valid === false
+            ? "optimizer_invalid"
+            : "deferred";
 
     const validatedHours =
       (canValidateNoChanges || (hasChangedPlans && canPublishPlan)) &&
@@ -514,11 +545,11 @@ Deno.serve(async (request) => {
             p_health_status: "unhealthy",
             p_last_outcome: outcome,
             p_reason:
-              typeof heating !== "boolean"
-                ? "relay_status_unknown"
-                : publicationReadiness.ok
-                  ? shadowRow.reason
-                  : publicationReadiness.reason,
+              !publicationReadiness.ok
+                ? publicationReadiness.reason
+                : typeof heating !== "boolean"
+                  ? "relay_status_unknown"
+                  : shadowRow.reason,
             p_run_id: runId,
             p_run_started_at: runStartedAt,
             p_validated_plan_at: null,
@@ -548,6 +579,7 @@ Deno.serve(async (request) => {
       heartbeat_committed: heartbeatCommitted,
       heartbeat_status: heartbeatCommitted ? "committed" : "superseded",
       last_outcome: outcome,
+      optimizer_input_fetch_failures: inputFetchReadiness.failedReasons,
       planned_hours_match: shadowRow.planned_hours_match,
       publication_ready: publicationReadiness.ok,
       publication_ready_reason: publicationReadiness.reason,
