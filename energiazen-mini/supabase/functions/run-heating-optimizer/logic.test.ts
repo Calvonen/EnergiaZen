@@ -81,7 +81,10 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   // about which literal UTC hour they carry, so plain UTC fixture rows are
   // fine as long as their Helsinki date key matches the intended day.
   const todayPrices = priceRowsForDay(todayPlanDate, 11, 20, 5); // 11:00Z.. = 14:00 Helsinki onward
-  const tomorrowPrices = priceRowsForDay(tomorrowPlanDate, 0, 20, 3);
+  const tomorrowPrices = [
+    ...priceRowsForDay(todayPlanDate, 21, 23, 3),
+    ...priceRowsForDay(tomorrowPlanDate, 0, 20, 3),
+  ];
 
   // 1. Full tomorrow prices + fresh tank reading -> backend optimizer
   // produces a plan (readiness ok, a HeatingOptimizationResult comes back).
@@ -173,9 +176,30 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const readiness = checkOptimizerReadiness({
       latestReading: staleReading,
       now,
-      priceHoursCount: 5,
+      priceHours: buildOptimizerHours(todayPrices, now, todayPlanDate, tomorrowPlanDate),
     });
     assertEqual(readiness, { ok: false, reason: "stale_tank_reading" }, "a 6h-old reading must be rejected as stale");
+  }
+
+  // Present but stale or holey price rows are not usable coverage.
+  {
+    const stalePrices = priceRowsForDay(todayPlanDate, 0, 5, 1);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: buildOptimizerHours(stalePrices, now, todayPlanDate, tomorrowPlanDate) }),
+      { ok: false, reason: "no_price_hours_available" },
+      "rows that end before now must not make the optimizer ready",
+    );
+    const holeyHours = buildOptimizerHours(todayPrices, now, todayPlanDate, tomorrowPlanDate).filter((_hour, index) => index !== 2);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: holeyHours }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "a gap in present prices must fail readiness",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: buildOptimizerHours([...todayPrices, ...tomorrowPrices], now, todayPlanDate, tomorrowPlanDate) }),
+      { ok: true },
+      "contiguous coverage retains existing ready behavior",
+    );
   }
 
   // 4. Heating status unknown -> the publication decision defers rather

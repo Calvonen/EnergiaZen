@@ -70,6 +70,23 @@ Deno.serve(async (request) => {
     });
 
     const now = new Date();
+    const saveHeartbeat = async (values: Record<string, unknown>) => {
+      const { error } = await supabase.from("backend_heating_optimizer_state").update({
+        updated_at: new Date().toISOString(),
+        ...values,
+      }).eq("id", 1);
+      if (error) throw new Error(`Failed to save optimizer heartbeat: ${error.message}`);
+    };
+
+    // A crash before this write (or pg_cron never invoking the function)
+    // cannot self-report. A persisted "running" state is intentionally
+    // unhealthy, so a crash after this point fails safe on the Shelly.
+    await saveHeartbeat({
+      health_status: "unhealthy",
+      last_outcome: "running",
+      last_run_attempt_at: now.toISOString(),
+      reason: "Optimizer run started; no plan has been validated by this attempt yet",
+    });
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
     // across DST transitions (spring-forward/fall-back days are 23h/25h
@@ -274,6 +291,27 @@ Deno.serve(async (request) => {
         500,
       );
     }
+
+    const isValidReadyDecision =
+      decision.status === "ready" && run.result?.valid === true;
+    const isNoChanges =
+      isValidReadyDecision && decision.status === "ready" && decision.changedPlans.length === 0;
+    const outcome = isNoChanges
+      ? "no_changes"
+      : isValidReadyDecision
+        ? "changes_not_published"
+        : run.result?.valid === false
+          ? "optimizer_invalid"
+          : "deferred";
+
+    await saveHeartbeat({
+      health_status: isNoChanges ? "healthy" : "unhealthy",
+      last_outcome: outcome,
+      ...(isNoChanges ? { last_validated_plan_at: now.toISOString() } : {}),
+      // Shadow mode never writes heating_plans, so last_published_at is
+      // deliberately preserved even when a changed valid draft exists.
+      reason: shadowRow.reason,
+    });
 
     return jsonResponse({
       decision: decision.status,

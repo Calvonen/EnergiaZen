@@ -6,7 +6,9 @@ const {
   createControllerState,
   createRequestError,
   decideHeating,
+  getHelsinkiParts,
   resolvePlanControl,
+  resolveTrustedPlanControl,
 } = require("./energyzen-controller");
 
 const nowMs = Date.parse("2026-07-26T12:00:00.000Z");
@@ -400,5 +402,24 @@ assert.strictEqual(
   "a missing plan must not activate fallback when fallbackEnabled is off",
 );
 assert.strictEqual(missingPlanFallbackDisabledControl.failSafeReason, "plan-missing");
+
+
+const heartbeatNow = Date.parse("2026-08-13T12:00:00.000Z");
+const todayPlan = [{ plan_date: "2026-08-13", planned_hours: [15], updated_at: "2026-08-10T00:00:00Z" }];
+function trustedControl(heartbeatRows, testSettings = settings) {
+  return resolveTrustedPlanControl(todayPlan, null, heartbeatRows, null, testSettings, "2026-08-13", heartbeatNow);
+}
+const freshHeartbeat = [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00.000Z" }];
+assert.strictEqual(trustedControl(freshHeartbeat).source, "energyzen", "fresh healthy heartbeat trusts today's plan even when heating_plans.updated_at is old (no_changes)");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "2026-08-13T10:29:59.000Z" }]).source, "backup", "stale validation falls back");
+assert.strictEqual(trustedControl([]).source, "backup", "missing heartbeat falls back");
+assert.strictEqual(trustedControl([{ health_status: "unhealthy", last_validated_plan_at: "2026-08-13T11:30:00Z" }]).source, "backup", "unhealthy status falls back");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "not-a-date" }]).source, "backup", "malformed validation timestamp falls back");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "2026-08-13T12:00:01Z" }]).source, "backup", "future validation timestamp falls back");
+const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
+assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
+assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T00:30:00Z")), { dateKey: "2026-03-29", hour: 2 });
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T01:30:00Z")), { dateKey: "2026-03-29", hour: 4 });
 
 console.log("EnergyZen Shelly controller tests passed");

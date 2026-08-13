@@ -177,7 +177,8 @@ export type OptimizerReadinessCheck =
         | "missing_tank_reading"
         | "incomplete_tank_reading"
         | "stale_tank_reading"
-        | "no_price_hours_available";
+        | "no_price_hours_available"
+        | "incomplete_price_coverage";
     };
 
 // Same gating as shouldRunHeatingOptimization, split into individual
@@ -185,11 +186,14 @@ export type OptimizerReadinessCheck =
 export function checkOptimizerReadiness({
   latestReading,
   now,
+  priceHours,
   priceHoursCount,
 }: {
   latestReading: RawTankReading | null;
   now: Date;
-  priceHoursCount: number;
+  priceHours?: HeatingOptimizationHour[];
+  /** Simulator compatibility; production passes priceHours for coverage validation. */
+  priceHoursCount?: number;
 }): OptimizerReadinessCheck {
   if (!latestReading) {
     return { ok: false, reason: "missing_tank_reading" };
@@ -203,8 +207,37 @@ export function checkOptimizerReadiness({
   if (!isTankReadingFreshForCalculation(latestReading.created_at, now)) {
     return { ok: false, reason: "stale_tank_reading" };
   }
-  if (priceHoursCount === 0) {
+  const availableCount = priceHours?.length ?? priceHoursCount ?? 0;
+  if (availableCount === 0) {
     return { ok: false, reason: "no_price_hours_available" };
+  }
+
+  if (!priceHours) return { ok: true };
+
+  // Freshness is coverage-based rather than an arbitrary fetched_at age:
+  // the first usable interval must cover `now`, and every interval in the
+  // window actually handed to the optimizer must be contiguous. Thus old
+  // rows, a missing current hour, and holes in otherwise-present rows all
+  // fail closed without changing optimizer math or hour selection.
+  const sorted = [...priceHours].sort(
+    (first, second) => first.date.getTime() - second.date.getTime(),
+  );
+  if (
+    sorted[0].date.getTime() > now.getTime() ||
+    sorted[0].endDate.getTime() <= now.getTime()
+  ) {
+    return { ok: false, reason: "incomplete_price_coverage" };
+  }
+  for (let index = 0; index < sorted.length; index += 1) {
+    const hour = sorted[index];
+    if (
+      !Number.isFinite(hour.date.getTime()) ||
+      !Number.isFinite(hour.endDate.getTime()) ||
+      hour.endDate.getTime() - hour.date.getTime() !== 60 * 60 * 1000 ||
+      (index > 0 && sorted[index - 1].endDate.getTime() !== hour.date.getTime())
+    ) {
+      return { ok: false, reason: "incomplete_price_coverage" };
+    }
   }
 
   return { ok: true };
@@ -271,7 +304,7 @@ export function runBackendHeatingOptimization({
   const readiness = checkOptimizerReadiness({
     latestReading,
     now,
-    priceHoursCount: hours.length,
+    priceHours: hours,
   });
 
   if (!readiness.ok || !latestReading) {

@@ -420,3 +420,37 @@ select cron.unschedule(jobid)
 from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 ```
+
+### Backend-optimoijan trust-heartbeat (shadow mode)
+
+Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden
+`id = 1` current-state-rivin. Historiataulua ei tarvita Shellyn päätökseen;
+`heating_plan_shadow_runs` säilyttää jo ajokohtaisen diagnostiikan. Erilliset
+`last_run_attempt_at`, `last_validated_plan_at` ja `last_published_at` estävät
+ajoyrityksen, onnistuneen validoinnin ja todellisen kirjoituksen sekoittamisen.
+
+Tunnin välein ajettavalle jobille production trust-raja on 90 minuuttia:
+yksi normaali 60 minuutin ajoväli ja 30 minuutin operatiivinen liikkumavara.
+Shelly luottaa tämän päivän suunnitelmaan vain, kun heartbeat on `healthy` ja
+`last_validated_plan_at` on kelvollinen, enintään 90 minuuttia vanha eikä
+tulevaisuudessa. Muuten se käyttää `backup_hours`-tunteja, jos
+`fallback_enabled = true`; muulloin releohjaus failaa kiinni. Suunnitelman
+`updated_at` ei gatea luottamusta: `no_changes` päivittää validoinnin mutta ei
+julkaisuaikaa.
+
+Shadow mode säilyy: vain validi, tallennettuun suunnitelmaan identtinen
+`no_changes` merkitään terveeksi ja päivittää validointiajan. Muuttunut validi
+tulos merkitään `changes_not_published`/unhealthy, koska tätä luonnosta ei vielä
+kirjoiteta `heating_plans`-tauluun; `last_published_at` ei siis etene tässä
+PR:ssä. Invalidit ja deferred-ajot ovat unhealthy. Hintojen tuoreus perustuu
+käyttökelpoiseen kattavuuteen: ensimmäisen optimizerille annetun tuntivälin on
+katettava nykyhetki ja kaikkien valittuun optimointi-ikkunaan kuuluvien
+hintavälien on oltava valideja, tunnin mittaisia ja aukottomia. `fetched_at`-iälle
+ei aseteta keinotekoista rajaa.
+
+Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
+cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
+se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta
+edellisen validoinnin 90 minuutin vanhenemisesta. Käynnistyksen jälkeen jäävä
+`running`-tila on tarkoituksella unhealthy. Erillinen ulkoinen cron/deploy-
+monitorointi tarvitaan edelleen ennen backend-primary-vaihetta.
