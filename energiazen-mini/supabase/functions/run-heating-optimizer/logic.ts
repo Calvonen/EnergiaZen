@@ -103,6 +103,7 @@ export type RawHeatingPlanRow = {
   plan_date: string;
   planned_hours: unknown;
   target_hours?: number | null;
+  updated_at?: string | null;
 };
 
 // Cross-runtime plan identity used by the backend heartbeat and Shelly.
@@ -559,6 +560,28 @@ export function buildStoredPlansMap(
   }
 
   return map;
+}
+
+export type ExpectedHeatingPlanVersion = {
+  expected_updated_at: string | null;
+  existed: boolean;
+  plan_date: string;
+};
+
+export function buildExpectedHeatingPlanVersions(
+  changedPlans: { plan_date: string }[],
+  storedRows: RawHeatingPlanRow[],
+): ExpectedHeatingPlanVersion[] {
+  return changedPlans.map((plan) => {
+    const storedPlan =
+      storedRows.find((row) => row.plan_date === plan.plan_date) ?? null;
+
+    return {
+      expected_updated_at: storedPlan?.updated_at ?? null,
+      existed: storedPlan !== null,
+      plan_date: plan.plan_date,
+    };
+  });
 }
 
 export {

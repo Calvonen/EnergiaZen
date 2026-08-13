@@ -467,6 +467,17 @@ tuntematon tai jokin näistä arvoista puuttuu, ajo voi yhä tallentaa
 diagnostiikan, mutta ei julkaise eikä merkitse automaattista suunnitelmaa
 healthy/validated-tilaan.
 
+Publication-RPC tarkistaa saman tilan uudelleen transaktion sisällä juuri
+ennen kirjoitusta. Edge Function välittää lisäksi jokaisen `changedPlans`-rivin
+snapshot-version (`plan_date`, oliko rivi olemassa, ja luettu `updated_at`).
+RPC lukitsee `heating_plans`-taulun lyhyen julkaisun ajaksi, varmistaa että
+nykyinen `heating_need_mode` on edelleen `automatic`, ja hyväksyy upsertin vain
+jos jokainen muutettava rivi vastaa alkuperäistä `updated_at`-snapshotia.
+Jos snapshotissa puuttunut rivi on ilmestynyt tai olemassa ollut rivi on
+päivittynyt, RPC palauttaa `plan_conflict`; jos tila vaihtui pois
+automaattisesta, se palauttaa `settings_conflict`. Kumpikaan polku ei kirjoita
+plan-rivejä eikä päivitä validointi- tai julkaisuaikoja.
+
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
 se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta

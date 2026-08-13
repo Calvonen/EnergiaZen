@@ -18,6 +18,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   buildHeatingPlanPublicationDecision,
   buildHeatingPlanFingerprint,
+  buildExpectedHeatingPlanVersions,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -240,7 +241,7 @@ Deno.serve(async (request) => {
         .order("starts_at", { ascending: true }),
       supabase
         .from("heating_plans")
-        .select("plan_date,planned_hours,mode,target_hours")
+        .select("plan_date,planned_hours,mode,target_hours,updated_at")
         .in("plan_date", [todayPlanDate, tomorrowPlanDate]),
       fetchLatestTemperatureDropProfile(supabase).catch((error: unknown) => {
         console.warn("run-heating-optimizer: temperature drop profile fetch failed", error);
@@ -416,10 +417,16 @@ Deno.serve(async (request) => {
     let wroteToHeatingPlans = false;
     let publishedPlanCount = 0;
     if (hasChangedPlans && canPublishPlan && decision.status === "ready") {
+      const expectedPlanVersions = buildExpectedHeatingPlanVersions(
+        decision.changedPlans,
+        heatingPlanRows,
+      );
       const { data: publishCommitted, error: publishError } = await supabase.rpc(
         "publish_backend_heating_optimizer_plans",
         {
           p_changed_plans: decision.changedPlans,
+          p_expected_heating_need_mode: "automatic",
+          p_expected_plan_versions: expectedPlanVersions,
           p_publish_reason: "valid plan published",
           p_published_at: now.toISOString(),
           p_run_id: runId,
@@ -454,8 +461,25 @@ Deno.serve(async (request) => {
           500,
         );
       }
-      heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(publishCommitted);
-      if (!heartbeatCommitted) {
+      if (publishCommitted === "settings_conflict" || publishCommitted === "plan_conflict") {
+        const failureCommitted = await completePublicationFailure(
+          `publication_failed: ${publishCommitted}`,
+        );
+        return jsonResponse(
+          {
+            decision: decision.status,
+            heartbeat_committed: failureCommitted,
+            heartbeat_status: failureCommitted ? "committed" : "superseded",
+            publication_conflict: publishCommitted,
+            reason: publishCommitted,
+            run_id: runId,
+            wrote_to_heating_plans: false,
+          },
+          409,
+        );
+      }
+      heartbeatCommitted = publishCommitted === "published";
+      if (publishCommitted === "heartbeat_superseded" || !heartbeatCommitted) {
         const failureCommitted = await completePublicationFailure(
           "publication_failed: heartbeat ownership lost before publication",
         );

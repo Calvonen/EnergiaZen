@@ -22,6 +22,13 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
     ),
     "utf8",
   );
+  const snapshotRecheckMigrationSource = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260813040000_recheck_backend_publication_snapshot.sql",
+    ),
+    "utf8",
+  );
   const edgeFunctionSource = readFileSync(
     join(process.cwd(), "supabase/functions/run-heating-optimizer/index.ts"),
     "utf8",
@@ -69,6 +76,31 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
       settingsMigrationSource.includes("heating_gain_source"),
     "settings migration must add backend-primary optimizer/control-mode columns",
   );
+  assertSource(
+    snapshotRecheckMigrationSource.includes("returns text") &&
+      snapshotRecheckMigrationSource.includes("p_expected_heating_need_mode text") &&
+      snapshotRecheckMigrationSource.includes("p_expected_plan_versions jsonb"),
+    "snapshot recheck migration must replace publication RPC with conflict-status return and expected snapshots",
+  );
+  assertSource(
+    snapshotRecheckMigrationSource.includes("lock table public.heating_plans in share row exclusive mode") &&
+      snapshotRecheckMigrationSource.includes("heating_need_mode = p_expected_heating_need_mode") &&
+      snapshotRecheckMigrationSource.includes("heating_need_mode = 'automatic'"),
+    "publication RPC must recheck automatic control mode inside the transaction before plan writes",
+  );
+  assertSource(
+    snapshotRecheckMigrationSource.includes("current_plan.updated_at is distinct from expected.expected_updated_at") &&
+      snapshotRecheckMigrationSource.includes("not expected.existed") &&
+      snapshotRecheckMigrationSource.includes("current_plan.plan_date is not null") &&
+      snapshotRecheckMigrationSource.includes("return 'plan_conflict'"),
+    "publication RPC must reject changed rows and rows created after an absent-row snapshot",
+  );
+  assertSource(
+    snapshotRecheckMigrationSource.includes("return 'settings_conflict'") &&
+      snapshotRecheckMigrationSource.includes("return 'heartbeat_superseded'") &&
+      snapshotRecheckMigrationSource.includes("return 'published'"),
+    "publication RPC must expose controlled status values for success, superseded and stale snapshots",
+  );
 
   assertSource(
     edgeFunctionSource.includes("publicationReadiness") &&
@@ -88,6 +120,18 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   assertSource(
     edgeFunctionSource.includes("p_changed_plans: decision.changedPlans"),
     "edge function must pass only duplicate-suppressed changedPlans to the publication RPC",
+  );
+  assertSource(
+    edgeFunctionSource.includes("buildExpectedHeatingPlanVersions") &&
+      edgeFunctionSource.includes("p_expected_plan_versions: expectedPlanVersions") &&
+      edgeFunctionSource.includes("p_expected_heating_need_mode: \"automatic\""),
+    "edge function must pass plan updated_at snapshots and the automatic mode snapshot to the publication RPC",
+  );
+  assertSource(
+    edgeFunctionSource.includes("publishCommitted === \"settings_conflict\"") &&
+      edgeFunctionSource.includes("publishCommitted === \"plan_conflict\"") &&
+      edgeFunctionSource.includes("publication_conflict: publishCommitted"),
+    "edge function must treat stale settings/plan snapshots as explicit fail-safe conflicts",
   );
   assertSource(
     edgeFunctionSource.includes("p_validated_plan_at: canValidateNoChanges ? now.toISOString() : null") &&

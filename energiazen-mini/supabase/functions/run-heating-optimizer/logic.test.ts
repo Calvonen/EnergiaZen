@@ -1,5 +1,6 @@
 import {
   buildHeatingPlanFingerprint,
+  buildExpectedHeatingPlanVersions,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
@@ -550,9 +551,41 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   // shape and the app-vs-backend match/mismatch comparison.
   {
     const storedPlans = buildStoredPlansMap([
-      { plan_date: todayPlanDate, planned_hours: [14, 15] } as RawHeatingPlanRow,
+      {
+        plan_date: todayPlanDate,
+        planned_hours: [14, 15],
+        updated_at: "2026-08-12T10:00:00.000Z",
+      } as RawHeatingPlanRow,
     ]);
     assertEqual(storedPlans[todayPlanDate]?.planned_hours, [14, 15], "buildStoredPlansMap must index by plan_date");
+    assertEqual(
+      buildExpectedHeatingPlanVersions(
+        [
+          { plan_date: todayPlanDate },
+          { plan_date: tomorrowPlanDate },
+        ],
+        [
+          {
+            plan_date: todayPlanDate,
+            planned_hours: [14, 15],
+            updated_at: "2026-08-12T10:00:00.000Z",
+          },
+        ] as RawHeatingPlanRow[],
+      ),
+      [
+        {
+          expected_updated_at: "2026-08-12T10:00:00.000Z",
+          existed: true,
+          plan_date: todayPlanDate,
+        },
+        {
+          expected_updated_at: null,
+          existed: false,
+          plan_date: tomorrowPlanDate,
+        },
+      ],
+      "expected plan versions must carry updated_at for existing rows and absent markers for missing rows",
+    );
 
     const matchingDecision = buildHeatingPlanPublicationDecision({
       currentHourNumber: 14,
