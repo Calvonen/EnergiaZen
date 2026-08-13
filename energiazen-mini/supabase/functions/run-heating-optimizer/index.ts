@@ -23,6 +23,7 @@ import {
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
+  canMarkHeatingPlanValidated,
   computeNextUnknownHeatingAnchor,
   createHeatingOptimizationSettings,
   fallbackHeatingGainPerHour,
@@ -357,11 +358,16 @@ Deno.serve(async (request) => {
 
     const isValidReadyDecision =
       decision.status === "ready" && run.result?.valid === true;
-    const isNoChanges =
-      isValidReadyDecision && decision.status === "ready" && decision.changedPlans.length === 0;
+    const isNoChanges = canMarkHeatingPlanValidated(
+      heating,
+      isValidReadyDecision,
+      decision.status === "ready" && decision.changedPlans.length === 0,
+    );
     const outcome = isNoChanges
       ? "no_changes"
-      : isValidReadyDecision
+      : typeof heating !== "boolean"
+        ? "deferred"
+        : isValidReadyDecision
         ? "changes_not_published"
         : run.result?.valid === false
           ? "optimizer_invalid"
@@ -379,7 +385,8 @@ Deno.serve(async (request) => {
       {
         p_health_status: isNoChanges ? "healthy" : "unhealthy",
         p_last_outcome: outcome,
-        p_reason: shadowRow.reason,
+        p_reason:
+          typeof heating === "boolean" ? shadowRow.reason : "relay_status_unknown",
         p_run_id: runId,
         p_run_started_at: runStartedAt,
         p_validated_plan_at: isNoChanges ? now.toISOString() : null,

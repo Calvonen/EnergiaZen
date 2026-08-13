@@ -120,6 +120,14 @@ export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true 
   return data === true;
 }
 
+export function canMarkHeatingPlanValidated(
+  heating: unknown,
+  isValidReadyDecision: boolean,
+  hasNoChanges: boolean,
+): boolean {
+  return typeof heating === "boolean" && isValidReadyDecision && hasNoChanges;
+}
+
 // automaticMaxHeatingHours and safetyShowerReserve are settings the
 // optimizer needs that heating_control_settings does not (currently) carry
 // - see the shadow-mode PR report for why. Both fall back to

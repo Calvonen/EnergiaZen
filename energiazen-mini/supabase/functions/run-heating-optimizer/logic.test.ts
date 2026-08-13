@@ -4,6 +4,7 @@ import {
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
+  canMarkHeatingPlanValidated,
   checkOptimizerReadiness,
   createHeatingOptimizationSettings,
   getDateKeyOffset,
@@ -72,6 +73,23 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  assertEqual(
+    canMarkHeatingPlanValidated(true, true, true),
+    true,
+    "known heating=true may validate an otherwise valid unchanged plan",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, true),
+    true,
+    "known heating=false may validate an otherwise valid unchanged plan",
+  );
+  for (const unknownHeating of [null, undefined]) {
+    assertEqual(
+      canMarkHeatingPlanValidated(unknownHeating, true, true),
+      false,
+      "unknown relay status must never be treated as false for heartbeat validation",
+    );
+  }
   assertEqual(
     wasHeartbeatCompareAndSetCommitted(true),
     true,
