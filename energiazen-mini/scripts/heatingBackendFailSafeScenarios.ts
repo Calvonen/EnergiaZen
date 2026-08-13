@@ -1159,25 +1159,6 @@ function runWeek({
   return records;
 }
 
-function longestConsecutiveRun(
-  records: WeekTickRecord[],
-  predicate: (record: WeekTickRecord) => boolean,
-): number {
-  let longest = 0;
-  let current = 0;
-
-  for (const record of records) {
-    if (predicate(record)) {
-      current += 1;
-      longest = Math.max(longest, current);
-    } else {
-      current = 0;
-    }
-  }
-
-  return longest;
-}
-
 // ---------------------------------------------------------------------
 // Scenario 8: WEEK_WITHOUT_APP
 // ---------------------------------------------------------------------
@@ -1394,39 +1375,28 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
         sustainedRecoveryWindow.map((record) => `${record.hourIndex}:${record.status}`).join(", "),
     );
   }
-  // The injected outage itself must never resurface later in the week -
-  // from the moment fresh data resumes onward, run_error/run_overdue/
-  // run_failed must never occur again. A later, ISOLATED
-  // no_recent_valid_plan dip is expected and NOT itself evidence of the
-  // outage lingering - WEEK_WITHOUT_APP shows the exact same benign
-  // pattern (the optimizer legitimately recomputing an unchanged plan for
-  // a few hours) with ZERO injected failures at all; only
-  // run_overdue/run_failed/run_error would indicate the outage itself
-  // resurfacing.
-  const afterRecovery = records.slice(freshDataHourIndex);
-  const outageArtifactsAfterRecovery = afterRecovery.filter(
-    (record) =>
-      record.status === "run_overdue" || record.status === "run_failed" || record.outcome === "run_error",
+  // PR #191 review (Codex): once the 3-hour sustained-recovery window has
+  // completed, "no_changes" outcomes now advance lastValidatedPlanAt just
+  // like "published" ones do (the WEEK_WITHOUT_APP fix) - so a later
+  // no_recent_valid_plan dip is no longer benign duplicate-suppression
+  // noise. If it happens here, the recovered pipeline is genuinely
+  // unhealthy again (e.g. stuck deferred/optimizer_invalid), not merely
+  // re-validating an unchanged plan. Require every single hour from the
+  // end of the sustained-recovery window through the end of the simulated
+  // week to be fully healthy - zero tolerance for any later dip.
+  const sustainedHealthyFromHourIndex = freshDataHourIndex + sustainedRecoveryWindow.length;
+  const afterSustainedRecovery = records.slice(sustainedHealthyFromHourIndex);
+  const unhealthyAfterSustainedRecovery = afterSustainedRecovery.filter(
+    (record) => record.status !== "healthy" || record.alert || record.fallbackRecommended,
   );
-  if (outageArtifactsAfterRecovery.length > 0) {
+  if (unhealthyAfterSustainedRecovery.length > 0) {
+    const first = unhealthyAfterSustainedRecovery[0];
     failures.push(
-      `expected the injected outage to never resurface after recovery (hour ${freshDataHourIndex} onward), ` +
-        `got ${outageArtifactsAfterRecovery.length} hour(s) with a lingering run_overdue/run_failed/run_error ` +
-        `- first at hour ${outageArtifactsAfterRecovery[0].hourIndex} (status: ` +
-        `"${outageArtifactsAfterRecovery[0].status}", outcome: "${outageArtifactsAfterRecovery[0].outcome}")`,
-    );
-  }
-  // Any later benign no_recent_valid_plan dip must still self-resolve
-  // promptly, exactly like WEEK_WITHOUT_APP's own baseline pattern - it
-  // must never turn into a prolonged/stuck condition.
-  const longestPostRecoveryNonHealthyStreak = longestConsecutiveRun(
-    afterRecovery,
-    (record) => record.status !== "healthy",
-  );
-  if (longestPostRecoveryNonHealthyStreak > 6) {
-    failures.push(
-      "expected any post-recovery non-healthy stretch to self-resolve within a few hours, got a " +
-        `${longestPostRecoveryNonHealthyStreak}h longest streak after hour ${freshDataHourIndex}`,
+      "expected every hour from the end of the sustained-recovery window (hour " +
+        `${sustainedHealthyFromHourIndex}) through the end of the week to be status "healthy" with no alert ` +
+        `and no fallback recommended, got ${unhealthyAfterSustainedRecovery.length} hour(s) that were not - ` +
+        `first at hour ${first.hourIndex} (status: "${first.status}", alert: ${first.alert}, ` +
+        `fallbackRecommended: ${first.fallbackRecommended})`,
     );
   }
 
