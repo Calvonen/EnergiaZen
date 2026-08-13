@@ -56,6 +56,7 @@ import { runEdgeFunctionImportBoundariesUnitTests } from "../tests/edgeFunctionI
 import { runEdgeFunctionRuntimeBindingsUnitTests } from "../tests/edgeFunctionRuntimeBindings.test";
 import { runHeatingOptimizerShadowPermissionsMigrationTests } from "../tests/heatingOptimizerShadowPermissionsMigration.test";
 import { runHeatingBackendWatchdogUnitTests } from "../lib/heatingBackendWatchdog.test";
+import { runBackendOptimizerHeartbeatMigrationTests } from "../tests/backendOptimizerHeartbeatMigration.test";
 import { runHeatingBackendFailSafeSimulationTests } from "../tests/heatingBackendFailSafeSimulation.test";
 
 async function runTests() {
@@ -117,6 +118,7 @@ async function runTests() {
   runEdgeFunctionRuntimeBindingsUnitTests();
   runHeatingOptimizerShadowPermissionsMigrationTests();
   runHeatingBackendWatchdogUnitTests();
+  runBackendOptimizerHeartbeatMigrationTests();
   runHeatingBackendFailSafeSimulationTests();
 
   console.log(

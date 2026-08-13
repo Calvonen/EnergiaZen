@@ -137,6 +137,7 @@
     "tests/edgeFunctionImportBoundaries.test.ts",
     "tests/edgeFunctionRuntimeBindings.test.ts",
     "tests/heatingOptimizerShadowPermissionsMigration.test.ts",
-    "scripts/run-tank-temperature-forecast-tests.ts"
+    "scripts/run-tank-temperature-forecast-tests.ts",
+    "tests/backendOptimizerHeartbeatMigration.test.ts"
   ]
 }

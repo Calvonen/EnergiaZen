@@ -431,7 +431,9 @@ ajoyrityksen, onnistuneen validoinnin ja todellisen kirjoituksen sekoittamisen.
 
 Tunnin välein ajettavalle jobille production trust-raja on 90 minuuttia:
 yksi normaali 60 minuutin ajoväli ja 30 minuutin operatiivinen liikkumavara.
-Shelly luottaa tämän päivän suunnitelmaan vain, kun heartbeat on `healthy` ja
+Kun gate myöhemmin aktivoidaan, Shelly luottaa tämän päivän suunnitelmaan vain,
+kun heartbeat on `healthy`, heartbeatin plan-fingerprint vastaa luettua
+`plan_date` + normalisoitua `planned_hours` -identiteettiä ja
 `last_validated_plan_at` on kelvollinen, enintään 90 minuuttia vanha eikä
 tulevaisuudessa. Muuten se käyttää `backup_hours`-tunteja, jos
 `fallback_enabled = true`; muulloin releohjaus failaa kiinni. Suunnitelman
@@ -454,3 +456,17 @@ se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta
 edellisen validoinnin 90 minuutin vanhenemisesta. Käynnistyksen jälkeen jäävä
 `running`-tila on tarkoituksella unhealthy. Erillinen ulkoinen cron/deploy-
 monitorointi tarvitaan edelleen ennen backend-primary-vaihetta.
+
+**Deployment-gate:** `BACKEND_PLAN_TRUST_ENABLED` on Shelly-lähteessä tässä
+shadow-PR:ssä tarkoituksella `false`. Shadow-optimizer voi merkitä terveeksi vain
+`no_changes`-ajon, joten gaten aktivointi nyt voisi ajaa laitteen jatkuvaan
+fallbackiin aina appin julkaisun muututtua. Gate aktivoidaan vasta erillisessä,
+hyväksytyn plan-publication-polun sisältävässä kontrolloidussa Shelly-deployssa;
+tämä PR ei muuta nykyistä tuotanto-ohjausta eikä ota backend-primaryä käyttöön.
+
+Rinnakkaiset ajot omistavat singletonin UUID `current_run_id` +
+`current_run_started_at` -CAS-tokenilla. Uudempi aloitusaika syrjäyttää vanhemman,
+ja lopetus-RPC päivittää rivin vain molempien arvojen täsmätessä. Siksi myöhään
+valmistuva vanha ajo ei voi ylikirjoittaa uudemman ajon tulosta. Onnistunut
+`no_changes` tallentaa lisäksi deterministisen identiteetin muodossa
+`YYYY-MM-DD|h1,h2,...`, jossa tunnit deduplikoidaan ja järjestetään.

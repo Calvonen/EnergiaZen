@@ -19,6 +19,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
   buildHeatingPlanPublicationDecision,
+  buildHeatingPlanFingerprint,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -70,23 +71,19 @@ Deno.serve(async (request) => {
     });
 
     const now = new Date();
-    const saveHeartbeat = async (values: Record<string, unknown>) => {
-      const { error } = await supabase.from("backend_heating_optimizer_state").update({
-        updated_at: new Date().toISOString(),
-        ...values,
-      }).eq("id", 1);
-      if (error) throw new Error(`Failed to save optimizer heartbeat: ${error.message}`);
-    };
+    const runId = crypto.randomUUID();
+    const runStartedAt = now.toISOString();
 
     // A crash before this write (or pg_cron never invoking the function)
     // cannot self-report. A persisted "running" state is intentionally
     // unhealthy, so a crash after this point fails safe on the Shelly.
-    await saveHeartbeat({
-      health_status: "unhealthy",
-      last_outcome: "running",
-      last_run_attempt_at: now.toISOString(),
-      reason: "Optimizer run started; no plan has been validated by this attempt yet",
-    });
+    const { error: beginHeartbeatError } = await supabase.rpc(
+      "begin_backend_heating_optimizer_run",
+      { p_run_id: runId, p_run_started_at: runStartedAt },
+    );
+    if (beginHeartbeatError) {
+      throw new Error(`Failed to begin optimizer heartbeat: ${beginHeartbeatError.message}`);
+    }
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
     // across DST transitions (spring-forward/fall-back days are 23h/25h
@@ -304,14 +301,30 @@ Deno.serve(async (request) => {
           ? "optimizer_invalid"
           : "deferred";
 
-    await saveHeartbeat({
-      health_status: isNoChanges ? "healthy" : "unhealthy",
-      last_outcome: outcome,
-      ...(isNoChanges ? { last_validated_plan_at: now.toISOString() } : {}),
-      // Shadow mode never writes heating_plans, so last_published_at is
-      // deliberately preserved even when a changed valid draft exists.
-      reason: shadowRow.reason,
-    });
+    const validatedHours =
+      isNoChanges && decision.status === "ready" ? decision.today.planned_hours : null;
+    const validatedFingerprint = validatedHours
+      ? buildHeatingPlanFingerprint(todayPlanDate, validatedHours)
+      : null;
+    // Shadow mode never writes heating_plans, so last_published_at is
+    // deliberately absent and preserved even when a changed valid draft exists.
+    const { error: completeHeartbeatError } = await supabase.rpc(
+      "complete_backend_heating_optimizer_run",
+      {
+        p_health_status: isNoChanges ? "healthy" : "unhealthy",
+        p_last_outcome: outcome,
+        p_reason: shadowRow.reason,
+        p_run_id: runId,
+        p_run_started_at: runStartedAt,
+        p_validated_plan_at: isNoChanges ? now.toISOString() : null,
+        p_validated_plan_date: isNoChanges ? todayPlanDate : null,
+        p_validated_plan_fingerprint: validatedFingerprint,
+        p_validated_planned_hours: validatedHours,
+      },
+    );
+    if (completeHeartbeatError) {
+      throw new Error(`Failed to complete optimizer heartbeat: ${completeHeartbeatError.message}`);
+    }
 
     return jsonResponse({
       decision: decision.status,

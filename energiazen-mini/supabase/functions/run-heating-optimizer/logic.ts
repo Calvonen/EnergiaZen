@@ -99,6 +99,19 @@ export type RawHeatingPlanRow = {
   target_hours?: number | null;
 };
 
+// Cross-runtime plan identity used by the backend heartbeat and Shelly.
+// Keeping the canonical representation deliberately simple avoids requiring
+// a crypto implementation on the constrained Shelly runtime.
+export function buildHeatingPlanFingerprint(
+  planDate: string,
+  plannedHours: unknown,
+): string | null {
+  const hours = normalizePlanHoursForComparison(plannedHours);
+  return /^\d{4}-\d{2}-\d{2}$/.test(planDate) && hours
+    ? `${planDate}|${hours.join(",")}`
+    : null;
+}
+
 // automaticMaxHeatingHours and safetyShowerReserve are settings the
 // optimizer needs that heating_control_settings does not (currently) carry
 // - see the shadow-mode PR report for why. Both fall back to

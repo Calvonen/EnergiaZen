@@ -1,4 +1,5 @@
 import {
+  buildHeatingPlanFingerprint,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
@@ -200,6 +201,20 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       { ok: true },
       "contiguous coverage retains existing ready behavior",
     );
+    const validHours = buildOptimizerHours([...todayPrices, ...tomorrowPrices], now, todayPlanDate, tomorrowPlanDate);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: [validHours[0], validHours[0], ...validHours.slice(1)] }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "duplicate price rows must invalidate coverage",
+    );
+    const overlappingHours = validHours.map((hour) => ({ ...hour }));
+    overlappingHours[1] = { ...overlappingHours[1], date: new Date(overlappingHours[1].date.getTime() - 30 * 60 * 1000) };
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: overlappingHours }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "overlapping price intervals must invalidate coverage",
+    );
+    assertEqual(buildHeatingPlanFingerprint("2026-08-13", [5, 2, 5]), "2026-08-13|2,5", "plan fingerprint normalizes and sorts hours");
   }
 
   // 4. Heating status unknown -> the publication decision defers rather

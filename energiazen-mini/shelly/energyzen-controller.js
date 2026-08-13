@@ -9,6 +9,9 @@ let REQUIRED_BLOCKING_READINGS = 2;
 // Hourly pg_cron cadence plus one half-hour operational grace period.
 // This gates validation time, never heating_plans.updated_at.
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
+// Keep disabled while the optimizer is shadow-only. Enable only in the same
+// controlled deployment that provides an approved backend publication path.
+let BACKEND_PLAN_TRUST_ENABLED = false;
 
 let SUPABASE_URL = "https://amyvzelzbvjvrevikvrp.supabase.co";
 let SUPABASE_KEY =
@@ -482,17 +485,25 @@ function resolvePlanControl(rows, error, settings, today) {
 }
 
 
-function isTrustedBackendHeartbeat(rows, error, nowMs) {
-  if (error !== null || !Array.isArray(rows) || rows.length !== 1) return false;
+function buildPlanFingerprint(planDate, plannedHours) {
+  let hours = normalizeHours(plannedHours);
+  return typeof planDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(planDate)
+    ? planDate + "|" + hours.join(",")
+    : null;
+}
+
+function isTrustedBackendHeartbeat(rows, error, planRow, nowMs) {
+  if (error !== null || !Array.isArray(rows) || rows.length !== 1 || !planRow) return false;
   let row = rows[0];
   let validatedAt = typeof row.last_validated_plan_at === "string" ? Date.parse(row.last_validated_plan_at) : NaN;
   let ageSeconds = (nowMs - validatedAt) / 1000;
-  return row.health_status === "healthy" && isFinite(validatedAt) && ageSeconds >= 0 && ageSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS;
+  let planFingerprint = buildPlanFingerprint(planRow.plan_date, planRow.planned_hours);
+  return row.health_status === "healthy" && isFinite(validatedAt) && ageSeconds >= 0 && ageSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS && planFingerprint !== null && row.validated_plan_fingerprint === planFingerprint;
 }
 
 function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowMs) {
   let control = resolvePlanControl(planRows, planError, settings, today);
-  if (control.source !== "energyzen" || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, nowMs)) return control;
+  if (control.source !== "energyzen" || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
   return settings.enabled
     ? { failSafeReason: null, plannedHours: settings.backupHours, resetHighFillReadings: true, source: "backup" }
     : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], resetHighFillReadings: true, source: "fail-safe" };
@@ -631,14 +642,17 @@ function fetchTodayPlan(settings) {
     "&limit=1";
 
   supabaseRequest(planPath, function (rows, error) {
-    let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at&id=eq.1&limit=1";
+    if (!BACKEND_PLAN_TRUST_ENABLED) {
+      let shadowControl = resolvePlanControl(rows, error, settings, today);
+      if (shadowControl.failSafeReason !== null) executeDecision(shadowControl, settings, null);
+      else fetchLatestReading(shadowControl, settings);
+      return;
+    }
+    let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
     supabaseRequest(heartbeatPath, function (heartbeatRows, heartbeatError) {
       let control = resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime());
-      if (control.failSafeReason !== null) {
-        executeDecision(control, settings, null);
-        return;
-      }
-      fetchLatestReading(control, settings);
+      if (control.failSafeReason !== null) executeDecision(control, settings, null);
+      else fetchLatestReading(control, settings);
     });
   });
 }
@@ -719,6 +733,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REQUIRED_BLOCKING_READINGS: REQUIRED_BLOCKING_READINGS,
     START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
+    buildPlanFingerprint: buildPlanFingerprint,
     calculateCurrentShowers: calculateCurrentShowers,
     createControllerState: createControllerState,
     createRequestError: createRequestError,
