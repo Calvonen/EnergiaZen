@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import * as Updates from "expo-updates";
 
+import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
 import {
   estimateHeatingGainPerHour,
   fallbackHeatingGainPerHour,
@@ -24,6 +25,7 @@ import {
   type EnergiaZenSettings,
   type HeatingGainSource,
 } from "@/lib/settings";
+import { persistSettingsDraft } from "@/lib/settingsDraft";
 import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
@@ -407,11 +409,17 @@ export default function HeatingLearningScreen() {
     commitPersistedSettings(nextSettings, previousSettings);
 
     try {
-      await saveSettings(nextSettings);
+      await persistSettingsDraft({
+        draftSettings: nextSettings,
+        savedSettings: previousSettings,
+        saveLocal: saveSettings,
+        saveRemote: async (settings) => {
+          await upsertHeatingControlSettings(supabase, settings);
+        },
+      });
     } catch {
-      // AsyncStorage-tallennus epäonnistui - peruuta julkaistu muutos, jotta
-      // näytetty tila ei väitä valintaa voimassa olevaksi kun sitä ei
-      // todellisuudessa tallennettu.
+      // The shared save path already rolls AsyncStorage back when the
+      // authoritative Supabase write fails. Keep the live context aligned.
       commitPersistedSettings(previousSettings, nextSettings);
       setGainSourceSaveError(
         "Valinnan tallennus epäonnistui. Yritä uudelleen.",

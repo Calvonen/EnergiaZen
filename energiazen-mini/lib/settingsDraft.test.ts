@@ -334,6 +334,60 @@ export async function runSettingsDraftUnitTests() {
     );
   }
 
+  for (const [previousSource, nextSource] of [
+    ["learned", "fixed"],
+    ["fixed", "learned"],
+  ] as const) {
+    const savedSettings = createSettings({ heatingGainSource: previousSource });
+    const nextSettings = createSettings({
+      automaticMaxHeatingHours: 5,
+      heatingGainSource: nextSource,
+      safetyShowerReserve: 1.5,
+      targetShowerReserve: 3.5,
+    });
+    const remotePayloads: Record<string, unknown>[] = [];
+
+    await persistSettingsDraft({
+      draftSettings: nextSettings,
+      savedSettings,
+      saveLocal: async () => {},
+      saveRemote: async (settings) => {
+        await upsertHeatingControlSettings(
+          {
+            from() {
+              return {
+                async upsert(payload) {
+                  remotePayloads.push(payload);
+                  return { error: null };
+                },
+              };
+            },
+          },
+          settings,
+        );
+      },
+    });
+
+    assertEqual(
+      {
+        automatic_max_heating_hours:
+          remotePayloads[0]?.automatic_max_heating_hours,
+        heating_gain_source: remotePayloads[0]?.heating_gain_source,
+        heating_need_mode: remotePayloads[0]?.heating_need_mode,
+        safety_shower_reserve: remotePayloads[0]?.safety_shower_reserve,
+        target_shower_reserve: remotePayloads[0]?.target_shower_reserve,
+      },
+      {
+        automatic_max_heating_hours: 5,
+        heating_gain_source: nextSource,
+        heating_need_mode: "automatic",
+        safety_shower_reserve: 1.5,
+        target_shower_reserve: 3.5,
+      },
+      `${previousSource} -> ${nextSource} writes the full authoritative settings payload`,
+    );
+  }
+
   {
     const invalidNumbers = {
       ...createSettings(),

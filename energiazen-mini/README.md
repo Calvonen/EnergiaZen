@@ -444,8 +444,9 @@ Backend-primary-tilassa validi muuttunut tulos julkaistaan
 `published`/healthy-tilaan vasta, kun muuttuneet `heating_plans`-rivit,
 `last_published_at`, `last_validated_plan_at` ja tämän päivän
 `validated_plan_fingerprint` on päivitetty samassa tietokantatransaktiossa.
-Identtinen tulos säilyy `no_changes`/healthy-polulla: se päivittää
-validoinnin mutta ei `last_published_at`-kenttää. Invalidit, deferred-ajot ja
+Identtinen tulos kulkee saman snapshot-suojatun RPC:n kautta
+`no_changes`/healthy-polulle: se päivittää validoinnin mutta ei
+`last_published_at`-kenttää. Invalidit, deferred-ajot ja
 publication-virheet ovat unhealthy. Hintojen tuoreus perustuu
 käyttökelpoiseen kattavuuteen: ensimmäisen optimizerille annetun tuntivälin on
 katettava nykyhetki ja kaikkien valittuun optimointi-ikkunaan kuuluvien
@@ -468,7 +469,7 @@ diagnostiikan, mutta ei julkaise eikä merkitse automaattista suunnitelmaa
 healthy/validated-tilaan.
 
 Publication-RPC tarkistaa saman tilan uudelleen transaktion sisällä juuri
-ennen kirjoitusta. Edge Function välittää full settings -snapshotin
+ennen plan-kirjoitusta tai `no_changes`-validointia. Edge Function välittää full settings -snapshotin
 value-by-value (`heating_need_mode`, optimizerin käyttäjäasetukset,
 `heating_gain_source`, `updated_at`) sekä plan-version snapshotin. Plan-
 snapshot sisältää kaikki `changedPlans`-rivit ja aina myös sen tämän päivän

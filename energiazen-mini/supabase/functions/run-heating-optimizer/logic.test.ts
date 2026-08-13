@@ -520,6 +520,16 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       "missing settings row cannot produce a publication settings snapshot",
     );
 
+    const fixedGainResolution = resolveOptimizerSettings({
+      ...settingsRow,
+      heating_gain_source: "fixed",
+    });
+    assertEqual(
+      fixedGainResolution.heatingGainSource,
+      "fixed",
+      "backend must use the synchronized Supabase gain source instead of a stale learned/default value",
+    );
+
     const fixedResolution = resolveOptimizerSettings({
       ...settingsRow,
       heating_need_mode: "fixed",
@@ -597,17 +607,53 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       ),
       [
         {
+          expected_planned_hours: [14, 15],
           expected_updated_at: "2026-08-12T10:00:00.000Z",
           existed: true,
           plan_date: todayPlanDate,
         },
         {
+          expected_planned_hours: null,
           expected_updated_at: null,
           existed: false,
           plan_date: tomorrowPlanDate,
         },
       ],
       "expected plan versions must include validated today even when only tomorrow is changed",
+    );
+    assertEqual(
+      buildExpectedHeatingPlanVersions(
+        [],
+        [
+          {
+            plan_date: todayPlanDate,
+            planned_hours: [14, 15],
+            updated_at: "2026-08-12T10:00:00.000Z",
+          },
+        ] as RawHeatingPlanRow[],
+        todayPlanDate,
+      ),
+      [
+        {
+          expected_planned_hours: [14, 15],
+          expected_updated_at: "2026-08-12T10:00:00.000Z",
+          existed: true,
+          plan_date: todayPlanDate,
+        },
+      ],
+      "no_changes must still carry today's version and content identity",
+    );
+    assertEqual(
+      buildExpectedHeatingPlanVersions([], [], todayPlanDate),
+      [
+        {
+          expected_planned_hours: null,
+          expected_updated_at: null,
+          existed: false,
+          plan_date: todayPlanDate,
+        },
+      ],
+      "no_changes must preserve an absent-today snapshot for conflict detection",
     );
 
     const matchingDecision = buildHeatingPlanPublicationDecision({

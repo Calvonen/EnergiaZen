@@ -564,6 +564,7 @@ export function buildStoredPlansMap(
 }
 
 export type ExpectedHeatingPlanVersion = {
+  expected_planned_hours: unknown;
   expected_updated_at: string | null;
   existed: boolean;
   plan_date: string;
@@ -585,6 +586,7 @@ export function buildExpectedHeatingPlanVersions(
     const storedPlan = storedRows.find((row) => row.plan_date === planDate) ?? null;
 
     return {
+      expected_planned_hours: storedPlan?.planned_hours ?? null,
       expected_updated_at: storedPlan?.updated_at ?? null,
       existed: storedPlan !== null,
       plan_date: planDate,

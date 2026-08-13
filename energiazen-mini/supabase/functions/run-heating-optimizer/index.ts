@@ -417,20 +417,23 @@ Deno.serve(async (request) => {
     let heartbeatCommitted = false;
     let wroteToHeatingPlans = false;
     let publishedPlanCount = 0;
-    if (hasChangedPlans && canPublishPlan && decision.status === "ready") {
+    const shouldUseSafeSnapshotCompletion =
+      (hasChangedPlans && canPublishPlan) || canValidateNoChanges;
+    if (shouldUseSafeSnapshotCompletion && decision.status === "ready") {
       const expectedPlanVersions = buildExpectedHeatingPlanVersions(
         decision.changedPlans,
         heatingPlanRows,
         todayPlanDate,
       );
       const expectedSettings = buildExpectedOptimizerSettingsSnapshot(settingsRow);
+      const successfulOutcome = hasChangedPlans ? "published" : "no_changes";
       const { data: publishCommitted, error: publishError } = await supabase.rpc(
         "publish_backend_heating_optimizer_plans",
         {
           p_changed_plans: decision.changedPlans,
           p_expected_plan_versions: expectedPlanVersions,
           p_expected_settings: expectedSettings,
-          p_publish_reason: "valid plan published",
+          p_publish_reason: hasChangedPlans ? "valid plan published" : shadowRow.reason,
           p_published_at: now.toISOString(),
           p_run_id: runId,
           p_run_started_at: runStartedAt,
@@ -440,7 +443,7 @@ Deno.serve(async (request) => {
         },
       );
       if (publishError) {
-        console.error("run-heating-optimizer: heating_plans publication failed", {
+        console.error("run-heating-optimizer: safe plan completion failed", {
           code: publishError.code,
           details: publishError.details,
           hint: publishError.hint,
@@ -453,7 +456,9 @@ Deno.serve(async (request) => {
         return jsonResponse(
           {
             decision: decision.status,
-            error: "Failed to publish heating plans",
+            error: hasChangedPlans
+              ? "Failed to publish heating plans"
+              : "Failed to validate unchanged heating plan",
             heartbeat_committed: failureCommitted,
             heartbeat_status: failureCommitted ? "committed" : "superseded",
             message: publishError.message,
@@ -481,10 +486,10 @@ Deno.serve(async (request) => {
           409,
         );
       }
-      heartbeatCommitted = publishCommitted === "published";
+      heartbeatCommitted = publishCommitted === successfulOutcome;
       if (publishCommitted === "heartbeat_superseded" || !heartbeatCommitted) {
         const failureCommitted = await completePublicationFailure(
-          "publication_failed: heartbeat ownership lost before publication",
+          "publication_failed: heartbeat ownership lost before safe completion",
         );
         return jsonResponse(
           {
@@ -498,15 +503,15 @@ Deno.serve(async (request) => {
           409,
         );
       }
-      outcome = "published";
-      wroteToHeatingPlans = true;
-      publishedPlanCount = decision.changedPlans.length;
+      outcome = successfulOutcome;
+      wroteToHeatingPlans = hasChangedPlans;
+      publishedPlanCount = hasChangedPlans ? decision.changedPlans.length : 0;
     } else {
       const { data: completeHeartbeatCommitted, error: completeHeartbeatError } =
         await supabase.rpc(
           "complete_backend_heating_optimizer_run",
           {
-            p_health_status: canValidateNoChanges ? "healthy" : "unhealthy",
+            p_health_status: "unhealthy",
             p_last_outcome: outcome,
             p_reason:
               typeof heating !== "boolean"
@@ -516,10 +521,10 @@ Deno.serve(async (request) => {
                   : publicationReadiness.reason,
             p_run_id: runId,
             p_run_started_at: runStartedAt,
-            p_validated_plan_at: canValidateNoChanges ? now.toISOString() : null,
-            p_validated_plan_date: canValidateNoChanges ? todayPlanDate : null,
-            p_validated_plan_fingerprint: validatedFingerprint,
-            p_validated_planned_hours: validatedHours,
+            p_validated_plan_at: null,
+            p_validated_plan_date: null,
+            p_validated_plan_fingerprint: null,
+            p_validated_planned_hours: null,
           },
         );
       if (completeHeartbeatError) {
