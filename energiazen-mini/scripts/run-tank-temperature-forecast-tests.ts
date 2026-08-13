@@ -59,6 +59,7 @@ import { runHeatingOptimizerShadowPermissionsMigrationTests } from "../tests/hea
 import { runHeatingBackendWatchdogUnitTests } from "../lib/heatingBackendWatchdog.test";
 import { runBackendOptimizerHeartbeatMigrationTests } from "../tests/backendOptimizerHeartbeatMigration.test";
 import { runBackendHeatingPlanPublicationMigrationTests } from "../tests/backendHeatingPlanPublicationMigration.test";
+import { runBackendHeatingOptimizerSecurityTests } from "../tests/backendHeatingOptimizerSecurity.test";
 import { runHeatingBackendFailSafeSimulationTests } from "../tests/heatingBackendFailSafeSimulation.test";
 
 async function runTests() {
@@ -123,10 +124,11 @@ async function runTests() {
   runHeatingBackendWatchdogUnitTests();
   runBackendOptimizerHeartbeatMigrationTests();
   runBackendHeatingPlanPublicationMigrationTests();
+  runBackendHeatingOptimizerSecurityTests();
   runHeatingBackendFailSafeSimulationTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingGainSourceSyncSource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources, edgeFunctionImportBoundaries, edgeFunctionRuntimeBindings, heatingOptimizerShadowPermissionsMigration, heatingBackendWatchdog, backendHeatingPlanPublicationMigration and heatingBackendFailSafeSimulation tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingGainSourceSyncSource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources, edgeFunctionImportBoundaries, edgeFunctionRuntimeBindings, heatingOptimizerShadowPermissionsMigration, heatingBackendWatchdog, backendHeatingPlanPublicationMigration, backendHeatingOptimizerSecurity and heatingBackendFailSafeSimulation tests passed",
   );
 }
 

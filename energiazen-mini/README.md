@@ -476,6 +476,14 @@ julkaisun että `no_changes`-healthy-validoinnin. Heartbeat jää unhealthy/
 `deferred`-tilaan, eikä validointi-, fingerprint- tai julkaisuaika etene.
 Usean samanaikaisen hakuvirheen reason säilyttää kaikki epäonnistuneet lähteet.
 
+Write-capable `run-heating-optimizer` hyväksyy vain pyynnön, jonka
+`x-energyzen-cron-secret` vastaa Edge Functionin
+`HEATING_OPTIMIZER_CRON_SECRET`-secretiä. Publishable key palvelee edelleen
+Supabase Edge gatewayn tunnistautumista, mutta ei yksin valtuuta optimizer-
+ajoa. Sama satunnainen arvo pitää provisionoida ennen cron-migraation ajoa
+sekä Edge Function secretiksi että Supabase Vaultiin nimellä
+`heating_optimizer_cron_secret`. Secretin arvoa ei tallenneta migraatioon.
+
 Publication-RPC tarkistaa saman tilan uudelleen transaktion sisällä juuri
 ennen plan-kirjoitusta tai `no_changes`-validointia. Edge Function välittää full settings -snapshotin
 value-by-value (`heating_need_mode`, optimizerin käyttäjäasetukset,
@@ -490,6 +498,13 @@ on ilmestynyt tai olemassa ollut rivi on päivittynyt, RPC palauttaa
 `plan_conflict`; jos asetukset muuttuivat, se palauttaa `settings_conflict`.
 Kumpikaan polku ei kirjoita plan-rivejä eikä päivitä validointi- tai
 julkaisuaikoja.
+
+RPC saa lisäksi optimizerin käyttämän latest tank reading -snapshotin
+(`created_at`, `heating`). Se lukitsee `tank_readings`-taulun lyhyen
+publication/no-change-transaktion loppuajaksi, varmistaa alkuperäisen readingin
+olemassaolon ja vertaa uusimman readingin relay-tilaa alkuperäiseen. Uudempi
+reading samalla `heating`-arvolla sallitaan; eri tai unknown relay-tila palauttaa
+`relay_conflict`in ennen plan-kirjoituksia ja heartbeat-validointia.
 
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,

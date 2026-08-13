@@ -20,6 +20,7 @@ import {
   buildHeatingPlanFingerprint,
   buildExpectedHeatingPlanVersions,
   buildExpectedOptimizerSettingsSnapshot,
+  buildExpectedRelaySnapshot,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -35,6 +36,7 @@ import {
   getFinnishDateKey,
   getHelsinkiHourNumber,
   latestPriceFetchedAt,
+  isHeatingOptimizerCronSecretAuthorized,
   resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
@@ -60,6 +62,12 @@ function jsonResponse(body: unknown, status = 200) {
 Deno.serve(async (request) => {
   if (request.method !== "GET" && request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
+  }
+
+  const cronSecret = Deno.env.get("HEATING_OPTIMIZER_CRON_SECRET");
+  const providedCronSecret = request.headers.get("x-energyzen-cron-secret");
+  if (!isHeatingOptimizerCronSecretAuthorized(providedCronSecret, cronSecret)) {
+    return jsonResponse({ error: "Unauthorized" }, 401);
   }
 
   let completeRunError: ((reason: string) => Promise<void>) | null = null;
@@ -457,12 +465,14 @@ Deno.serve(async (request) => {
         todayPlanDate,
       );
       const expectedSettings = buildExpectedOptimizerSettingsSnapshot(settingsRow);
+      const expectedRelaySnapshot = buildExpectedRelaySnapshot(latestReading);
       const successfulOutcome = hasChangedPlans ? "published" : "no_changes";
       const { data: publishCommitted, error: publishError } = await supabase.rpc(
         "publish_backend_heating_optimizer_plans",
         {
           p_changed_plans: decision.changedPlans,
           p_expected_plan_versions: expectedPlanVersions,
+          p_expected_relay_snapshot: expectedRelaySnapshot,
           p_expected_settings: expectedSettings,
           p_publish_reason: hasChangedPlans ? "valid plan published" : shadowRow.reason,
           p_published_at: now.toISOString(),
@@ -500,7 +510,11 @@ Deno.serve(async (request) => {
           500,
         );
       }
-      if (publishCommitted === "settings_conflict" || publishCommitted === "plan_conflict") {
+      if (
+        publishCommitted === "settings_conflict" ||
+        publishCommitted === "plan_conflict" ||
+        publishCommitted === "relay_conflict"
+      ) {
         const failureCommitted = await completePublicationFailure(
           `publication_failed: ${publishCommitted}`,
         );

@@ -2,6 +2,7 @@ import {
   buildHeatingPlanFingerprint,
   buildExpectedHeatingPlanVersions,
   buildExpectedOptimizerSettingsSnapshot,
+  buildExpectedRelaySnapshot,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
@@ -14,6 +15,7 @@ import {
   getDateKeyOffset,
   getHelsinkiDateStart,
   latestPriceFetchedAt,
+  isHeatingOptimizerCronSecretAuthorized,
   resolveHourlyDropProfile,
   resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
@@ -80,6 +82,44 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  assertEqual(
+    isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),
+    true,
+    "matching private cron secret authorizes the optimizer request",
+  );
+  for (const [provided, expected] of [
+    [null, "private-cron-secret"],
+    ["wrong-secret", "private-cron-secret"],
+    ["publishable-key-only", undefined],
+    ["", "private-cron-secret"],
+  ] as const) {
+    assertEqual(
+      isHeatingOptimizerCronSecretAuthorized(provided, expected),
+      false,
+      "missing, wrong or merely publishable credentials must not authorize the optimizer",
+    );
+  }
+  assertEqual(
+    buildExpectedRelaySnapshot({
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: false,
+      top_temp: 55,
+    }),
+    { created_at: "2026-08-13T10:00:00.000Z", heating: false },
+    "relay snapshot must carry the optimizer's original reading identity and heating state",
+  );
+  assertEqual(
+    buildExpectedRelaySnapshot({
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: null,
+      top_temp: 55,
+    }),
+    { created_at: "2026-08-13T10:00:00.000Z", heating: null },
+    "unknown original relay state must remain unknown for fail-safe rejection",
+  );
+
   {
     const emptyGainHistory = successfulOptimizerInputFetch({ readings: [] });
     const emptyRecoveryHistory = successfulOptimizerInputFetch({ readings: [] });

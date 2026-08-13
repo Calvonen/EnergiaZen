@@ -65,6 +65,32 @@ export type RawTankReading = {
   top_temp: number | null;
 };
 
+export type ExpectedRelaySnapshot = {
+  created_at: string | null;
+  heating: boolean | null;
+};
+
+export function buildExpectedRelaySnapshot(
+  reading: RawTankReading | null,
+): ExpectedRelaySnapshot {
+  return {
+    created_at: reading?.created_at ?? null,
+    heating: reading?.heating ?? null,
+  };
+}
+
+export function isHeatingOptimizerCronSecretAuthorized(
+  providedSecret: string | null,
+  expectedSecret: string | undefined,
+): boolean {
+  return Boolean(
+    providedSecret &&
+      expectedSecret &&
+      providedSecret.length > 0 &&
+      providedSecret === expectedSecret,
+  );
+}
+
 export type RawHeatingControlSettingsRow = {
   automatic_max_heating_hours: number | null;
   full_tank_average_temperature: number | null;
