@@ -276,18 +276,17 @@ Tarkista nykyinen tila:
 select * from public.device_monitor_state;
 ```
 
-## Lämmitysoptimoinnin backend shadow mode
+## Lämmitysoptimoinnin backend-primary
 
 `run-heating-optimizer` ajaa saman lämmitysoptimoinnin kuin appi
 (`optimizeHeatingPlan()`, `supabase/functions/_shared/heatingOptimizer.ts` -
 ks. alla miksi tämä ei asu `lib/`:ssä) backendissä, tuotanto-
-Supabasen hinta-, varaaja- ja asetusdatalla, mutta **ei kirjoita
-`heating_plans`-tauluun**. Jokainen ajo tallentaa yhden diagnostisen rivin
-`heating_plan_shadow_runs`-tauluun (suunniteltu tulos, verrattuna appin
-nykyiseen julkaisuun) - Shelly ja appi jatkavat toimimista täysin
-muuttumattomina. Tämä on tarkoituksella väliaikainen vaihe: backendistä
-tehdään ensisijainen kirjoittaja `heating_plans`-tauluun vasta erikseen
-hyväksyttävässä myöhemmässä muutoksessa.
+Supabasen hinta-, varaaja- ja asetusdatalla. Jokainen ajo tallentaa edelleen
+diagnostisen rivin `heating_plan_shadow_runs`-tauluun, mutta validi ja valmis
+ajo saa nyt julkaista duplicate-suppressionin tunnistamat muuttuneet rivit
+`heating_plans`-tauluun. Julkaisu tehdään vain heartbeat-omistajuuden
+CAS-suojauksen alla, ja onnistunut julkaisu päivittää samalla Shellyn
+trust-fingerprintin.
 
 Optimizerin ja julkaisun turvamekanismit (current-hour preservation,
 unknown heating state, stale-input/valmiusgate, duplikaatti-/vanhentunut
@@ -297,8 +296,8 @@ ei kopioita. Kaikki funktion oma logiikka on
 `supabase/functions/run-heating-optimizer/logic.ts`:ssä (ei
 Deno-only-APIeja, yksikkötestattu Node:n alla `logic.test.ts`:llä,
 mukana `npm test`:ssä); `index.ts` on ohut Supabase-IO-kuori (hakee inputit
-service role -oikeuksilla, kutsuu `logic.ts`:ää, tallentaa yhden
-shadow-rivin).
+service role -oikeuksilla, kutsuu `logic.ts`:ää, tallentaa shadow-rivin ja
+kutsuu tarvittaessa transaktionaalista publication-RPC:tä).
 
 **Jaettu domain-logiikka asuu `supabase/functions/_shared/`-hakemistossa,
 ei `lib/`:ssä.** `npx supabase functions deploy <nimi> --use-api`
@@ -421,7 +420,7 @@ from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 ```
 
-### Backend-optimoijan trust-heartbeat (shadow mode)
+### Backend-optimoijan trust-heartbeat
 
 Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden
 `id = 1` current-state-rivin. Historiataulua ei tarvita Shellyn päätökseen;
@@ -440,11 +439,14 @@ tulevaisuudessa. Muuten se käyttää `backup_hours`-tunteja, jos
 `updated_at` ei gatea luottamusta: `no_changes` päivittää validoinnin mutta ei
 julkaisuaikaa.
 
-Shadow mode säilyy: vain validi, tallennettuun suunnitelmaan identtinen
-`no_changes` merkitään terveeksi ja päivittää validointiajan. Muuttunut validi
-tulos merkitään `changes_not_published`/unhealthy, koska tätä luonnosta ei vielä
-kirjoiteta `heating_plans`-tauluun; `last_published_at` ei siis etene tässä
-PR:ssä. Invalidit ja deferred-ajot ovat unhealthy. Hintojen tuoreus perustuu
+Backend-primary-tilassa validi muuttunut tulos julkaistaan
+`publish_backend_heating_optimizer_plans`-RPC:llä ja merkitään
+`published`/healthy-tilaan vasta, kun muuttuneet `heating_plans`-rivit,
+`last_published_at`, `last_validated_plan_at` ja tämän päivän
+`validated_plan_fingerprint` on päivitetty samassa tietokantatransaktiossa.
+Identtinen tulos säilyy `no_changes`/healthy-polulla: se päivittää
+validoinnin mutta ei `last_published_at`-kenttää. Invalidit, deferred-ajot ja
+publication-virheet ovat unhealthy. Hintojen tuoreus perustuu
 käyttökelpoiseen kattavuuteen: ensimmäisen optimizerille annetun tuntivälin on
 katettava nykyhetki ja kaikkien valittuun optimointi-ikkunaan kuuluvien
 hintavälien on oltava valideja, tunnin mittaisia ja aukottomia. Viimeisen välin
@@ -461,19 +463,17 @@ edellisen validoinnin 90 minuutin vanhenemisesta. Käynnistyksen jälkeen jääv
 `running`-tila on tarkoituksella unhealthy. Erillinen ulkoinen cron/deploy-
 monitorointi tarvitaan edelleen ennen backend-primary-vaihetta.
 
-**Deployment-gate:** `BACKEND_PLAN_TRUST_ENABLED` on Shelly-lähteessä tässä
-shadow-PR:ssä tarkoituksella `false`. Shadow-optimizer voi merkitä terveeksi vain
-`no_changes`-ajon, joten gaten aktivointi nyt voisi ajaa laitteen jatkuvaan
-fallbackiin aina appin julkaisun muututtua. Gate aktivoidaan vasta erillisessä,
-hyväksytyn plan-publication-polun sisältävässä kontrolloidussa Shelly-deployssa;
-tämä PR ei muuta nykyistä tuotanto-ohjausta eikä ota backend-primaryä käyttöön.
+**Deployment-gate:** Shellyn trust-gate (`BACKEND_PLAN_TRUST_ENABLED`) on
+edelleen erillinen laitedeploy-päätös. Tämä backend-muutos ei muuta Shellyn
+fallback-logiikkaa eikä minifioitua controlleria.
 
 Rinnakkaiset ajot omistavat singletonin UUID `current_run_id` +
 `current_run_started_at` -CAS-tokenilla. Uudempi aloitusaika syrjäyttää vanhemman,
 ja lopetus-RPC päivittää rivin vain molempien arvojen täsmätessä. Siksi myöhään
-valmistuva vanha ajo ei voi ylikirjoittaa uudemman ajon tulosta. Onnistunut
-`no_changes` tallentaa lisäksi deterministisen identiteetin muodossa
-`YYYY-MM-DD|h1,h2,...`, jossa tunnit deduplikoidaan ja järjestetään.
+valmistuva vanha ajo ei voi ylikirjoittaa uudemman ajon tulosta eikä julkaista
+stale-plania. Onnistunut `published` ja `no_changes` tallentavat lisäksi
+deterministisen identiteetin muodossa `YYYY-MM-DD|h1,h2,...`, jossa tunnit
+deduplikoidaan ja järjestetään.
 
 RPC:n boolean-paluuarvo on osa CAS-sopimusta: `begin = false` lopettaa
 superseded-ajon ennen optimizer-putkea HTTP 409 -vastauksella, eikä singletonia

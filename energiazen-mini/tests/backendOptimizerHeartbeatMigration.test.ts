@@ -12,7 +12,7 @@ function assertSource(condition: boolean, message: string) {
 }
 
 export function runBackendOptimizerHeartbeatMigrationTests() {
-  const sql = readFileSync(join(process.cwd(), "supabase/migrations/20260813010000_harden_backend_optimizer_heartbeat.sql"), "utf8");
+  const sql = readFileSync(join(process.cwd(), "supabase/migrations/20260813010000_harden_backend_optimizer_heartbeat.sql"), "utf8").replace(/\r\n/g, "\n");
   assertSource(sql.includes("current_run_id = p_run_id") && sql.includes("current_run_started_at = p_run_started_at"), "completion must compare-and-set both run identity and start time");
   assertSource(/current_run_started_at is null or current_run_started_at < p_run_started_at/.test(sql), "an older run start must not replace a newer owner");
   assertSource(sql.includes("validated_plan_fingerprint"), "heartbeat must persist validated plan identity");
@@ -42,7 +42,7 @@ export function runBackendOptimizerHeartbeatMigrationTests() {
   const edgeFunctionSource = readFileSync(
     join(process.cwd(), "supabase/functions/run-heating-optimizer/index.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   assertSource(
     edgeFunctionSource.includes("if (!wasHeartbeatCompareAndSetCommitted(beginHeartbeatCommitted))") &&
       edgeFunctionSource.includes('status: "superseded"') &&

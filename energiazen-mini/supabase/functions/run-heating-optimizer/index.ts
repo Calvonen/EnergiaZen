@@ -1,12 +1,10 @@
-// EnergyZen backend heating-optimizer SHADOW MODE.
+// EnergyZen backend-primary heating optimizer.
 //
 // Runs the exact same optimizeHeatingPlan() the React Native app runs,
-// using production Supabase price/tank/settings data, and writes the
-// result to heating_plan_shadow_runs for comparison. Deliberately does NOT
-// write to heating_plans - Shelly/ESP keeps reading only what the app
-// publishes there until a separate, explicitly-approved change makes this
-// function (or another one) the primary writer. See this PR's report for
-// the phased plan to get there.
+// using production Supabase price/tank/settings data, keeps the diagnostic
+// heating_plan_shadow_runs row, and publishes changed automatic plans only
+// after the existing readiness, optimizer validity, relay-status, duplicate-
+// suppression and heartbeat ownership gates all pass.
 //
 // All actual optimizer/publication logic lives in ./logic.ts (no Deno-only
 // APIs, unit-tested under Node - see logic.test.ts). This file is only the
@@ -137,6 +135,26 @@ Deno.serve(async (request) => {
           { heartbeat_error: heartbeatError, reason, run_id: runId },
         );
       }
+    };
+    const completePublicationFailure = async (reason: string) => {
+      const { data, error } = await supabase.rpc(
+        "complete_backend_heating_optimizer_run",
+        {
+          p_health_status: "unhealthy",
+          p_last_outcome: "publication_failed",
+          p_reason: reason,
+          p_run_id: runId,
+          p_run_started_at: runStartedAt,
+          p_validated_plan_at: null,
+          p_validated_plan_date: null,
+          p_validated_plan_fingerprint: null,
+          p_validated_planned_hours: null,
+        },
+      );
+      if (error) {
+        throw new Error(`Failed to persist publication failure heartbeat: ${error.message}`);
+      }
+      return wasHeartbeatCompareAndSetCommitted(data);
     };
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
@@ -357,52 +375,121 @@ Deno.serve(async (request) => {
       );
     }
 
-    const isValidReadyDecision =
-      decision.status === "ready" && run.result?.valid === true;
-    const isNoChanges = canMarkHeatingPlanValidated(
+    const isValidReadyDecision = decision.status === "ready" && run.result?.valid === true;
+    const todayChanged =
+      decision.status === "ready" &&
+      decision.changedPlans.some((plan) => plan.plan_date === todayPlanDate);
+    const canValidateNoChanges = canMarkHeatingPlanValidated(
       heating,
       isValidReadyDecision,
-      decision.status === "ready" &&
-        decision.changedPlans.some((plan) => plan.plan_date === todayPlanDate),
+      todayChanged,
     );
-    const outcome = isNoChanges
+    const hasChangedPlans = decision.status === "ready" && decision.changedPlans.length > 0;
+    const canPublishPlan = typeof heating === "boolean" && isValidReadyDecision;
+    const invalidOutcome = canValidateNoChanges
       ? "no_changes"
       : typeof heating !== "boolean"
         ? "deferred"
-        : isValidReadyDecision
-        ? "changes_not_published"
         : run.result?.valid === false
           ? "optimizer_invalid"
           : "deferred";
 
     const validatedHours =
-      isNoChanges && decision.status === "ready" ? decision.today.planned_hours : null;
+      (canValidateNoChanges || (hasChangedPlans && canPublishPlan)) &&
+      decision.status === "ready"
+      ? decision.today.planned_hours
+      : null;
     const validatedFingerprint = validatedHours
       ? buildHeatingPlanFingerprint(todayPlanDate, validatedHours)
       : null;
-    // Shadow mode never writes heating_plans, so last_published_at is
-    // deliberately absent and preserved even when a changed valid draft exists.
-    const { data: completeHeartbeatCommitted, error: completeHeartbeatError } = await supabase.rpc(
-      "complete_backend_heating_optimizer_run",
-      {
-        p_health_status: isNoChanges ? "healthy" : "unhealthy",
-        p_last_outcome: outcome,
-        p_reason:
-          typeof heating === "boolean" ? shadowRow.reason : "relay_status_unknown",
-        p_run_id: runId,
-        p_run_started_at: runStartedAt,
-        p_validated_plan_at: isNoChanges ? now.toISOString() : null,
-        p_validated_plan_date: isNoChanges ? todayPlanDate : null,
-        p_validated_plan_fingerprint: validatedFingerprint,
-        p_validated_planned_hours: validatedHours,
-      },
-    );
-    if (completeHeartbeatError) {
-      throw new Error(`Failed to complete optimizer heartbeat: ${completeHeartbeatError.message}`);
+
+    let outcome = invalidOutcome;
+    let heartbeatCommitted = false;
+    let wroteToHeatingPlans = false;
+    let publishedPlanCount = 0;
+    if (hasChangedPlans && canPublishPlan && decision.status === "ready") {
+      const { data: publishCommitted, error: publishError } = await supabase.rpc(
+        "publish_backend_heating_optimizer_plans",
+        {
+          p_changed_plans: decision.changedPlans,
+          p_publish_reason: "valid plan published",
+          p_published_at: now.toISOString(),
+          p_run_id: runId,
+          p_run_started_at: runStartedAt,
+          p_validated_plan_date: todayPlanDate,
+          p_validated_plan_fingerprint: validatedFingerprint,
+          p_validated_planned_hours: validatedHours,
+        },
+      );
+      if (publishError) {
+        console.error("run-heating-optimizer: heating_plans publication failed", {
+          code: publishError.code,
+          details: publishError.details,
+          hint: publishError.hint,
+          message: publishError.message,
+          run_id: runId,
+        });
+        const failureCommitted = await completePublicationFailure(
+          `publication_failed: ${publishError.message}`,
+        );
+        return jsonResponse(
+          {
+            decision: decision.status,
+            error: "Failed to publish heating plans",
+            heartbeat_committed: failureCommitted,
+            heartbeat_status: failureCommitted ? "committed" : "superseded",
+            message: publishError.message,
+            reason: "publication_failed",
+            run_id: runId,
+            wrote_to_heating_plans: false,
+          },
+          500,
+        );
+      }
+      heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(publishCommitted);
+      if (!heartbeatCommitted) {
+        const failureCommitted = await completePublicationFailure(
+          "publication_failed: heartbeat ownership lost before publication",
+        );
+        return jsonResponse(
+          {
+            decision: decision.status,
+            heartbeat_committed: failureCommitted,
+            heartbeat_status: failureCommitted ? "committed" : "superseded",
+            reason: "publication_ownership_lost",
+            run_id: runId,
+            wrote_to_heating_plans: false,
+          },
+          409,
+        );
+      }
+      outcome = "published";
+      wroteToHeatingPlans = true;
+      publishedPlanCount = decision.changedPlans.length;
+    } else {
+      const { data: completeHeartbeatCommitted, error: completeHeartbeatError } =
+        await supabase.rpc(
+          "complete_backend_heating_optimizer_run",
+          {
+            p_health_status: canValidateNoChanges ? "healthy" : "unhealthy",
+            p_last_outcome: outcome,
+            p_reason:
+              typeof heating === "boolean" ? shadowRow.reason : "relay_status_unknown",
+            p_run_id: runId,
+            p_run_started_at: runStartedAt,
+            p_validated_plan_at: canValidateNoChanges ? now.toISOString() : null,
+            p_validated_plan_date: canValidateNoChanges ? todayPlanDate : null,
+            p_validated_plan_fingerprint: validatedFingerprint,
+            p_validated_planned_hours: validatedHours,
+          },
+        );
+      if (completeHeartbeatError) {
+        throw new Error(`Failed to complete optimizer heartbeat: ${completeHeartbeatError.message}`);
+      }
+      heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(
+        completeHeartbeatCommitted,
+      );
     }
-    const heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(
-      completeHeartbeatCommitted,
-    );
     if (!heartbeatCommitted) {
       console.warn(
         "run-heating-optimizer: run lost heartbeat ownership before completion",
@@ -412,16 +499,20 @@ Deno.serve(async (request) => {
 
     return jsonResponse({
       decision: decision.status,
+      changed_plan_count:
+        decision.status === "ready" ? decision.changedPlans.length : 0,
       heartbeat_committed: heartbeatCommitted,
       heartbeat_status: heartbeatCommitted ? "committed" : "superseded",
+      last_outcome: outcome,
       planned_hours_match: shadowRow.planned_hours_match,
+      published_plan_count: publishedPlanCount,
       reason: shadowRow.reason,
       settings_source: settingsSource,
       today_plan_date: todayPlanDate,
       today_planned_hours: shadowRow.today_planned_hours,
       tomorrow_plan_date: tomorrowPlanDate,
       tomorrow_planned_hours: shadowRow.tomorrow_planned_hours,
-      wrote_to_heating_plans: false,
+      wrote_to_heating_plans: wroteToHeatingPlans,
     });
   } catch (error) {
     console.error("run-heating-optimizer failed", error);
