@@ -168,7 +168,12 @@ type TimestampAssessment =
   | { kind: "value"; ageMinutes: number };
 
 function assessTimestamp(isoTimestamp: string | null, now: Date): TimestampAssessment {
-  if (!isoTimestamp) {
+  // Strict null check, not a truthiness check: "" is a non-null string
+  // that simply fails to parse as a date below (new Date("").getTime() is
+  // NaN), so it must be classified as "invalid", not "missing" - a
+  // falsy-check here previously conflated the two, letting an empty
+  // string slip through as if the field had never been populated at all.
+  if (isoTimestamp === null) {
     return { kind: "missing" };
   }
 

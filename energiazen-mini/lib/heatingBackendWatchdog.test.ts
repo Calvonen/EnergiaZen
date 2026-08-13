@@ -645,4 +645,144 @@ export function runHeatingBackendWatchdogUnitTests() {
       "a missing (not malformed) lastRunAt must still carry the cron_missing category, unchanged",
     );
   }
+
+  // --- PR #191 final-cleanup review (Codex): an empty string ("") is a
+  // non-null value that simply fails to parse as a date - assessTimestamp
+  // previously used a truthiness check (!isoTimestamp), which treats ""
+  // the same as null and misclassifies it as "missing" instead of
+  // "invalid", risking the same "undefined min ago" style diagnostic this
+  // whole malformed-timestamp fix exists to prevent. ---
+
+  // 24. lastRunAt="" alone (a fresh, valid lastValidatedPlanAt proves the
+  // empty-string lastRunAt alone is what forces the result).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: "",
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      'an empty-string lastRunAt ("") must be treated as run_overdue, the same safe unhealthy bucket a ' +
+        "missing/malformed one hits",
+    );
+    assertEqual(result.alert, true, 'an empty-string lastRunAt ("") must alert');
+    assert(
+      result.alertReason?.startsWith("run_timestamp_invalid:"),
+      `an empty-string lastRunAt must carry the run_timestamp_invalid category (not cron_missing), got: ${result.alertReason}`,
+    );
+    assert(
+      !result.alertReason?.includes("undefined"),
+      `alertReason must never contain the literal text "undefined", got: ${result.alertReason}`,
+    );
+    assertEqual(
+      result.lastRunAgeMinutes,
+      null,
+      'an empty-string lastRunAt must report lastRunAgeMinutes as null, not NaN or a garbage number',
+    );
+  }
+
+  // 25. lastValidatedPlanAt="" alone (a fresh, valid lastRunAt with a
+  // successful outcome proves the empty-string validated-plan timestamp
+  // alone is what forces the result).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: "",
+      now,
+    });
+    assertEqual(
+      result.status,
+      "no_recent_valid_plan",
+      'an empty-string lastValidatedPlanAt ("") must be treated as no_recent_valid_plan, the same safe ' +
+        "unhealthy bucket a missing/malformed one hits",
+    );
+    assertEqual(result.alert, true, 'an empty-string lastValidatedPlanAt ("") must alert');
+    assert(
+      result.alertReason?.startsWith("validated_plan_timestamp_invalid:"),
+      "an empty-string lastValidatedPlanAt must carry the validated_plan_timestamp_invalid category (not " +
+        `no_recent_valid_plan's plain missing wording), got: ${result.alertReason}`,
+    );
+    assert(
+      !result.alertReason?.includes("undefined"),
+      `alertReason must never contain the literal text "undefined", got: ${result.alertReason}`,
+    );
+    assertEqual(
+      result.lastValidatedPlanAgeMinutes,
+      null,
+      "an empty-string lastValidatedPlanAt must report lastValidatedPlanAgeMinutes as null, not NaN or a garbage number",
+    );
+  }
+
+  // 26. Both empty strings at once -> run_overdue wins (same priority
+  // order as both-malformed/both-future/both-missing).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: "",
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: "",
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "when both timestamps are empty strings, run_overdue must win over no_recent_valid_plan",
+    );
+    assert(
+      result.alertReason?.startsWith("run_timestamp_invalid:"),
+      "both-empty-string alertReason must be the run_timestamp_invalid category, not the validated-plan one",
+    );
+  }
+
+  // 27. null must still mean "missing" (cron_missing), genuinely distinct
+  // from "" meaning "invalid" (run_timestamp_invalid) - re-confirms the
+  // two are not accidentally merged back together by this fix either.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: null,
+      lastRunOutcome: null,
+      lastRunReason: null,
+      lastValidatedPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(result.status, "run_overdue", "a null lastRunAt must still be run_overdue");
+    assert(
+      result.alertReason?.startsWith("cron_missing:"),
+      `a null lastRunAt must still carry the cron_missing category, not run_timestamp_invalid, got: ${result.alertReason}`,
+    );
+  }
+
+  // 28. Normal valid past timestamps remain entirely unaffected by the
+  // strict-null-check change.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "healthy",
+      "ordinary past timestamps must still resolve to healthy after the empty-string fix",
+    );
+    assertEqual(result.alert, false, "ordinary past timestamps must not alert");
+  }
 }
