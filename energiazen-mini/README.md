@@ -479,3 +479,12 @@ merkitsee siihen `heartbeat_committed: false` ja `heartbeat_status:
 Migraation lähdetesti ei aja PL/pgSQL:ää oikeaa PostgreSQL-instanssia vasten,
 joten RPC:iden atomisuus ja oikeudet on validoitava staging-/tuotanto-Supabasessa
 ennen deploymentia.
+
+Kun heartbeat-omistajuus on saatu, pakollisten input-hakujen virheet,
+shadow-rivin tallennusvirhe ja odottamattomat poikkeukset yrittävät aina päättää
+ajon `unhealthy` / `run_error` -tilaan alkuperäisellä virhesyyllä. Jos tämä
+complete-RPC epäonnistuu tai palauttaa `false`, ongelma lokitetaan mutta
+alkuperäistä HTTP-virhettä ei peitetä. `false` tarkoittaa, että uudempi ajo
+omistaa singletonin eikä vanha run_error saa muuttaa sen tilaa. Nykyinen testi
+varmistaa tämän lähdekoodisopimuksena ja TypeScript-omistajuusmallina; se ei
+suorita Edge Functionia ja RPC:tä oikeaa Supabase/PostgreSQL-instanssia vasten.

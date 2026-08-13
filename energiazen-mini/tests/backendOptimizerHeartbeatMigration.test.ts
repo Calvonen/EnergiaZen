@@ -54,4 +54,31 @@ export function runBackendOptimizerHeartbeatMigrationTests() {
       edgeFunctionSource.includes('heartbeat_status: heartbeatCommitted ? "committed" : "superseded"'),
     "a lost completion CAS must not be reported as heartbeat-committed",
   );
+  assertSource(
+    edgeFunctionSource.includes('p_last_outcome: "run_error"') &&
+      edgeFunctionSource.includes('p_health_status: "unhealthy"'),
+    "owned failures must complete the heartbeat as unhealthy run_error",
+  );
+  for (const failureReason of [
+    "Failed to fetch latest tank reading",
+    "Failed to fetch heating_control_settings",
+    "Failed to fetch electricity_prices",
+    "Failed to fetch heating_plans",
+    "Failed to save shadow run",
+  ]) {
+    assertSource(
+      edgeFunctionSource.includes(`await completeRunError(\n        \`${failureReason}`) ||
+        edgeFunctionSource.includes(`await completeRunError(\`${failureReason}`),
+      `${failureReason} must attempt a run_error completion`,
+    );
+  }
+  assertSource(
+    edgeFunctionSource.includes("if (completeRunError) {") &&
+      edgeFunctionSource.includes("await completeRunError(reason);"),
+    "the outer exception handler must attempt a run_error completion after ownership",
+  );
+  assertSource(
+    edgeFunctionSource.includes("run_error heartbeat superseded; newer run state preserved"),
+    "a superseded run_error completion must preserve and log the newer owner",
+  );
 }

@@ -57,6 +57,8 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
+  let completeRunError: ((reason: string) => Promise<void>) | null = null;
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -101,6 +103,40 @@ Deno.serve(async (request) => {
         409,
       );
     }
+    completeRunError = async (reason: string) => {
+      try {
+        const { data, error } = await supabase.rpc(
+          "complete_backend_heating_optimizer_run",
+          {
+            p_health_status: "unhealthy",
+            p_last_outcome: "run_error",
+            p_reason: reason,
+            p_run_id: runId,
+            p_run_started_at: runStartedAt,
+            p_validated_plan_at: null,
+            p_validated_plan_date: null,
+            p_validated_plan_fingerprint: null,
+            p_validated_planned_hours: null,
+          },
+        );
+        if (error) {
+          console.error(
+            "run-heating-optimizer: failed to persist run_error heartbeat",
+            { heartbeat_error: error.message, reason, run_id: runId },
+          );
+        } else if (!wasHeartbeatCompareAndSetCommitted(data)) {
+          console.warn(
+            "run-heating-optimizer: run_error heartbeat superseded; newer run state preserved",
+            { reason, run_id: runId, run_started_at: runStartedAt },
+          );
+        }
+      } catch (heartbeatError) {
+        console.error(
+          "run-heating-optimizer: run_error heartbeat threw; original error preserved",
+          { heartbeat_error: heartbeatError, reason, run_id: runId },
+        );
+      }
+    };
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
     // across DST transitions (spring-forward/fall-back days are 23h/25h
@@ -193,24 +229,36 @@ Deno.serve(async (request) => {
     ]);
 
     if (latestReadingResult.error) {
+      await completeRunError(
+        `Failed to fetch latest tank reading: ${latestReadingResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch latest tank reading", message: latestReadingResult.error.message },
         502,
       );
     }
     if (settingsResult.error) {
+      await completeRunError(
+        `Failed to fetch heating_control_settings: ${settingsResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch heating_control_settings", message: settingsResult.error.message },
         502,
       );
     }
     if (priceResult.error) {
+      await completeRunError(
+        `Failed to fetch electricity_prices: ${priceResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch electricity_prices", message: priceResult.error.message },
         502,
       );
     }
     if (heatingPlansResult.error) {
+      await completeRunError(
+        `Failed to fetch heating_plans: ${heatingPlansResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch heating_plans", message: heatingPlansResult.error.message },
         502,
@@ -300,6 +348,7 @@ Deno.serve(async (request) => {
         hint: insertError.hint,
         code: insertError.code,
       });
+      await completeRunError(`Failed to save shadow run: ${insertError.message}`);
       return jsonResponse(
         { error: "Failed to save shadow run", message: insertError.message },
         500,
@@ -367,12 +416,16 @@ Deno.serve(async (request) => {
     });
   } catch (error) {
     console.error("run-heating-optimizer failed", error);
+    const reason =
+      error instanceof Error
+        ? error.message
+        : "Unexpected run-heating-optimizer error";
+    if (completeRunError) {
+      await completeRunError(reason);
+    }
     return jsonResponse(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected run-heating-optimizer error",
+        error: reason,
       },
       500,
     );
