@@ -1,6 +1,7 @@
 import {
   buildHeatingPlanFingerprint,
   buildExpectedHeatingPlanVersions,
+  buildExpectedOptimizerSettingsSnapshot,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
@@ -150,6 +151,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     min_tank_temperature: 10,
     safety_shower_reserve: 2,
     target_shower_reserve: 4,
+    updated_at: "2026-08-12T09:00:00.000Z",
   };
   // UTC hours here are all treated as if they were the price API's own
   // starts_at/ends_at values - buildOptimizerHours only cares about
@@ -496,6 +498,27 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       2,
       "backend must use the user's Supabase safetyShowerReserve value",
     );
+    assertEqual(
+      buildExpectedOptimizerSettingsSnapshot(settingsRow),
+      {
+        automatic_max_heating_hours: 5,
+        full_tank_average_temperature: 70,
+        full_tank_showers: 6,
+        heating_gain_source: "learned",
+        heating_need_mode: "automatic",
+        max_tank_temperature: 70,
+        min_tank_temperature: 10,
+        safety_shower_reserve: 2,
+        target_shower_reserve: 4,
+        updated_at: "2026-08-12T09:00:00.000Z",
+      },
+      "settings snapshot must include every backend-primary optimizer setting and updated_at",
+    );
+    assertEqual(
+      buildExpectedOptimizerSettingsSnapshot(null),
+      null,
+      "missing settings row cannot produce a publication settings snapshot",
+    );
 
     const fixedResolution = resolveOptimizerSettings({
       ...settingsRow,
@@ -561,7 +584,6 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     assertEqual(
       buildExpectedHeatingPlanVersions(
         [
-          { plan_date: todayPlanDate },
           { plan_date: tomorrowPlanDate },
         ],
         [
@@ -571,6 +593,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
             updated_at: "2026-08-12T10:00:00.000Z",
           },
         ] as RawHeatingPlanRow[],
+        todayPlanDate,
       ),
       [
         {
@@ -584,7 +607,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
           plan_date: tomorrowPlanDate,
         },
       ],
-      "expected plan versions must carry updated_at for existing rows and absent markers for missing rows",
+      "expected plan versions must include validated today even when only tomorrow is changed",
     );
 
     const matchingDecision = buildHeatingPlanPublicationDecision({

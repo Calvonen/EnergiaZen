@@ -75,6 +75,7 @@ export type RawHeatingControlSettingsRow = {
   min_tank_temperature: number | null;
   safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
+  updated_at?: string | null;
 };
 
 export type RawElectricityPriceRow = {
@@ -571,17 +572,58 @@ export type ExpectedHeatingPlanVersion = {
 export function buildExpectedHeatingPlanVersions(
   changedPlans: { plan_date: string }[],
   storedRows: RawHeatingPlanRow[],
+  validatedPlanDate?: string,
 ): ExpectedHeatingPlanVersion[] {
-  return changedPlans.map((plan) => {
-    const storedPlan =
-      storedRows.find((row) => row.plan_date === plan.plan_date) ?? null;
+  const planDates = [
+    ...new Set([
+      ...(validatedPlanDate ? [validatedPlanDate] : []),
+      ...changedPlans.map((plan) => plan.plan_date),
+    ]),
+  ];
+
+  return planDates.map((planDate) => {
+    const storedPlan = storedRows.find((row) => row.plan_date === planDate) ?? null;
 
     return {
       expected_updated_at: storedPlan?.updated_at ?? null,
       existed: storedPlan !== null,
-      plan_date: plan.plan_date,
+      plan_date: planDate,
     };
   });
+}
+
+export type ExpectedOptimizerSettingsSnapshot = {
+  automatic_max_heating_hours: number | null;
+  full_tank_average_temperature: number | null;
+  full_tank_showers: number | null;
+  heating_gain_source: string | null;
+  heating_need_mode: string | null;
+  max_tank_temperature: number | null;
+  min_tank_temperature: number | null;
+  safety_shower_reserve: number | null;
+  target_shower_reserve: number | null;
+  updated_at: string | null;
+};
+
+export function buildExpectedOptimizerSettingsSnapshot(
+  row: RawHeatingControlSettingsRow | null,
+): ExpectedOptimizerSettingsSnapshot | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    automatic_max_heating_hours: row.automatic_max_heating_hours,
+    full_tank_average_temperature: row.full_tank_average_temperature,
+    full_tank_showers: row.full_tank_showers,
+    heating_gain_source: row.heating_gain_source,
+    heating_need_mode: row.heating_need_mode,
+    max_tank_temperature: row.max_tank_temperature,
+    min_tank_temperature: row.min_tank_temperature,
+    safety_shower_reserve: row.safety_shower_reserve,
+    target_shower_reserve: row.target_shower_reserve,
+    updated_at: row.updated_at ?? null,
+  };
 }
 
 export {

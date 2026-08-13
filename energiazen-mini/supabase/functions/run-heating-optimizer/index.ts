@@ -19,6 +19,7 @@ import {
   buildHeatingPlanPublicationDecision,
   buildHeatingPlanFingerprint,
   buildExpectedHeatingPlanVersions,
+  buildExpectedOptimizerSettingsSnapshot,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -200,7 +201,7 @@ Deno.serve(async (request) => {
       supabase
         .from("heating_control_settings")
         .select(
-          "automatic_max_heating_hours,full_tank_average_temperature,full_tank_showers,heating_gain_source,heating_need_mode,max_tank_temperature,min_tank_temperature,safety_shower_reserve,target_shower_reserve",
+          "automatic_max_heating_hours,full_tank_average_temperature,full_tank_showers,heating_gain_source,heating_need_mode,max_tank_temperature,min_tank_temperature,safety_shower_reserve,target_shower_reserve,updated_at",
         )
         .eq("id", 1)
         .maybeSingle(),
@@ -420,13 +421,15 @@ Deno.serve(async (request) => {
       const expectedPlanVersions = buildExpectedHeatingPlanVersions(
         decision.changedPlans,
         heatingPlanRows,
+        todayPlanDate,
       );
+      const expectedSettings = buildExpectedOptimizerSettingsSnapshot(settingsRow);
       const { data: publishCommitted, error: publishError } = await supabase.rpc(
         "publish_backend_heating_optimizer_plans",
         {
           p_changed_plans: decision.changedPlans,
-          p_expected_heating_need_mode: "automatic",
           p_expected_plan_versions: expectedPlanVersions,
+          p_expected_settings: expectedSettings,
           p_publish_reason: "valid plan published",
           p_published_at: now.toISOString(),
           p_run_id: runId,

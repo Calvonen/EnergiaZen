@@ -25,7 +25,7 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   const snapshotRecheckMigrationSource = readFileSync(
     join(
       process.cwd(),
-      "supabase/migrations/20260813040000_recheck_backend_publication_snapshot.sql",
+      "supabase/migrations/20260813050000_recheck_full_backend_publication_snapshot.sql",
     ),
     "utf8",
   );
@@ -78,15 +78,37 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   );
   assertSource(
     snapshotRecheckMigrationSource.includes("returns text") &&
-      snapshotRecheckMigrationSource.includes("p_expected_heating_need_mode text") &&
+      snapshotRecheckMigrationSource.includes("p_expected_settings jsonb") &&
       snapshotRecheckMigrationSource.includes("p_expected_plan_versions jsonb"),
-    "snapshot recheck migration must replace publication RPC with conflict-status return and expected snapshots",
+    "snapshot recheck migration must replace publication RPC with conflict-status return and full expected snapshots",
   );
   assertSource(
     snapshotRecheckMigrationSource.includes("lock table public.heating_plans in share row exclusive mode") &&
-      snapshotRecheckMigrationSource.includes("heating_need_mode = p_expected_heating_need_mode") &&
-      snapshotRecheckMigrationSource.includes("heating_need_mode = 'automatic'"),
-    "publication RPC must recheck automatic control mode inside the transaction before plan writes",
+      snapshotRecheckMigrationSource.includes("from public.heating_control_settings") &&
+      snapshotRecheckMigrationSource.includes("for update") &&
+      snapshotRecheckMigrationSource.includes("current_settings.heating_need_mode <> 'automatic'"),
+    "publication RPC must lock and recheck automatic control mode inside the transaction before plan writes",
+  );
+  for (const settingColumn of [
+    "automatic_max_heating_hours",
+    "safety_shower_reserve",
+    "target_shower_reserve",
+    "full_tank_showers",
+    "full_tank_average_temperature",
+    "min_tank_temperature",
+    "max_tank_temperature",
+    "heating_gain_source",
+    "updated_at",
+  ]) {
+    assertSource(
+      snapshotRecheckMigrationSource.includes(`current_settings.${settingColumn} is distinct from expected.${settingColumn}`),
+      `publication RPC must recheck settings snapshot column ${settingColumn}`,
+    );
+  }
+  assertSource(
+    snapshotRecheckMigrationSource.includes("missing_validated_today") &&
+      snapshotRecheckMigrationSource.includes("plan_date = p_validated_plan_date"),
+    "publication RPC must require the validated today plan in the expected plan-version snapshot",
   );
   assertSource(
     snapshotRecheckMigrationSource.includes("current_plan.updated_at is distinct from expected.expected_updated_at") &&
@@ -123,9 +145,11 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   );
   assertSource(
     edgeFunctionSource.includes("buildExpectedHeatingPlanVersions") &&
+      edgeFunctionSource.includes("buildExpectedOptimizerSettingsSnapshot") &&
       edgeFunctionSource.includes("p_expected_plan_versions: expectedPlanVersions") &&
-      edgeFunctionSource.includes("p_expected_heating_need_mode: \"automatic\""),
-    "edge function must pass plan updated_at snapshots and the automatic mode snapshot to the publication RPC",
+      edgeFunctionSource.includes("p_expected_settings: expectedSettings") &&
+      edgeFunctionSource.includes("todayPlanDate"),
+    "edge function must pass full settings snapshot and plan updated_at snapshots including validated today to the publication RPC",
   );
   assertSource(
     edgeFunctionSource.includes("publishCommitted === \"settings_conflict\"") &&
