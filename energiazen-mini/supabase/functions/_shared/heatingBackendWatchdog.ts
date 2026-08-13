@@ -20,8 +20,19 @@
 
 // What the most recent backend optimizer run ATTEMPT (any invocation,
 // success or failure) resulted in:
-//  - "published": a valid optimizer result was produced and durably
-//    written as the new plan.
+//  - "published": a valid optimizer result was produced AND at least one
+//    plan was actually durably written (buildHeatingPlanPublicationDecision's
+//    own changedPlans was non-empty - see heatingPlanPublication.ts's
+//    getChangedHeatingPlans/areHeatingPlansOperationallyEqual). This is
+//    the only outcome that should ever be treated as refreshing "how
+//    fresh is the currently trusted plan".
+//  - "no_changes": the run completed and produced a valid, ready
+//    decision, but every computed plan was operationally identical to
+//    what's already stored (changedPlans was empty) - production's own
+//    duplicate-suppression means no write would actually happen here, so
+//    this must NOT be treated the same as "published": a long run of
+//    identical no-op decisions must not make an unwritten plan look
+//    freshly confirmed (PR #191 review).
 //  - "optimizer_invalid": the run completed but optimizeHeatingPlan()
 //    itself reported valid: false (violations present) - never publishable.
 //  - "deferred": the run completed but buildHeatingPlanPublicationDecision
@@ -29,12 +40,20 @@
 //    (e.g. stale/missing tank reading, no price hours available, unknown
 //    heating status) - see run-heating-optimizer/logic.ts.
 //  - "publication_failed": the run produced a valid, ready-to-publish
-//    result, but the write/publish step itself failed.
+//    result with at least one genuinely changed plan, but the write/
+//    publish step itself failed.
 //  - "run_error": the run attempt itself threw before producing a result
 //    (e.g. an unhandled Edge Function exception, a fetch failure with no
 //    fallback).
+//
+// evaluateHeatingBackendHealth below requires no change for "no_changes":
+// its lastValidPlanAt search (see the fail-safe simulator's evaluateHistory)
+// already only matches the literal outcome "published", so a "no_changes"
+// entry is correctly skipped by that same, unmodified lookup - exactly
+// like an outright failure would be, just for a different reason.
 export type HeatingBackendRunOutcome =
   | "published"
+  | "no_changes"
   | "optimizer_invalid"
   | "deferred"
   | "publication_failed"
