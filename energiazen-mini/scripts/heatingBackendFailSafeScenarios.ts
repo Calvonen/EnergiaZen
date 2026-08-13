@@ -83,7 +83,7 @@ function assert(condition: unknown, message: string): void {
 // ---------------------------------------------------------------------
 export const illustrativeWatchdogConfig: HeatingBackendWatchdogConfig = {
   maxRunIntervalMinutes: 90,
-  maxValidPlanAgeMinutes: 150,
+  maxValidatedPlanAgeMinutes: 150,
 };
 
 const hourMs = 60 * 60 * 1000;
@@ -384,6 +384,17 @@ export type BackendRunHistoryEntry = {
   reason: string;
 };
 
+// PR #191 follow-up review (Codex): lastValidatedPlanAt and lastPublishedAt
+// are derived from two DIFFERENT subsets of history, matching
+// evaluateHeatingBackendHealth's own split - see its comments for why:
+//  - lastPublishedAt: most recent entry with outcome "published"
+//    (a genuine durable write) only, exactly as before.
+//  - lastValidatedPlanAt: most recent entry with outcome "published" OR
+//    "no_changes" - a duplicate-suppressed no-op still successfully
+//    reconfirmed the stored plan is correct, even though nothing was
+//    written. "publication_failed" deliberately does NOT count as either -
+//    see HeatingBackendRunOutcome's own comment for why a changed-but-
+//    unpersisted plan must not look like a validation.
 export function evaluateHistory(
   history: BackendRunHistoryEntry[],
   now: Date,
@@ -391,13 +402,18 @@ export function evaluateHistory(
 ): HeatingBackendHealthResult {
   const last = history.length > 0 ? history[history.length - 1] : null;
   const lastPublished = [...history].reverse().find((entry) => entry.outcome === "published") ?? null;
+  const lastValidated =
+    [...history]
+      .reverse()
+      .find((entry) => entry.outcome === "published" || entry.outcome === "no_changes") ?? null;
 
   return evaluateHeatingBackendHealth({
     config,
+    lastPublishedAt: lastPublished ? lastPublished.at.toISOString() : null,
     lastRunAt: last ? last.at.toISOString() : null,
     lastRunOutcome: last ? last.outcome : null,
     lastRunReason: last ? last.reason : null,
-    lastValidPlanAt: lastPublished ? lastPublished.at.toISOString() : null,
+    lastValidatedPlanAt: lastValidated ? lastValidated.at.toISOString() : null,
     now,
   });
 }
@@ -510,7 +526,10 @@ export type ScenarioReportRow = {
   fallbackExpected: boolean;
   alertExpected: boolean;
   alertReason: string | null;
-  lastValidPlanAgeMinutes: string;
+  /** How old the last run that VALIDATED the plan (published or no_changes) is - what watchdog health is actually judged on. */
+  lastValidatedPlanAgeMinutes: string;
+  /** How old the last actual durable WRITE is - diagnostic only, does not by itself gate health. */
+  lastPublishedAgeMinutes: string;
   notes: string;
   failures: string[];
 };
@@ -567,10 +586,12 @@ function buildReportRow({
     alertReason: actual.alertReason,
     failures: [],
     fallbackExpected,
-    lastValidPlanAgeMinutes:
-      actual.lastValidPlanAgeMinutes === null
+    lastPublishedAgeMinutes:
+      actual.lastPublishedAgeMinutes === null ? "n/a" : actual.lastPublishedAgeMinutes.toFixed(1),
+    lastValidatedPlanAgeMinutes:
+      actual.lastValidatedPlanAgeMinutes === null
         ? "n/a"
-        : actual.lastValidPlanAgeMinutes.toFixed(1),
+        : actual.lastValidatedPlanAgeMinutes.toFixed(1),
     notes,
     optimizerStatus: "",
     passFail: "PASS",
@@ -1169,13 +1190,6 @@ function scenarioWeekWithoutApp(): ScenarioReportRow {
   const successCount = publishedCount + noChangesCount;
   const alertCount = records.filter((record) => record.alert).length;
   const nonHealthyRecords = records.filter((record) => record.status !== "healthy");
-  const nonHealthyButNotFreshnessRecords = nonHealthyRecords.filter(
-    (record) => record.status !== "no_recent_valid_plan",
-  );
-  const longestNonHealthyStreak = longestConsecutiveRun(
-    records,
-    (record) => record.status !== "healthy",
-  );
   const lastRecord = records[records.length - 1];
 
   const row = buildReportRow({
@@ -1183,30 +1197,34 @@ function scenarioWeekWithoutApp(): ScenarioReportRow {
       alert: lastRecord.alert,
       alertReason: null,
       fallbackRecommended: lastRecord.fallbackRecommended,
+      lastPublishedAgeMinutes: 0,
       lastRunAgeMinutes: 0,
-      lastValidPlanAgeMinutes: 0,
+      lastValidatedPlanAgeMinutes: 0,
       status: lastRecord.status,
     },
     alertExpected: false,
     fallbackExpected: false,
     notes:
       `7 vrk x 24 h = ${totalHours} tuntia simuloitu ilman etta appia "avataan" kertaakaan (appin tila ei ole ` +
-      `input tahan ollenkaan). Optimizer onnistui KAIKKINA ${totalHours} tuntina (0 virhetta/lykkaysta/` +
-      `invalidia): ${publishedCount} tuntia todella JULKAISI (durable write, changedPlans epatyhja), ` +
-      `${noChangesCount} tuntia oli duplikaattina hylatty no-op (buildHeatingPlanPublicationDecisionin ` +
-      "changedPlans=[] - ei kirjoitusta, lastValidPlanAt EI edisty naina tunteina - ks. PR #191 review). " +
-      `${alertCount}/${totalHours} tuntia alert=true, aina syyna PELKKA no_recent_valid_plan (ei koskaan ` +
-      "run_overdue/run_failed) - hetkellinen, itsestaan korjautuva seuraus siita etta sama suunnitelma " +
-      `pysyi muuttumattomana muutaman tunnin ajan, ei mikaan oikea vika. Pisin yhtajaksoinen ei-terve ` +
-      `jakso: ${longestNonHealthyStreak} h.`,
+      `input tahan ollenkaan). Optimizer onnistui JA VALIDOI suunnitelman KAIKKINA ${totalHours} tuntina (0 ` +
+      `virhetta/lykkaysta/invalidia): ${publishedCount} tuntia todella JULKAISI (durable write, changedPlans ` +
+      "epatyhja - lastPublishedAt edistyy), " +
+      `${noChangesCount} tuntia oli duplikaattina hylatty no-op (changedPlans=[] - EI kirjoitusta, ` +
+      "lastPublishedAt EI edisty naina tunteina) mutta VALIDOI silti tallennetun suunnitelman edelleen " +
+      "oikeaksi (lastValidatedPlanAt EDISTYY joka onnistuneella ajolla, kirjoitti tai ei - PR #191 " +
+      "follow-up review). Koska watchdogin terveys perustuu VALIDOINTIIN eika pelkkaan kirjoitukseen, koko " +
+      `viikko pysyy TERVEENA (${alertCount}/${totalHours} tuntia alert=true) - duplicate suppression ei ` +
+      "enaa itsessaan aiheuta false alerttia.",
     planPublishedExpected: null,
     scenario: "WEEK_WITHOUT_APP",
   });
-  row.optimizerStatus = `success ${successCount}/${totalHours} (published ${publishedCount}, no_changes ${noChangesCount})`;
+  row.optimizerStatus =
+    `success 168/168 -> validated ${successCount}/${totalHours} (published ${publishedCount}, no_changes ` +
+    `${noChangesCount})`;
   row.planStatus =
     alertCount === 0
-      ? "continuously fresh, no fallback moments"
-      : `${alertCount}h briefly stale (no_recent_valid_plan only, longest streak ${longestNonHealthyStreak}h) - duplicate-suppressed no-ops, not a real failure`;
+      ? `continuously healthy (validated every hour) - ${publishedCount} durable write(s), ${noChangesCount} duplicate-suppressed no-op(s)`
+      : `${alertCount}h alert=true - unexpected for a failure-free week under correct validation semantics`;
 
   const failures: string[] = [];
   // The pipeline itself must never fail/defer/invalidate for a whole week
@@ -1220,24 +1238,34 @@ function scenarioWeekWithoutApp(): ScenarioReportRow {
         `${successCount} successful hour(s) (missing ${totalHours - successCount})`,
     );
   }
-  // Any non-healthy hour in this failure-free week must be attributable
-  // ONLY to benign duplicate-suppressed staleness (no_recent_valid_plan) -
-  // never to a genuine pipeline problem (run_overdue/run_failed), since
-  // nothing in this scenario ever fails or stops running.
-  if (nonHealthyButNotFreshnessRecords.length > 0) {
+  // PR #191 follow-up review: with lastValidatedPlanAt correctly advancing
+  // on BOTH "published" and "no_changes" outcomes (a duplicate-suppressed
+  // no-op is a real validation, not merely a missed write), a fully
+  // healthy failure-free week must produce ZERO alerts - duplicate
+  // suppression alone must never cause a false alert, regardless of how
+  // many consecutive hours the plan happens to stay unchanged.
+  if (alertCount !== 0) {
     failures.push(
-      "expected every non-healthy hour in a failure-free week to be no_recent_valid_plan only, got " +
-        `${nonHealthyButNotFreshnessRecords.length} hour(s) with a different status - first at hour ` +
-        `${nonHealthyButNotFreshnessRecords[0].hourIndex} (status: "${nonHealthyButNotFreshnessRecords[0].status}")`,
+      "expected zero alert hours in a failure-free week now that duplicate no-ops correctly count as " +
+        `validations, got ${alertCount}`,
     );
   }
-  // A benign no-op stretch must self-resolve promptly the moment a
-  // genuinely changed plan is next computed - it must never turn into a
-  // prolonged/stuck condition.
-  if (longestNonHealthyStreak > 6) {
+  if (nonHealthyRecords.length > 0) {
     failures.push(
-      `expected any non-healthy stretch to self-resolve within a few hours, got a ${longestNonHealthyStreak}h ` +
-        "longest streak - long enough to suggest a stuck condition rather than benign no-op staleness",
+      `expected status "healthy" in every one of the ${totalHours} simulated hours, got a non-healthy ` +
+        `status in ${nonHealthyRecords.length} hour(s) - first at hour ${nonHealthyRecords[0].hourIndex} ` +
+        `(status: "${nonHealthyRecords[0].status}")`,
+    );
+  }
+  // Fixture sanity check, not a behaviour assertion: this scenario is only
+  // meaningful proof of the duplicate-suppression fix if it actually
+  // exercises a real no_changes hour - if a future fixture change made
+  // the optimizer publish every single hour, this whole scenario would
+  // silently stop testing what it claims to.
+  if (noChangesCount === 0) {
+    failures.push(
+      "expected this fixture to exercise at least one duplicate-suppressed no_changes hour - otherwise this " +
+        "scenario is not actually exercising PR #191's duplicate-suppression fix",
     );
   }
 
@@ -1407,7 +1435,8 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
     alertReason: `run_failed during hours [${failureStartHour}, ${failureEndHour})`,
     failures,
     fallbackExpected: true,
-    lastValidPlanAgeMinutes: "varies (see notes)",
+    lastPublishedAgeMinutes: "varies (see notes)",
+    lastValidatedPlanAgeMinutes: "varies (see notes)",
     notes:
       `Paiva 3, ${failureHours} peräkkäistä tuntia (index [${failureStartHour}, ${failureEndHour})) ` +
       "simuloi run-heating-optimizerin suorituksen epaonnistumista (simulateRunError), jonka ajan varaajan " +
@@ -1494,22 +1523,28 @@ function runFutureTimestampSafetyChecks(): void {
       `a future-timestamped published plan must never yield status "healthy" via evaluateHistory, got "${result.status}"`,
     );
     assert(
-      result.alertReason?.startsWith("valid_plan_timestamp_in_future:") ?? false,
-      `a future-timestamped published plan must carry the valid_plan_timestamp_in_future category via evaluateHistory, got: ${result.alertReason}`,
+      result.alertReason?.startsWith("validated_plan_timestamp_in_future:") ?? false,
+      `a future-timestamped published plan must carry the validated_plan_timestamp_in_future category via evaluateHistory, got: ${result.alertReason}`,
     );
   }
 }
 
 // ---------------------------------------------------------------------
-// PR #191 review (Codex): duplicate suppression regression coverage - a
-// duplicate-suppression bug two ways: (1) treating a duplicate-suppressed
-// no-op (buildHeatingPlanPublicationDecision's own changedPlans === [])
-// as if it were a real publication, and (2) letting that false
-// "publication" refresh watchdog plan freshness. Both are now fixed in
-// runOneBackendTick's outcome classification (see its own comment); this
-// proves it end to end, at both the tick level (runOneBackendTick,
-// storedPlans) and the watchdog level (evaluateHistory,
-// lastValidPlanAgeMinutes).
+// PR #191 review (Codex) + follow-up review: duplicate suppression
+// regression coverage. The original bug had two parts: (1) treating a
+// duplicate-suppressed no-op (buildHeatingPlanPublicationDecision's own
+// changedPlans === []) as if it were a real publication, and (2) letting
+// that false "publication" refresh watchdog plan freshness. The
+// follow-up review then found the FIX itself over-corrected: a genuine
+// no-op run - the optimizer successfully reconfirming the stored plan is
+// still correct - was being treated as no confirmation at all, so a long
+// run of healthy no-ops could still eventually alert. Both are now
+// fixed by splitting "was the plan just VALIDATED" (lastValidatedPlanAt -
+// advances on published OR no_changes) from "was the plan just durably
+// WRITTEN" (lastPublishedAt - advances on published only) - see
+// heatingBackendWatchdog.ts's own comments. This proves it end to end, at
+// both the tick level (runOneBackendTick, storedPlans) and the watchdog
+// level (evaluateHistory, lastValidatedPlanAgeMinutes/lastPublishedAgeMinutes).
 // ---------------------------------------------------------------------
 function runDuplicateSuppressionSafetyChecks(): void {
   const now = new Date("2026-08-12T11:30:00.000Z");
@@ -1521,8 +1556,9 @@ function runDuplicateSuppressionSafetyChecks(): void {
     top_temp: 65,
   };
 
-  // 1. ready + changedPlans non-empty (both plan_dates are brand new
-  // against empty storedPlans) -> publication actually occurs.
+  // 1. ready + changedPlans non-empty -> publication actually occurs, and
+  // BOTH validation and publication freshness advance together (they are
+  // the same event here).
   const firstTick = runOneBackendTick({
     isCurrentlyHeating: false,
     latestReading: reading,
@@ -1547,6 +1583,14 @@ function runDuplicateSuppressionSafetyChecks(): void {
       freshCheck.status === "healthy",
       `immediately after a genuine publication the watchdog must be healthy, got "${freshCheck.status}"`,
     );
+    assert(
+      freshCheck.lastValidatedPlanAgeMinutes === 0,
+      "a genuine publication must advance lastValidatedPlanAt (it is, among other things, a validation)",
+    );
+    assert(
+      freshCheck.lastPublishedAgeMinutes === 0,
+      "a genuine publication must advance lastPublishedAt (it is, specifically, a durable write)",
+    );
   }
 
   // 2. Re-running the EXACT same tick (identical now/prices/reading, only
@@ -1570,9 +1614,12 @@ function runDuplicateSuppressionSafetyChecks(): void {
     "a no_changes tick must leave storedPlans exactly as they were - nothing durably re-written",
   );
 
-  // lastValidPlanAt must NOT advance to the no-op tick's time - one hour
-  // after a single no-op run, the watchdog must still be measuring
-  // freshness from the ORIGINAL publication, not the no-op.
+  // PR #191 follow-up review: a genuine no-op VALIDATES the stored plan is
+  // still correct, even though nothing needed to be (re)written -
+  // lastValidatedPlanAt must advance to the no-op's own time (the plan was
+  // just reconfirmed), while lastPublishedAt must stay exactly where the
+  // original publish left it (nothing was actually written this hour) -
+  // and the watchdog must be healthy either way.
   {
     const historyAfterNoOp: BackendRunHistoryEntry[] = [
       { at: now, outcome: "published", reason: firstTick.reason },
@@ -1580,57 +1627,186 @@ function runDuplicateSuppressionSafetyChecks(): void {
     ];
     const afterNoOpCheck = evaluateHistory(historyAfterNoOp, new Date(now.getTime() + hourMs));
     assert(
-      afterNoOpCheck.lastValidPlanAgeMinutes === 60,
-      `lastValidPlanAt must still point at the original published entry (60 min old), not the no_changes ` +
-        `entry (0 min old) - got ${afterNoOpCheck.lastValidPlanAgeMinutes}`,
+      afterNoOpCheck.lastValidatedPlanAgeMinutes === 0,
+      "a no_changes run must advance lastValidatedPlanAt to its OWN time - it just reconfirmed the plan - " +
+        `got ${afterNoOpCheck.lastValidatedPlanAgeMinutes}`,
+    );
+    assert(
+      afterNoOpCheck.lastPublishedAgeMinutes === 60,
+      "a no_changes run must NOT advance lastPublishedAt - nothing was durably written this hour, it must " +
+        `still point at the original publish (60 min old) - got ${afterNoOpCheck.lastPublishedAgeMinutes}`,
     );
     assert(
       afterNoOpCheck.status === "healthy",
-      "a single no-op run must not itself cause an alert while the original publication is still fresh enough",
+      "a genuine no-op validation must keep the watchdog healthy - it just confirmed the stored plan is " +
+        "still correct",
     );
   }
 
-  // 3. Repeated identical (no_changes) results over multiple hours must
-  // NOT keep the watchdog healthy forever merely because the optimizer
-  // keeps running successfully - only an actual publication counts.
-  const history: BackendRunHistoryEntry[] = [
-    { at: now, outcome: "published", reason: "valid plan published" },
-  ];
-  const noOpHours = 4; // 4h of hourly no-op runs > illustrativeWatchdogConfig.maxValidPlanAgeMinutes (150 min)
-  for (let hourIndex = 1; hourIndex <= noOpHours; hourIndex += 1) {
-    history.push({
-      at: new Date(now.getTime() + hourIndex * hourMs),
-      outcome: "no_changes",
-      reason:
-        "valid plan computed but operationally identical to the already-published plan - no durable write, storedPlans untouched",
-    });
+  // 3. changed plan + failed write -> validation must NOT make the system
+  // healthy; publication failure wins. Even though the optimizer itself
+  // found a valid, changed plan (in some loose sense "validated" it), that
+  // plan was never durably persisted - production#s stored row is still
+  // the stale pre-change one, so this must alert immediately exactly like
+  // run_error does, regardless of how fresh a PRIOR real validation still
+  // is (see HeatingBackendRunOutcome's own "publication_failed" comment -
+  // it is deliberately excluded from evaluateHistory's validated-outcome
+  // search).
+  {
+    const historyWithFailedWrite: BackendRunHistoryEntry[] = [
+      { at: now, outcome: "published", reason: "valid plan published" },
+      {
+        at: new Date(now.getTime() + hourMs),
+        outcome: "publication_failed",
+        reason: "simulated plan write/publish failure after a valid optimizer result",
+      },
+    ];
+    const failedWriteCheck = evaluateHistory(
+      historyWithFailedWrite,
+      new Date(now.getTime() + hourMs),
+    );
+    assert(
+      failedWriteCheck.status === "run_failed",
+      `a publication_failed run must win over any no-op-style leniency and alert immediately as run_failed, ` +
+        `got "${failedWriteCheck.status}"`,
+    );
+    assert(
+      failedWriteCheck.alert === true,
+      "a failed write of a genuinely changed plan must alert, not be hidden by a still-fresh prior validation",
+    );
+    assert(
+      failedWriteCheck.lastValidatedPlanAgeMinutes === 60,
+      "publication_failed must NOT itself advance lastValidatedPlanAt - only the earlier real publish counts, " +
+        `got ${failedWriteCheck.lastValidatedPlanAgeMinutes}`,
+    );
   }
-  const staleCheckNow = new Date(now.getTime() + noOpHours * hourMs);
-  const staleCheck = evaluateHistory(history, staleCheckNow);
-  assert(
-    staleCheck.status !== "healthy",
-    `${noOpHours} hours of successful-but-unchanged (no_changes) runs must NOT keep the watchdog healthy ` +
-      `forever - the underlying plan was never actually re-published, got status "${staleCheck.status}"`,
-  );
-  assert(
-    staleCheck.status === "no_recent_valid_plan",
-    `a long run of no-op runs with no actual failure must land on no_recent_valid_plan specifically (not ` +
-      `run_failed/run_overdue - the pipeline itself keeps succeeding every hour), got "${staleCheck.status}"`,
-  );
 
-  // 4. Once a genuinely changed plan is published again, publication
-  // resumes and freshness immediately advances - recovery, not a
-  // permanent fault mode.
-  history.push({ at: staleCheckNow, outcome: "published", reason: "valid plan published" });
-  const recoveredCheck = evaluateHistory(history, staleCheckNow);
-  assert(
-    recoveredCheck.status === "healthy",
-    `a genuine publication after a long no-op stretch must immediately restore status "healthy", got "${recoveredCheck.status}"`,
-  );
-  assert(
-    recoveredCheck.lastValidPlanAgeMinutes === 0,
-    `a fresh publication must reset lastValidPlanAgeMinutes to 0, got ${recoveredCheck.lastValidPlanAgeMinutes}`,
-  );
+  // 4. invalid/deferred optimizer -> validation heartbeat does not
+  // advance either (neither outcome confirms the stored plan is correct -
+  // one is an unsafe result, the other never got far enough to check).
+  for (const nonValidatingOutcome of ["optimizer_invalid", "deferred"] as const) {
+    const historyWithNonValidatingRun: BackendRunHistoryEntry[] = [
+      { at: now, outcome: "published", reason: "valid plan published" },
+      {
+        at: new Date(now.getTime() + hourMs),
+        outcome: nonValidatingOutcome,
+        reason: `simulated ${nonValidatingOutcome} run`,
+      },
+    ];
+    const check = evaluateHistory(historyWithNonValidatingRun, new Date(now.getTime() + hourMs));
+    assert(
+      check.lastValidatedPlanAgeMinutes === 60,
+      `a "${nonValidatingOutcome}" run must NOT advance lastValidatedPlanAt - got ${check.lastValidatedPlanAgeMinutes}`,
+    );
+  }
+
+  // 5. cron/run failure (run_error) -> validation heartbeat does not
+  // advance either - the run never even reached a result to validate.
+  {
+    const historyWithRunError: BackendRunHistoryEntry[] = [
+      { at: now, outcome: "published", reason: "valid plan published" },
+      {
+        at: new Date(now.getTime() + hourMs),
+        outcome: "run_error",
+        reason: "simulated run-heating-optimizer execution failure (unhandled exception)",
+      },
+    ];
+    const check = evaluateHistory(historyWithRunError, new Date(now.getTime() + hourMs));
+    assert(
+      check.lastValidatedPlanAgeMinutes === 60,
+      `a run_error must NOT advance lastValidatedPlanAt - got ${check.lastValidatedPlanAgeMinutes}`,
+    );
+    assert(check.status === "run_failed", "a run_error must still win immediately as run_failed");
+  }
+
+  // 6. A long stretch of genuine hourly no-op validations must NOT cause a
+  // false alert at any point along the way, no matter how long it runs -
+  // each hour is itself a fresh reconfirmation, so lastValidatedPlanAt
+  // never actually goes stale. Checked at EVERY hour along a stretch
+  // deliberately much longer than maxValidatedPlanAgeMinutes (150 min),
+  // not just at the end - proves this holds throughout, not by accident
+  // at one sampled instant.
+  {
+    const longNoOpHistory: BackendRunHistoryEntry[] = [
+      { at: now, outcome: "published", reason: "valid plan published" },
+    ];
+    const longNoOpHours = 12; // 12h, well beyond the 150 min threshold if it were NOT correctly refreshed hourly
+    for (let hourIndex = 1; hourIndex <= longNoOpHours; hourIndex += 1) {
+      const hourNow = new Date(now.getTime() + hourIndex * hourMs);
+      longNoOpHistory.push({
+        at: hourNow,
+        outcome: "no_changes",
+        reason:
+          "valid plan computed but operationally identical to the already-published plan - no durable write, storedPlans untouched",
+      });
+      const checkAtThisHour = evaluateHistory(longNoOpHistory, hourNow);
+      assert(
+        checkAtThisHour.status === "healthy",
+        `expected status "healthy" at hour ${hourIndex} of a long stretch of genuine hourly no-op ` +
+          `validations, got "${checkAtThisHour.status}" (this is exactly the false alert PR #191's ` +
+          "follow-up review reported)",
+      );
+    }
+    // lastPublishedAt, meanwhile, correctly keeps aging the whole time -
+    // it is still purely diagnostic and never itself gates health.
+    const finalCheck = evaluateHistory(
+      longNoOpHistory,
+      new Date(now.getTime() + longNoOpHours * hourMs),
+    );
+    assert(
+      finalCheck.lastPublishedAgeMinutes === longNoOpHours * 60,
+      "lastPublishedAt must keep aging throughout a long no-op stretch even while healthy - it is diagnostic " +
+        `only, got ${finalCheck.lastPublishedAgeMinutes}`,
+    );
+
+    // 7. If the optimizer stops running altogether (no new entries at all -
+    // pg_cron itself breaks), a long, otherwise-perfectly-healthy no-op
+    // history must NOT hide that - run_overdue must still fire once
+    // enough time has passed with no new run attempt, exactly as if the
+    // history were empty.
+    const cronStoppedNow = new Date(
+      now.getTime() +
+        longNoOpHours * hourMs +
+        (illustrativeWatchdogConfig.maxRunIntervalMinutes + 30) * minuteMs,
+    );
+    const cronStoppedCheck = evaluateHistory(longNoOpHistory, cronStoppedNow);
+    assert(
+      cronStoppedCheck.status === "run_overdue",
+      "a long healthy no-op history must not mask a stopped cron - once no new run attempt has been seen " +
+        `for long enough, status must be run_overdue regardless of how clean the history was, got ` +
+        `"${cronStoppedCheck.status}"`,
+    );
+  }
+
+  // 8. Once a genuinely changed plan is published again after a no-op
+  // stretch, publication resumes and BOTH lastValidatedPlanAt and
+  // lastPublishedAt immediately advance together.
+  {
+    const history: BackendRunHistoryEntry[] = [
+      { at: now, outcome: "published", reason: "valid plan published" },
+      {
+        at: new Date(now.getTime() + hourMs),
+        outcome: "no_changes",
+        reason:
+          "valid plan computed but operationally identical to the already-published plan - no durable write, storedPlans untouched",
+      },
+      { at: new Date(now.getTime() + 2 * hourMs), outcome: "published", reason: "valid plan published" },
+    ];
+    const recoveredCheckAt = new Date(now.getTime() + 2 * hourMs);
+    const recoveredCheck = evaluateHistory(history, recoveredCheckAt);
+    assert(
+      recoveredCheck.status === "healthy",
+      `a genuine publication after a no-op stretch must be healthy, got "${recoveredCheck.status}"`,
+    );
+    assert(
+      recoveredCheck.lastValidatedPlanAgeMinutes === 0,
+      `a fresh publication must reset lastValidatedPlanAgeMinutes to 0, got ${recoveredCheck.lastValidatedPlanAgeMinutes}`,
+    );
+    assert(
+      recoveredCheck.lastPublishedAgeMinutes === 0,
+      `a fresh publication must reset lastPublishedAgeMinutes to 0, got ${recoveredCheck.lastPublishedAgeMinutes}`,
+    );
+  }
 }
 
 export function runAllScenarios(): ScenarioReportRow[] {

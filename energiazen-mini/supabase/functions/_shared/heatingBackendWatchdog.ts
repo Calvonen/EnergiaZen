@@ -23,16 +23,14 @@
 //  - "published": a valid optimizer result was produced AND at least one
 //    plan was actually durably written (buildHeatingPlanPublicationDecision's
 //    own changedPlans was non-empty - see heatingPlanPublication.ts's
-//    getChangedHeatingPlans/areHeatingPlansOperationallyEqual). This is
-//    the only outcome that should ever be treated as refreshing "how
-//    fresh is the currently trusted plan".
+//    getChangedHeatingPlans/areHeatingPlansOperationallyEqual).
 //  - "no_changes": the run completed and produced a valid, ready
 //    decision, but every computed plan was operationally identical to
 //    what's already stored (changedPlans was empty) - production's own
-//    duplicate-suppression means no write would actually happen here, so
-//    this must NOT be treated the same as "published": a long run of
-//    identical no-op decisions must not make an unwritten plan look
-//    freshly confirmed (PR #191 review).
+//    duplicate-suppression means no write would actually happen here. The
+//    backend has nonetheless just successfully CONFIRMED the already-
+//    stored plan is still correct - see the lastValidatedPlanAt/
+//    lastPublishedAt split below for why this matters (PR #191 review).
 //  - "optimizer_invalid": the run completed but optimizeHeatingPlan()
 //    itself reported valid: false (violations present) - never publishable.
 //  - "deferred": the run completed but buildHeatingPlanPublicationDecision
@@ -41,16 +39,16 @@
 //    heating status) - see run-heating-optimizer/logic.ts.
 //  - "publication_failed": the run produced a valid, ready-to-publish
 //    result with at least one genuinely changed plan, but the write/
-//    publish step itself failed.
+//    publish step itself failed. Deliberately NOT treated as a
+//    validation either, even though the optimizer itself succeeded: the
+//    plan that was actually confirmed valid is the CHANGED one, and that
+//    one was never durably persisted - the stored row a future caller
+//    would read back is the stale pre-change one, so nothing here should
+//    be read as "the stored plan was just reconfirmed". Publication
+//    failure must win over any no-op-style leniency (see report).
 //  - "run_error": the run attempt itself threw before producing a result
 //    (e.g. an unhandled Edge Function exception, a fetch failure with no
 //    fallback).
-//
-// evaluateHeatingBackendHealth below requires no change for "no_changes":
-// its lastValidPlanAt search (see the fail-safe simulator's evaluateHistory)
-// already only matches the literal outcome "published", so a "no_changes"
-// entry is correctly skipped by that same, unmodified lookup - exactly
-// like an outright failure would be, just for a different reason.
 export type HeatingBackendRunOutcome =
   | "published"
   | "no_changes"
@@ -60,7 +58,7 @@ export type HeatingBackendRunOutcome =
   | "run_error";
 
 // Both thresholds are REQUIRED, not defaulted - the current codebase does
-// not define how old a backend run/published plan may get before it's
+// not define how old a backend run/validated plan may get before it's
 // unsafe to trust (see this module's simulator report). Neither value
 // supplied by a caller here is validated as a "correct" production
 // number; that decision is explicitly out of scope for this module and
@@ -74,11 +72,13 @@ export type HeatingBackendWatchdogConfig = {
    */
   maxRunIntervalMinutes: number;
   /**
-   * How old the most recently PUBLISHED valid plan may be before it is no
-   * longer trusted as fresh, independent of whether the most recent run
-   * attempt(s) succeeded.
+   * How old the most recently VALIDATED plan may be before it is no
+   * longer trusted as fresh - see lastValidatedPlanAt below for exactly
+   * what counts as a validation. Independent of whether the most recent
+   * run attempt(s) succeeded, and independent of whether that validation
+   * happened to also involve a durable write (see lastPublishedAt).
    */
-  maxValidPlanAgeMinutes: number;
+  maxValidatedPlanAgeMinutes: number;
 };
 
 export type HeatingBackendHealthInput = {
@@ -89,8 +89,36 @@ export type HeatingBackendHealthInput = {
   lastRunOutcome: HeatingBackendRunOutcome | null;
   /** Free-text diagnostic for lastRunOutcome (readiness reason, violations, error message, ...). */
   lastRunReason: string | null;
-  /** ISO timestamp of the most recent successfully PUBLISHED valid plan, or null if none has ever been observed. */
-  lastValidPlanAt: string | null;
+  /**
+   * ISO timestamp of the most recent run that successfully CONFIRMED the
+   * stored plan is still correct - either by durably publishing a changed
+   * one ("published"), or by recomputing and finding the already-stored
+   * plan still operationally identical ("no_changes" - a real
+   * duplicate-suppressed no-op still IS a successful validation, just not
+   * a write). Deliberately does NOT advance on "publication_failed": that
+   * outcome means a *different*, unpersisted plan was found valid, not
+   * that the currently-stored one was reconfirmed - see
+   * HeatingBackendRunOutcome's own comment. null if no validation has
+   * ever been observed.
+   *
+   * THIS is what gates the "no_recent_valid_plan" status below, not
+   * lastPublishedAt - a long run of genuine no-op validations must never
+   * look unhealthy purely because nothing needed to be (re)written (PR
+   * #191 review).
+   */
+  lastValidatedPlanAt: string | null;
+  /**
+   * ISO timestamp of the most recent run that actually performed a
+   * durable write (outcome "published" specifically - changedPlans was
+   * non-empty and the write succeeded). Purely diagnostic here - it does
+   * NOT by itself gate "healthy" (see lastValidatedPlanAt) - but is kept
+   * as its own explicit, separately-tracked concept because a future
+   * consumer (e.g. a Shelly-side "is this heating_plans row stale"
+   * safeguard) cares specifically about when the row was last actually
+   * touched, not merely when it was last reconfirmed correct. null if no
+   * publication has ever been observed.
+   */
+  lastPublishedAt: string | null;
   now: Date;
 };
 
@@ -104,8 +132,9 @@ export type HeatingBackendHealthResult = {
   alert: boolean;
   alertReason: string | null;
   fallbackRecommended: boolean;
+  lastPublishedAgeMinutes: number | null;
   lastRunAgeMinutes: number | null;
-  lastValidPlanAgeMinutes: number | null;
+  lastValidatedPlanAgeMinutes: number | null;
   status: HeatingBackendHealthStatus;
 };
 
@@ -137,21 +166,32 @@ function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
 //      recently, or ever - or lastRunAt is nonsensically in the future,
 //      see below). This is the most severe case: it means even
 //      run_error/publication_failed outcomes have stopped arriving, so we
-//      cannot even see WHY the pipeline is unhealthy.
+//      cannot even see WHY the pipeline is unhealthy. A long, healthy-
+//      looking run of validated no_changes entries in the past does NOT
+//      protect against this - run_overdue is judged purely from
+//      lastRunAt, so if the pipeline stops running altogether, this still
+//      fires regardless of how clean its history was up to that point.
 //   2. run_failed - the most recent attempt itself reported failure
 //      (run_error or publication_failed). Reported immediately, without
 //      waiting for the plan to actually go stale - a failed run today is
 //      worth knowing about today even if yesterday's plan is technically
-//      still "fresh enough".
+//      still "fresh enough". A changed-but-unpublished plan
+//      (publication_failed) always wins here over any no-op leniency -
+//      see lastValidatedPlanAt's own comment for why that outcome is
+//      deliberately excluded from counting as a validation at all.
 //   3. no_recent_valid_plan - no run attempt has outright failed, but
-//      nothing valid has actually been published recently either (e.g. a
-//      run of deferred/optimizer_invalid outcomes: stale inputs, an
-//      optimizer result that never clears its own safety violations, or
-//      lastValidPlanAt is nonsensically in the future, see below).
+//      nothing has actually CONFIRMED the stored plan recently either
+//      (e.g. a run of deferred/optimizer_invalid outcomes: stale inputs,
+//      an optimizer result that never clears its own safety violations,
+//      or lastValidatedPlanAt is nonsensically in the future, see below).
+//      Judged against lastValidatedPlanAt, not lastPublishedAt - a
+//      genuine duplicate-suppressed no-op (see "no_changes") counts as a
+//      confirmation and keeps this healthy even though nothing was
+//      written.
 // Any one of these sets alert + fallbackRecommended; none of them being
 // true is the only "healthy" result.
 //
-// Future timestamps (lastRunAgeMinutes/lastValidPlanAgeMinutes < 0): a
+// Future timestamps (lastRunAgeMinutes/lastValidatedPlanAgeMinutes < 0): a
 // clock-skewed, malformed, or otherwise impossible "in the future"
 // timestamp must never be read as "very fresh" and must never produce
 // status: "healthy" - same safety principle
@@ -162,35 +202,39 @@ function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
 // old or missing timestamp would hit (requirement: preserve existing
 // status priority semantics) rather than a new status value, but each
 // gets its own explicit alertReason category
-// ("run_timestamp_in_future"/"valid_plan_timestamp_in_future") distinct
-// from the plain "cron_missing"/"no_recent_valid_plan" staleness wording,
-// since "the timestamp claims to be from the future" is a materially
-// different, more alarming condition than "the timestamp is merely old"
-// and callers/logs should be able to tell them apart.
+// ("run_timestamp_in_future"/"validated_plan_timestamp_in_future")
+// distinct from the plain "cron_missing"/"no_recent_valid_plan" staleness
+// wording, since "the timestamp claims to be from the future" is a
+// materially different, more alarming condition than "the timestamp is
+// merely old" and callers/logs should be able to tell them apart.
+// lastPublishedAt is diagnostic only and is never checked for
+// staleness/future-ness here - it doesn't gate anything.
 export function evaluateHeatingBackendHealth({
   config,
   lastRunAt,
   lastRunOutcome,
   lastRunReason,
-  lastValidPlanAt,
+  lastValidatedPlanAt,
+  lastPublishedAt,
   now,
 }: HeatingBackendHealthInput): HeatingBackendHealthResult {
   const lastRunAgeMinutes = ageMinutes(lastRunAt, now);
-  const lastValidPlanAgeMinutes = ageMinutes(lastValidPlanAt, now);
+  const lastValidatedPlanAgeMinutes = ageMinutes(lastValidatedPlanAt, now);
+  const lastPublishedAgeMinutes = ageMinutes(lastPublishedAt, now);
 
   const lastRunIsInFuture = lastRunAgeMinutes !== null && lastRunAgeMinutes < 0;
-  const lastValidPlanIsInFuture =
-    lastValidPlanAgeMinutes !== null && lastValidPlanAgeMinutes < 0;
+  const lastValidatedPlanIsInFuture =
+    lastValidatedPlanAgeMinutes !== null && lastValidatedPlanAgeMinutes < 0;
 
   const runOverdue =
     lastRunAgeMinutes === null ||
     lastRunIsInFuture ||
     lastRunAgeMinutes > config.maxRunIntervalMinutes;
   const runFailed = lastRunOutcome === "run_error" || lastRunOutcome === "publication_failed";
-  const validPlanStale =
-    lastValidPlanAgeMinutes === null ||
-    lastValidPlanIsInFuture ||
-    lastValidPlanAgeMinutes > config.maxValidPlanAgeMinutes;
+  const validatedPlanStale =
+    lastValidatedPlanAgeMinutes === null ||
+    lastValidatedPlanIsInFuture ||
+    lastValidatedPlanAgeMinutes > config.maxValidatedPlanAgeMinutes;
 
   if (runOverdue) {
     return {
@@ -201,8 +245,9 @@ export function evaluateHeatingBackendHealth({
           ? "cron_missing: no backend optimizer run has ever been observed"
           : `cron_missing: last run attempt was ${lastRunAgeMinutes?.toFixed(1)} min ago, exceeding maxRunIntervalMinutes (${config.maxRunIntervalMinutes})`,
       fallbackRecommended: true,
+      lastPublishedAgeMinutes,
       lastRunAgeMinutes,
-      lastValidPlanAgeMinutes,
+      lastValidatedPlanAgeMinutes,
       status: "run_overdue",
     };
   }
@@ -212,23 +257,25 @@ export function evaluateHeatingBackendHealth({
       alert: true,
       alertReason: `${lastRunOutcome}: ${lastRunReason ?? "no further detail supplied"}`,
       fallbackRecommended: true,
+      lastPublishedAgeMinutes,
       lastRunAgeMinutes,
-      lastValidPlanAgeMinutes,
+      lastValidatedPlanAgeMinutes,
       status: "run_failed",
     };
   }
 
-  if (validPlanStale) {
+  if (validatedPlanStale) {
     return {
       alert: true,
-      alertReason: lastValidPlanIsInFuture
-        ? `valid_plan_timestamp_in_future: last published valid plan's timestamp (${lastValidPlanAt}) is ${Math.abs(lastValidPlanAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as trusted`
-        : lastValidPlanAt === null
-          ? "no_recent_valid_plan: no published valid plan has ever been observed"
-          : `no_recent_valid_plan: last published valid plan was ${lastValidPlanAgeMinutes?.toFixed(1)} min ago, exceeding maxValidPlanAgeMinutes (${config.maxValidPlanAgeMinutes})`,
+      alertReason: lastValidatedPlanIsInFuture
+        ? `validated_plan_timestamp_in_future: last validated plan's timestamp (${lastValidatedPlanAt}) is ${Math.abs(lastValidatedPlanAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as trusted`
+        : lastValidatedPlanAt === null
+          ? "no_recent_valid_plan: no validated plan has ever been observed"
+          : `no_recent_valid_plan: last validated plan was ${lastValidatedPlanAgeMinutes?.toFixed(1)} min ago, exceeding maxValidatedPlanAgeMinutes (${config.maxValidatedPlanAgeMinutes})`,
       fallbackRecommended: true,
+      lastPublishedAgeMinutes,
       lastRunAgeMinutes,
-      lastValidPlanAgeMinutes,
+      lastValidatedPlanAgeMinutes,
       status: "no_recent_valid_plan",
     };
   }
@@ -237,8 +284,9 @@ export function evaluateHeatingBackendHealth({
     alert: false,
     alertReason: null,
     fallbackRecommended: false,
+    lastPublishedAgeMinutes,
     lastRunAgeMinutes,
-    lastValidPlanAgeMinutes,
+    lastValidatedPlanAgeMinutes,
     status: "healthy",
   };
 }

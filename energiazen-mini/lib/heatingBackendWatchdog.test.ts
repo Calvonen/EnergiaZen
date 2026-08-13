@@ -21,20 +21,23 @@ export function runHeatingBackendWatchdogUnitTests() {
   const now = new Date("2026-08-12T11:30:00.000Z");
   const config: HeatingBackendWatchdogConfig = {
     maxRunIntervalMinutes: 90,
-    maxValidPlanAgeMinutes: 150,
+    maxValidatedPlanAgeMinutes: 150,
   };
   const minutesAgo = (minutes: number) =>
     new Date(now.getTime() - minutes * 60 * 1000).toISOString();
   const minutesFromNow = (minutes: number) => minutesAgo(-minutes);
 
   // 1. Everything fresh and successful -> healthy, no alert, no fallback.
+  // lastPublishedAt and lastValidatedPlanAt agree here (a genuine
+  // "published" run advances both).
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(5),
       lastRunAt: minutesAgo(5),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(5),
+      lastValidatedPlanAt: minutesAgo(5),
       now,
     });
     assertEqual(result.status, "healthy", "fresh successful run must be healthy");
@@ -49,10 +52,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: null,
       lastRunAt: null,
       lastRunOutcome: null,
       lastRunReason: null,
-      lastValidPlanAt: null,
+      lastValidatedPlanAt: null,
       now,
     });
     assertEqual(result.status, "run_overdue", "no run ever observed must be run_overdue");
@@ -70,10 +74,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(200),
       lastRunAt: minutesAgo(200),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(200),
+      lastValidatedPlanAt: minutesAgo(200),
       now,
     });
     assertEqual(result.status, "run_overdue", "a run 200 min ago (> 90 min limit) must be run_overdue");
@@ -82,17 +87,18 @@ export function runHeatingBackendWatchdogUnitTests() {
   }
 
   // 4. The most recent attempt itself failed (run_error) - must alert
-  // IMMEDIATELY, even though the previous valid plan is still well within
-  // maxValidPlanAgeMinutes. This is what lets EDGE_FUNCTION_FAILURE be
-  // detected on the very run it happens, not only once the plan goes
-  // stale.
+  // IMMEDIATELY, even though the previous validated plan is still well
+  // within maxValidatedPlanAgeMinutes. This is what lets
+  // EDGE_FUNCTION_FAILURE be detected on the very run it happens, not
+  // only once the plan goes stale.
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(20),
       lastRunAt: minutesAgo(2),
       lastRunOutcome: "run_error",
       lastRunReason: "TypeError: fetch failed",
-      lastValidPlanAt: minutesAgo(20),
+      lastValidatedPlanAt: minutesAgo(20),
       now,
     });
     assertEqual(result.status, "run_failed", "a run_error outcome must be run_failed");
@@ -104,14 +110,20 @@ export function runHeatingBackendWatchdogUnitTests() {
     );
   }
 
-  // 5. Same as above but publication_failed - also run_failed.
+  // 5. Same as above but publication_failed - also run_failed. PR #191
+  // follow-up review: a changed-but-unpublished plan must win over any
+  // no-op leniency - even though the optimizer itself found a valid
+  // plan, that plan was never durably persisted, so this must alert
+  // immediately just like run_error does, regardless of how fresh the
+  // PREVIOUS validation/publication still is.
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(20),
       lastRunAt: minutesAgo(2),
       lastRunOutcome: "publication_failed",
       lastRunReason: "insert failed: connection reset",
-      lastValidPlanAt: minutesAgo(20),
+      lastValidatedPlanAt: minutesAgo(20),
       now,
     });
     assertEqual(result.status, "run_failed", "a publication_failed outcome must be run_failed");
@@ -119,23 +131,24 @@ export function runHeatingBackendWatchdogUnitTests() {
   }
 
   // 6. The most recent attempt was merely deferred (e.g. stale inputs),
-  // not an outright failure, but no valid plan has been published
-  // recently enough either -> no_recent_valid_plan, not run_failed.
+  // not an outright failure, but nothing has validated the plan recently
+  // enough either -> no_recent_valid_plan, not run_failed.
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(400),
       lastRunAt: minutesAgo(5),
       lastRunOutcome: "deferred",
       lastRunReason: "optimizer not ready: stale_tank_reading",
-      lastValidPlanAt: minutesAgo(400),
+      lastValidatedPlanAt: minutesAgo(400),
       now,
     });
     assertEqual(
       result.status,
       "no_recent_valid_plan",
-      "a merely-deferred recent attempt with a stale prior plan must be no_recent_valid_plan",
+      "a merely-deferred recent attempt with a stale prior validation must be no_recent_valid_plan",
     );
-    assertEqual(result.alert, true, "a stale valid plan must alert");
+    assertEqual(result.alert, true, "a stale validated plan must alert");
     assert(
       result.alertReason?.startsWith("no_recent_valid_plan:"),
       "stale-plan alert reason must name the condition",
@@ -143,22 +156,23 @@ export function runHeatingBackendWatchdogUnitTests() {
   }
 
   // 7. A merely-deferred recent attempt is NOT itself an alert as long as
-  // the last published plan is still fresh enough - a single deferred run
+  // the last validated plan is still fresh enough - a single deferred run
   // (e.g. one stale tank reading) must not immediately page anyone while
-  // the previously published plan is still within its trusted window.
+  // the previous validation is still within its trusted window.
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(30),
       lastRunAt: minutesAgo(5),
       lastRunOutcome: "deferred",
       lastRunReason: "optimizer not ready: stale_tank_reading",
-      lastValidPlanAt: minutesAgo(30),
+      lastValidatedPlanAt: minutesAgo(30),
       now,
     });
     assertEqual(
       result.status,
       "healthy",
-      "a single deferred run must stay healthy while the prior plan is still fresh",
+      "a single deferred run must stay healthy while the prior validation is still fresh",
     );
     assertEqual(result.alert, false, "a single deferred run alone must not alert");
   }
@@ -170,10 +184,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(0),
       lastRunAt: minutesAgo(0),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(0),
+      lastValidatedPlanAt: minutesAgo(0),
       now,
     });
     assertEqual(result.status, "healthy", "an immediately-fresh successful run must be healthy");
@@ -187,10 +202,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(500),
       lastRunAt: minutesAgo(500),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(500),
+      lastValidatedPlanAt: minutesAgo(500),
       now,
     });
     assertEqual(
@@ -205,10 +221,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(12),
       lastRunAt: minutesAgo(12),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(12),
+      lastValidatedPlanAt: minutesAgo(12),
       now,
     });
     assert(
@@ -216,9 +233,14 @@ export function runHeatingBackendWatchdogUnitTests() {
       "lastRunAgeMinutes must reflect the supplied timestamp's age",
     );
     assert(
-      result.lastValidPlanAgeMinutes !== null &&
-        Math.abs(result.lastValidPlanAgeMinutes - 12) < 0.01,
-      "lastValidPlanAgeMinutes must reflect the supplied timestamp's age",
+      result.lastValidatedPlanAgeMinutes !== null &&
+        Math.abs(result.lastValidatedPlanAgeMinutes - 12) < 0.01,
+      "lastValidatedPlanAgeMinutes must reflect the supplied timestamp's age",
+    );
+    assert(
+      result.lastPublishedAgeMinutes !== null &&
+        Math.abs(result.lastPublishedAgeMinutes - 12) < 0.01,
+      "lastPublishedAgeMinutes must reflect the supplied timestamp's age",
     );
   }
 
@@ -226,16 +248,17 @@ export function runHeatingBackendWatchdogUnitTests() {
   // row/caller bug) must NEVER be read as "very fresh" - it must be
   // treated as run_overdue, the same bucket a missing/too-old run hits,
   // with its own distinct alertReason category so it is not confused with
-  // an ordinary staleness explanation. lastValidPlanAt is deliberately
+  // an ordinary staleness explanation. lastValidatedPlanAt is deliberately
   // fresh here too, to prove the future lastRunAt alone is what forces
   // the unhealthy result (nothing else in this fixture would).
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(5),
       lastRunAt: minutesFromNow(10),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(5),
+      lastValidatedPlanAt: minutesAgo(5),
       now,
     });
     assertEqual(
@@ -255,47 +278,50 @@ export function runHeatingBackendWatchdogUnitTests() {
     );
   }
 
-  // 11. Symmetric case: a future lastValidPlanAt must never let an old
+  // 11. Symmetric case: a future lastValidatedPlanAt must never let an old
   // plan appear trusted just because wall-clock time hasn't caught up to
   // its claimed timestamp yet. lastRunAt is fresh and successful here, so
-  // only the future lastValidPlanAt can be what forces no_recent_valid_plan.
+  // only the future lastValidatedPlanAt can be what forces
+  // no_recent_valid_plan.
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesFromNow(10),
       lastRunAt: minutesAgo(5),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesFromNow(10),
+      lastValidatedPlanAt: minutesFromNow(10),
       now,
     });
     assertEqual(
       result.status,
       "no_recent_valid_plan",
-      "a future lastValidPlanAt must be treated as no_recent_valid_plan, never as trusted",
+      "a future lastValidatedPlanAt must be treated as no_recent_valid_plan, never as trusted",
     );
-    assertEqual(result.alert, true, "a future lastValidPlanAt must alert");
-    assertEqual(result.fallbackRecommended, true, "a future lastValidPlanAt must recommend fallback");
+    assertEqual(result.alert, true, "a future lastValidatedPlanAt must alert");
+    assertEqual(result.fallbackRecommended, true, "a future lastValidatedPlanAt must recommend fallback");
     assert(
-      result.alertReason?.startsWith("valid_plan_timestamp_in_future:"),
-      `future lastValidPlanAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
+      result.alertReason?.startsWith("validated_plan_timestamp_in_future:"),
+      `future lastValidatedPlanAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
     );
     assert(
-      result.lastValidPlanAgeMinutes !== null && result.lastValidPlanAgeMinutes < 0,
-      "lastValidPlanAgeMinutes must still report the actual (negative) computed age for diagnostics",
+      result.lastValidatedPlanAgeMinutes !== null && result.lastValidatedPlanAgeMinutes < 0,
+      "lastValidatedPlanAgeMinutes must still report the actual (negative) computed age for diagnostics",
     );
   }
 
   // 12. Both timestamps future at once -> run_overdue wins (same priority
   // order a merely-old lastRunAt already takes over a merely-old
-  // lastValidPlanAt - PR #191 review requirement to preserve existing
+  // lastValidatedPlanAt - PR #191 review requirement to preserve existing
   // status priority semantics).
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesFromNow(15),
       lastRunAt: minutesFromNow(15),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesFromNow(15),
+      lastValidatedPlanAt: minutesFromNow(15),
       now,
     });
     assertEqual(
@@ -306,7 +332,7 @@ export function runHeatingBackendWatchdogUnitTests() {
     assertEqual(result.alert, true, "both-future must alert");
     assert(
       result.alertReason?.startsWith("run_timestamp_in_future:"),
-      "both-future alertReason must be the run_timestamp_in_future category, not the valid-plan one",
+      "both-future alertReason must be the run_timestamp_in_future category, not the validated-plan one",
     );
   }
 
@@ -316,10 +342,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: now.toISOString(),
       lastRunAt: now.toISOString(),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: now.toISOString(),
+      lastValidatedPlanAt: now.toISOString(),
       now,
     });
     assertEqual(
@@ -330,9 +357,9 @@ export function runHeatingBackendWatchdogUnitTests() {
     assertEqual(result.alert, false, "age-zero timestamps must not alert");
     assertEqual(result.lastRunAgeMinutes, 0, "age-zero lastRunAt must report exactly 0, not negative");
     assertEqual(
-      result.lastValidPlanAgeMinutes,
+      result.lastValidatedPlanAgeMinutes,
       0,
-      "age-zero lastValidPlanAt must report exactly 0, not negative",
+      "age-zero lastValidatedPlanAt must report exactly 0, not negative",
     );
   }
 
@@ -341,10 +368,11 @@ export function runHeatingBackendWatchdogUnitTests() {
   {
     const result = evaluateHeatingBackendHealth({
       config,
+      lastPublishedAt: minutesAgo(5),
       lastRunAt: minutesAgo(5),
       lastRunOutcome: "published",
       lastRunReason: "valid plan published",
-      lastValidPlanAt: minutesAgo(5),
+      lastValidatedPlanAt: minutesAgo(5),
       now,
     });
     assertEqual(
@@ -354,5 +382,64 @@ export function runHeatingBackendWatchdogUnitTests() {
     );
     assertEqual(result.alert, false, "ordinary past timestamps must not alert");
     assertEqual(result.alertReason, null, "ordinary past timestamps must not carry an alert reason");
+  }
+
+  // --- PR #191 follow-up review: lastValidatedPlanAt vs lastPublishedAt ---
+  // These prove evaluateHeatingBackendHealth's OWN health decision uses
+  // lastValidatedPlanAt, never lastPublishedAt, for the no_recent_valid_plan
+  // check - the fail-safe simulator's evaluateHistory() is responsible for
+  // deriving these two timestamps correctly from run history (its own
+  // dedicated tests cover that derivation), but the pure health function
+  // itself must behave correctly no matter how far apart the two
+  // timestamps are.
+
+  // 15. A duplicate-suppressed no-op run keeps lastValidatedPlanAt fresh
+  // even while lastPublishedAt is old - must be healthy, since the plan
+  // was just reconfirmed correct even though nothing needed writing.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(400), // long-ago last durable write
+      lastRunAt: minutesAgo(0),
+      lastRunOutcome: "no_changes",
+      lastRunReason:
+        "valid plan computed but operationally identical to the already-published plan - no durable write, storedPlans untouched",
+      lastValidatedPlanAt: minutesAgo(0), // just reconfirmed
+      now,
+    });
+    assertEqual(
+      result.status,
+      "healthy",
+      "a fresh no_changes validation must be healthy even with a very old lastPublishedAt",
+    );
+    assertEqual(result.alert, false, "a fresh validation-only no-op must not alert");
+    assert(
+      result.lastPublishedAgeMinutes !== null &&
+        Math.abs(result.lastPublishedAgeMinutes - 400) < 0.01,
+      "lastPublishedAgeMinutes must still accurately report how old the actual last write is, even while healthy",
+    );
+  }
+
+  // 16. Symmetric failure case: lastValidatedPlanAt going stale must alert
+  // even while lastPublishedAt happens to look "recent" in absolute terms
+  // (e.g. a publish that happened, then a long run of readiness failures
+  // with no further validation at all) - freshness is judged on
+  // validation, not on how long ago SOME write once happened.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(200),
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "deferred",
+      lastRunReason: "optimizer not ready: stale_tank_reading",
+      lastValidatedPlanAt: minutesAgo(200),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "no_recent_valid_plan",
+      "staleness must be judged on lastValidatedPlanAt, not on lastPublishedAt alone",
+    );
+    assertEqual(result.alert, true, "a stale validation must alert regardless of lastPublishedAt");
   }
 }

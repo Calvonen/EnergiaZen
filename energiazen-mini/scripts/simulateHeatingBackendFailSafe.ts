@@ -14,7 +14,8 @@ function printReport(rows: ScenarioReportRow[]) {
       fallback_expected: row.fallbackExpected,
       alert_expected: row.alertExpected,
       alert_reason: row.alertReason ?? "",
-      last_valid_plan_age_min: row.lastValidPlanAgeMinutes,
+      last_validated_plan_age_min: row.lastValidatedPlanAgeMinutes,
+      last_published_age_min: row.lastPublishedAgeMinutes,
     })),
   );
 
