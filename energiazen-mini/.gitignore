@@ -38,6 +38,7 @@ yarn-error.*
 .tmp-forecast-tests/
 .tmp-optimizer-simulator/
 .tmp-replay-validation/
+.tmp-heating-failsafe-simulator/
 
 app-example
 
