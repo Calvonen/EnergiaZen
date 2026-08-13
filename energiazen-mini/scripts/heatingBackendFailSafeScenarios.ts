@@ -26,6 +26,7 @@ import {
   buildOptimizerHours,
   checkOptimizerReadiness,
   createHeatingOptimizationSettings,
+  fallbackHeatingGainPerHour,
   getDateKeyOffset,
   getFinnishDateKey,
   getHelsinkiHourNumber,
@@ -37,6 +38,18 @@ import {
   type RawTankReading,
 } from "../supabase/functions/run-heating-optimizer/logic";
 import type { ComparableHeatingPlan } from "../supabase/functions/_shared/heatingPlanPublication";
+// simulateHeatingPlan/HeatingOptimizationHour aren't re-exported from
+// logic.ts (it only re-exports what run-heating-optimizer's own index.ts
+// needs) - imported directly from the same real, unmodified production
+// module logic.ts itself calls into, to replay exactly one hour of real
+// tank physics for hours run-heating-optimizer did NOT produce a fresh
+// forecast for (see advanceTankPhysicsThroughUnobservedHour below). Not a
+// second/parallel physics model - the identical function optimizeHeatingPlan
+// itself calls internally.
+import {
+  simulateHeatingPlan,
+  type HeatingOptimizationHour,
+} from "../supabase/functions/_shared/heatingOptimizer";
 import type { HourlyTemperatureDropProfile } from "../lib/tankTemperatureForecast";
 import {
   evaluateHeatingBackendHealth,
@@ -213,7 +226,10 @@ export function runOneBackendTick(input: BackendTickInput): BackendTickResult {
   });
 
   const { settings } = resolveOptimizerSettings(settingsRow);
-  const optimizationSettings = createHeatingOptimizationSettings(settings, 4.5);
+  const optimizationSettings = createHeatingOptimizationSettings(
+    settings,
+    fallbackHeatingGainPerHour,
+  );
 
   const run = runBackendHeatingOptimization({
     heatingGainHistory: [],
@@ -357,6 +373,103 @@ export function evaluateHistory(
     lastValidPlanAt: lastPublished ? lastPublished.at.toISOString() : null,
     now,
   });
+}
+
+// ---------------------------------------------------------------------
+// Advances the GROUND-TRUTH tank state through exactly one hour that
+// run-heating-optimizer did NOT produce a fresh forecast for (run_error,
+// deferred, or optimizer_invalid all leave a tick's forecast unavailable -
+// see runOneBackendTick). PR #191 review: a prior version of this
+// simulator left the tank's temperature completely frozen for every hour
+// of an outage and then re-stamped that frozen value as a brand new
+// reading the moment the outage ended, which could make recovery look
+// healthy for the wrong reason (a fabricated fresh timestamp on stale
+// data) rather than because the modeled physical state was actually safe.
+//
+// Reuses simulateHeatingPlan (the exact same physics
+// optimizeHeatingPlan's own combination search calls internally, exported
+// from the real, unmodified _shared/heatingOptimizer.ts) for a
+// single-hour window - not a second/parallel physics model.
+//
+// Heating credit is given ONLY when the current Helsinki hour is already
+// in the last successfully PUBLISHED plan's planned_hours - i.e. "Shelly
+// kept executing whatever heating_plans already said, independent of
+// run-heating-optimizer's own health this particular hour", which is the
+// real mechanism (Shelly reads heating_plans on its own 60s cadence, not
+// run-heating-optimizer's live output - see this PR's Shelly audit).
+// Deliberately does NOT model Shelly's backup_hours/fallback override
+// (fill-ratio thresholds, debounce, "backup-fault-override" blind
+// heating): there is no reusable non-Shelly domain function for that
+// decision, and duplicating shelly/energyzen-controller.js's own logic
+// here would be exactly the second independent implementation this task
+// says not to build. An outage hour outside the last published plan is
+// therefore modeled as pure heat loss - the conservative choice, since it
+// never credits recovery for backup heating this simulator cannot verify
+// actually happened.
+function advanceTankPhysicsThroughUnobservedHour({
+  currentReading,
+  now,
+  storedPlans,
+}: {
+  currentReading: RawTankReading;
+  now: Date;
+  storedPlans: SimulatedHeatingPlanStore;
+}): { heatingApplied: boolean; reading: RawTankReading } {
+  const planDate = getDateKeyOffset(0, now);
+  const currentHourNumber = getHelsinkiHourNumber(now);
+  const lastPublishedPlannedHours = storedPlans[planDate]?.planned_hours;
+  const plannedHours = Array.isArray(lastPublishedPlannedHours)
+    ? lastPublishedPlannedHours.filter(
+        (hour): hour is number => typeof hour === "number",
+      )
+    : [];
+  const shouldHeatThisHour = plannedHours.includes(currentHourNumber);
+
+  const hourWindow: HeatingOptimizationHour[] = [
+    {
+      date: now,
+      endDate: new Date(now.getTime() + hourMs),
+      id: `unobserved:${now.toISOString()}`,
+      isCurrentHour: true,
+      price: 0,
+      segmentHours: 1,
+      startDate: now.toISOString(),
+    },
+  ];
+
+  const { settings } = resolveOptimizerSettings(settingsRow);
+  const optimizationSettings = createHeatingOptimizationSettings(
+    settings,
+    fallbackHeatingGainPerHour,
+  );
+
+  const steppedHour = simulateHeatingPlan({
+    currentBottomTemperature: currentReading.bottom_temp as number,
+    currentTopTemperature: currentReading.top_temp as number,
+    heatingGainPerHour: fallbackHeatingGainPerHour,
+    hourlyDrops: flatHourlyDrops,
+    hours: hourWindow,
+    isCurrentlyHeating: currentReading.heating === true,
+    selectedHeatingHourIds: shouldHeatThisHour ? [hourWindow[0].id] : [],
+    settings: optimizationSettings,
+  }).forecast[0];
+
+  // heatingGain > 0 (not isHeatingSelected) reflects whether heating was
+  // actually APPLIED this hour - a selected hour can still be blocked by
+  // the start-fill-ratio check (see heatingOptimizer.ts) if the tank was
+  // already close to full, in which case no gain is added even though the
+  // hour was nominally "planned".
+  const heatingApplied = steppedHour.heatingGain > 0;
+
+  return {
+    heatingApplied,
+    reading: {
+      bottom_temp: steppedHour.bottomTemperatureAfter,
+      created_at: now.toISOString(),
+      heating: heatingApplied,
+      top_temp: steppedHour.topTemperatureAfter,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -861,12 +974,34 @@ export type WeekTickRecord = {
   alert: boolean;
   alertReason: string | null;
   fallbackRecommended: boolean;
+  groundTruthBottomTemp: number;
+  groundTruthTopTemp: number;
   hourIndex: number;
   now: Date;
   outcome: HeatingBackendRunOutcome;
+  reason: string;
   status: HeatingBackendHealthResult["status"];
 };
 
+// Two separate tank states are tracked through the week, deliberately kept
+// apart (PR #191 review):
+//
+//  - groundTruthReading: what the tank is ACTUALLY doing, physically,
+//    every single hour, regardless of whether run-heating-optimizer ran
+//    successfully that hour. Advanced every hour via either the real
+//    optimizer forecast (when a tick produced one) or
+//    advanceTankPhysicsThroughUnobservedHour (when it didn't) - never
+//    frozen, never skipped.
+//  - the reading actually fed into runOneBackendTick as
+//    "latest tank_readings row": only ever refreshed to the current
+//    groundTruthReading, stamped with `now`, on an hour that is NEITHER
+//    itself a simulated run_error hour NOR the first hour immediately
+//    after one ends. That first post-outage hour deliberately still sees
+//    the stale pre-outage reading, so it cannot become healthy merely
+//    because run-heating-optimizer started executing again - only the
+//    following hour, once a new simulated fresh tank observation has
+//    "arrived", can. Outside any outage this reduces to the same
+//    every-hour freshening WEEK_WITHOUT_APP already relies on.
 function runWeek({
   hours,
   injectRunErrorAt,
@@ -880,21 +1015,35 @@ function runWeek({
   const records: WeekTickRecord[] = [];
 
   let storedPlans: SimulatedHeatingPlanStore = {};
-  let latestReading: RawTankReading = {
+  let groundTruthReading: RawTankReading = {
     bottom_temp: 60,
     created_at: weekStart.toISOString(),
     heating: false,
     top_temp: 65,
   };
+  let observedReading: RawTankReading = groundTruthReading;
   let isCurrentlyHeating = false;
+  let previousHourWasRunError = false;
 
   for (let hourIndex = 0; hourIndex < hours; hourIndex += 1) {
     const now = new Date(weekStart.getTime() + hourIndex * hourMs);
     const simulateRunError = injectRunErrorAt(hourIndex);
+    const isFirstHourAfterOutage = !simulateRunError && previousHourWasRunError;
+
+    if (!simulateRunError && !isFirstHourAfterOutage) {
+      // A new simulated fresh tank observation "arrives": carry the
+      // current ground-truth physical state forward as this hour's
+      // tank_readings row.
+      observedReading = { ...groundTruthReading, created_at: now.toISOString() };
+    }
+    // Otherwise (mid-outage, or the very first hour right after one)
+    // deliberately leave `observedReading` untouched - still whatever was
+    // last actually observed, aging exactly like a real stalled/unverified
+    // sensor feed would.
 
     const tick = runOneBackendTick({
       isCurrentlyHeating,
-      latestReading: simulateRunError ? latestReading : { ...latestReading, created_at: now.toISOString() },
+      latestReading: observedReading,
       now,
       prices,
       simulateRunError,
@@ -904,35 +1053,44 @@ function runWeek({
     storedPlans = tick.storedPlans;
     history.push({ at: now, outcome: tick.outcome, reason: tick.reason });
 
-    // Step the simulated physical state forward using the optimizer's own
-    // forecast for the current hour - "as far as the existing simulator
-    // supports", per this task's scope, rather than inventing a second
-    // physics model just for this week-long replay.
+    // Ground truth ALWAYS advances by exactly one hour, whether or not
+    // this tick produced a fresh forecast - reusing the real optimizer's
+    // own forecast when it did (tick.topAfter/bottomAfter), or replaying
+    // the same real physics for a single unobserved hour otherwise (see
+    // advanceTankPhysicsThroughUnobservedHour) - never frozen.
     if (tick.topAfter !== null && tick.bottomAfter !== null) {
-      latestReading = {
+      groundTruthReading = {
         bottom_temp: tick.bottomAfter,
         created_at: now.toISOString(),
         heating: tick.heatingSelectedNow ?? false,
         top_temp: tick.topAfter,
       };
       isCurrentlyHeating = tick.heatingSelectedNow ?? false;
+    } else {
+      const stepped = advanceTankPhysicsThroughUnobservedHour({
+        currentReading: groundTruthReading,
+        now,
+        storedPlans,
+      });
+      groundTruthReading = stepped.reading;
+      isCurrentlyHeating = stepped.heatingApplied;
     }
-    // When the tick failed/deferred, the tank keeps existing at its last
-    // known reading (no forecast to advance state from) - the reading's
-    // own created_at is intentionally NOT bumped to `now` in that branch
-    // above, so the next tick's readiness check sees it aging exactly
-    // like a real stalled sensor feed would.
 
     const watchdog = evaluateHistory(history, now);
     records.push({
       alert: watchdog.alert,
       alertReason: watchdog.alertReason,
       fallbackRecommended: watchdog.fallbackRecommended,
+      groundTruthBottomTemp: groundTruthReading.bottom_temp as number,
+      groundTruthTopTemp: groundTruthReading.top_temp as number,
       hourIndex,
       now,
       outcome: tick.outcome,
+      reason: tick.reason,
       status: watchdog.status,
     });
+
+    previousHourWasRunError = simulateRunError;
   }
 
   return records;
@@ -1013,9 +1171,19 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
 
   const beforeFailure = records[failureStartHour - 1];
   const duringFailure = records.slice(failureStartHour, failureEndHour);
-  const afterRecoveryHour = failureEndHour; // first hour after the outage ends
-  const afterRecovery = records[afterRecoveryHour];
-  const laterRecovery = records[Math.min(afterRecoveryHour + 3, records.length - 1)];
+  // The tick right where simulateRunError flips back to false: run-heating-
+  // optimizer executes again without throwing, but the tank reading it
+  // sees is still the one from before the outage (runWeek deliberately
+  // does not refresh it here - see runWeek's comment) - PR #191 review.
+  const firstRecoveryHourIndex = failureEndHour;
+  const firstRecoveryHour = records[firstRecoveryHourIndex];
+  // One hour later, a new simulated fresh tank observation "arrives" -
+  // only from here can the pipeline actually recover.
+  const freshDataHourIndex = failureEndHour + 1;
+  const freshDataHour = records[freshDataHourIndex];
+  const laterRecovery = records[Math.min(freshDataHourIndex + 3, records.length - 1)];
+  const beforeOutageBottomTemp = beforeFailure.groundTruthBottomTemp;
+  const endOfOutageBottomTemp = records[failureEndHour - 1].groundTruthBottomTemp;
 
   const failures: string[] = [];
   if (beforeFailure.alert) {
@@ -1043,15 +1211,60 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
       'expected every hour during the injected outage to carry an alertReason starting with "run_error:"',
     );
   }
-  if (afterRecovery.alert) {
-    failures.push("expected the alert to clear on the very first successful run after recovery");
-  }
-  // Status, not just the alert boolean, on the very first recovered hour -
-  // recovery must land back on "healthy" immediately, not linger in some
-  // other non-alerting status.
-  if (afterRecovery.status !== "healthy") {
+  // PR #191 review (Codex): the tank's ground-truth physical state must
+  // genuinely move through the outage (heat loss, and/or heating credit
+  // from the last published plan) rather than sit frozen at its
+  // pre-outage value - a frozen value is exactly what let a later version
+  // of this simulator fabricate a "fresh" reading on recovery that had
+  // not actually experienced the outage.
+  if (Math.abs(endOfOutageBottomTemp - beforeOutageBottomTemp) < 0.01) {
     failures.push(
-      `expected status "healthy" on the very first successful run after recovery, got "${afterRecovery.status}"`,
+      `expected the tank's ground-truth bottom temperature to change during the ${failureHours}-hour outage ` +
+        `(heat loss and/or last-published-plan heating), got an unchanged ${beforeOutageBottomTemp.toFixed(2)} ` +
+        "C before and after - the physical state must not stay frozen",
+    );
+  }
+  // PR #191 review (Codex): the very first tick after run-heating-
+  // optimizer starts succeeding again must NOT publish/become healthy -
+  // it still only has the stale pre-outage tank reading available (no
+  // fresh observation has "arrived" yet), so it must be rejected the same
+  // way any real stalled sensor feed would be, via the EXISTING
+  // stale_tank_reading readiness rule - not a special case invented for
+  // this scenario.
+  if (firstRecoveryHour.outcome === "published") {
+    failures.push(
+      "expected the very first tick after the outage to NOT publish - it must still see the pre-outage " +
+        "(by now stale) tank reading rather than a fabricated fresh one",
+    );
+  }
+  if (!firstRecoveryHour.reason.includes("stale_tank_reading")) {
+    failures.push(
+      "expected the very first tick after the outage to be rejected specifically via the existing " +
+        `stale_tank_reading readiness rule, got reason: "${firstRecoveryHour.reason}"`,
+    );
+  }
+  if (firstRecoveryHour.status === "healthy") {
+    failures.push(
+      "expected the very first tick after the outage to NOT report healthy - recovery must not pass from a " +
+        "fabricated fresh reading",
+    );
+  }
+  // PR #191 review (Codex): only once a genuinely fresh simulated tank
+  // observation has arrived (one hour later) can recovery actually
+  // happen, and only because the modeled physical state at that point is
+  // legitimately acceptable to the real, unmodified optimizer.
+  if (freshDataHour.outcome !== "published") {
+    failures.push(
+      "expected the hour after a fresh tank observation arrives to publish a valid plan again, got outcome " +
+        `"${freshDataHour.outcome}"`,
+    );
+  }
+  if (freshDataHour.alert) {
+    failures.push("expected the alert to clear once a genuinely fresh tank observation arrives");
+  }
+  if (freshDataHour.status !== "healthy") {
+    failures.push(
+      `expected status "healthy" once a genuinely fresh tank observation arrives, got "${freshDataHour.status}"`,
     );
   }
   if (laterRecovery.alert || laterRecovery.status !== "healthy") {
@@ -1066,13 +1279,24 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
     lastValidPlanAgeMinutes: "varies (see notes)",
     notes:
       `Paiva 3, ${failureHours} peräkkäistä tuntia (index [${failureStartHour}, ${failureEndHour})) ` +
-      "simuloi run-heating-optimizerin suorituksen epaonnistumista (simulateRunError). Vika havaitaan " +
-      "valittomasti (alert=true jo ensimmaisella epaonnistuneella tunnilla), pysyy paalla koko katkon ajan, " +
-      "ja poistuu heti ensimmaisella onnistuneella ajolla katkon jalkeen - jarjestelma ei jaa pysyvasti " +
-      "vikamoodiin.",
-    optimizerStatus: `error during hours [${failureStartHour}, ${failureEndHour}), valid before/after`,
+      "simuloi run-heating-optimizerin suorituksen epaonnistumista (simulateRunError), jonka ajan varaajan " +
+      "todellinen (ground-truth) lampotila jatkaa kehittymistaan lammonhukkana ja/tai viimeisimman " +
+      "julkaistun suunnitelman mukaisena lammityksena - ei jaadytettyna. Vika havaitaan valittomasti " +
+      "(alert=true jo ensimmaisella epaonnistuneella tunnilla) ja pysyy paalla koko katkon ajan. Katkon " +
+      "paattyessa (tunti " +
+      String(firstRecoveryHourIndex) +
+      ") run-heating-optimizer ajaa taas onnistuneesti, mutta nakee silti katkoa edeltavan (nyt vanhentuneen) " +
+      "lukeman eika julkaise - vasta seuraavana tuntina (" +
+      String(freshDataHourIndex) +
+      "), kun uusi simuloitu tuore mittaus \"saapuu\", palautuminen tapahtuu - ja vain koska mallinnettu " +
+      "fysikaalinen tila on silloin aidosti turvallinen. Jarjestelma ei jaa pysyvasti vikamoodiin.",
+    optimizerStatus:
+      `error during hours [${failureStartHour}, ${failureEndHour}), stale_tank_reading at hour ` +
+      `${firstRecoveryHourIndex}, valid from hour ${freshDataHourIndex}`,
     passFail: failures.length === 0 ? "PASS" : "FAIL",
-    planStatus: `not_published during outage, published resumes at hour ${afterRecoveryHour}`,
+    planStatus:
+      `not_published during outage and at hour ${firstRecoveryHourIndex} (stale reading), published resumes ` +
+      `at hour ${freshDataHourIndex}`,
     scenario: "FAILURE_DURING_WEEK",
   };
 
