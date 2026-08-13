@@ -442,4 +442,207 @@ export function runHeatingBackendWatchdogUnitTests() {
     );
     assertEqual(result.alert, true, "a stale validation must alert regardless of lastPublishedAt");
   }
+
+  // --- PR #191 follow-up review (Codex): malformed (present but
+  // unparsable) timestamps must never be confused with "missing" and must
+  // never produce a garbage diagnostic like "last run attempt was
+  // undefined min ago" - a non-null, non-date-parseable string is a
+  // materially different (and never legitimate) condition from a
+  // genuinely absent timestamp. ---
+  const malformedTimestamp = "not-a-real-timestamp";
+
+  // 17. Malformed lastRunAt alone (a fresh, valid lastValidatedPlanAt
+  // proves the malformed lastRunAt alone is what forces the result).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: malformedTimestamp,
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "a malformed lastRunAt must be treated as run_overdue, the same safe unhealthy bucket a missing one hits",
+    );
+    assertEqual(result.alert, true, "a malformed lastRunAt must alert");
+    assertEqual(result.fallbackRecommended, true, "a malformed lastRunAt must recommend fallback");
+    assert(
+      result.alertReason?.startsWith("run_timestamp_invalid:"),
+      `malformed lastRunAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
+    );
+    assert(
+      !result.alertReason?.includes("undefined"),
+      `alertReason must never contain the literal text "undefined", got: ${result.alertReason}`,
+    );
+    assertEqual(
+      result.lastRunAgeMinutes,
+      null,
+      "an unparsable lastRunAt must report lastRunAgeMinutes as null, not NaN or a garbage number",
+    );
+  }
+
+  // 18. Malformed lastValidatedPlanAt alone (a fresh, valid lastRunAt with
+  // a successful outcome proves the malformed validated-plan timestamp
+  // alone is what forces the result, not run_overdue/run_failed).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: malformedTimestamp,
+      now,
+    });
+    assertEqual(
+      result.status,
+      "no_recent_valid_plan",
+      "a malformed lastValidatedPlanAt must be treated as no_recent_valid_plan, the same safe unhealthy " +
+        "bucket a missing one hits",
+    );
+    assertEqual(result.alert, true, "a malformed lastValidatedPlanAt must alert");
+    assertEqual(
+      result.fallbackRecommended,
+      true,
+      "a malformed lastValidatedPlanAt must recommend fallback",
+    );
+    assert(
+      result.alertReason?.startsWith("validated_plan_timestamp_invalid:"),
+      `malformed lastValidatedPlanAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
+    );
+    assert(
+      !result.alertReason?.includes("undefined"),
+      `alertReason must never contain the literal text "undefined", got: ${result.alertReason}`,
+    );
+    assertEqual(
+      result.lastValidatedPlanAgeMinutes,
+      null,
+      "an unparsable lastValidatedPlanAt must report lastValidatedPlanAgeMinutes as null, not NaN or a garbage number",
+    );
+  }
+
+  // 19. Both malformed at once -> run_overdue wins (same priority order a
+  // merely-old/missing/future lastRunAt already takes over the
+  // validated-plan checks).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(5),
+      lastRunAt: malformedTimestamp,
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: malformedTimestamp,
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "when both timestamps are malformed, run_overdue must win over no_recent_valid_plan",
+    );
+    assert(
+      result.alertReason?.startsWith("run_timestamp_invalid:"),
+      "both-malformed alertReason must be the run_timestamp_invalid category, not the validated-plan one",
+    );
+  }
+
+  // 20. Malformed run timestamp + a genuinely VALID (fresh) plan
+  // timestamp - run_overdue must still win (the cron cadence itself looks
+  // broken/unverifiable, which is more severe than a fresh plan can
+  // compensate for).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(2),
+      lastRunAt: malformedTimestamp,
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: minutesAgo(2),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "a malformed lastRunAt must still force run_overdue even with an otherwise fresh, valid plan timestamp",
+    );
+    assert(
+      result.alertReason?.startsWith("run_timestamp_invalid:"),
+      `malformed lastRunAt must win with its own category even alongside a fresh valid plan timestamp, got: ${result.alertReason}`,
+    );
+  }
+
+  // 21. A genuinely VALID (fresh) run timestamp + a malformed validated-
+  // plan timestamp - no_recent_valid_plan must fire (run_overdue/
+  // run_failed do not apply, so the malformed plan timestamp is what's
+  // left to explain the alert).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: minutesAgo(2),
+      lastRunAt: minutesAgo(2),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: malformedTimestamp,
+      now,
+    });
+    assertEqual(
+      result.status,
+      "no_recent_valid_plan",
+      "a fresh, valid run timestamp must not mask a malformed validated-plan timestamp",
+    );
+    assert(
+      result.alertReason?.startsWith("validated_plan_timestamp_invalid:"),
+      `a fresh valid run timestamp must not mask a malformed validated-plan timestamp, got: ${result.alertReason}`,
+    );
+  }
+
+  // 22. Malformed lastPublishedAt (diagnostic-only field) must be handled
+  // safely too, even though it does not drive health status - it must
+  // become null (like "missing"), never NaN or a value that corrupts an
+  // otherwise-healthy result.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: malformedTimestamp,
+      lastRunAt: minutesAgo(2),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidatedPlanAt: minutesAgo(2),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "healthy",
+      "a malformed lastPublishedAt must not itself break an otherwise healthy result - it is diagnostic only",
+    );
+    assertEqual(
+      result.lastPublishedAgeMinutes,
+      null,
+      "a malformed lastPublishedAt must report lastPublishedAgeMinutes as null, not NaN",
+    );
+  }
+
+  // 23. Normal null/missing timestamps still behave exactly as before
+  // this fix (re-run of case 2's fixture, unchanged) - "missing" and
+  // "invalid" must stay genuinely distinct outcomes of the same
+  // run_overdue bucket, not accidentally merged back together.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastPublishedAt: null,
+      lastRunAt: null,
+      lastRunOutcome: null,
+      lastRunReason: null,
+      lastValidatedPlanAt: null,
+      now,
+    });
+    assertEqual(result.status, "run_overdue", "a missing lastRunAt must still be run_overdue");
+    assert(
+      result.alertReason?.startsWith("cron_missing:"),
+      "a missing (not malformed) lastRunAt must still carry the cron_missing category, unchanged",
+    );
+  }
 }

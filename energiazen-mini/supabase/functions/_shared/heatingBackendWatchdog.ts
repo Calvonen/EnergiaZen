@@ -138,39 +138,65 @@ export type HeatingBackendHealthResult = {
   status: HeatingBackendHealthStatus;
 };
 
-// Can be negative - a supplied timestamp later than `now` (clock skew, a
-// malformed row, a caller bug) is deliberately NOT clamped to 0 here. The
-// caller (evaluateHeatingBackendHealth) is the one responsible for
-// treating a negative age as untrustworthy rather than "very fresh" - see
-// its own comment. Mirrors the same
-// lib/tankMonitorAlert.ts/computeTankReadingAgeMinutes shape (also allowed
-// to go negative, for the same reason: isTankReadingStale there already
-// treats a negative age as stale, never as fresh).
-function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
+// Three DIFFERENT reasons a timestamp might not yield a usable age, kept
+// explicitly distinct rather than collapsed into a single "null" the way
+// an age-only helper would:
+//  - "missing": the field was never populated at all (isoTimestamp is
+//    null) - legitimate and expected on a cold start (e.g. no run has
+//    ever been observed yet).
+//  - "invalid": isoTimestamp is non-null but does not parse as a date at
+//    all (a malformed row, a caller bug, truncated/corrupted data) - never
+//    legitimate, and a materially different problem from "missing".
+//  - "value": a genuine parsed instant, which the caller then separately
+//    checks for being in the future (clock skew) or merely too old.
+// Collapsing "invalid" into the same bucket as "missing" is exactly what
+// previously produced misleading diagnostics like "last run attempt was
+// undefined min ago" - the old code assumed a non-null timestamp always
+// meant a parseable one, so a malformed-but-non-null value fell through
+// into the "compute an age and format it" branch with nothing to format.
+//
+// The parsed "value" case can still be negative (now earlier than the
+// timestamp - clock skew) - deliberately NOT clamped to 0 here, mirroring
+// lib/tankMonitorAlert.ts/computeTankReadingAgeMinutes (also allowed to go
+// negative, for the same reason: isTankReadingStale there already treats
+// a negative age as stale, never as fresh). The caller
+// (evaluateHeatingBackendHealth) is responsible for treating both a
+// negative age and an "invalid" assessment as untrustworthy.
+type TimestampAssessment =
+  | { kind: "missing" }
+  | { kind: "invalid" }
+  | { kind: "value"; ageMinutes: number };
+
+function assessTimestamp(isoTimestamp: string | null, now: Date): TimestampAssessment {
   if (!isoTimestamp) {
-    return null;
+    return { kind: "missing" };
   }
 
   const time = new Date(isoTimestamp).getTime();
 
   if (Number.isNaN(time)) {
-    return null;
+    return { kind: "invalid" };
   }
 
-  return (now.getTime() - time) / (60 * 1000);
+  return { kind: "value", ageMinutes: (now.getTime() - time) / (60 * 1000) };
+}
+
+function ageMinutesOf(assessment: TimestampAssessment): number | null {
+  return assessment.kind === "value" ? assessment.ageMinutes : null;
 }
 
 // Three independent, individually-explainable checks, evaluated in this
 // priority order when more than one applies at once:
-//   1. run_overdue - the cron cadence itself looks broken (no attempt seen
-//      recently, or ever - or lastRunAt is nonsensically in the future,
-//      see below). This is the most severe case: it means even
-//      run_error/publication_failed outcomes have stopped arriving, so we
-//      cannot even see WHY the pipeline is unhealthy. A long, healthy-
-//      looking run of validated no_changes entries in the past does NOT
-//      protect against this - run_overdue is judged purely from
-//      lastRunAt, so if the pipeline stops running altogether, this still
-//      fires regardless of how clean its history was up to that point.
+//   1. run_overdue - the cron cadence itself looks broken: no attempt seen
+//      recently, or ever, or lastRunAt is unparsable, or it is
+//      nonsensically in the future (see below). This is the most severe
+//      case: it means even run_error/publication_failed outcomes have
+//      stopped arriving, so we cannot even see WHY the pipeline is
+//      unhealthy. A long, healthy-looking run of validated no_changes
+//      entries in the past does NOT protect against this - run_overdue is
+//      judged purely from lastRunAt, so if the pipeline stops running
+//      altogether, this still fires regardless of how clean its history
+//      was up to that point.
 //   2. run_failed - the most recent attempt itself reported failure
 //      (run_error or publication_failed). Reported immediately, without
 //      waiting for the plan to actually go stale - a failed run today is
@@ -183,32 +209,34 @@ function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
 //      nothing has actually CONFIRMED the stored plan recently either
 //      (e.g. a run of deferred/optimizer_invalid outcomes: stale inputs,
 //      an optimizer result that never clears its own safety violations,
-//      or lastValidatedPlanAt is nonsensically in the future, see below).
-//      Judged against lastValidatedPlanAt, not lastPublishedAt - a
-//      genuine duplicate-suppressed no-op (see "no_changes") counts as a
-//      confirmation and keeps this healthy even though nothing was
-//      written.
+//      or lastValidatedPlanAt is unparsable or nonsensically in the
+//      future, see below). Judged against lastValidatedPlanAt, not
+//      lastPublishedAt - a genuine duplicate-suppressed no-op (see
+//      "no_changes") counts as a confirmation and keeps this healthy even
+//      though nothing was written.
 // Any one of these sets alert + fallbackRecommended; none of them being
 // true is the only "healthy" result.
 //
-// Future timestamps (lastRunAgeMinutes/lastValidatedPlanAgeMinutes < 0): a
-// clock-skewed, malformed, or otherwise impossible "in the future"
-// timestamp must never be read as "very fresh" and must never produce
-// status: "healthy" - same safety principle
-// lib/tankReadingFreshness.ts/isTankReadingStale already applies to tank
-// readings (a negative reading age is treated as stale, not fresh) is
-// applied here to both watched timestamps. Folded into the SAME
-// run_overdue/no_recent_valid_plan buckets and priority order a merely-
-// old or missing timestamp would hit (requirement: preserve existing
-// status priority semantics) rather than a new status value, but each
-// gets its own explicit alertReason category
-// ("run_timestamp_in_future"/"validated_plan_timestamp_in_future")
-// distinct from the plain "cron_missing"/"no_recent_valid_plan" staleness
-// wording, since "the timestamp claims to be from the future" is a
-// materially different, more alarming condition than "the timestamp is
-// merely old" and callers/logs should be able to tell them apart.
-// lastPublishedAt is diagnostic only and is never checked for
-// staleness/future-ness here - it doesn't gate anything.
+// Untrustworthy timestamps - two distinct kinds, both folded into the SAME
+// run_overdue/no_recent_valid_plan buckets and priority order a merely-old
+// or missing timestamp would hit (preserving existing status priority
+// semantics), but each with its own explicit alertReason category rather
+// than a generic staleness message:
+//  - Future (ageMinutes < 0): a clock-skewed or otherwise impossible
+//    "in the future" timestamp must never be read as "very fresh" - same
+//    safety principle lib/tankReadingFreshness.ts/isTankReadingStale
+//    already applies to tank readings. Categories:
+//    "run_timestamp_in_future"/"validated_plan_timestamp_in_future".
+//  - Invalid (present but unparsable - a malformed row, a caller bug):
+//    must never be silently treated as "missing" (which is a normal,
+//    expected cold-start state) nor fall through into a staleness message
+//    with nothing to format - that previously produced diagnostics like
+//    "last run attempt was undefined min ago". Categories:
+//    "run_timestamp_invalid"/"validated_plan_timestamp_invalid".
+// lastPublishedAt is diagnostic only and is never checked for staleness/
+// future-ness/validity here - it doesn't gate anything - but is still
+// assessed via the same assessTimestamp so a malformed value there safely
+// becomes null (like "missing") rather than producing a garbage age.
 export function evaluateHeatingBackendHealth({
   config,
   lastRunAt,
@@ -218,32 +246,44 @@ export function evaluateHeatingBackendHealth({
   lastPublishedAt,
   now,
 }: HeatingBackendHealthInput): HeatingBackendHealthResult {
-  const lastRunAgeMinutes = ageMinutes(lastRunAt, now);
-  const lastValidatedPlanAgeMinutes = ageMinutes(lastValidatedPlanAt, now);
-  const lastPublishedAgeMinutes = ageMinutes(lastPublishedAt, now);
+  const lastRunAssessment = assessTimestamp(lastRunAt, now);
+  const lastValidatedPlanAssessment = assessTimestamp(lastValidatedPlanAt, now);
+  const lastPublishedAssessment = assessTimestamp(lastPublishedAt, now);
 
-  const lastRunIsInFuture = lastRunAgeMinutes !== null && lastRunAgeMinutes < 0;
+  const lastRunAgeMinutes = ageMinutesOf(lastRunAssessment);
+  const lastValidatedPlanAgeMinutes = ageMinutesOf(lastValidatedPlanAssessment);
+  const lastPublishedAgeMinutes = ageMinutesOf(lastPublishedAssessment);
+
+  const lastRunIsInvalid = lastRunAssessment.kind === "invalid";
+  const lastRunIsInFuture = lastRunAssessment.kind === "value" && lastRunAssessment.ageMinutes < 0;
+  const lastValidatedPlanIsInvalid = lastValidatedPlanAssessment.kind === "invalid";
   const lastValidatedPlanIsInFuture =
-    lastValidatedPlanAgeMinutes !== null && lastValidatedPlanAgeMinutes < 0;
+    lastValidatedPlanAssessment.kind === "value" && lastValidatedPlanAssessment.ageMinutes < 0;
 
   const runOverdue =
-    lastRunAgeMinutes === null ||
+    lastRunAssessment.kind === "missing" ||
+    lastRunIsInvalid ||
     lastRunIsInFuture ||
-    lastRunAgeMinutes > config.maxRunIntervalMinutes;
+    (lastRunAssessment.kind === "value" &&
+      lastRunAssessment.ageMinutes > config.maxRunIntervalMinutes);
   const runFailed = lastRunOutcome === "run_error" || lastRunOutcome === "publication_failed";
   const validatedPlanStale =
-    lastValidatedPlanAgeMinutes === null ||
+    lastValidatedPlanAssessment.kind === "missing" ||
+    lastValidatedPlanIsInvalid ||
     lastValidatedPlanIsInFuture ||
-    lastValidatedPlanAgeMinutes > config.maxValidatedPlanAgeMinutes;
+    (lastValidatedPlanAssessment.kind === "value" &&
+      lastValidatedPlanAssessment.ageMinutes > config.maxValidatedPlanAgeMinutes);
 
   if (runOverdue) {
     return {
       alert: true,
-      alertReason: lastRunIsInFuture
-        ? `run_timestamp_in_future: last run attempt's timestamp (${lastRunAt}) is ${Math.abs(lastRunAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as fresh`
-        : lastRunAt === null
-          ? "cron_missing: no backend optimizer run has ever been observed"
-          : `cron_missing: last run attempt was ${lastRunAgeMinutes?.toFixed(1)} min ago, exceeding maxRunIntervalMinutes (${config.maxRunIntervalMinutes})`,
+      alertReason: lastRunIsInvalid
+        ? `run_timestamp_invalid: last run attempt's timestamp (${JSON.stringify(lastRunAt)}) could not be parsed as a valid date - an unparsable timestamp is never treated as fresh`
+        : lastRunIsInFuture
+          ? `run_timestamp_in_future: last run attempt's timestamp (${lastRunAt}) is ${Math.abs(lastRunAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as fresh`
+          : lastRunAt === null
+            ? "cron_missing: no backend optimizer run has ever been observed"
+            : `cron_missing: last run attempt was ${lastRunAgeMinutes?.toFixed(1)} min ago, exceeding maxRunIntervalMinutes (${config.maxRunIntervalMinutes})`,
       fallbackRecommended: true,
       lastPublishedAgeMinutes,
       lastRunAgeMinutes,
@@ -267,11 +307,13 @@ export function evaluateHeatingBackendHealth({
   if (validatedPlanStale) {
     return {
       alert: true,
-      alertReason: lastValidatedPlanIsInFuture
-        ? `validated_plan_timestamp_in_future: last validated plan's timestamp (${lastValidatedPlanAt}) is ${Math.abs(lastValidatedPlanAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as trusted`
-        : lastValidatedPlanAt === null
-          ? "no_recent_valid_plan: no validated plan has ever been observed"
-          : `no_recent_valid_plan: last validated plan was ${lastValidatedPlanAgeMinutes?.toFixed(1)} min ago, exceeding maxValidatedPlanAgeMinutes (${config.maxValidatedPlanAgeMinutes})`,
+      alertReason: lastValidatedPlanIsInvalid
+        ? `validated_plan_timestamp_invalid: last validated plan's timestamp (${JSON.stringify(lastValidatedPlanAt)}) could not be parsed as a valid date - an unparsable timestamp is never treated as trusted`
+        : lastValidatedPlanIsInFuture
+          ? `validated_plan_timestamp_in_future: last validated plan's timestamp (${lastValidatedPlanAt}) is ${Math.abs(lastValidatedPlanAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as trusted`
+          : lastValidatedPlanAt === null
+            ? "no_recent_valid_plan: no validated plan has ever been observed"
+            : `no_recent_valid_plan: last validated plan was ${lastValidatedPlanAgeMinutes?.toFixed(1)} min ago, exceeding maxValidatedPlanAgeMinutes (${config.maxValidatedPlanAgeMinutes})`,
       fallbackRecommended: true,
       lastPublishedAgeMinutes,
       lastRunAgeMinutes,
