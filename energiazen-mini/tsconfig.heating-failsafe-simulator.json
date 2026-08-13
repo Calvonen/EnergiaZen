@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": ".tmp-heating-failsafe-simulator",
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "target": "es2020"
+  },
+  "include": [
+    "scripts/simulateHeatingBackendFailSafe.ts"
+  ]
+}
