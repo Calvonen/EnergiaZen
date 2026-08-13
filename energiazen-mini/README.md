@@ -456,6 +456,17 @@ aikavyöhykkeellä, joten DST-päivän todellinen pituus voi olla 23 tai 25 tunt
 kiinteän 24 tunnin oletuksen sijaan. `fetched_at`-iälle ei aseteta keinotekoista
 rajaa.
 
+Backend-primary publication vaatii lisäksi, että
+`heating_control_settings.heating_need_mode = 'automatic'` ja kaikki
+automaattisen optimizerin käyttäjäasetukset löytyvät Supabasesta:
+`automatic_max_heating_hours`, `safety_shower_reserve`,
+`target_shower_reserve`, `full_tank_showers`,
+`full_tank_average_temperature`, `min_tank_temperature`,
+`max_tank_temperature` ja `heating_gain_source`. Jos tila on `fixed`,
+tuntematon tai jokin näistä arvoista puuttuu, ajo voi yhä tallentaa
+diagnostiikan, mutta ei julkaise eikä merkitse automaattista suunnitelmaa
+healthy/validated-tilaan.
+
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
 se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta

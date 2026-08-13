@@ -15,6 +15,13 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
     ),
     "utf8",
   );
+  const settingsMigrationSource = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260813030000_add_backend_primary_optimizer_settings.sql",
+    ),
+    "utf8",
+  );
   const edgeFunctionSource = readFileSync(
     join(process.cwd(), "supabase/functions/run-heating-optimizer/index.ts"),
     "utf8",
@@ -55,10 +62,24 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
     migrationSource.includes("grant insert, update on table public.heating_plans to service_role;"),
     "service_role must have the table privileges needed to publish heating plans",
   );
+  assertSource(
+    settingsMigrationSource.includes("heating_need_mode") &&
+      settingsMigrationSource.includes("automatic_max_heating_hours") &&
+      settingsMigrationSource.includes("safety_shower_reserve") &&
+      settingsMigrationSource.includes("heating_gain_source"),
+    "settings migration must add backend-primary optimizer/control-mode columns",
+  );
 
   assertSource(
-    edgeFunctionSource.includes("const canPublishPlan = typeof heating === \"boolean\" && isValidReadyDecision"),
-    "edge function must require a known relay status and valid ready optimizer result before publishing",
+    edgeFunctionSource.includes("publicationReadiness") &&
+      edgeFunctionSource.includes("publicationReadiness.ok"),
+    "edge function must consult backend publication readiness",
+  );
+  assertSource(
+    edgeFunctionSource.includes("typeof heating === \"boolean\"") &&
+      edgeFunctionSource.includes("isValidReadyDecision") &&
+      edgeFunctionSource.includes("publicationReadiness.ok"),
+    "edge function must require known relay status, valid ready optimizer result, automatic mode and complete settings before publishing",
   );
   assertSource(
     edgeFunctionSource.includes("if (hasChangedPlans && canPublishPlan && decision.status === \"ready\")"),
@@ -67,6 +88,11 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   assertSource(
     edgeFunctionSource.includes("p_changed_plans: decision.changedPlans"),
     "edge function must pass only duplicate-suppressed changedPlans to the publication RPC",
+  );
+  assertSource(
+    edgeFunctionSource.includes("p_validated_plan_at: canValidateNoChanges ? now.toISOString() : null") &&
+      edgeFunctionSource.includes(") && publicationReadiness.ok"),
+    "no_changes must not validate/mark healthy unless settings and control mode are publication-ready",
   );
   assertSource(
     edgeFunctionSource.includes("p_last_outcome: \"publication_failed\"") &&

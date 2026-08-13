@@ -140,10 +140,14 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     top_temp: 40,
   };
   const settingsRow: RawHeatingControlSettingsRow = {
+    automatic_max_heating_hours: 5,
     full_tank_average_temperature: 70,
     full_tank_showers: 6,
+    heating_gain_source: "learned",
+    heating_need_mode: "automatic",
     max_tank_temperature: 70,
     min_tank_temperature: 10,
+    safety_shower_reserve: 2,
     target_shower_reserve: 4,
   };
   // UTC hours here are all treated as if they were the price API's own
@@ -172,6 +176,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const run = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: {},
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -203,6 +208,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const run = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: {},
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -417,6 +423,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const backendRun = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: dropProfile.hourlyDrops,
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -463,6 +470,81 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     "must report the newest fetched_at among the rows, ignoring rows without one",
   );
   assertEqual(latestPriceFetchedAt([]), null, "no price rows means no fetched_at to report");
+
+  // Backend-primary publication must only use settings genuinely present in
+  // heating_control_settings, and only while the user mode is automatic.
+  {
+    const automaticResolution = resolveOptimizerSettings(settingsRow);
+    assertEqual(
+      automaticResolution.publicationReadiness,
+      { ok: true, reason: null },
+      "automatic mode with every optimizer setting present is publication-ready",
+    );
+    assertEqual(
+      automaticResolution.settingsSource,
+      "heating_control_settings",
+      "complete settings must not be reported as defaults-backed",
+    );
+    assertEqual(
+      automaticResolution.settings.automaticMaxHeatingHours,
+      5,
+      "backend must use the user's Supabase automaticMaxHeatingHours value, not defaultSettings",
+    );
+    assertEqual(
+      automaticResolution.settings.safetyShowerReserve,
+      2,
+      "backend must use the user's Supabase safetyShowerReserve value",
+    );
+
+    const fixedResolution = resolveOptimizerSettings({
+      ...settingsRow,
+      heating_need_mode: "fixed",
+    });
+    assertEqual(
+      fixedResolution.publicationReadiness,
+      { ok: false, reason: "control_mode_not_automatic" },
+      "fixed mode must block backend-primary publication even when changedPlans exist",
+    );
+    assertEqual(
+      fixedResolution.settingsSource,
+      "heating_control_settings",
+      "fixed mode with complete settings is blocked by mode, not by defaults",
+    );
+
+    for (const [field, row] of [
+      [
+        "automaticMaxHeatingHours",
+        { ...settingsRow, automatic_max_heating_hours: null },
+      ],
+      ["safetyShowerReserve", { ...settingsRow, safety_shower_reserve: null }],
+      ["heatingGainSource", { ...settingsRow, heating_gain_source: null }],
+    ] as const) {
+      const resolution = resolveOptimizerSettings(row);
+      assertEqual(
+        resolution.publicationReadiness,
+        { ok: false, reason: "settings_incomplete" },
+        `${field} missing must block publication`,
+      );
+      assertEqual(
+        resolution.settingsSource,
+        "heating_control_settings+defaults",
+        `${field} missing must not be reported as publication-ready settings_source`,
+      );
+    }
+
+    for (const row of [
+      null,
+      { ...settingsRow, heating_need_mode: null },
+      { ...settingsRow, heating_need_mode: "manual" },
+    ]) {
+      const resolution = resolveOptimizerSettings(row);
+      assertEqual(
+        resolution.publicationReadiness.ok,
+        false,
+        "missing/unknown/invalid control mode must fail safe",
+      );
+    }
+  }
 
   // buildStoredPlansMap / buildShadowRunRow: sanity-check the shadow row
   // shape and the app-vs-backend match/mismatch comparison.

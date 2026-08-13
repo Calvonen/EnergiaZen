@@ -110,10 +110,14 @@ const flatHourlyDrops: HourlyTemperatureDropProfile = Object.fromEntries(
 );
 
 const settingsRow: RawHeatingControlSettingsRow = {
+  automatic_max_heating_hours: 3,
   full_tank_average_temperature: 70,
   full_tank_showers: 6,
+  heating_gain_source: "learned",
+  heating_need_mode: "automatic",
   max_tank_temperature: 70,
   min_tank_temperature: 10,
+  safety_shower_reserve: 2,
   target_shower_reserve: 4,
 };
 
@@ -226,7 +230,7 @@ export function runOneBackendTick(input: BackendTickInput): BackendTickResult {
     priceHoursCount: hours.length,
   });
 
-  const { settings } = resolveOptimizerSettings(settingsRow);
+  const { heatingGainSource, settings } = resolveOptimizerSettings(settingsRow);
   const optimizationSettings = createHeatingOptimizationSettings(
     settings,
     fallbackHeatingGainPerHour,
@@ -235,6 +239,7 @@ export function runOneBackendTick(input: BackendTickInput): BackendTickResult {
   const run = runBackendHeatingOptimization({
     heatingGainHistory: [],
     hourlyDrops: flatHourlyDrops,
+    heatingGainSource,
     hours,
     isCurrentlyHeating: input.isCurrentlyHeating,
     latestReading: input.latestReading,

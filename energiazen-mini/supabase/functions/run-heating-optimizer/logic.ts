@@ -66,10 +66,14 @@ export type RawTankReading = {
 };
 
 export type RawHeatingControlSettingsRow = {
+  automatic_max_heating_hours: number | null;
   full_tank_average_temperature: number | null;
   full_tank_showers: number | null;
+  heating_gain_source: string | null;
+  heating_need_mode: string | null;
   max_tank_temperature: number | null;
   min_tank_temperature: number | null;
+  safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
 };
 
@@ -129,39 +133,86 @@ export function canMarkHeatingPlanValidated(
   return typeof heating === "boolean" && isValidReadyDecision && !hasTodayChanges;
 }
 
-// automaticMaxHeatingHours and safetyShowerReserve are settings the
-// optimizer needs that heating_control_settings does not (currently) carry
-// - see the shadow-mode PR report for why. Both fall back to
-// defaultSettings below, and settingsSource records that so shadow rows
-// stay honest about it rather than silently pretending parity.
+export type BackendPublicationReadiness =
+  | { ok: true; reason: null }
+  | {
+      ok: false;
+      reason:
+        | "control_mode_not_automatic"
+        | "control_mode_missing"
+        | "control_mode_invalid"
+        | "settings_missing"
+        | "settings_incomplete";
+    };
+
 export type OptimizerSettingsResolution = {
+  heatingGainSource: "learned" | "fixed";
+  heatingNeedMode: "automatic" | "fixed" | null;
+  publicationReadiness: BackendPublicationReadiness;
   settings: HeatingOptimizationSettingsSource;
-  settingsSource: "heating_control_settings+defaults" | "defaults_only";
+  settingsSource: "heating_control_settings" | "heating_control_settings+defaults" | "defaults_only";
 };
 
 export function resolveOptimizerSettings(
   row: RawHeatingControlSettingsRow | null,
 ): OptimizerSettingsResolution {
+  const missingRequiredSettings =
+    !row ||
+    !Number.isFinite(row.automatic_max_heating_hours) ||
+    !Number.isFinite(row.full_tank_average_temperature) ||
+    !Number.isFinite(row.full_tank_showers) ||
+    !Number.isFinite(row.max_tank_temperature) ||
+    !Number.isFinite(row.min_tank_temperature) ||
+    !Number.isFinite(row.safety_shower_reserve) ||
+    !Number.isFinite(row.target_shower_reserve) ||
+    (row.heating_gain_source !== "learned" && row.heating_gain_source !== "fixed");
+  const heatingNeedMode =
+    row?.heating_need_mode === "automatic" || row?.heating_need_mode === "fixed"
+      ? row.heating_need_mode
+      : null;
+  const heatingGainSource =
+    row?.heating_gain_source === "fixed" ? "fixed" : defaultSettings.heatingGainSource;
   const settings: HeatingOptimizationSettingsSource = {
-    automaticMaxHeatingHours: defaultSettings.automaticMaxHeatingHours,
+    automaticMaxHeatingHours:
+      row?.automatic_max_heating_hours ?? defaultSettings.automaticMaxHeatingHours,
     fullTankAverageTemperature:
       row?.full_tank_average_temperature ?? defaultSettings.fullTankAverageTemperature,
     fullTankShowers: row?.full_tank_showers ?? defaultSettings.fullTankShowers,
     maxTankTemperature: row?.max_tank_temperature ?? defaultSettings.maxTankTemperature,
     minTankTemperature: row?.min_tank_temperature ?? defaultSettings.minTankTemperature,
-    safetyShowerReserve: defaultSettings.safetyShowerReserve,
+    safetyShowerReserve:
+      row?.safety_shower_reserve ?? defaultSettings.safetyShowerReserve,
     targetShowerReserve: row?.target_shower_reserve ?? defaultSettings.targetShowerReserve,
   };
+  const publicationReadiness: BackendPublicationReadiness = (() => {
+    if (!row) {
+      return { ok: false, reason: "settings_missing" };
+    }
+    if (row.heating_need_mode === null) {
+      return { ok: false, reason: "control_mode_missing" };
+    }
+    if (row.heating_need_mode !== "automatic" && row.heating_need_mode !== "fixed") {
+      return { ok: false, reason: "control_mode_invalid" };
+    }
+    if (row.heating_need_mode !== "automatic") {
+      return { ok: false, reason: "control_mode_not_automatic" };
+    }
+    if (missingRequiredSettings) {
+      return { ok: false, reason: "settings_incomplete" };
+    }
+    return { ok: true, reason: null };
+  })();
 
   return {
+    heatingGainSource,
+    heatingNeedMode,
+    publicationReadiness,
     settings,
-    // automaticMaxHeatingHours and safetyShowerReserve always come from
-    // defaultSettings today - heating_control_settings does not carry them
-    // (see the shadow-mode PR report). The remaining fields come from the
-    // row when one exists, defaultSettings otherwise.
-    settingsSource: row
-      ? "heating_control_settings+defaults"
-      : "defaults_only",
+    settingsSource: !row
+      ? "defaults_only"
+      : missingRequiredSettings
+        ? "heating_control_settings+defaults"
+        : "heating_control_settings",
   };
 }
 
@@ -327,6 +378,7 @@ export function runBackendHeatingOptimization({
   heatingGainHistory,
   hourlyDrops,
   hours,
+  heatingGainSource,
   isCurrentlyHeating,
   latestReading,
   now,
@@ -335,6 +387,7 @@ export function runBackendHeatingOptimization({
   heatingGainHistory: TankTemperatureReading[];
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  heatingGainSource: "learned" | "fixed";
   isCurrentlyHeating: boolean;
   latestReading: RawTankReading | null;
   now: Date;
@@ -381,6 +434,8 @@ export function runBackendHeatingOptimization({
     currentWeightedTemperature,
     hourlyDrops,
     hours: materializedHours,
+    heatingGainPerHour:
+      heatingGainSource === "fixed" ? settings.fallbackHeatingGainPerHour : undefined,
     isCurrentlyHeating,
     recoveryDropEnabled: false,
     settings,

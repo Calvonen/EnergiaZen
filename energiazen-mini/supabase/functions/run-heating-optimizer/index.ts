@@ -199,7 +199,7 @@ Deno.serve(async (request) => {
       supabase
         .from("heating_control_settings")
         .select(
-          "full_tank_average_temperature,full_tank_showers,max_tank_temperature,min_tank_temperature,target_shower_reserve",
+          "automatic_max_heating_hours,full_tank_average_temperature,full_tank_showers,heating_gain_source,heating_need_mode,max_tank_temperature,min_tank_temperature,safety_shower_reserve,target_shower_reserve",
         )
         .eq("id", 1)
         .maybeSingle(),
@@ -293,8 +293,12 @@ Deno.serve(async (request) => {
     const heatingPlanRows = (heatingPlansResult.data ?? []) as RawHeatingPlanRow[];
     const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;
 
-    const { settings: optimizerSettingsSource, settingsSource } =
-      resolveOptimizerSettings(settingsRow);
+    const {
+      heatingGainSource,
+      publicationReadiness,
+      settings: optimizerSettingsSource,
+      settingsSource,
+    } = resolveOptimizerSettings(settingsRow);
     const optimizationSettings = createHeatingOptimizationSettings(
       optimizerSettingsSource,
       fallbackHeatingGainPerHour,
@@ -309,6 +313,7 @@ Deno.serve(async (request) => {
     const run = runBackendHeatingOptimization({
       heatingGainHistory: gainHistory,
       hourlyDrops: dropProfile.hourlyDrops,
+      heatingGainSource,
       hours,
       isCurrentlyHeating: heating === true,
       latestReading,
@@ -383,9 +388,12 @@ Deno.serve(async (request) => {
       heating,
       isValidReadyDecision,
       todayChanged,
-    );
+    ) && publicationReadiness.ok;
     const hasChangedPlans = decision.status === "ready" && decision.changedPlans.length > 0;
-    const canPublishPlan = typeof heating === "boolean" && isValidReadyDecision;
+    const canPublishPlan =
+      typeof heating === "boolean" &&
+      isValidReadyDecision &&
+      publicationReadiness.ok;
     const invalidOutcome = canValidateNoChanges
       ? "no_changes"
       : typeof heating !== "boolean"
@@ -474,7 +482,11 @@ Deno.serve(async (request) => {
             p_health_status: canValidateNoChanges ? "healthy" : "unhealthy",
             p_last_outcome: outcome,
             p_reason:
-              typeof heating === "boolean" ? shadowRow.reason : "relay_status_unknown",
+              typeof heating !== "boolean"
+                ? "relay_status_unknown"
+                : publicationReadiness.ok
+                  ? shadowRow.reason
+                  : publicationReadiness.reason,
             p_run_id: runId,
             p_run_started_at: runStartedAt,
             p_validated_plan_at: canValidateNoChanges ? now.toISOString() : null,
@@ -505,8 +517,10 @@ Deno.serve(async (request) => {
       heartbeat_status: heartbeatCommitted ? "committed" : "superseded",
       last_outcome: outcome,
       planned_hours_match: shadowRow.planned_hours_match,
+      publication_ready: publicationReadiness.ok,
+      publication_ready_reason: publicationReadiness.reason,
       published_plan_count: publishedPlanCount,
-      reason: shadowRow.reason,
+      reason: publicationReadiness.ok ? shadowRow.reason : publicationReadiness.reason,
       settings_source: settingsSource,
       today_plan_date: todayPlanDate,
       today_planned_hours: shadowRow.today_planned_hours,
