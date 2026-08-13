@@ -1,15 +1,19 @@
 import {
+  buildHeatingPlanFingerprint,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
+  canMarkHeatingPlanValidated,
   checkOptimizerReadiness,
   createHeatingOptimizationSettings,
   getDateKeyOffset,
+  getHelsinkiDateStart,
   latestPriceFetchedAt,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
   runBackendHeatingOptimization,
+  wasHeartbeatCompareAndSetCommitted,
   type HeatingPlanPublicationDecision,
   type RawElectricityPriceRow,
   type RawHeatingControlSettingsRow,
@@ -50,13 +54,80 @@ function priceRowsForDay(
     const startsAt = `${dateKey}T${String(hour).padStart(2, "0")}:00:00.000Z`;
     const endsAt = new Date(new Date(startsAt).getTime() + 60 * 60 * 1000).toISOString();
 
-    rows.push({ ends_at: endsAt, spot_price_cents_kwh: priceCentsPerKwh, starts_at: startsAt });
+    rows.push({ ends_at: endsAt, resolution_minutes: 60, spot_price_cents_kwh: priceCentsPerKwh, starts_at: startsAt });
   }
 
   return rows;
 }
 
+function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
+  const rows: RawElectricityPriceRow[] = [];
+  for (let cursor = start.getTime(); cursor < end.getTime(); cursor += 60 * 60 * 1000) {
+    rows.push({
+      ends_at: new Date(cursor + 60 * 60 * 1000).toISOString(),
+      resolution_minutes: 60,
+      spot_price_cents_kwh: 4,
+      starts_at: new Date(cursor).toISOString(),
+    });
+  }
+  return rows;
+}
+
 export function runRunHeatingOptimizerLogicUnitTests() {
+  assertEqual(
+    canMarkHeatingPlanValidated(true, true, false),
+    true,
+    "known heating=true may validate an otherwise valid unchanged plan",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, false),
+    true,
+    "known heating=false may validate an otherwise valid unchanged plan",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, true),
+    false,
+    "a changed today plan must remain unvalidated",
+  );
+  assertEqual(
+    canMarkHeatingPlanValidated(false, true, false),
+    true,
+    "unchanged today remains valid independently of optional tomorrow changes",
+  );
+  const optionalTomorrowChange = { plan_date: "2026-08-13" };
+  assertEqual(
+    canMarkHeatingPlanValidated(
+      false,
+      true,
+      [optionalTomorrowChange].some((plan) => plan.plan_date === "2026-08-12"),
+    ),
+    true,
+    "a tomorrow-only draft change must not block today's healthy validation",
+  );
+  assertEqual(
+    buildHeatingPlanFingerprint("2026-08-12", [2, 5]),
+    "2026-08-12|2,5",
+    "today validation fingerprints only the stored today plan identity",
+  );
+  for (const unknownHeating of [null, undefined]) {
+    assertEqual(
+      canMarkHeatingPlanValidated(unknownHeating, true, true),
+      false,
+      "unknown relay status must never be treated as false for heartbeat validation",
+    );
+  }
+  assertEqual(
+    wasHeartbeatCompareAndSetCommitted(true),
+    true,
+    "literal true is the only committed heartbeat RPC result",
+  );
+  for (const lostOwnershipResult of [false, null, undefined, "true", 1]) {
+    assertEqual(
+      wasHeartbeatCompareAndSetCommitted(lostOwnershipResult),
+      false,
+      "false or malformed RPC data must never look heartbeat-committed",
+    );
+  }
   // Fixed instant used across the fixtures below: 2026-08-12T11:30:00Z is
   // 14:30 in Helsinki (EEST, UTC+3) in August.
   const now = new Date("2026-08-12T11:30:00.000Z");
@@ -81,7 +152,10 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   // about which literal UTC hour they carry, so plain UTC fixture rows are
   // fine as long as their Helsinki date key matches the intended day.
   const todayPrices = priceRowsForDay(todayPlanDate, 11, 20, 5); // 11:00Z.. = 14:00 Helsinki onward
-  const tomorrowPrices = priceRowsForDay(tomorrowPlanDate, 0, 20, 3);
+  const tomorrowPrices = [
+    ...priceRowsForDay(todayPlanDate, 21, 23, 3),
+    ...priceRowsForDay(tomorrowPlanDate, 0, 20, 3),
+  ];
 
   // 1. Full tomorrow prices + fresh tank reading -> backend optimizer
   // produces a plan (readiness ok, a HeatingOptimizationResult comes back).
@@ -173,9 +247,126 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const readiness = checkOptimizerReadiness({
       latestReading: staleReading,
       now,
-      priceHoursCount: 5,
+      priceHours: buildOptimizerHours(todayPrices, now, todayPlanDate, tomorrowPlanDate),
     });
     assertEqual(readiness, { ok: false, reason: "stale_tank_reading" }, "a 6h-old reading must be rejected as stale");
+  }
+
+  // Present but stale or holey price rows are not usable coverage.
+  {
+    const stalePrices = priceRowsForDay(todayPlanDate, 0, 5, 1);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: buildOptimizerHours(stalePrices, now, todayPlanDate, tomorrowPlanDate) }),
+      { ok: false, reason: "no_price_hours_available" },
+      "rows that end before now must not make the optimizer ready",
+    );
+    const holeyHours = buildOptimizerHours(todayPrices, now, todayPlanDate, tomorrowPlanDate).filter((_hour, index) => index !== 2);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: holeyHours }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "a gap in present prices must fail readiness",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: buildOptimizerHours([...todayPrices, ...tomorrowPrices], now, todayPlanDate, tomorrowPlanDate) }),
+      { ok: true },
+      "contiguous coverage retains existing ready behavior",
+    );
+    const completeTodayHours = buildOptimizerHours(
+      todayPrices,
+      now,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
+    const quarterHourRows = priceRowsBetween(
+      new Date("2026-08-12T11:00:00.000Z"),
+      new Date("2026-08-12T13:00:00.000Z"),
+    ).flatMap((row) => {
+      const start = new Date(row.starts_at).getTime();
+      return [0, 15, 30, 45].map((offsetMinutes) => ({
+        ...row,
+        ends_at: new Date(start + (offsetMinutes + 15) * 60 * 1000).toISOString(),
+        resolution_minutes: 15,
+        starts_at: new Date(start + offsetMinutes * 60 * 1000).toISOString(),
+      }));
+    });
+    assertEqual(
+      buildOptimizerHours(
+        [...todayPrices, ...quarterHourRows],
+        now,
+        todayPlanDate,
+        tomorrowPlanDate,
+      ).length,
+      completeTodayHours.length,
+      "mixed 15-minute rows must not disturb supported 60-minute optimizer input",
+    );
+    assertEqual(
+      buildOptimizerHours(quarterHourRows, now, todayPlanDate, tomorrowPlanDate),
+      [],
+      "15-minute-only prices must leave the hourly optimizer not ready",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours }),
+      { ok: true },
+      "complete remaining today coverage is ready without tomorrow prices",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours.slice(0, 4) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "a truncated current-plus-few-hours window must not be ready",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours.slice(0, -1) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "missing the final hour before local day end must not be ready",
+    );
+    const validHours = buildOptimizerHours([...todayPrices, ...tomorrowPrices], now, todayPlanDate, tomorrowPlanDate);
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: [validHours[0], validHours[0], ...validHours.slice(1)] }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "duplicate price rows must invalidate coverage",
+    );
+    const overlappingHours = validHours.map((hour) => ({ ...hour }));
+    overlappingHours[1] = { ...overlappingHours[1], date: new Date(overlappingHours[1].date.getTime() - 30 * 60 * 1000) };
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: overlappingHours }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "overlapping price intervals must invalidate coverage",
+    );
+    assertEqual(buildHeatingPlanFingerprint("2026-08-13", [5, 2, 5]), "2026-08-13|2,5", "plan fingerprint normalizes and sorts hours");
+  }
+
+  // Helsinki day-end coverage uses actual IANA-zone midnights. The spring
+  // transition day is 23 real hours and the autumn transition day is 25.
+  for (const fixture of [
+    { dateKey: "2026-03-29", expectedHours: 23 },
+    { dateKey: "2026-10-25", expectedHours: 25 },
+  ]) {
+    const dayStart = getHelsinkiDateStart(fixture.dateKey);
+    const nextDateKey = getDateKeyOffset(1, new Date(dayStart.getTime() + 12 * 60 * 60 * 1000));
+    const dayEnd = getHelsinkiDateStart(nextDateKey);
+    assertEqual(
+      (dayEnd.getTime() - dayStart.getTime()) / (60 * 60 * 1000),
+      fixture.expectedHours,
+      "DST fixture must have its real Helsinki day length",
+    );
+    const dstNow = new Date(dayStart.getTime() + 30 * 60 * 1000);
+    const dstReading = { ...freshReading, created_at: dstNow.toISOString() };
+    const dstHours = buildOptimizerHours(
+      priceRowsBetween(dayStart, dayEnd),
+      dstNow,
+      fixture.dateKey,
+      nextDateKey,
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: dstReading, now: dstNow, priceHours: dstHours }),
+      { ok: true },
+      "full DST-day remainder must reach the actual next Helsinki midnight",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: dstReading, now: dstNow, priceHours: dstHours.slice(0, -1) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "truncated DST-day remainder must fail coverage",
+    );
   }
 
   // 4. Heating status unknown -> the publication decision defers rather
@@ -264,9 +455,9 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   // independent of how far into the future its rows happen to reach.
   assertEqual(
     latestPriceFetchedAt([
-      { ends_at: "x", fetched_at: "2026-08-12T09:00:00.000Z", spot_price_cents_kwh: 1, starts_at: "a" },
-      { ends_at: "x", fetched_at: "2026-08-12T13:10:00.000Z", spot_price_cents_kwh: 1, starts_at: "b" },
-      { ends_at: "x", fetched_at: null, spot_price_cents_kwh: 1, starts_at: "c" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: "2026-08-12T09:00:00.000Z", spot_price_cents_kwh: 1, starts_at: "a" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: "2026-08-12T13:10:00.000Z", spot_price_cents_kwh: 1, starts_at: "b" },
+      { ends_at: "x", resolution_minutes: 60, fetched_at: null, spot_price_cents_kwh: 1, starts_at: "c" },
     ]),
     "2026-08-12T13:10:00.000Z",
     "must report the newest fetched_at among the rows, ignoring rows without one",

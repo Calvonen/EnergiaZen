@@ -53,6 +53,7 @@ import { defaultSettings } from "../_shared/settingsDefaults.ts";
 import {
   getDateKeyOffset,
   getFinnishDateKey,
+  getHelsinkiDateStart,
   getHelsinkiHourNumber,
 } from "../_shared/heatingLogic.ts";
 import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain.ts";
@@ -75,6 +76,7 @@ export type RawHeatingControlSettingsRow = {
 export type RawElectricityPriceRow = {
   ends_at: string;
   fetched_at?: string | null;
+  resolution_minutes: number;
   spot_price_cents_kwh: number;
   starts_at: string;
 };
@@ -98,6 +100,34 @@ export type RawHeatingPlanRow = {
   planned_hours: unknown;
   target_hours?: number | null;
 };
+
+// Cross-runtime plan identity used by the backend heartbeat and Shelly.
+// Keeping the canonical representation deliberately simple avoids requiring
+// a crypto implementation on the constrained Shelly runtime.
+export function buildHeatingPlanFingerprint(
+  planDate: string,
+  plannedHours: unknown,
+): string | null {
+  const hours = normalizePlanHoursForComparison(plannedHours);
+  return /^\d{4}-\d{2}-\d{2}$/.test(planDate) && hours
+    ? `${planDate}|${hours.join(",")}`
+    : null;
+}
+
+// Supabase RPC returns the PL/pgSQL boolean as `data`. Only literal true
+// means the compare-and-set was committed; false/null/any unexpected shape
+// must never be reported as a successful heartbeat ownership operation.
+export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true {
+  return data === true;
+}
+
+export function canMarkHeatingPlanValidated(
+  heating: unknown,
+  isValidReadyDecision: boolean,
+  hasTodayChanges: boolean,
+): boolean {
+  return typeof heating === "boolean" && isValidReadyDecision && !hasTodayChanges;
+}
 
 // automaticMaxHeatingHours and safetyShowerReserve are settings the
 // optimizer needs that heating_control_settings does not (currently) carry
@@ -144,6 +174,7 @@ export function buildOptimizerHours(
   tomorrowPlanDate: string,
 ): HeatingOptimizationHour[] {
   return prices
+    .filter((price) => price.resolution_minutes === 60)
     .map((price) => {
       const date = new Date(price.starts_at);
       const endDate = new Date(price.ends_at);
@@ -177,7 +208,8 @@ export type OptimizerReadinessCheck =
         | "missing_tank_reading"
         | "incomplete_tank_reading"
         | "stale_tank_reading"
-        | "no_price_hours_available";
+        | "no_price_hours_available"
+        | "incomplete_price_coverage";
     };
 
 // Same gating as shouldRunHeatingOptimization, split into individual
@@ -185,11 +217,14 @@ export type OptimizerReadinessCheck =
 export function checkOptimizerReadiness({
   latestReading,
   now,
+  priceHours,
   priceHoursCount,
 }: {
   latestReading: RawTankReading | null;
   now: Date;
-  priceHoursCount: number;
+  priceHours?: HeatingOptimizationHour[];
+  /** Simulator compatibility; production passes priceHours for coverage validation. */
+  priceHoursCount?: number;
 }): OptimizerReadinessCheck {
   if (!latestReading) {
     return { ok: false, reason: "missing_tank_reading" };
@@ -203,8 +238,45 @@ export function checkOptimizerReadiness({
   if (!isTankReadingFreshForCalculation(latestReading.created_at, now)) {
     return { ok: false, reason: "stale_tank_reading" };
   }
-  if (priceHoursCount === 0) {
+  const availableCount = priceHours?.length ?? priceHoursCount ?? 0;
+  if (availableCount === 0) {
     return { ok: false, reason: "no_price_hours_available" };
+  }
+
+  if (!priceHours) return { ok: true };
+
+  // Freshness is coverage-based rather than an arbitrary fetched_at age:
+  // the first usable interval must cover `now`, and every interval in the
+  // window actually handed to the optimizer must be contiguous. Thus old
+  // rows, a missing current hour, and holes in otherwise-present rows all
+  // fail closed without changing optimizer math or hour selection.
+  const sorted = [...priceHours].sort(
+    (first, second) => first.date.getTime() - second.date.getTime(),
+  );
+  if (
+    sorted[0].date.getTime() > now.getTime() ||
+    sorted[0].endDate.getTime() <= now.getTime()
+  ) {
+    return { ok: false, reason: "incomplete_price_coverage" };
+  }
+  for (let index = 0; index < sorted.length; index += 1) {
+    const hour = sorted[index];
+    if (
+      !Number.isFinite(hour.date.getTime()) ||
+      !Number.isFinite(hour.endDate.getTime()) ||
+      hour.endDate.getTime() - hour.date.getTime() !== 60 * 60 * 1000 ||
+      (index > 0 && sorted[index - 1].endDate.getTime() !== hour.date.getTime())
+    ) {
+      return { ok: false, reason: "incomplete_price_coverage" };
+    }
+  }
+
+  // Tomorrow is optional, but today's remaining local hours are not. Resolve
+  // next Helsinki midnight through the shared IANA-time-zone helper; DST days
+  // can contain 23 or 25 real hours and must not use a fixed 24-hour offset.
+  const nextHelsinkiMidnight = getHelsinkiDateStart(getDateKeyOffset(1, now));
+  if (sorted[sorted.length - 1].endDate.getTime() < nextHelsinkiMidnight.getTime()) {
+    return { ok: false, reason: "incomplete_price_coverage" };
   }
 
   return { ok: true };
@@ -271,7 +343,7 @@ export function runBackendHeatingOptimization({
   const readiness = checkOptimizerReadiness({
     latestReading,
     now,
-    priceHoursCount: hours.length,
+    priceHours: hours,
   });
 
   if (!readiness.ok || !latestReading) {
@@ -444,6 +516,7 @@ export {
   fetchLatestTemperatureDropProfile,
   getDateKeyOffset,
   getFinnishDateKey,
+  getHelsinkiDateStart,
   getHelsinkiHourNumber,
 };
 export type { HeatingPlanPublicationDecision, TankTemperatureReading };

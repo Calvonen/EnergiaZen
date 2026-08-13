@@ -19,9 +19,11 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
   buildHeatingPlanPublicationDecision,
+  buildHeatingPlanFingerprint,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
+  canMarkHeatingPlanValidated,
   computeNextUnknownHeatingAnchor,
   createHeatingOptimizationSettings,
   fallbackHeatingGainPerHour,
@@ -39,6 +41,7 @@ import {
   type RawHeatingPlanRow,
   type RawTankReading,
   type TankTemperatureReading,
+  wasHeartbeatCompareAndSetCommitted,
 } from "./logic.ts";
 
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
@@ -55,6 +58,8 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
+  let completeRunError: ((reason: string) => Promise<void>) | null = null;
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -70,6 +75,69 @@ Deno.serve(async (request) => {
     });
 
     const now = new Date();
+    const runId = crypto.randomUUID();
+    const runStartedAt = now.toISOString();
+
+    // A crash before this write (or pg_cron never invoking the function)
+    // cannot self-report. A persisted "running" state is intentionally
+    // unhealthy, so a crash after this point fails safe on the Shelly.
+    const { data: beginHeartbeatCommitted, error: beginHeartbeatError } = await supabase.rpc(
+      "begin_backend_heating_optimizer_run",
+      { p_run_id: runId, p_run_started_at: runStartedAt },
+    );
+    if (beginHeartbeatError) {
+      throw new Error(`Failed to begin optimizer heartbeat: ${beginHeartbeatError.message}`);
+    }
+    if (!wasHeartbeatCompareAndSetCommitted(beginHeartbeatCommitted)) {
+      console.warn(
+        "run-heating-optimizer: run superseded before begin; optimizer pipeline skipped",
+        { run_id: runId, run_started_at: runStartedAt },
+      );
+      return jsonResponse(
+        {
+          heartbeat_committed: false,
+          reason: "heartbeat_begin_superseded",
+          run_id: runId,
+          status: "superseded",
+          wrote_to_heating_plans: false,
+        },
+        409,
+      );
+    }
+    completeRunError = async (reason: string) => {
+      try {
+        const { data, error } = await supabase.rpc(
+          "complete_backend_heating_optimizer_run",
+          {
+            p_health_status: "unhealthy",
+            p_last_outcome: "run_error",
+            p_reason: reason,
+            p_run_id: runId,
+            p_run_started_at: runStartedAt,
+            p_validated_plan_at: null,
+            p_validated_plan_date: null,
+            p_validated_plan_fingerprint: null,
+            p_validated_planned_hours: null,
+          },
+        );
+        if (error) {
+          console.error(
+            "run-heating-optimizer: failed to persist run_error heartbeat",
+            { heartbeat_error: error.message, reason, run_id: runId },
+          );
+        } else if (!wasHeartbeatCompareAndSetCommitted(data)) {
+          console.warn(
+            "run-heating-optimizer: run_error heartbeat superseded; newer run state preserved",
+            { reason, run_id: runId, run_started_at: runStartedAt },
+          );
+        }
+      } catch (heartbeatError) {
+        console.error(
+          "run-heating-optimizer: run_error heartbeat threw; original error preserved",
+          { heartbeat_error: heartbeatError, reason, run_id: runId },
+        );
+      }
+    };
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
     // across DST transitions (spring-forward/fall-back days are 23h/25h
@@ -147,8 +215,9 @@ Deno.serve(async (request) => {
       }),
       supabase
         .from("electricity_prices")
-        .select("starts_at,ends_at,spot_price_cents_kwh,fetched_at")
+        .select("starts_at,ends_at,spot_price_cents_kwh,fetched_at,resolution_minutes")
         .eq("region", electricityPriceRegion)
+        .eq("resolution_minutes", 60)
         .gte("starts_at", priceWindowStartIso)
         .order("starts_at", { ascending: true }),
       supabase
@@ -162,24 +231,36 @@ Deno.serve(async (request) => {
     ]);
 
     if (latestReadingResult.error) {
+      await completeRunError(
+        `Failed to fetch latest tank reading: ${latestReadingResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch latest tank reading", message: latestReadingResult.error.message },
         502,
       );
     }
     if (settingsResult.error) {
+      await completeRunError(
+        `Failed to fetch heating_control_settings: ${settingsResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch heating_control_settings", message: settingsResult.error.message },
         502,
       );
     }
     if (priceResult.error) {
+      await completeRunError(
+        `Failed to fetch electricity_prices: ${priceResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch electricity_prices", message: priceResult.error.message },
         502,
       );
     }
     if (heatingPlansResult.error) {
+      await completeRunError(
+        `Failed to fetch heating_plans: ${heatingPlansResult.error.message}`,
+      );
       return jsonResponse(
         { error: "Failed to fetch heating_plans", message: heatingPlansResult.error.message },
         502,
@@ -269,14 +350,70 @@ Deno.serve(async (request) => {
         hint: insertError.hint,
         code: insertError.code,
       });
+      await completeRunError(`Failed to save shadow run: ${insertError.message}`);
       return jsonResponse(
         { error: "Failed to save shadow run", message: insertError.message },
         500,
       );
     }
 
+    const isValidReadyDecision =
+      decision.status === "ready" && run.result?.valid === true;
+    const isNoChanges = canMarkHeatingPlanValidated(
+      heating,
+      isValidReadyDecision,
+      decision.status === "ready" &&
+        decision.changedPlans.some((plan) => plan.plan_date === todayPlanDate),
+    );
+    const outcome = isNoChanges
+      ? "no_changes"
+      : typeof heating !== "boolean"
+        ? "deferred"
+        : isValidReadyDecision
+        ? "changes_not_published"
+        : run.result?.valid === false
+          ? "optimizer_invalid"
+          : "deferred";
+
+    const validatedHours =
+      isNoChanges && decision.status === "ready" ? decision.today.planned_hours : null;
+    const validatedFingerprint = validatedHours
+      ? buildHeatingPlanFingerprint(todayPlanDate, validatedHours)
+      : null;
+    // Shadow mode never writes heating_plans, so last_published_at is
+    // deliberately absent and preserved even when a changed valid draft exists.
+    const { data: completeHeartbeatCommitted, error: completeHeartbeatError } = await supabase.rpc(
+      "complete_backend_heating_optimizer_run",
+      {
+        p_health_status: isNoChanges ? "healthy" : "unhealthy",
+        p_last_outcome: outcome,
+        p_reason:
+          typeof heating === "boolean" ? shadowRow.reason : "relay_status_unknown",
+        p_run_id: runId,
+        p_run_started_at: runStartedAt,
+        p_validated_plan_at: isNoChanges ? now.toISOString() : null,
+        p_validated_plan_date: isNoChanges ? todayPlanDate : null,
+        p_validated_plan_fingerprint: validatedFingerprint,
+        p_validated_planned_hours: validatedHours,
+      },
+    );
+    if (completeHeartbeatError) {
+      throw new Error(`Failed to complete optimizer heartbeat: ${completeHeartbeatError.message}`);
+    }
+    const heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(
+      completeHeartbeatCommitted,
+    );
+    if (!heartbeatCommitted) {
+      console.warn(
+        "run-heating-optimizer: run lost heartbeat ownership before completion",
+        { run_id: runId, run_started_at: runStartedAt },
+      );
+    }
+
     return jsonResponse({
       decision: decision.status,
+      heartbeat_committed: heartbeatCommitted,
+      heartbeat_status: heartbeatCommitted ? "committed" : "superseded",
       planned_hours_match: shadowRow.planned_hours_match,
       reason: shadowRow.reason,
       settings_source: settingsSource,
@@ -288,12 +425,16 @@ Deno.serve(async (request) => {
     });
   } catch (error) {
     console.error("run-heating-optimizer failed", error);
+    const reason =
+      error instanceof Error
+        ? error.message
+        : "Unexpected run-heating-optimizer error";
+    if (completeRunError) {
+      await completeRunError(reason);
+    }
     return jsonResponse(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected run-heating-optimizer error",
+        error: reason,
       },
       500,
     );

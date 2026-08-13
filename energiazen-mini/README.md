@@ -420,3 +420,75 @@ select cron.unschedule(jobid)
 from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 ```
+
+### Backend-optimoijan trust-heartbeat (shadow mode)
+
+Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden
+`id = 1` current-state-rivin. Historiataulua ei tarvita Shellyn päätökseen;
+`heating_plan_shadow_runs` säilyttää jo ajokohtaisen diagnostiikan. Erilliset
+`last_run_attempt_at`, `last_validated_plan_at` ja `last_published_at` estävät
+ajoyrityksen, onnistuneen validoinnin ja todellisen kirjoituksen sekoittamisen.
+
+Tunnin välein ajettavalle jobille production trust-raja on 90 minuuttia:
+yksi normaali 60 minuutin ajoväli ja 30 minuutin operatiivinen liikkumavara.
+Kun gate myöhemmin aktivoidaan, Shelly luottaa tämän päivän suunnitelmaan vain,
+kun heartbeat on `healthy`, heartbeatin plan-fingerprint vastaa luettua
+`plan_date` + normalisoitua `planned_hours` -identiteettiä ja
+`last_validated_plan_at` on kelvollinen, enintään 90 minuuttia vanha eikä
+tulevaisuudessa. Muuten se käyttää `backup_hours`-tunteja, jos
+`fallback_enabled = true`; muulloin releohjaus failaa kiinni. Suunnitelman
+`updated_at` ei gatea luottamusta: `no_changes` päivittää validoinnin mutta ei
+julkaisuaikaa.
+
+Shadow mode säilyy: vain validi, tallennettuun suunnitelmaan identtinen
+`no_changes` merkitään terveeksi ja päivittää validointiajan. Muuttunut validi
+tulos merkitään `changes_not_published`/unhealthy, koska tätä luonnosta ei vielä
+kirjoiteta `heating_plans`-tauluun; `last_published_at` ei siis etene tässä
+PR:ssä. Invalidit ja deferred-ajot ovat unhealthy. Hintojen tuoreus perustuu
+käyttökelpoiseen kattavuuteen: ensimmäisen optimizerille annetun tuntivälin on
+katettava nykyhetki ja kaikkien valittuun optimointi-ikkunaan kuuluvien
+hintavälien on oltava valideja, tunnin mittaisia ja aukottomia. Viimeisen välin
+on lisäksi ulotuttava vähintään seuraavaan `Europe/Helsinki`-keskiyöhön asti;
+huomisen hinnat ovat edelleen optionaalisia. Keskiyö ratkaistaan IANA-
+aikavyöhykkeellä, joten DST-päivän todellinen pituus voi olla 23 tai 25 tuntia
+kiinteän 24 tunnin oletuksen sijaan. `fetched_at`-iälle ei aseteta keinotekoista
+rajaa.
+
+Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
+cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
+se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta
+edellisen validoinnin 90 minuutin vanhenemisesta. Käynnistyksen jälkeen jäävä
+`running`-tila on tarkoituksella unhealthy. Erillinen ulkoinen cron/deploy-
+monitorointi tarvitaan edelleen ennen backend-primary-vaihetta.
+
+**Deployment-gate:** `BACKEND_PLAN_TRUST_ENABLED` on Shelly-lähteessä tässä
+shadow-PR:ssä tarkoituksella `false`. Shadow-optimizer voi merkitä terveeksi vain
+`no_changes`-ajon, joten gaten aktivointi nyt voisi ajaa laitteen jatkuvaan
+fallbackiin aina appin julkaisun muututtua. Gate aktivoidaan vasta erillisessä,
+hyväksytyn plan-publication-polun sisältävässä kontrolloidussa Shelly-deployssa;
+tämä PR ei muuta nykyistä tuotanto-ohjausta eikä ota backend-primaryä käyttöön.
+
+Rinnakkaiset ajot omistavat singletonin UUID `current_run_id` +
+`current_run_started_at` -CAS-tokenilla. Uudempi aloitusaika syrjäyttää vanhemman,
+ja lopetus-RPC päivittää rivin vain molempien arvojen täsmätessä. Siksi myöhään
+valmistuva vanha ajo ei voi ylikirjoittaa uudemman ajon tulosta. Onnistunut
+`no_changes` tallentaa lisäksi deterministisen identiteetin muodossa
+`YYYY-MM-DD|h1,h2,...`, jossa tunnit deduplikoidaan ja järjestetään.
+
+RPC:n boolean-paluuarvo on osa CAS-sopimusta: `begin = false` lopettaa
+superseded-ajon ennen optimizer-putkea HTTP 409 -vastauksella, eikä singletonia
+muuteta. `complete = false` säilyttää optimizerin diagnostisen vastauksen mutta
+merkitsee siihen `heartbeat_committed: false` ja `heartbeat_status:
+"superseded"`; vastaus ei siis väitä heartbeat-kirjoituksen onnistuneen.
+Migraation lähdetesti ei aja PL/pgSQL:ää oikeaa PostgreSQL-instanssia vasten,
+joten RPC:iden atomisuus ja oikeudet on validoitava staging-/tuotanto-Supabasessa
+ennen deploymentia.
+
+Kun heartbeat-omistajuus on saatu, pakollisten input-hakujen virheet,
+shadow-rivin tallennusvirhe ja odottamattomat poikkeukset yrittävät aina päättää
+ajon `unhealthy` / `run_error` -tilaan alkuperäisellä virhesyyllä. Jos tämä
+complete-RPC epäonnistuu tai palauttaa `false`, ongelma lokitetaan mutta
+alkuperäistä HTTP-virhettä ei peitetä. `false` tarkoittaa, että uudempi ajo
+omistaa singletonin eikä vanha run_error saa muuttaa sen tilaa. Nykyinen testi
+varmistaa tämän lähdekoodisopimuksena ja TypeScript-omistajuusmallina; se ei
+suorita Edge Functionia ja RPC:tä oikeaa Supabase/PostgreSQL-instanssia vasten.

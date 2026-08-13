@@ -2,11 +2,14 @@ const assert = require("assert");
 const {
   REQUIRED_BLOCKING_READINGS,
   START_HEATING_FILL_RATIO,
+  buildPlanFingerprint,
   calculateCurrentShowers,
   createControllerState,
   createRequestError,
   decideHeating,
+  getHelsinkiParts,
   resolvePlanControl,
+  resolveTrustedPlanControl,
 } = require("./energyzen-controller");
 
 const nowMs = Date.parse("2026-07-26T12:00:00.000Z");
@@ -400,5 +403,30 @@ assert.strictEqual(
   "a missing plan must not activate fallback when fallbackEnabled is off",
 );
 assert.strictEqual(missingPlanFallbackDisabledControl.failSafeReason, "plan-missing");
+
+
+const heartbeatNow = Date.parse("2026-08-13T12:00:00.000Z");
+const todayPlan = [{ plan_date: "2026-08-13", planned_hours: [15], updated_at: "2026-08-10T00:00:00Z" }];
+function trustedControl(heartbeatRows, testSettings = settings) {
+  return resolveTrustedPlanControl(todayPlan, null, heartbeatRows, null, testSettings, "2026-08-13", heartbeatNow);
+}
+const freshHeartbeat = [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00.000Z", validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]) }];
+assert.strictEqual(trustedControl(freshHeartbeat).source, "energyzen", "fresh healthy heartbeat trusts today's plan even when heating_plans.updated_at is old (no_changes)");
+assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-13", planned_hours: [7, 8] }], null, freshHeartbeat, null, settings, "2026-08-13", heartbeatNow).source, "backup", "later changed planned_hours must not inherit trust");
+assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-14", planned_hours: [15] }], null, freshHeartbeat, null, settings, "2026-08-14", heartbeatNow).source, "backup", "a different plan_date must not inherit trust");
+assert.strictEqual(resolveTrustedPlanControl(todayPlan, null, null, createRequestError("heartbeat unavailable", true), settings, "2026-08-13", heartbeatNow).source, "backup", "heartbeat fetch failure falls back");
+assert.strictEqual(trustedControl([{ ...freshHeartbeat[0], validated_plan_fingerprint: "2026-08-13|7,8" }]).source, "backup", "fingerprint mismatch falls back");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "2026-08-13T10:29:59.000Z", validated_plan_fingerprint: "2026-08-13|15" }]).source, "backup", "stale validation falls back");
+assert.strictEqual(trustedControl([]).source, "backup", "missing heartbeat falls back");
+assert.strictEqual(trustedControl([{ health_status: "unhealthy", last_validated_plan_at: "2026-08-13T11:30:00Z", validated_plan_fingerprint: "2026-08-13|15" }]).source, "backup", "unhealthy status falls back");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "not-a-date", validated_plan_fingerprint: "2026-08-13|15" }]).source, "backup", "malformed validation timestamp falls back");
+assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_plan_at: "2026-08-13T12:00:01Z", validated_plan_fingerprint: "2026-08-13|15" }]).source, "backup", "future validation timestamp falls back");
+const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
+assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
+assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T00:30:00Z")), { dateKey: "2026-03-29", hour: 2 });
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T01:30:00Z")), { dateKey: "2026-03-29", hour: 4 });
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-10-25T00:30:00Z")), { dateKey: "2026-10-25", hour: 3 });
+assert.deepStrictEqual(getHelsinkiParts(new Date("2026-10-25T01:30:00Z")), { dateKey: "2026-10-25", hour: 3 }, "both repeated autumn instants retain existing local-hour semantics");
 
 console.log("EnergyZen Shelly controller tests passed");

@@ -145,6 +145,7 @@ function buildPriceRows(
       rows.push({
         ends_at: endsAt.toISOString(),
         fetched_at: startsAt.toISOString(),
+        resolution_minutes: 60,
         spot_price_cents_kwh: priceForHour(dayIndex, hour),
         starts_at: startsAt.toISOString(),
       });
