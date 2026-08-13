@@ -53,6 +53,7 @@ import { defaultSettings } from "../_shared/settingsDefaults.ts";
 import {
   getDateKeyOffset,
   getFinnishDateKey,
+  getHelsinkiDateStart,
   getHelsinkiHourNumber,
 } from "../_shared/heatingLogic.ts";
 import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain.ts";
@@ -258,6 +259,14 @@ export function checkOptimizerReadiness({
     ) {
       return { ok: false, reason: "incomplete_price_coverage" };
     }
+  }
+
+  // Tomorrow is optional, but today's remaining local hours are not. Resolve
+  // next Helsinki midnight through the shared IANA-time-zone helper; DST days
+  // can contain 23 or 25 real hours and must not use a fixed 24-hour offset.
+  const nextHelsinkiMidnight = getHelsinkiDateStart(getDateKeyOffset(1, now));
+  if (sorted[sorted.length - 1].endDate.getTime() < nextHelsinkiMidnight.getTime()) {
+    return { ok: false, reason: "incomplete_price_coverage" };
   }
 
   return { ok: true };
@@ -497,6 +506,7 @@ export {
   fetchLatestTemperatureDropProfile,
   getDateKeyOffset,
   getFinnishDateKey,
+  getHelsinkiDateStart,
   getHelsinkiHourNumber,
 };
 export type { HeatingPlanPublicationDecision, TankTemperatureReading };

@@ -143,6 +143,33 @@ export function getDateKeyOffset(offsetDays: number, date = new Date()): string 
   ].join("-");
 }
 
+/** UTC instant at Helsinki midnight for a YYYY-MM-DD local date key. */
+export function getHelsinkiDateStart(dateKey: string): Date {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const targetTimestamp = Date.UTC(year, month - 1, day);
+  let utcTimestamp = targetTimestamp;
+
+  // Resolve the IANA-zone offset at the target instant rather than assuming
+  // UTC+2/+3 or a 24-hour local day. Iteration also converges across DST days.
+  for (let index = 0; index < 3; index += 1) {
+    const parts = helsinkiDatePartsFormatter.formatToParts(
+      new Date(utcTimestamp),
+    );
+    const value = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const localDateTimestamp = Date.UTC(
+      value("year"),
+      value("month") - 1,
+      value("day"),
+    );
+    const localHour = getHelsinkiHourNumber(new Date(utcTimestamp));
+    utcTimestamp += targetTimestamp -
+      (localDateTimestamp + localHour * 60 * 60 * 1000);
+  }
+
+  return new Date(utcTimestamp);
+}
+
 export function formatHelsinkiDateKey(date: Date) {
   return getFinnishDateKey(date.toISOString());
 }

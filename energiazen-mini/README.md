@@ -447,8 +447,12 @@ kirjoiteta `heating_plans`-tauluun; `last_published_at` ei siis etene tässä
 PR:ssä. Invalidit ja deferred-ajot ovat unhealthy. Hintojen tuoreus perustuu
 käyttökelpoiseen kattavuuteen: ensimmäisen optimizerille annetun tuntivälin on
 katettava nykyhetki ja kaikkien valittuun optimointi-ikkunaan kuuluvien
-hintavälien on oltava valideja, tunnin mittaisia ja aukottomia. `fetched_at`-iälle
-ei aseteta keinotekoista rajaa.
+hintavälien on oltava valideja, tunnin mittaisia ja aukottomia. Viimeisen välin
+on lisäksi ulotuttava vähintään seuraavaan `Europe/Helsinki`-keskiyöhön asti;
+huomisen hinnat ovat edelleen optionaalisia. Keskiyö ratkaistaan IANA-
+aikavyöhykkeellä, joten DST-päivän todellinen pituus voi olla 23 tai 25 tuntia
+kiinteän 24 tunnin oletuksen sijaan. `fetched_at`-iälle ei aseteta keinotekoista
+rajaa.
 
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,

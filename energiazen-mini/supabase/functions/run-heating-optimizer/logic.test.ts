@@ -7,6 +7,7 @@ import {
   checkOptimizerReadiness,
   createHeatingOptimizationSettings,
   getDateKeyOffset,
+  getHelsinkiDateStart,
   latestPriceFetchedAt,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
@@ -55,6 +56,18 @@ function priceRowsForDay(
     rows.push({ ends_at: endsAt, spot_price_cents_kwh: priceCentsPerKwh, starts_at: startsAt });
   }
 
+  return rows;
+}
+
+function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
+  const rows: RawElectricityPriceRow[] = [];
+  for (let cursor = start.getTime(); cursor < end.getTime(); cursor += 60 * 60 * 1000) {
+    rows.push({
+      ends_at: new Date(cursor + 60 * 60 * 1000).toISOString(),
+      spot_price_cents_kwh: 4,
+      starts_at: new Date(cursor).toISOString(),
+    });
+  }
   return rows;
 }
 
@@ -214,6 +227,27 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       { ok: true },
       "contiguous coverage retains existing ready behavior",
     );
+    const completeTodayHours = buildOptimizerHours(
+      todayPrices,
+      now,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours }),
+      { ok: true },
+      "complete remaining today coverage is ready without tomorrow prices",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours.slice(0, 4) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "a truncated current-plus-few-hours window must not be ready",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours.slice(0, -1) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "missing the final hour before local day end must not be ready",
+    );
     const validHours = buildOptimizerHours([...todayPrices, ...tomorrowPrices], now, todayPlanDate, tomorrowPlanDate);
     assertEqual(
       checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: [validHours[0], validHours[0], ...validHours.slice(1)] }),
@@ -228,6 +262,40 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       "overlapping price intervals must invalidate coverage",
     );
     assertEqual(buildHeatingPlanFingerprint("2026-08-13", [5, 2, 5]), "2026-08-13|2,5", "plan fingerprint normalizes and sorts hours");
+  }
+
+  // Helsinki day-end coverage uses actual IANA-zone midnights. The spring
+  // transition day is 23 real hours and the autumn transition day is 25.
+  for (const fixture of [
+    { dateKey: "2026-03-29", expectedHours: 23 },
+    { dateKey: "2026-10-25", expectedHours: 25 },
+  ]) {
+    const dayStart = getHelsinkiDateStart(fixture.dateKey);
+    const nextDateKey = getDateKeyOffset(1, new Date(dayStart.getTime() + 12 * 60 * 60 * 1000));
+    const dayEnd = getHelsinkiDateStart(nextDateKey);
+    assertEqual(
+      (dayEnd.getTime() - dayStart.getTime()) / (60 * 60 * 1000),
+      fixture.expectedHours,
+      "DST fixture must have its real Helsinki day length",
+    );
+    const dstNow = new Date(dayStart.getTime() + 30 * 60 * 1000);
+    const dstReading = { ...freshReading, created_at: dstNow.toISOString() };
+    const dstHours = buildOptimizerHours(
+      priceRowsBetween(dayStart, dayEnd),
+      dstNow,
+      fixture.dateKey,
+      nextDateKey,
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: dstReading, now: dstNow, priceHours: dstHours }),
+      { ok: true },
+      "full DST-day remainder must reach the actual next Helsinki midnight",
+    );
+    assertEqual(
+      checkOptimizerReadiness({ latestReading: dstReading, now: dstNow, priceHours: dstHours.slice(0, -1) }),
+      { ok: false, reason: "incomplete_price_coverage" },
+      "truncated DST-day remainder must fail coverage",
+    );
   }
 
   // 4. Heating status unknown -> the publication decision defers rather
