@@ -1303,7 +1303,75 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
   return row;
 }
 
+// ---------------------------------------------------------------------
+// PR #191 review (Codex): a defensive check (not one of the 9 named
+// scenarios) proving the exact evaluateHistory() path every scenario
+// above funnels through can never report "healthy" for a nonsensical
+// future run-history timestamp. lib/heatingBackendWatchdog.test.ts
+// already covers evaluateHeatingBackendHealth directly; this guards the
+// simulator's OWN history-derivation logic on top of it (which entry
+// evaluateHistory picks as "last"/"lastPublished" from a list), so a
+// future regression there would fail loudly too, not just a unit test
+// nobody runs. Runs as part of runAllScenarios() so both entry points
+// (npm run simulate:heating-failsafe and npm test) enforce it.
+// ---------------------------------------------------------------------
+function runFutureTimestampSafetyChecks(): void {
+  const now = new Date("2026-08-12T11:30:00.000Z");
+
+  // A run recorded with a future timestamp must never make the pipeline
+  // look healthy, even though its own outcome is "published" (so it is
+  // simultaneously both the most recent run AND the most recent
+  // published plan).
+  {
+    const history: BackendRunHistoryEntry[] = [
+      {
+        at: new Date(now.getTime() + 10 * minuteMs),
+        outcome: "published",
+        reason: "valid plan published",
+      },
+    ];
+    const result = evaluateHistory(history, now);
+    assert(
+      result.status !== "healthy",
+      `a future-timestamped run history entry must never yield status "healthy" via evaluateHistory, got "${result.status}"`,
+    );
+    assert(
+      result.alertReason?.startsWith("run_timestamp_in_future:") ?? false,
+      `a future-timestamped run history entry must carry the run_timestamp_in_future category via evaluateHistory, got: ${result.alertReason}`,
+    );
+  }
+
+  // A future-timestamped PUBLISHED plan must not make an otherwise-stale
+  // pipeline look trusted, even when the most recent run attempt itself
+  // is a normal, non-future, non-failing (merely deferred) one.
+  {
+    const history: BackendRunHistoryEntry[] = [
+      {
+        at: new Date(now.getTime() + 10 * minuteMs),
+        outcome: "published",
+        reason: "valid plan published",
+      },
+      {
+        at: now,
+        outcome: "deferred",
+        reason: "optimizer not ready: stale_tank_reading",
+      },
+    ];
+    const result = evaluateHistory(history, now);
+    assert(
+      result.status !== "healthy",
+      `a future-timestamped published plan must never yield status "healthy" via evaluateHistory, got "${result.status}"`,
+    );
+    assert(
+      result.alertReason?.startsWith("valid_plan_timestamp_in_future:") ?? false,
+      `a future-timestamped published plan must carry the valid_plan_timestamp_in_future category via evaluateHistory, got: ${result.alertReason}`,
+    );
+  }
+}
+
 export function runAllScenarios(): ScenarioReportRow[] {
+  runFutureTimestampSafetyChecks();
+
   return [
     scenarioNormal(),
     scenarioCronMissing(),

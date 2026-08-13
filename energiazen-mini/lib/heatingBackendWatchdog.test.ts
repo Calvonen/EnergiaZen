@@ -25,6 +25,7 @@ export function runHeatingBackendWatchdogUnitTests() {
   };
   const minutesAgo = (minutes: number) =>
     new Date(now.getTime() - minutes * 60 * 1000).toISOString();
+  const minutesFromNow = (minutes: number) => minutesAgo(-minutes);
 
   // 1. Everything fresh and successful -> healthy, no alert, no fallback.
   {
@@ -219,5 +220,139 @@ export function runHeatingBackendWatchdogUnitTests() {
         Math.abs(result.lastValidPlanAgeMinutes - 12) < 0.01,
       "lastValidPlanAgeMinutes must reflect the supplied timestamp's age",
     );
+  }
+
+  // 10. PR #191 review (Codex): a future lastRunAt (clock skew/malformed
+  // row/caller bug) must NEVER be read as "very fresh" - it must be
+  // treated as run_overdue, the same bucket a missing/too-old run hits,
+  // with its own distinct alertReason category so it is not confused with
+  // an ordinary staleness explanation. lastValidPlanAt is deliberately
+  // fresh here too, to prove the future lastRunAt alone is what forces
+  // the unhealthy result (nothing else in this fixture would).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastRunAt: minutesFromNow(10),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "a future lastRunAt must be treated as run_overdue, never as fresh",
+    );
+    assertEqual(result.alert, true, "a future lastRunAt must alert");
+    assertEqual(result.fallbackRecommended, true, "a future lastRunAt must recommend fallback");
+    assert(
+      result.alertReason?.startsWith("run_timestamp_in_future:"),
+      `future lastRunAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
+    );
+    assert(
+      result.lastRunAgeMinutes !== null && result.lastRunAgeMinutes < 0,
+      "lastRunAgeMinutes must still report the actual (negative) computed age for diagnostics",
+    );
+  }
+
+  // 11. Symmetric case: a future lastValidPlanAt must never let an old
+  // plan appear trusted just because wall-clock time hasn't caught up to
+  // its claimed timestamp yet. lastRunAt is fresh and successful here, so
+  // only the future lastValidPlanAt can be what forces no_recent_valid_plan.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidPlanAt: minutesFromNow(10),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "no_recent_valid_plan",
+      "a future lastValidPlanAt must be treated as no_recent_valid_plan, never as trusted",
+    );
+    assertEqual(result.alert, true, "a future lastValidPlanAt must alert");
+    assertEqual(result.fallbackRecommended, true, "a future lastValidPlanAt must recommend fallback");
+    assert(
+      result.alertReason?.startsWith("valid_plan_timestamp_in_future:"),
+      `future lastValidPlanAt must carry its own distinct alertReason category, got: ${result.alertReason}`,
+    );
+    assert(
+      result.lastValidPlanAgeMinutes !== null && result.lastValidPlanAgeMinutes < 0,
+      "lastValidPlanAgeMinutes must still report the actual (negative) computed age for diagnostics",
+    );
+  }
+
+  // 12. Both timestamps future at once -> run_overdue wins (same priority
+  // order a merely-old lastRunAt already takes over a merely-old
+  // lastValidPlanAt - PR #191 review requirement to preserve existing
+  // status priority semantics).
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastRunAt: minutesFromNow(15),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidPlanAt: minutesFromNow(15),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "run_overdue",
+      "when both timestamps are future, run_overdue must win over no_recent_valid_plan",
+    );
+    assertEqual(result.alert, true, "both-future must alert");
+    assert(
+      result.alertReason?.startsWith("run_timestamp_in_future:"),
+      "both-future alertReason must be the run_timestamp_in_future category, not the valid-plan one",
+    );
+  }
+
+  // 13. Boundary: a timestamp exactly equal to `now` (age === 0) is NOT a
+  // future timestamp and must remain valid/fresh - only a STRICTLY
+  // negative age is untrustworthy.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastRunAt: now.toISOString(),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidPlanAt: now.toISOString(),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "healthy",
+      "a timestamp exactly equal to now (age 0) must remain healthy, not be treated as future",
+    );
+    assertEqual(result.alert, false, "age-zero timestamps must not alert");
+    assertEqual(result.lastRunAgeMinutes, 0, "age-zero lastRunAt must report exactly 0, not negative");
+    assertEqual(
+      result.lastValidPlanAgeMinutes,
+      0,
+      "age-zero lastValidPlanAt must report exactly 0, not negative",
+    );
+  }
+
+  // 14. Normal past timestamps still behave exactly as before this fix -
+  // re-run of case 1's fixture, unchanged.
+  {
+    const result = evaluateHeatingBackendHealth({
+      config,
+      lastRunAt: minutesAgo(5),
+      lastRunOutcome: "published",
+      lastRunReason: "valid plan published",
+      lastValidPlanAt: minutesAgo(5),
+      now,
+    });
+    assertEqual(
+      result.status,
+      "healthy",
+      "ordinary past timestamps must still resolve to healthy after the future-timestamp fix",
+    );
+    assertEqual(result.alert, false, "ordinary past timestamps must not alert");
+    assertEqual(result.alertReason, null, "ordinary past timestamps must not carry an alert reason");
   }
 }

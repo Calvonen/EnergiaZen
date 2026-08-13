@@ -90,6 +90,14 @@ export type HeatingBackendHealthResult = {
   status: HeatingBackendHealthStatus;
 };
 
+// Can be negative - a supplied timestamp later than `now` (clock skew, a
+// malformed row, a caller bug) is deliberately NOT clamped to 0 here. The
+// caller (evaluateHeatingBackendHealth) is the one responsible for
+// treating a negative age as untrustworthy rather than "very fresh" - see
+// its own comment. Mirrors the same
+// lib/tankMonitorAlert.ts/computeTankReadingAgeMinutes shape (also allowed
+// to go negative, for the same reason: isTankReadingStale there already
+// treats a negative age as stale, never as fresh).
 function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
   if (!isoTimestamp) {
     return null;
@@ -107,7 +115,8 @@ function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
 // Three independent, individually-explainable checks, evaluated in this
 // priority order when more than one applies at once:
 //   1. run_overdue - the cron cadence itself looks broken (no attempt seen
-//      recently, or ever). This is the most severe case: it means even
+//      recently, or ever - or lastRunAt is nonsensically in the future,
+//      see below). This is the most severe case: it means even
 //      run_error/publication_failed outcomes have stopped arriving, so we
 //      cannot even see WHY the pipeline is unhealthy.
 //   2. run_failed - the most recent attempt itself reported failure
@@ -117,10 +126,28 @@ function ageMinutes(isoTimestamp: string | null, now: Date): number | null {
 //      still "fresh enough".
 //   3. no_recent_valid_plan - no run attempt has outright failed, but
 //      nothing valid has actually been published recently either (e.g. a
-//      run of deferred/optimizer_invalid outcomes: stale inputs, or an
-//      optimizer result that never clears its own safety violations).
+//      run of deferred/optimizer_invalid outcomes: stale inputs, an
+//      optimizer result that never clears its own safety violations, or
+//      lastValidPlanAt is nonsensically in the future, see below).
 // Any one of these sets alert + fallbackRecommended; none of them being
 // true is the only "healthy" result.
+//
+// Future timestamps (lastRunAgeMinutes/lastValidPlanAgeMinutes < 0): a
+// clock-skewed, malformed, or otherwise impossible "in the future"
+// timestamp must never be read as "very fresh" and must never produce
+// status: "healthy" - same safety principle
+// lib/tankReadingFreshness.ts/isTankReadingStale already applies to tank
+// readings (a negative reading age is treated as stale, not fresh) is
+// applied here to both watched timestamps. Folded into the SAME
+// run_overdue/no_recent_valid_plan buckets and priority order a merely-
+// old or missing timestamp would hit (requirement: preserve existing
+// status priority semantics) rather than a new status value, but each
+// gets its own explicit alertReason category
+// ("run_timestamp_in_future"/"valid_plan_timestamp_in_future") distinct
+// from the plain "cron_missing"/"no_recent_valid_plan" staleness wording,
+// since "the timestamp claims to be from the future" is a materially
+// different, more alarming condition than "the timestamp is merely old"
+// and callers/logs should be able to tell them apart.
 export function evaluateHeatingBackendHealth({
   config,
   lastRunAt,
@@ -132,17 +159,26 @@ export function evaluateHeatingBackendHealth({
   const lastRunAgeMinutes = ageMinutes(lastRunAt, now);
   const lastValidPlanAgeMinutes = ageMinutes(lastValidPlanAt, now);
 
+  const lastRunIsInFuture = lastRunAgeMinutes !== null && lastRunAgeMinutes < 0;
+  const lastValidPlanIsInFuture =
+    lastValidPlanAgeMinutes !== null && lastValidPlanAgeMinutes < 0;
+
   const runOverdue =
-    lastRunAgeMinutes === null || lastRunAgeMinutes > config.maxRunIntervalMinutes;
+    lastRunAgeMinutes === null ||
+    lastRunIsInFuture ||
+    lastRunAgeMinutes > config.maxRunIntervalMinutes;
   const runFailed = lastRunOutcome === "run_error" || lastRunOutcome === "publication_failed";
   const validPlanStale =
-    lastValidPlanAgeMinutes === null || lastValidPlanAgeMinutes > config.maxValidPlanAgeMinutes;
+    lastValidPlanAgeMinutes === null ||
+    lastValidPlanIsInFuture ||
+    lastValidPlanAgeMinutes > config.maxValidPlanAgeMinutes;
 
   if (runOverdue) {
     return {
       alert: true,
-      alertReason:
-        lastRunAt === null
+      alertReason: lastRunIsInFuture
+        ? `run_timestamp_in_future: last run attempt's timestamp (${lastRunAt}) is ${Math.abs(lastRunAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as fresh`
+        : lastRunAt === null
           ? "cron_missing: no backend optimizer run has ever been observed"
           : `cron_missing: last run attempt was ${lastRunAgeMinutes?.toFixed(1)} min ago, exceeding maxRunIntervalMinutes (${config.maxRunIntervalMinutes})`,
       fallbackRecommended: true,
@@ -166,8 +202,9 @@ export function evaluateHeatingBackendHealth({
   if (validPlanStale) {
     return {
       alert: true,
-      alertReason:
-        lastValidPlanAt === null
+      alertReason: lastValidPlanIsInFuture
+        ? `valid_plan_timestamp_in_future: last published valid plan's timestamp (${lastValidPlanAt}) is ${Math.abs(lastValidPlanAgeMinutes as number).toFixed(1)} min ahead of now - an impossible timestamp is never treated as trusted`
+        : lastValidPlanAt === null
           ? "no_recent_valid_plan: no published valid plan has ever been observed"
           : `no_recent_valid_plan: last published valid plan was ${lastValidPlanAgeMinutes?.toFixed(1)} min ago, exceeding maxValidPlanAgeMinutes (${config.maxValidPlanAgeMinutes})`,
       fallbackRecommended: true,
