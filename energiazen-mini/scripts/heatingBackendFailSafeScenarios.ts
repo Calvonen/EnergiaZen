@@ -424,12 +424,34 @@ function buildReportRow({
   };
 }
 
-function checkExpectation(
-  row: ScenarioReportRow,
-  actual: HeatingBackendHealthResult,
-  planPublishedExpected: boolean | null,
-  planPublishedActual: boolean | null,
-): ScenarioReportRow {
+// expectedStatus is REQUIRED (not optional) - every single-tick scenario
+// below must pin down exactly which of evaluateHeatingBackendHealth's four
+// statuses it expects, not just the alert/fallbackRecommended booleans two
+// different statuses could both produce (e.g. run_overdue and run_failed
+// both alert with fallback recommended, but they are different failure
+// categories with different operational meaning - see PR #191 review).
+//
+// expectedAlertReasonPrefix pins down the failure CATEGORY within that
+// status for scenarios that specifically exercise one: null means "no
+// alert reason expected" (only valid for status "healthy"), a string means
+// actual.alertReason must start with it (evaluateHeatingBackendHealth
+// always prefixes alertReason with "<category>: ..." - see
+// lib/heatingBackendWatchdog.ts).
+function checkExpectation({
+  actual,
+  expectedAlertReasonPrefix,
+  expectedStatus,
+  planPublishedActual,
+  planPublishedExpected,
+  row,
+}: {
+  actual: HeatingBackendHealthResult;
+  expectedAlertReasonPrefix: string | null;
+  expectedStatus: HeatingBackendHealthResult["status"];
+  planPublishedActual: boolean | null;
+  planPublishedExpected: boolean | null;
+  row: ScenarioReportRow;
+}): ScenarioReportRow {
   const failures: string[] = [];
 
   if (actual.alert !== row.alertExpected) {
@@ -438,6 +460,18 @@ function checkExpectation(
   if (actual.fallbackRecommended !== row.fallbackExpected) {
     failures.push(
       `fallbackRecommended: expected ${row.fallbackExpected}, got ${actual.fallbackRecommended}`,
+    );
+  }
+  if (actual.status !== expectedStatus) {
+    failures.push(`status: expected "${expectedStatus}", got "${actual.status}"`);
+  }
+  if (expectedAlertReasonPrefix === null) {
+    if (actual.alertReason !== null) {
+      failures.push(`alertReason: expected null, got ${JSON.stringify(actual.alertReason)}`);
+    }
+  } else if (!actual.alertReason || !actual.alertReason.startsWith(expectedAlertReasonPrefix)) {
+    failures.push(
+      `alertReason: expected it to start with "${expectedAlertReasonPrefix}", got ${JSON.stringify(actual.alertReason)}`,
     );
   }
   if (planPublishedExpected !== null && planPublishedActual !== planPublishedExpected) {
@@ -485,7 +519,14 @@ function scenarioNormal(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, true, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: null,
+    expectedStatus: "healthy",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: true,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -513,7 +554,14 @@ function scenarioCronMissing(): ScenarioReportRow {
   row.optimizerStatus = "n/a (no run observed)";
   row.planStatus = "not_published (stale: last published 5h ago)";
 
-  return checkExpectation(row, actual, null, null);
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "cron_missing:",
+    expectedStatus: "run_overdue",
+    planPublishedActual: null,
+    planPublishedExpected: null,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -552,7 +600,14 @@ function scenarioEdgeFunctionFailure(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, false, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "run_error:",
+    expectedStatus: "run_failed",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: false,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -609,7 +664,14 @@ function scenarioStalePrices(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, false, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "no_recent_valid_plan:",
+    expectedStatus: "no_recent_valid_plan",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: false,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -660,7 +722,14 @@ function scenarioStaleTankReading(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, false, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "no_recent_valid_plan:",
+    expectedStatus: "no_recent_valid_plan",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: false,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -717,7 +786,14 @@ function scenarioOptimizerInvalid(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, false, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "no_recent_valid_plan:",
+    expectedStatus: "no_recent_valid_plan",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: false,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -768,7 +844,14 @@ function scenarioPlanPublicationFailure(): ScenarioReportRow {
   row.optimizerStatus = optimizerStatusFor(tick);
   row.planStatus = planStatusFor(tick);
 
-  return checkExpectation(row, actual, false, tick.outcome === "published");
+  return checkExpectation({
+    actual,
+    expectedAlertReasonPrefix: "publication_failed:",
+    expectedStatus: "run_failed",
+    planPublishedActual: tick.outcome === "published",
+    planPublishedExpected: false,
+    row,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -776,6 +859,7 @@ function scenarioPlanPublicationFailure(): ScenarioReportRow {
 // ---------------------------------------------------------------------
 export type WeekTickRecord = {
   alert: boolean;
+  alertReason: string | null;
   fallbackRecommended: boolean;
   hourIndex: number;
   now: Date;
@@ -842,6 +926,7 @@ function runWeek({
     const watchdog = evaluateHistory(history, now);
     records.push({
       alert: watchdog.alert,
+      alertReason: watchdog.alertReason,
       fallbackRecommended: watchdog.fallbackRecommended,
       hourIndex,
       now,
@@ -862,6 +947,7 @@ function scenarioWeekWithoutApp(): ScenarioReportRow {
 
   const publishedCount = records.filter((record) => record.outcome === "published").length;
   const alertCount = records.filter((record) => record.alert).length;
+  const nonHealthyRecords = records.filter((record) => record.status !== "healthy");
   const lastRecord = records[records.length - 1];
 
   const row = buildReportRow({
@@ -895,6 +981,18 @@ function scenarioWeekWithoutApp(): ScenarioReportRow {
   if (alertCount !== 0) {
     failures.push(`expected zero alert hours in a failure-free week, got ${alertCount}`);
   }
+  // Status, not just the alert boolean: "remains healthy throughout" means
+  // evaluateHeatingBackendHealth's status must be exactly "healthy" at
+  // every single hour, not merely alert === false (a status could in
+  // principle be non-healthy without alert being set - asserting the
+  // status directly is the stronger, intended check per PR #191 review).
+  if (nonHealthyRecords.length > 0) {
+    failures.push(
+      `expected status "healthy" in every one of the ${totalHours} simulated hours, got a non-healthy ` +
+        `status in ${nonHealthyRecords.length} hour(s) - first at hour ${nonHealthyRecords[0].hourIndex} ` +
+        `(status: "${nonHealthyRecords[0].status}")`,
+    );
+  }
 
   return { ...row, failures, passFail: failures.length === 0 ? "PASS" : "FAIL" };
 }
@@ -923,14 +1021,38 @@ function scenarioFailureDuringWeek(): ScenarioReportRow {
   if (beforeFailure.alert) {
     failures.push("expected no alert immediately before the injected outage");
   }
+  // Status, not just the alert boolean, immediately before the outage -
+  // must be the genuine "healthy" classification, not some other
+  // non-alerting-but-not-healthy state (PR #191 review).
+  if (beforeFailure.status !== "healthy") {
+    failures.push(
+      `expected status "healthy" immediately before the injected outage, got "${beforeFailure.status}"`,
+    );
+  }
   if (!duringFailure.every((record) => record.alert)) {
     failures.push("expected every hour during the injected outage to alert");
   }
   if (!duringFailure.every((record) => record.status === "run_failed")) {
     failures.push("expected every hour during the injected outage to report status run_failed");
   }
+  // Category, not just the status: every during-outage hour must be
+  // attributed to the run_error failure this scenario actually injects,
+  // not some other run_failed cause (e.g. a stray publication_failed).
+  if (!duringFailure.every((record) => record.alertReason?.startsWith("run_error:"))) {
+    failures.push(
+      'expected every hour during the injected outage to carry an alertReason starting with "run_error:"',
+    );
+  }
   if (afterRecovery.alert) {
     failures.push("expected the alert to clear on the very first successful run after recovery");
+  }
+  // Status, not just the alert boolean, on the very first recovered hour -
+  // recovery must land back on "healthy" immediately, not linger in some
+  // other non-alerting status.
+  if (afterRecovery.status !== "healthy") {
+    failures.push(
+      `expected status "healthy" on the very first successful run after recovery, got "${afterRecovery.status}"`,
+    );
   }
   if (laterRecovery.alert || laterRecovery.status !== "healthy") {
     failures.push("expected the system to stay healthy well after recovery, not get stuck in a fault mode");
