@@ -512,6 +512,17 @@ puuttuva arvo tai puuttuva käytetty hintarivi palauttaa hallitun
 plan-kirjoituksia, healthy-validointia ja heartbeat-aikaleimojen tai
 fingerprintin päivitystä.
 
+Normaali `tank_snapshot_conflict` retrytetään kerran saman backend-runin
+sisällä. Ennen retryä Edge Function varmistaa singleton-riviltä, että sama
+`current_run_id` + `current_run_started_at` omistaa ajon edelleen. Retry lukee
+uudelleen latest tank readingin, hinnat, settingsit, planit, heating gain- ja
+recovery-historiat sekä temperature drop profilen, minkä jälkeen optimizer ja
+publication-snapshotit rakennetaan alusta. Ensimmäinen konflikti ei päätä
+heartbeatia terminal-tilaan. Jos toinenkin yritys konfliktoi, ajo päättyy
+`unhealthy`/`deferred`-tilaan syyllä
+`tank_snapshot_conflict_retry_exhausted`; settings-, plan-, price- ja
+relay-konflikteja ei retrytetä.
+
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
 se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta

@@ -12,14 +12,17 @@ import {
   checkOptimizerReadiness,
   combineBackendPublicationReadiness,
   createHeatingOptimizationSettings,
+  doesHeartbeatRunTokenMatch,
   failedOptimizerInputFetch,
   getDateKeyOffset,
   getHelsinkiDateStart,
   latestPriceFetchedAt,
   isHeatingOptimizerCronSecretAuthorized,
+  maxTankSnapshotPublicationRetries,
   resolveHourlyDropProfile,
   resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
+  resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
   successfulOptimizerInputFetch,
   wasHeartbeatCompareAndSetCommitted,
@@ -98,6 +101,184 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       isHeatingOptimizerCronSecretAuthorized(provided, expected),
       false,
       "missing, wrong or merely publishable credentials must not authorize the optimizer",
+    );
+  }
+  assertEqual(
+    maxTankSnapshotPublicationRetries,
+    1,
+    "normal tank snapshot races must have exactly one deterministic retry",
+  );
+  assertEqual(
+    doesHeartbeatRunTokenMatch({
+      currentRunId: "run-1",
+      currentRunStartedAt: "2026-08-13T10:00:00+00:00",
+      expectedRunId: "run-1",
+      expectedRunStartedAt: "2026-08-13T10:00:00.000Z",
+    }),
+    true,
+    "heartbeat ownership must compare timestamptz instants rather than their JSON spelling",
+  );
+  assertEqual(
+    doesHeartbeatRunTokenMatch({
+      currentRunId: "newer-run",
+      currentRunStartedAt: "2026-08-13T10:01:00+00:00",
+      expectedRunId: "run-1",
+      expectedRunStartedAt: "2026-08-13T10:00:00.000Z",
+    }),
+    false,
+    "a newer heartbeat token must supersede the retrying run",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 0,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: true,
+    }),
+    "retry",
+    "the first owned tank snapshot conflict must retry",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 1,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: true,
+    }),
+    "retry_exhausted",
+    "a second tank conflict must exhaust the one-retry budget",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 0,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: false,
+    }),
+    "superseded",
+    "a superseded run must not retry a tank conflict",
+  );
+  for (const publicationResult of [
+    "settings_conflict",
+    "plan_conflict",
+    "price_snapshot_conflict",
+    "relay_conflict",
+  ]) {
+    assertEqual(
+      resolveTankSnapshotRetryAction({
+        attemptIndex: 0,
+        publicationResult,
+        stillOwnsRun: true,
+      }),
+      "terminal",
+      `${publicationResult} must not enter the tank retry path`,
+    );
+  }
+  {
+    type SimulatedPublicationResult =
+      | "heartbeat_superseded"
+      | "no_changes"
+      | "published"
+      | "tank_snapshot_conflict";
+    function simulateTankRetry(
+      publicationResults: SimulatedPublicationResult[],
+      readingIds: string[],
+      stillOwnsRun = true,
+    ) {
+      const optimizedReadingIds: string[] = [];
+
+      for (let attemptIndex = 0; attemptIndex < publicationResults.length; attemptIndex += 1) {
+        optimizedReadingIds.push(readingIds[attemptIndex]);
+        const publicationResult = publicationResults[attemptIndex];
+        const retryAction = resolveTankSnapshotRetryAction({
+          attemptIndex,
+          publicationResult,
+          stillOwnsRun,
+        });
+        if (retryAction === "retry") continue;
+        if (retryAction === "superseded") {
+          return {
+            finalReadingId: readingIds[attemptIndex],
+            health: "superseded",
+            optimizedReadingIds,
+            timestampsAdvanced: false,
+            wrotePlan: false,
+          };
+        }
+        if (retryAction === "retry_exhausted") {
+          return {
+            finalReadingId: readingIds[attemptIndex],
+            health: "unhealthy/deferred",
+            optimizedReadingIds,
+            timestampsAdvanced: false,
+            wrotePlan: false,
+          };
+        }
+        return {
+          finalReadingId: readingIds[attemptIndex],
+          health: "healthy",
+          optimizedReadingIds,
+          timestampsAdvanced: true,
+          wrotePlan: publicationResult === "published",
+        };
+      }
+
+      throw new Error("simulated tank retry did not reach a final outcome");
+    }
+
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "published"],
+        ["old-reading", "fresh-reading"],
+      ),
+      {
+        finalReadingId: "fresh-reading",
+        health: "healthy",
+        optimizedReadingIds: ["old-reading", "fresh-reading"],
+        timestampsAdvanced: true,
+        wrotePlan: true,
+      },
+      "retry publication must rerun against and publish the fresh reading snapshot",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "no_changes"],
+        ["old-reading", "fresh-reading"],
+      ),
+      {
+        finalReadingId: "fresh-reading",
+        health: "healthy",
+        optimizedReadingIds: ["old-reading", "fresh-reading"],
+        timestampsAdvanced: true,
+        wrotePlan: false,
+      },
+      "retry no_changes must validate the fresh reading snapshot without a plan write",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "tank_snapshot_conflict"],
+        ["old-reading", "newer-reading"],
+      ),
+      {
+        finalReadingId: "newer-reading",
+        health: "unhealthy/deferred",
+        optimizedReadingIds: ["old-reading", "newer-reading"],
+        timestampsAdvanced: false,
+        wrotePlan: false,
+      },
+      "retry exhaustion must remain unhealthy and must not write or advance validation state",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "published"],
+        ["old-reading", "must-not-run"],
+        false,
+      ),
+      {
+        finalReadingId: "old-reading",
+        health: "superseded",
+        optimizedReadingIds: ["old-reading"],
+        timestampsAdvanced: false,
+        wrotePlan: false,
+      },
+      "a superseding run must stop before another optimizer attempt",
     );
   }
   assertEqual(

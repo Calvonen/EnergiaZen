@@ -29,6 +29,7 @@ import {
   combineBackendPublicationReadiness,
   computeNextUnknownHeatingAnchor,
   createHeatingOptimizationSettings,
+  doesHeartbeatRunTokenMatch,
   fallbackHeatingGainPerHour,
   failedOptimizerInputFetch,
   fetchHeatingGainHistory,
@@ -38,9 +39,11 @@ import {
   getHelsinkiHourNumber,
   latestPriceFetchedAt,
   isHeatingOptimizerCronSecretAuthorized,
+  maxTankSnapshotPublicationRetries,
   resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
+  resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
   successfulOptimizerInputFetch,
   type RawElectricityPriceRow,
@@ -171,6 +174,51 @@ Deno.serve(async (request) => {
       }
       return wasHeartbeatCompareAndSetCommitted(data);
     };
+    const completeTankRetryExhausted = async (reason: string) => {
+      const { data, error } = await supabase.rpc(
+        "complete_backend_heating_optimizer_run",
+        {
+          p_health_status: "unhealthy",
+          p_last_outcome: "deferred",
+          p_reason: reason,
+          p_run_id: runId,
+          p_run_started_at: runStartedAt,
+          p_validated_plan_at: null,
+          p_validated_plan_date: null,
+          p_validated_plan_fingerprint: null,
+          p_validated_planned_hours: null,
+        },
+      );
+      if (error) {
+        throw new Error(`Failed to persist tank retry exhaustion: ${error.message}`);
+      }
+      return wasHeartbeatCompareAndSetCommitted(data);
+    };
+    const stillOwnsHeartbeat = async () => {
+      const { data, error } = await supabase
+        .from("backend_heating_optimizer_state")
+        .select("current_run_id,current_run_started_at")
+        .eq("id", 1)
+        .maybeSingle();
+      if (error) {
+        throw new Error(`Failed to verify optimizer heartbeat ownership: ${error.message}`);
+      }
+      return doesHeartbeatRunTokenMatch({
+        currentRunId: data?.current_run_id,
+        currentRunStartedAt: data?.current_run_started_at,
+        expectedRunId: runId,
+        expectedRunStartedAt: runStartedAt,
+      });
+    };
+    const shadowRunId = crypto.randomUUID();
+    let shadowRunSaved = false;
+
+    for (
+      let optimizerAttempt = 0;
+      optimizerAttempt <= maxTankSnapshotPublicationRetries;
+      optimizerAttempt += 1
+    ) {
+      const attemptNow = new Date();
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
     // across DST transitions (spring-forward/fall-back days are 23h/25h
@@ -178,16 +226,16 @@ Deno.serve(async (request) => {
     // Helsinki calendar date). Same helper app/(tabs)/index.tsx uses for
     // today/tomorrow (getChartDayKey, fetchHourlyPrices) - no parallel date
     // logic here.
-    const todayPlanDate = getDateKeyOffset(0, now);
-    const tomorrowPlanDate = getDateKeyOffset(1, now);
+    const todayPlanDate = getDateKeyOffset(0, attemptNow);
+    const tomorrowPlanDate = getDateKeyOffset(1, attemptNow);
     const priceWindowStartIso = new Date(
-      now.getTime() - 24 * 60 * 60 * 1000,
+      attemptNow.getTime() - 24 * 60 * 60 * 1000,
     ).toISOString();
     const gainHistoryStartIso = new Date(
-      now.getTime() - heatingGainHistoryDays * 24 * 60 * 60 * 1000,
+      attemptNow.getTime() - heatingGainHistoryDays * 24 * 60 * 60 * 1000,
     ).toISOString();
     const recoveryReadingsStartIso = new Date(
-      now.getTime() - recoveryReadingsWindowDays * 24 * 60 * 60 * 1000,
+      attemptNow.getTime() - recoveryReadingsWindowDays * 24 * 60 * 60 * 1000,
     ).toISOString();
 
     // The two tank_readings history fetches must stay paginated via
@@ -224,7 +272,7 @@ Deno.serve(async (request) => {
           .select("created_at,top_temp,bottom_temp,inlet_temp,heating")
           .eq("heating", true)
           .gte("created_at", gainHistoryStartIso)
-          .lte("created_at", now.toISOString())
+          .lte("created_at", attemptNow.toISOString())
           .order("created_at", { ascending: true })
           .range(from, to);
 
@@ -341,10 +389,15 @@ Deno.serve(async (request) => {
       optimizerSettingsSource,
       fallbackHeatingGainPerHour,
     );
-    const hours = buildOptimizerHours(prices, now, todayPlanDate, tomorrowPlanDate);
+    const hours = buildOptimizerHours(
+      prices,
+      attemptNow,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
     const dropProfile = resolveHourlyDropProfile({
       localReadings: recoveryReadings,
-      now,
+      now: attemptNow,
       storedProfile: dropProfileResult.value,
     });
     const heating = latestReading?.heating ?? null;
@@ -355,7 +408,7 @@ Deno.serve(async (request) => {
       hours,
       isCurrentlyHeating: heating === true,
       latestReading,
-      now,
+      now: attemptNow,
       settings: optimizationSettings,
     });
 
@@ -367,16 +420,16 @@ Deno.serve(async (request) => {
     const unknownHeatingAnchor = computeNextUnknownHeatingAnchor({
       currentAnchor: null,
       heating,
-      now,
+      now: attemptNow,
       readingCreatedAt: latestReading?.created_at ?? null,
     });
     const decision = buildHeatingPlanPublicationDecision({
-      currentHourNumber: getHelsinkiHourNumber(now),
+      currentHourNumber: getHelsinkiHourNumber(attemptNow),
       dateKeyOf: getFinnishDateKey,
       hasAttemptedTankReadingFetch: true,
       heating,
       isTodayPlanLoaded: true,
-      now,
+      now: attemptNow,
       optimizerResult: run.result,
       optimizerSettings: { automaticMaxHeatingHours: optimizationSettings.maxHeatingHours },
       selectedHours: hours,
@@ -391,7 +444,7 @@ Deno.serve(async (request) => {
       decision,
       heatingStatus: heating,
       inputPriceFetchedAt: latestPriceFetchedAt(prices),
-      now,
+      now: attemptNow,
       optimizerResult: run.result,
       readinessReason: inputFetchReadiness.ok
         ? (run.readiness.ok ? null : run.readiness.reason)
@@ -402,9 +455,15 @@ Deno.serve(async (request) => {
       tomorrowPlanDate,
     });
 
-    const { error: insertError } = await supabase
-      .from("heating_plan_shadow_runs")
-      .insert(shadowRow);
+    const shadowWrite = shadowRunSaved
+      ? await supabase
+          .from("heating_plan_shadow_runs")
+          .update(shadowRow)
+          .eq("id", shadowRunId)
+      : await supabase
+          .from("heating_plan_shadow_runs")
+          .insert({ id: shadowRunId, ...shadowRow });
+    const insertError = shadowWrite.error;
 
     if (insertError) {
       console.error("run-heating-optimizer: shadow row insert failed", {
@@ -419,6 +478,7 @@ Deno.serve(async (request) => {
         500,
       );
     }
+    shadowRunSaved = true;
 
     const isValidReadyDecision = decision.status === "ready" && run.result?.valid === true;
     const todayChanged =
@@ -481,7 +541,7 @@ Deno.serve(async (request) => {
           p_expected_settings: expectedSettings,
           p_expected_tank_snapshot: expectedTankSnapshot,
           p_publish_reason: hasChangedPlans ? "valid plan published" : shadowRow.reason,
-          p_published_at: now.toISOString(),
+          p_published_at: attemptNow.toISOString(),
           p_run_id: runId,
           p_run_started_at: runStartedAt,
           p_validated_plan_date: todayPlanDate,
@@ -516,11 +576,63 @@ Deno.serve(async (request) => {
           500,
         );
       }
+      if (publishCommitted === "tank_snapshot_conflict") {
+        const hasRetryBudget =
+          optimizerAttempt < maxTankSnapshotPublicationRetries;
+        const retryAction = resolveTankSnapshotRetryAction({
+          attemptIndex: optimizerAttempt,
+          publicationResult: publishCommitted,
+          stillOwnsRun: hasRetryBudget ? await stillOwnsHeartbeat() : true,
+        });
+
+        if (retryAction === "retry") {
+          console.warn(
+            "run-heating-optimizer: tank snapshot changed; retrying all optimizer inputs",
+            {
+              next_attempt: optimizerAttempt + 1,
+              run_id: runId,
+              tank_snapshot_retry_limit: maxTankSnapshotPublicationRetries,
+            },
+          );
+          continue;
+        }
+        if (retryAction === "superseded") {
+          return jsonResponse(
+            {
+              decision: decision.status,
+              heartbeat_committed: false,
+              heartbeat_status: "superseded",
+              reason: "heartbeat_superseded",
+              run_id: runId,
+              wrote_to_heating_plans: false,
+            },
+            409,
+          );
+        }
+
+        const retryExhaustedReason =
+          "tank_snapshot_conflict_retry_exhausted";
+        const failureCommitted = await completeTankRetryExhausted(
+          retryExhaustedReason,
+        );
+        return jsonResponse(
+          {
+            decision: decision.status,
+            heartbeat_committed: failureCommitted,
+            heartbeat_status: failureCommitted ? "committed" : "superseded",
+            publication_conflict: publishCommitted,
+            reason: retryExhaustedReason,
+            run_id: runId,
+            tank_snapshot_retry_count: optimizerAttempt,
+            wrote_to_heating_plans: false,
+          },
+          409,
+        );
+      }
       if (
         publishCommitted === "settings_conflict" ||
         publishCommitted === "plan_conflict" ||
         publishCommitted === "relay_conflict" ||
-        publishCommitted === "tank_snapshot_conflict" ||
         publishCommitted === "price_snapshot_conflict"
       ) {
         const failureCommitted = await completePublicationFailure(
@@ -608,12 +720,15 @@ Deno.serve(async (request) => {
       published_plan_count: publishedPlanCount,
       reason: publicationReadiness.ok ? shadowRow.reason : publicationReadiness.reason,
       settings_source: settingsSource,
+      tank_snapshot_retry_count: optimizerAttempt,
       today_plan_date: todayPlanDate,
       today_planned_hours: shadowRow.today_planned_hours,
       tomorrow_plan_date: tomorrowPlanDate,
       tomorrow_planned_hours: shadowRow.tomorrow_planned_hours,
       wrote_to_heating_plans: wroteToHeatingPlans,
     });
+    }
+    throw new Error("Optimizer retry loop exited without a final outcome");
   } catch (error) {
     console.error("run-heating-optimizer failed", error);
     const reason =

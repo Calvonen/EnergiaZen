@@ -157,6 +157,55 @@ export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true 
   return data === true;
 }
 
+export function doesHeartbeatRunTokenMatch({
+  currentRunId,
+  currentRunStartedAt,
+  expectedRunId,
+  expectedRunStartedAt,
+}: {
+  currentRunId: string | null | undefined;
+  currentRunStartedAt: string | null | undefined;
+  expectedRunId: string;
+  expectedRunStartedAt: string;
+}): boolean {
+  const currentStartedAt = Date.parse(currentRunStartedAt ?? "");
+  const expectedStartedAt = Date.parse(expectedRunStartedAt);
+  return (
+    currentRunId === expectedRunId &&
+    Number.isFinite(currentStartedAt) &&
+    Number.isFinite(expectedStartedAt) &&
+    currentStartedAt === expectedStartedAt
+  );
+}
+
+export const maxTankSnapshotPublicationRetries = 1;
+
+export type TankSnapshotRetryAction =
+  | "retry"
+  | "retry_exhausted"
+  | "superseded"
+  | "terminal";
+
+export function resolveTankSnapshotRetryAction({
+  attemptIndex,
+  publicationResult,
+  stillOwnsRun,
+}: {
+  attemptIndex: number;
+  publicationResult: unknown;
+  stillOwnsRun: boolean;
+}): TankSnapshotRetryAction {
+  if (publicationResult !== "tank_snapshot_conflict") {
+    return "terminal";
+  }
+  if (!stillOwnsRun) {
+    return "superseded";
+  }
+  return attemptIndex < maxTankSnapshotPublicationRetries
+    ? "retry"
+    : "retry_exhausted";
+}
+
 export function canMarkHeatingPlanValidated(
   heating: unknown,
   isValidReadyDecision: boolean,

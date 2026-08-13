@@ -126,6 +126,13 @@ export function runBackendHeatingOptimizerSecurityTests() {
     ),
     "utf8",
   );
+  const shadowRetryMigration = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260813100000_allow_optimizer_shadow_retry_updates.sql",
+    ),
+    "utf8",
+  );
 
   const authCheck = edgeSource.indexOf(
     "isHeatingOptimizerCronSecretAuthorized(providedCronSecret, cronSecret)",
@@ -158,6 +165,70 @@ export function runBackendHeatingOptimizerSecurityTests() {
       cronMigration.includes("'x-energyzen-cron-secret'") &&
       cronMigration.includes("where name = 'publishable_key'"),
     "cron must load the private caller secret from Vault while retaining the publishable gateway credential",
+  );
+
+  const retryLoopStart = edgeSource.indexOf(
+    "optimizerAttempt <= maxTankSnapshotPublicationRetries",
+  );
+  const retryLoopEnd = edgeSource.indexOf(
+    'throw new Error("Optimizer retry loop exited without a final outcome")',
+  );
+  const retryLoopSource = edgeSource.slice(retryLoopStart, retryLoopEnd);
+  assertSource(
+    retryLoopStart > unauthorizedReturn &&
+      retryLoopEnd > retryLoopStart &&
+      retryLoopSource.includes('const attemptNow = new Date()') &&
+      retryLoopSource.includes('.from("tank_readings")') &&
+      retryLoopSource.includes('.from("heating_control_settings")') &&
+      retryLoopSource.includes('fetchHeatingGainHistory(async (from, to) =>') &&
+      retryLoopSource.includes('.from("electricity_prices")') &&
+      retryLoopSource.includes('.from("heating_plans")') &&
+      retryLoopSource.includes('fetchLatestTemperatureDropProfile(supabase)') &&
+      retryLoopSource.includes('runBackendHeatingOptimization({') &&
+      retryLoopSource.includes('buildExpectedTankSnapshot(latestReading)') &&
+      retryLoopSource.includes('buildExpectedElectricityPriceSnapshot(') &&
+      retryLoopSource.includes('"publish_backend_heating_optimizer_plans"'),
+    "each retry must refetch every publication-relevant input, rerun the optimizer and rebuild publication snapshots",
+  );
+  const tankConflictBranch = retryLoopSource.indexOf(
+    'publishCommitted === "tank_snapshot_conflict"',
+  );
+  const retryContinue = retryLoopSource.indexOf("continue;", tankConflictBranch);
+  const terminalConflictBranch = retryLoopSource.indexOf(
+    'publishCommitted === "settings_conflict"',
+    tankConflictBranch,
+  );
+  assertSource(
+    tankConflictBranch !== -1 &&
+      retryLoopSource.indexOf("await stillOwnsHeartbeat()", tankConflictBranch) <
+        retryContinue &&
+      retryContinue < terminalConflictBranch &&
+      !retryLoopSource
+        .slice(tankConflictBranch, retryContinue)
+        .includes("completePublicationFailure(") &&
+      retryLoopSource.includes('"tank_snapshot_conflict_retry_exhausted"') &&
+      retryLoopSource.includes("completeTankRetryExhausted(") &&
+      edgeSource.includes('p_last_outcome: "deferred"') &&
+      edgeSource.includes("p_validated_plan_at: null") &&
+      edgeSource.includes("p_validated_plan_fingerprint: null"),
+    "the first owned tank conflict must retry without terminal completion, while exhaustion stays deferred and non-validating",
+  );
+  assertSource(
+    edgeSource.includes('.select("current_run_id,current_run_started_at")') &&
+      edgeSource.includes("doesHeartbeatRunTokenMatch({") &&
+      edgeSource.includes("expectedRunId: runId") &&
+      edgeSource.includes("expectedRunStartedAt: runStartedAt") &&
+      retryLoopSource.includes('reason: "heartbeat_superseded"') &&
+      retryLoopSource.includes("wrote_to_heating_plans: false"),
+    "retry must stop without writes when a newer run owns the heartbeat",
+  );
+  assertSource(
+    retryLoopSource.includes('.insert({ id: shadowRunId, ...shadowRow })') &&
+      retryLoopSource.includes('.update(shadowRow)') &&
+      shadowRetryMigration.includes(
+        "grant update on table public.heating_plan_shadow_runs to service_role",
+      ),
+    "retry must refresh the invocation's single shadow row instead of inserting duplicate diagnostics",
   );
 
   assertSource(
