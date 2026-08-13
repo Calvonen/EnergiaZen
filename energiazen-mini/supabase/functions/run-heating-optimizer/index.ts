@@ -40,6 +40,7 @@ import {
   type RawHeatingPlanRow,
   type RawTankReading,
   type TankTemperatureReading,
+  wasHeartbeatCompareAndSetCommitted,
 } from "./logic.ts";
 
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
@@ -77,12 +78,28 @@ Deno.serve(async (request) => {
     // A crash before this write (or pg_cron never invoking the function)
     // cannot self-report. A persisted "running" state is intentionally
     // unhealthy, so a crash after this point fails safe on the Shelly.
-    const { error: beginHeartbeatError } = await supabase.rpc(
+    const { data: beginHeartbeatCommitted, error: beginHeartbeatError } = await supabase.rpc(
       "begin_backend_heating_optimizer_run",
       { p_run_id: runId, p_run_started_at: runStartedAt },
     );
     if (beginHeartbeatError) {
       throw new Error(`Failed to begin optimizer heartbeat: ${beginHeartbeatError.message}`);
+    }
+    if (!wasHeartbeatCompareAndSetCommitted(beginHeartbeatCommitted)) {
+      console.warn(
+        "run-heating-optimizer: run superseded before begin; optimizer pipeline skipped",
+        { run_id: runId, run_started_at: runStartedAt },
+      );
+      return jsonResponse(
+        {
+          heartbeat_committed: false,
+          reason: "heartbeat_begin_superseded",
+          run_id: runId,
+          status: "superseded",
+          wrote_to_heating_plans: false,
+        },
+        409,
+      );
     }
     // getDateKeyOffset reads the Helsinki calendar date and shifts by whole
     // calendar days - unlike a fixed +24h instant shift, it stays correct
@@ -308,7 +325,7 @@ Deno.serve(async (request) => {
       : null;
     // Shadow mode never writes heating_plans, so last_published_at is
     // deliberately absent and preserved even when a changed valid draft exists.
-    const { error: completeHeartbeatError } = await supabase.rpc(
+    const { data: completeHeartbeatCommitted, error: completeHeartbeatError } = await supabase.rpc(
       "complete_backend_heating_optimizer_run",
       {
         p_health_status: isNoChanges ? "healthy" : "unhealthy",
@@ -325,9 +342,20 @@ Deno.serve(async (request) => {
     if (completeHeartbeatError) {
       throw new Error(`Failed to complete optimizer heartbeat: ${completeHeartbeatError.message}`);
     }
+    const heartbeatCommitted = wasHeartbeatCompareAndSetCommitted(
+      completeHeartbeatCommitted,
+    );
+    if (!heartbeatCommitted) {
+      console.warn(
+        "run-heating-optimizer: run lost heartbeat ownership before completion",
+        { run_id: runId, run_started_at: runStartedAt },
+      );
+    }
 
     return jsonResponse({
       decision: decision.status,
+      heartbeat_committed: heartbeatCommitted,
+      heartbeat_status: heartbeatCommitted ? "committed" : "superseded",
       planned_hours_match: shadowRow.planned_hours_match,
       reason: shadowRow.reason,
       settings_source: settingsSource,

@@ -470,3 +470,12 @@ ja lopetus-RPC päivittää rivin vain molempien arvojen täsmätessä. Siksi my
 valmistuva vanha ajo ei voi ylikirjoittaa uudemman ajon tulosta. Onnistunut
 `no_changes` tallentaa lisäksi deterministisen identiteetin muodossa
 `YYYY-MM-DD|h1,h2,...`, jossa tunnit deduplikoidaan ja järjestetään.
+
+RPC:n boolean-paluuarvo on osa CAS-sopimusta: `begin = false` lopettaa
+superseded-ajon ennen optimizer-putkea HTTP 409 -vastauksella, eikä singletonia
+muuteta. `complete = false` säilyttää optimizerin diagnostisen vastauksen mutta
+merkitsee siihen `heartbeat_committed: false` ja `heartbeat_status:
+"superseded"`; vastaus ei siis väitä heartbeat-kirjoituksen onnistuneen.
+Migraation lähdetesti ei aja PL/pgSQL:ää oikeaa PostgreSQL-instanssia vasten,
+joten RPC:iden atomisuus ja oikeudet on validoitava staging-/tuotanto-Supabasessa
+ennen deploymentia.

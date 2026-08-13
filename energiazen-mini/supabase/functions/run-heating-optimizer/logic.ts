@@ -112,6 +112,13 @@ export function buildHeatingPlanFingerprint(
     : null;
 }
 
+// Supabase RPC returns the PL/pgSQL boolean as `data`. Only literal true
+// means the compare-and-set was committed; false/null/any unexpected shape
+// must never be reported as a successful heartbeat ownership operation.
+export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true {
+  return data === true;
+}
+
 // automaticMaxHeatingHours and safetyShowerReserve are settings the
 // optimizer needs that heating_control_settings does not (currently) carry
 // - see the shadow-mode PR report for why. Both fall back to

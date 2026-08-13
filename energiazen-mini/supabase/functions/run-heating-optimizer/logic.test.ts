@@ -11,6 +11,7 @@ import {
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
   runBackendHeatingOptimization,
+  wasHeartbeatCompareAndSetCommitted,
   type HeatingPlanPublicationDecision,
   type RawElectricityPriceRow,
   type RawHeatingControlSettingsRow,
@@ -58,6 +59,18 @@ function priceRowsForDay(
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  assertEqual(
+    wasHeartbeatCompareAndSetCommitted(true),
+    true,
+    "literal true is the only committed heartbeat RPC result",
+  );
+  for (const lostOwnershipResult of [false, null, undefined, "true", 1]) {
+    assertEqual(
+      wasHeartbeatCompareAndSetCommitted(lostOwnershipResult),
+      false,
+      "false or malformed RPC data must never look heartbeat-committed",
+    );
+  }
   // Fixed instant used across the fixtures below: 2026-08-12T11:30:00Z is
   // 14:30 in Helsinki (EEST, UTC+3) in August.
   const now = new Date("2026-08-12T11:30:00.000Z");
