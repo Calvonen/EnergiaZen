@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import * as Updates from "expo-updates";
 
-import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
 import {
   estimateHeatingGainPerHour,
   fallbackHeatingGainPerHour,
@@ -413,8 +412,27 @@ export default function HeatingLearningScreen() {
         draftSettings: nextSettings,
         savedSettings: previousSettings,
         saveLocal: saveSettings,
+        // Codex P2 (PR #193): must write only heating_gain_source, never the
+        // full heating_control_settings payload - previousSettings here is
+        // this device's local AsyncStorage snapshot, which can be stale for
+        // every OTHER field (heating_need_mode, reserves, calibration,
+        // backup hours, fallback flag). A full upsert would silently revert
+        // any of those to this stale local copy just because the user
+        // toggled gain source. A plain UPDATE (not upsert) also means this
+        // narrow action never creates a fresh, mostly-empty row on its own -
+        // that bootstrap case is SettingsScenarioProvider's backfill's job.
         saveRemote: async (settings) => {
-          await upsertHeatingControlSettings(supabase, settings);
+          const { error } = await supabase
+            .from("heating_control_settings")
+            .update({
+              heating_gain_source: settings.heatingGainSource,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", 1);
+
+          if (error) {
+            throw error;
+          }
         },
       });
     } catch {

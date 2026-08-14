@@ -50,9 +50,8 @@ export function runHeatingControlSettingsBackfillSourceTests() {
     "backend readiness check must still gate on heating_need_mode presence/validity (source contract baseline)",
   );
   assertSource(
-    backfillSource.includes(
-      'row.heating_need_mode === "automatic" || row.heating_need_mode === "fixed"',
-    ),
+    backfillSource.includes('value === "automatic" || value === "fixed"') &&
+      backfillSource.includes("isValidHeatingNeedMode(row.heating_need_mode)"),
     "app-side completeness check must require heating_need_mode to be a valid, present value",
   );
   assertSource(
@@ -62,9 +61,8 @@ export function runHeatingControlSettingsBackfillSourceTests() {
     "backend readiness check must still validate heating_gain_source (source contract baseline)",
   );
   assertSource(
-    backfillSource.includes(
-      'row.heating_gain_source === "learned" || row.heating_gain_source === "fixed"',
-    ),
+    backfillSource.includes('value === "learned" || value === "fixed"') &&
+      backfillSource.includes("isValidHeatingGainSource(row.heating_gain_source)"),
     "app-side completeness check must validate heating_gain_source the same way",
   );
 
@@ -98,7 +96,7 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   // overwrite - see ensureHeatingControlSettingsBackfilled's own contract
   // (upsertIfUnchanged) enforced by lib/heatingControlSettingsBackfill.test.ts.
   const upsertIfUnchangedStart = contextSource.indexOf(
-    "upsertIfUnchanged: async (settings, rowExisted, observedUpdatedAt) => {",
+    "upsertIfUnchanged: async (settings, observedRow) => {",
   );
   const upsertIfUnchangedEnd = contextSource.indexOf(
     "\n        },\n      });",
@@ -115,13 +113,24 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   assertSource(
     upsertIfUnchangedSource.includes("ignoreDuplicates: true") &&
       upsertIfUnchangedSource.includes('.is("updated_at", null)') &&
-      upsertIfUnchangedSource.includes('.eq("updated_at", observedUpdatedAt)'),
+      upsertIfUnchangedSource.includes('.eq("updated_at", observedRow.updated_at)'),
     "the conditional write must use insert-only-if-absent for a missing row and an updated_at-gated update for an existing one",
   );
   assertSource(
     upsertIfUnchangedSource.includes('.select("id")') &&
       upsertIfUnchangedSource.includes("Array.isArray(data) && data.length > 0"),
     "the conditional write must report whether it actually matched/wrote a row, not assume success",
+  );
+  // Codex P2 (startup backfill follow-up): the write must merge the
+  // observed row with the local payload, not write the local payload
+  // verbatim - see mergeHeatingControlSettingsBackfillPayload's own
+  // contract enforced by lib/heatingControlSettingsBackfill.test.ts.
+  assertSource(
+    upsertIfUnchangedSource.includes("buildHeatingControlSettingsPayload(settings)") &&
+      upsertIfUnchangedSource.includes(
+        "mergeHeatingControlSettingsBackfillPayload(",
+      ),
+    "the write must merge the local payload with the observed row, preserving already-authoritative remote fields",
   );
   assertSource(
     contextSource.includes("retryTimeoutId = setTimeout(") &&

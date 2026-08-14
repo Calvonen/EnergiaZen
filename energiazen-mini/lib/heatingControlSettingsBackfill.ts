@@ -11,12 +11,18 @@ import type { EnergiaZenSettings } from "./settings";
 // updated_at is selected purely as an optimistic-concurrency token for the
 // conditional write in ensureHeatingControlSettingsBackfilled below - it
 // plays no part in isHeatingControlSettingsRowAuthoritative's completeness
-// check.
+// check. backup_hours/fallback_enabled are selected purely so
+// mergeHeatingControlSettingsBackfillPayload below can preserve them too if
+// already authoritative - they likewise play no part in the completeness
+// check (Shelly's own fail-safe fields, not run-heating-optimizer readiness
+// inputs).
 export const heatingControlSettingsCompletenessColumns =
-  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,updated_at";
+  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,backup_hours,fallback_enabled,updated_at";
 
 export type HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: number | null;
+  backup_hours: number[] | null;
+  fallback_enabled: boolean | null;
   full_tank_average_temperature: number | null;
   full_tank_showers: number | null;
   heating_gain_source: string | null;
@@ -28,13 +34,31 @@ export type HeatingControlSettingsCompletenessRow = {
   updated_at: string | null;
 };
 
+function isValidHeatingNeedMode(
+  value: string | null,
+): value is "automatic" | "fixed" {
+  return value === "automatic" || value === "fixed";
+}
+
+function isValidHeatingGainSource(
+  value: string | null,
+): value is "learned" | "fixed" {
+  return value === "learned" || value === "fixed";
+}
+
+function isValidBackupHours(value: number[] | null): value is number[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
 // True only once the Supabase row carries every authoritative optimizer
 // input run-heating-optimizer's publication-readiness gate requires -
 // regardless of which mode is currently selected (a "fixed"-mode row still
 // needs complete numeric fields so backend-primary is instantly ready the
 // moment the user later switches to automatic). Existing installs created
 // before these columns existed have every one of them NULL, which this
-// correctly reports as not-yet-authoritative.
+// correctly reports as not-yet-authoritative. Deliberately does not
+// consider backup_hours/fallback_enabled - those are Shelly's own fail-safe
+// fields, not part of run-heating-optimizer's readiness gate.
 export function isHeatingControlSettingsRowAuthoritative(
   row: HeatingControlSettingsCompletenessRow | null,
 ): boolean {
@@ -43,7 +67,7 @@ export function isHeatingControlSettingsRowAuthoritative(
   }
 
   return (
-    (row.heating_need_mode === "automatic" || row.heating_need_mode === "fixed") &&
+    isValidHeatingNeedMode(row.heating_need_mode) &&
     Number.isFinite(row.automatic_max_heating_hours) &&
     Number.isFinite(row.full_tank_average_temperature) &&
     Number.isFinite(row.full_tank_showers) &&
@@ -51,8 +75,99 @@ export function isHeatingControlSettingsRowAuthoritative(
     Number.isFinite(row.min_tank_temperature) &&
     Number.isFinite(row.safety_shower_reserve) &&
     Number.isFinite(row.target_shower_reserve) &&
-    (row.heating_gain_source === "learned" || row.heating_gain_source === "fixed")
+    isValidHeatingGainSource(row.heating_gain_source)
   );
+}
+
+// The subset of HeatingControlSettingsPayload (lib/heatingControlSettingsPayload.ts)
+// that mergeHeatingControlSettingsBackfillPayload below can fill from local
+// settings - a structurally-compatible local type rather than importing
+// that module's type, so this file stays self-contained. id/timezone/
+// updated_at are excluded: they are never "local vs. remote", they're
+// always set the same way regardless of which side wins per field.
+export type HeatingControlSettingsBackfillPayloadFields = {
+  automatic_max_heating_hours: number;
+  backup_hours: number[];
+  fallback_enabled: boolean;
+  full_tank_average_temperature: number;
+  full_tank_showers: number;
+  heating_gain_source: "learned" | "fixed";
+  heating_need_mode: "automatic" | "fixed";
+  max_tank_temperature: number;
+  min_tank_temperature: number;
+  safety_shower_reserve: number;
+  target_shower_reserve: number;
+};
+
+// Codex P2 (PR #193, startup backfill follow-up): the original backfill
+// wrote a full payload built purely from local AsyncStorage settings
+// whenever the remote row was not YET fully authoritative - even if the
+// remote row already had some fields correctly set (e.g. by another
+// device), those already-good values would be silently overwritten by this
+// device's possibly-stale local copy just because some OTHER field was
+// still missing.
+//
+// This merges field-by-field instead: the observed remote row is the base,
+// and a field only falls back to localPayload's value when the remote
+// value is missing/invalid. A field that is already valid on the remote row
+// - including heating_need_mode itself - is preserved verbatim, never
+// replaced by the local value even if they differ. That is what stops a
+// stale local "fixed" from reverting a freshly-set remote "automatic" (or
+// vice versa) during the exact same kind of incomplete-row backfill this
+// module exists to handle.
+export function mergeHeatingControlSettingsBackfillPayload<
+  T extends HeatingControlSettingsBackfillPayloadFields,
+>(
+  localPayload: T,
+  observedRow: HeatingControlSettingsCompletenessRow | null,
+): T {
+  if (!observedRow) {
+    return localPayload;
+  }
+
+  return {
+    ...localPayload,
+    automatic_max_heating_hours: Number.isFinite(
+      observedRow.automatic_max_heating_hours,
+    )
+      ? (observedRow.automatic_max_heating_hours as number)
+      : localPayload.automatic_max_heating_hours,
+    backup_hours: isValidBackupHours(observedRow.backup_hours)
+      ? observedRow.backup_hours
+      : localPayload.backup_hours,
+    fallback_enabled:
+      typeof observedRow.fallback_enabled === "boolean"
+        ? observedRow.fallback_enabled
+        : localPayload.fallback_enabled,
+    full_tank_average_temperature: Number.isFinite(
+      observedRow.full_tank_average_temperature,
+    )
+      ? (observedRow.full_tank_average_temperature as number)
+      : localPayload.full_tank_average_temperature,
+    full_tank_showers: Number.isFinite(observedRow.full_tank_showers)
+      ? (observedRow.full_tank_showers as number)
+      : localPayload.full_tank_showers,
+    heating_gain_source: isValidHeatingGainSource(
+      observedRow.heating_gain_source,
+    )
+      ? observedRow.heating_gain_source
+      : localPayload.heating_gain_source,
+    heating_need_mode: isValidHeatingNeedMode(observedRow.heating_need_mode)
+      ? observedRow.heating_need_mode
+      : localPayload.heating_need_mode,
+    max_tank_temperature: Number.isFinite(observedRow.max_tank_temperature)
+      ? (observedRow.max_tank_temperature as number)
+      : localPayload.max_tank_temperature,
+    min_tank_temperature: Number.isFinite(observedRow.min_tank_temperature)
+      ? (observedRow.min_tank_temperature as number)
+      : localPayload.min_tank_temperature,
+    safety_shower_reserve: Number.isFinite(observedRow.safety_shower_reserve)
+      ? (observedRow.safety_shower_reserve as number)
+      : localPayload.safety_shower_reserve,
+    target_shower_reserve: Number.isFinite(observedRow.target_shower_reserve)
+      ? (observedRow.target_shower_reserve as number)
+      : localPayload.target_shower_reserve,
+  };
 }
 
 export type HeatingControlSettingsSyncOutcome =
@@ -64,24 +179,25 @@ export type HeatingControlSettingsSyncOutcome =
 // Pure orchestration, DI'd for testing without a real Supabase client.
 //
 // Never substitutes an arbitrary backend default for a missing field: the
-// only value ever written is localSettings, i.e. exactly what loadSettings()
-// already resolved from AsyncStorage (the app's own real - possibly still
-// factory-default, but never "backend arbitrary" - effective settings). It
-// never rewrites heating_need_mode to "automatic": buildHeatingControlSettingsPayload
-// (called by upsertIfUnchanged) mirrors localSettings.heatingNeedMode
-// verbatim, so a user already on fixed mode stays on fixed mode after a
-// backfill.
+// only value ever used as a fallback is localSettings, i.e. exactly what
+// loadSettings() already resolved from AsyncStorage (the app's own real -
+// possibly still factory-default, but never "backend arbitrary" -
+// effective settings), and only for fields the observed remote row does not
+// already have. It never rewrites an already-valid remote heating_need_mode
+// to "automatic": mergeHeatingControlSettingsBackfillPayload preserves
+// whatever valid mode the row already has, and only ever falls back to
+// localSettings.heatingNeedMode when the row had none.
 //
 // Race safety (Codex P2, PR #193): fetchRow() and the write below are two
 // separate round trips, so another device or a Settings save can make the
 // row authoritative in between. upsertIfUnchanged is a compare-and-swap
-// gated on the exact row state just observed (rowExisted/observedUpdatedAt)
-// - it must return false, not perform the write, if that state no longer
-// matches. Losing the race means someone else's write already happened, so
-// this re-reads once and trusts it (isHeatingControlSettingsRowAuthoritative
-// on the fresh read) instead of blindly retrying with a now-stale local
-// snapshot. No new tables/state: the CAS token is the row's own existing
-// updated_at column, and the retry-on-loss path reuses fetchRow.
+// gated on the exact row observed - it must return false, not perform the
+// write, if that state no longer matches. Losing the race means someone
+// else's write already happened, so this re-reads once and trusts it
+// (isHeatingControlSettingsRowAuthoritative on the fresh read) instead of
+// blindly retrying with a now-stale local snapshot. No new tables/state:
+// the CAS token is the row's own existing updated_at column, and the
+// retry-on-loss path reuses fetchRow.
 export async function ensureHeatingControlSettingsBackfilled({
   fetchRow,
   localSettings,
@@ -94,8 +210,7 @@ export async function ensureHeatingControlSettingsBackfilled({
   localSettings: EnergiaZenSettings;
   upsertIfUnchanged: (
     settings: EnergiaZenSettings,
-    rowExisted: boolean,
-    observedUpdatedAt: string | null,
+    observedRow: HeatingControlSettingsCompletenessRow | null,
   ) => Promise<boolean>;
 }): Promise<HeatingControlSettingsSyncOutcome> {
   let fetchResult: {
@@ -117,12 +232,9 @@ export async function ensureHeatingControlSettingsBackfilled({
     return "already_synced";
   }
 
-  const rowExisted = fetchResult.data !== null;
-  const observedUpdatedAt = fetchResult.data?.updated_at ?? null;
-
   let wrote: boolean;
   try {
-    wrote = await upsertIfUnchanged(localSettings, rowExisted, observedUpdatedAt);
+    wrote = await upsertIfUnchanged(localSettings, fetchResult.data);
   } catch {
     return "backfill_failed";
   }

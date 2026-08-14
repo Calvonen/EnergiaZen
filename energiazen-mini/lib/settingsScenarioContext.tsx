@@ -22,6 +22,7 @@ import {
   ensureHeatingControlSettingsBackfilled,
   heatingControlSettingsCompletenessColumns,
   isHeatingControlSettingsSyncOutcomeSynced,
+  mergeHeatingControlSettingsBackfillPayload,
   type HeatingControlSettingsCompletenessRow,
 } from "./heatingControlSettingsBackfill";
 
@@ -134,11 +135,20 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
           };
         },
         localSettings: persistedSettingsRef.current,
-        upsertIfUnchanged: async (settings, rowExisted, observedUpdatedAt) => {
-          const payload = buildHeatingControlSettingsPayload(settings);
+        upsertIfUnchanged: async (settings, observedRow) => {
+          // Codex P2 (PR #193, startup backfill follow-up): merge, don't
+          // overwrite - a field the observed row is already authoritative
+          // for is preserved verbatim; only fields the row is still missing
+          // fall back to localPayload. See
+          // mergeHeatingControlSettingsBackfillPayload's own comment.
+          const localPayload = buildHeatingControlSettingsPayload(settings);
+          const payload = mergeHeatingControlSettingsBackfillPayload(
+            localPayload,
+            observedRow,
+          );
           const table = supabase.from("heating_control_settings");
 
-          if (!rowExisted) {
+          if (!observedRow) {
             // No row observed - insert only if one still doesn't exist by
             // the time this reaches the database; a concurrent insert wins
             // and this becomes a no-op (empty `data`), not an overwrite.
@@ -160,7 +170,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
           // sets it), so the filter simply matches nothing and no row is
           // returned.
           const { data, error } =
-            observedUpdatedAt === null
+            observedRow.updated_at === null
               ? await table
                   .update(payload)
                   .eq("id", 1)
@@ -169,7 +179,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
               : await table
                   .update(payload)
                   .eq("id", 1)
-                  .eq("updated_at", observedUpdatedAt)
+                  .eq("updated_at", observedRow.updated_at)
                   .select("id");
 
           if (error) {

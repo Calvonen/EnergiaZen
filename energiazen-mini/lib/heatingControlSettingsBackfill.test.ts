@@ -3,6 +3,8 @@ import {
   ensureHeatingControlSettingsBackfilled,
   isHeatingControlSettingsRowAuthoritative,
   isHeatingControlSettingsSyncOutcomeSynced,
+  mergeHeatingControlSettingsBackfillPayload,
+  type HeatingControlSettingsBackfillPayloadFields,
   type HeatingControlSettingsCompletenessRow,
 } from "./heatingControlSettingsBackfill";
 
@@ -24,6 +26,8 @@ function readHeatingNeedMode(settings: EnergiaZenSettings | null) {
 
 const completeAutomaticRow: HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: 3,
+  backup_hours: [2, 3, 4],
+  fallback_enabled: true,
   full_tank_average_temperature: 55,
   full_tank_showers: 6,
   heating_gain_source: "learned",
@@ -39,6 +43,8 @@ const completeAutomaticRow: HeatingControlSettingsCompletenessRow = {
 // exactly the pre-migration shape described in the Codex P1 finding.
 const legacyEmptyRow: HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: null,
+  backup_hours: null,
+  fallback_enabled: null,
   full_tank_average_temperature: null,
   full_tank_showers: null,
   heating_gain_source: null,
@@ -48,6 +54,20 @@ const legacyEmptyRow: HeatingControlSettingsCompletenessRow = {
   safety_shower_reserve: null,
   target_shower_reserve: null,
   updated_at: null,
+};
+
+const localPayload: HeatingControlSettingsBackfillPayloadFields = {
+  automatic_max_heating_hours: 4,
+  backup_hours: [1, 2],
+  fallback_enabled: false,
+  full_tank_average_temperature: 50,
+  full_tank_showers: 5,
+  heating_gain_source: "fixed",
+  heating_need_mode: "fixed",
+  max_tank_temperature: 65,
+  min_tank_temperature: 12,
+  safety_shower_reserve: 1,
+  target_shower_reserve: 2,
 };
 
 export async function runHeatingControlSettingsBackfillUnitTests() {
@@ -91,6 +111,145 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
     "an invalid heating_gain_source must fail completeness",
   );
 
+  // --- mergeHeatingControlSettingsBackfillPayload ---------------------
+
+  assertEqual(
+    mergeHeatingControlSettingsBackfillPayload(localPayload, null),
+    localPayload,
+    "merging with no observed row at all must return the local payload unchanged",
+  );
+
+  // Codex P2 (startup backfill follow-up): a partially-authoritative remote
+  // row must keep every field it already has, and only genuinely missing
+  // fields may fall back to the local payload.
+  {
+    const partiallyAuthoritativeRow: HeatingControlSettingsCompletenessRow = {
+      ...legacyEmptyRow,
+      heating_need_mode: "automatic",
+      automatic_max_heating_hours: 6,
+      heating_gain_source: "learned",
+      updated_at: "2026-08-14T09:00:00.000Z",
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayload,
+      partiallyAuthoritativeRow,
+    );
+    assertEqual(
+      merged.heating_need_mode,
+      "automatic",
+      "an already-authoritative remote heating_need_mode must be preserved, not overwritten by a stale local value",
+    );
+    assertEqual(
+      merged.automatic_max_heating_hours,
+      6,
+      "an already-authoritative remote numeric field must be preserved",
+    );
+    assertEqual(
+      merged.heating_gain_source,
+      "learned",
+      "an already-authoritative remote heating_gain_source must be preserved",
+    );
+    assertEqual(
+      merged.full_tank_average_temperature,
+      localPayload.full_tank_average_temperature,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.full_tank_showers,
+      localPayload.full_tank_showers,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.max_tank_temperature,
+      localPayload.max_tank_temperature,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.min_tank_temperature,
+      localPayload.min_tank_temperature,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.safety_shower_reserve,
+      localPayload.safety_shower_reserve,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.target_shower_reserve,
+      localPayload.target_shower_reserve,
+      "a genuinely missing remote field must fall back to the local value",
+    );
+    assertEqual(
+      merged.backup_hours,
+      localPayload.backup_hours,
+      "a genuinely missing remote backup_hours must fall back to the local value",
+    );
+    assertEqual(
+      merged.fallback_enabled,
+      localPayload.fallback_enabled,
+      "a genuinely missing remote fallback_enabled must fall back to the local value",
+    );
+  }
+
+  // backup_hours/fallback_enabled must be part of the same merge policy as
+  // every other field - including preserving an explicit `false`, not just
+  // truthy values.
+  {
+    const rowWithBackupHoursAndFallback: HeatingControlSettingsCompletenessRow = {
+      ...completeAutomaticRow,
+      backup_hours: [5, 6, 7],
+      fallback_enabled: false,
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayload,
+      rowWithBackupHoursAndFallback,
+    );
+    assertEqual(
+      merged.backup_hours,
+      [5, 6, 7],
+      "an already-set remote backup_hours must be preserved by the merge",
+    );
+    assertEqual(
+      merged.fallback_enabled,
+      false,
+      "an already-set remote fallback_enabled (including false) must be preserved",
+    );
+  }
+
+  // A fully authoritative remote row must win on every field - the merge
+  // result must never carry any value from the local payload in that case.
+  {
+    const fullyAuthoritativeRow: HeatingControlSettingsCompletenessRow = {
+      ...completeAutomaticRow,
+      backup_hours: [7, 8],
+      fallback_enabled: true,
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayload,
+      fullyAuthoritativeRow,
+    );
+    assertEqual(
+      merged,
+      {
+        automatic_max_heating_hours: fullyAuthoritativeRow.automatic_max_heating_hours,
+        backup_hours: fullyAuthoritativeRow.backup_hours,
+        fallback_enabled: fullyAuthoritativeRow.fallback_enabled,
+        full_tank_average_temperature:
+          fullyAuthoritativeRow.full_tank_average_temperature,
+        full_tank_showers: fullyAuthoritativeRow.full_tank_showers,
+        heating_gain_source: fullyAuthoritativeRow.heating_gain_source,
+        heating_need_mode: fullyAuthoritativeRow.heating_need_mode,
+        max_tank_temperature: fullyAuthoritativeRow.max_tank_temperature,
+        min_tank_temperature: fullyAuthoritativeRow.min_tank_temperature,
+        safety_shower_reserve: fullyAuthoritativeRow.safety_shower_reserve,
+        target_shower_reserve: fullyAuthoritativeRow.target_shower_reserve,
+      },
+      "merging with a fully authoritative remote row must yield exactly the remote's own values for every field, never the local payload's",
+    );
+  }
+
+  // --- ensureHeatingControlSettingsBackfilled --------------------------
+
   const localSettings: EnergiaZenSettings = {
     ...defaultSettings,
     automaticMaxHeatingHours: 4,
@@ -101,19 +260,18 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
   // local settings -> Supabase backfill": a missing remote row must be
   // backfilled from the app's own already-loaded local settings, with no
   // user interaction and no arbitrary backend default substituted. Also
-  // verifies rowExisted/observedUpdatedAt are threaded through correctly
-  // for the "no row yet" case.
+  // verifies the observed row (null here) is threaded through to
+  // upsertIfUnchanged unchanged, so the caller can build its own
+  // compare-and-swap and merge on it.
   {
     let upsertedSettings: EnergiaZenSettings | null = null;
-    let observedRowExisted: boolean | null = null;
-    let observedUpdatedAtSeen: string | null | undefined;
+    let observedRowSeen: HeatingControlSettingsCompletenessRow | null | undefined;
     const outcome = await ensureHeatingControlSettingsBackfilled({
       fetchRow: async () => ({ data: null, error: null }),
       localSettings,
-      upsertIfUnchanged: async (settings, rowExisted, observedUpdatedAt) => {
+      upsertIfUnchanged: async (settings, observedRow) => {
         upsertedSettings = settings;
-        observedRowExisted = rowExisted;
-        observedUpdatedAtSeen = observedUpdatedAt;
+        observedRowSeen = observedRow;
         return true;
       },
     });
@@ -123,11 +281,10 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
       localSettings,
       "the backfill must upsert exactly the app's current local settings, not an arbitrary default",
     );
-    assertEqual(observedRowExisted, false, "a missing row must report rowExisted = false");
     assertEqual(
-      observedUpdatedAtSeen,
+      observedRowSeen,
       null,
-      "a missing row must report observedUpdatedAt = null",
+      "a missing row must pass observedRow = null through to upsertIfUnchanged",
     );
     assertEqual(
       isHeatingControlSettingsSyncOutcomeSynced(outcome),
@@ -136,33 +293,31 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
     );
   }
 
-  // The same, but for an existing incomplete row - rowExisted/
-  // observedUpdatedAt must reflect the row actually read, so the caller can
-  // build a compare-and-swap on it.
+  // The same, but for an existing incomplete row - the exact row read must
+  // be passed through to upsertIfUnchanged, so the caller can build a
+  // compare-and-swap and a merge on it.
   {
-    let observedRowExisted: boolean | null = null;
-    let observedUpdatedAtSeen: string | null | undefined;
+    let observedRowSeen: HeatingControlSettingsCompletenessRow | null | undefined;
     const outcome = await ensureHeatingControlSettingsBackfilled({
       fetchRow: async () => ({ data: legacyEmptyRow, error: null }),
       localSettings,
-      upsertIfUnchanged: async (_settings, rowExisted, observedUpdatedAt) => {
-        observedRowExisted = rowExisted;
-        observedUpdatedAtSeen = observedUpdatedAt;
+      upsertIfUnchanged: async (_settings, observedRow) => {
+        observedRowSeen = observedRow;
         return true;
       },
     });
     assertEqual(outcome, "backfilled", "an existing incomplete row must trigger a backfill");
-    assertEqual(observedRowExisted, true, "an existing row must report rowExisted = true");
     assertEqual(
-      observedUpdatedAtSeen,
-      legacyEmptyRow.updated_at,
-      "the observed row's own updated_at must be passed through as the CAS token",
+      observedRowSeen,
+      legacyEmptyRow,
+      "the observed row must be passed through to upsertIfUnchanged unchanged",
     );
   }
 
   // "jo täydellinen Supabase settings-rivi ei regressioidu": an already-
   // authoritative row must short-circuit without ever calling
-  // upsertIfUnchanged.
+  // upsertIfUnchanged - i.e. a fully authoritative remote row must never be
+  // written to at all.
   {
     let upsertCalled = false;
     const outcome = await ensureHeatingControlSettingsBackfilled({
@@ -188,7 +343,8 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
   // returning false (its compare-and-swap matched nothing) - the backfill
   // must re-read once and, finding the row now authoritative, defer to it
   // as already_synced instead of a second blind write with the stale
-  // localSettings snapshot.
+  // localSettings snapshot. This is the CAS-conflict case: the newer row
+  // wins and is re-read.
   {
     let fetchCount = 0;
     let upsertAttempted = false;
