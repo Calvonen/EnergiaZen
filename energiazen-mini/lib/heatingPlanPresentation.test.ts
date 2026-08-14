@@ -2,6 +2,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
 } from "./heatingPlanPresentation";
 
@@ -33,6 +34,43 @@ const baseInput = {
 };
 
 export function runHeatingPlanPresentationUnitTests() {
+  const priceInterval = (startsAt: string) => ({
+    date: new Date(startsAt),
+    startDate: startsAt,
+  });
+  const rollbackPrices = [
+    priceInterval("2026-10-25T00:00:00.000Z"),
+    priceInterval("2026-10-25T01:00:00.000Z"),
+  ];
+
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: [
+        priceInterval("2026-10-24T00:00:00.000Z"),
+        priceInterval("2026-10-24T01:00:00.000Z"),
+      ],
+      storedPlans: [{ plan_date: "2026-10-24", planned_hours: [3] }],
+    }),
+    false,
+    "normaalipaivan tallennettu tunti ei ole monitulkintainen",
+  );
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: rollbackPrices,
+      storedPlans: [{ plan_date: "2026-10-25", planned_hours: [3] }],
+    }),
+    true,
+    "DST-palautuspaivan kahdesti esiintyva tallennettu tunti vaatii optimizer-varavaihtoehdon",
+  );
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: rollbackPrices,
+      storedPlans: [{ plan_date: "2026-10-25", planned_hours: [4] }],
+    }),
+    false,
+    "DST-paivan duplikaatti ei estä tallennettua suunnitelmaa kun suunnitelma ei viittaa siihen",
+  );
+
   const stored = buildStoredHeatingPlanPresentation({
     currentShowers: 5.8,
     safetyShowerReserve: 2,
@@ -51,8 +89,49 @@ export function runHeatingPlanPresentationUnitTests() {
     1,
     "tallennetun suunnitelman tunnit sailyvat odotusnakymaan",
   );
+  assertEqual(
+    stored.selectedHours[0]?.label,
+    "06-07 · 2,0 c/kWh",
+    "tallennettujen tuntien hintatieto sailyy esityksessa",
+  );
+  assertEqual(
+    stored.forecastSummary,
+    "Tallennettu suunnitelma ei sisällä ennustetietoja.",
+    "tallennettu suunnitelma ei vihjaa kayttavansa nykyista paikallista ennustetta",
+  );
+  assertEqual(
+    stored.limitsSummary,
+    "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    "tallennettu suunnitelma ei nimea nykyisia paikallisia tavoite- tai turvarajoja",
+  );
+  assertEqual(
+    buildStoredHeatingPlanPresentation({
+      currentShowers: 0.4,
+      safetyShowerReserve: 0.5,
+      selectedHours: [
+        { label: "06-07", period: "Tänään", price: 2 },
+      ],
+      targetShowerReserve: 9,
+    }),
+    stored,
+    "paikallisten asetusten tai suihkuarvion muutos ei muuta tallennetun backend-suunnitelman metadataa",
+  );
 
   const standard = buildHeatingPlanPresentation(baseInput);
+  assertEqual(
+    selectActiveHeatingPlanPresentation(
+      standard,
+      hasAmbiguousStoredHeatingPlanHour({
+        hourlyPrices: rollbackPrices,
+        storedPlans: [{ plan_date: "2026-10-25", planned_hours: [3] }],
+      })
+        ? null
+        : stored,
+      true,
+    ),
+    standard,
+    "monitulkintainen tallennettu DST-tunti johtaa optimizer-esityksen varavaihtoehtoon",
+  );
   assertEqual(standard.reasonKind, "standard", "tavallinen suunnitelma tunnistetaan");
   assertEqual(
     standard.reason,
@@ -291,7 +370,17 @@ export function runHeatingPlanPresentationUnitTests() {
   assertEqual(
     selectActiveHeatingPlanPresentation(standard, stored) === standard,
     true,
-    "tuore optimointitulos voittaa tallennetun suunnitelman",
+    "legacy-tilassa tuore optimointitulos voittaa tallennetun suunnitelman",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, stored, true) === stored,
+    true,
+    "backend-primary-tilassa tallennettu suunnitelma voittaa tuoreen optimointituloksen",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, null, true) === standard,
+    true,
+    "backend-primary-tilassa tuore optimointitulos toimii varavaihtoehtona, kun tallennettua suunnitelmaa ei ole",
   );
   assertEqual(
     selectActiveHeatingPlanPresentation(null, stored) === stored,

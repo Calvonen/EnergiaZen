@@ -69,6 +69,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
 } from "@/lib/heatingPlanPresentation";
 import {
@@ -1468,7 +1469,11 @@ export default function HomeScreen() {
       storedHeatingPlans[tomorrowPlanDate],
     ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
 
-    if (storedPlans.length === 0) {
+    if (storedPlans.length !== 2) {
+      return null;
+    }
+
+    if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
       return null;
     }
 
@@ -1526,9 +1531,14 @@ export default function HomeScreen() {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
   }, [hasUnsavedChanges]);
 
+  const storedHeatingPlanIsAuthoritative =
+    BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
+    settings.heatingNeedMode === "automatic" &&
+    heatingControlSettingsSyncStatus !== "unsynced";
   const activePlanPresentation = selectActiveHeatingPlanPresentation(
     activeOptimizerPresentation,
     storedHeatingPlanPresentation,
+    storedHeatingPlanIsAuthoritative,
   );
   const scenarioPlanPresentation =
     hasUnsavedChanges && scenarioValidation.errors.length === 0

@@ -1,3 +1,10 @@
+import { normalizeStoredHeatingPlanHours } from "./heatingPlanMarkers";
+import {
+  getFinnishDateKey,
+  getHelsinkiHourNumber,
+  type HourlyPrice,
+} from "./heatingLogic";
+
 export type HeatingPlanReasonKind =
   | "early-for-safety"
   | "fallback"
@@ -181,38 +188,37 @@ export function buildHeatingPlanPresentation({
 }
 
 export function buildStoredHeatingPlanPresentation({
-  currentShowers,
-  safetyShowerReserve,
   selectedHours,
-  targetShowerReserve,
 }: {
   currentShowers: number | null;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
   targetShowerReserve: number;
-}) {
-  const currentShowersValue = currentShowers ?? 0;
-  const presentation = buildHeatingPlanPresentation({
-    automaticMaxHeatingHours: selectedHours.length,
-    cheaperPlanRejectedForSafety: false,
-    currentShowers,
-    fallbackInUse: false,
-    finalShowers: currentShowersValue,
-    fixedHeatingHoursPerDay: selectedHours.length,
-    forecastEndLabel: "ennusteen paivittyessa",
-    heatingNeedMode: "automatic",
-    minimumShowers: currentShowersValue,
-    planValid: true,
-    safetyShowerReserve,
-    selectedHours,
-    targetShowerReserve,
-  });
-
+}): HeatingPlanPresentation {
   return {
-    ...presentation,
+    emptyPlanLabel:
+      selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
     forecastDetails: null,
-    forecastSummary: "Ennustetta päivitetään uusilla lämpötilatiedoilla.",
-    reason: "Näytetään viimeksi tallennettu lämmityssuunnitelma.",
+    forecastSummary: "Tallennettu suunnitelma ei sisällä ennustetietoja.",
+    heatingSummary:
+      selectedHours.length === 0
+        ? null
+        : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
+    limitsSummary:
+      "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
+    reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
+    selectedHours: selectedHours.map((hour) => {
+      const priceLabel = formatHeatingHourPrice(hour.price);
+      const costLabel = formatEstimatedCost(hour.estimatedCostEuros);
+
+      return {
+        ...hour,
+        label: [hour.label, priceLabel, costLabel]
+          .filter((label): label is string => Boolean(label))
+          .join(" · "),
+      };
+    }),
     statusSummary: "Viimeksi tallennettu suunnitelma",
   };
 }
@@ -220,8 +226,38 @@ export function buildStoredHeatingPlanPresentation({
 export function selectActiveHeatingPlanPresentation(
   freshOptimizerPresentation: HeatingPlanPresentation | null,
   storedPresentation: HeatingPlanPresentation | null,
+  storedPlanIsAuthoritative = false,
 ) {
+  if (storedPlanIsAuthoritative) {
+    return storedPresentation ?? freshOptimizerPresentation;
+  }
+
   return freshOptimizerPresentation ?? storedPresentation;
+}
+
+export function hasAmbiguousStoredHeatingPlanHour({
+  hourlyPrices,
+  storedPlans,
+}: {
+  hourlyPrices: Pick<HourlyPrice, "date" | "startDate">[];
+  storedPlans: { plan_date?: string | null; planned_hours?: unknown }[];
+}) {
+  const priceIntervalsByDateHour = new Map<string, Set<number>>();
+
+  for (const price of hourlyPrices) {
+    const dateHour = `${getFinnishDateKey(price.startDate)}:${getHelsinkiHourNumber(price.date)}`;
+    const intervalStarts = priceIntervalsByDateHour.get(dateHour) ?? new Set();
+    intervalStarts.add(price.date.getTime());
+    priceIntervalsByDateHour.set(dateHour, intervalStarts);
+  }
+
+  return storedPlans.some((plan) =>
+    normalizeStoredHeatingPlanHours(plan.planned_hours).some(
+      (hour) =>
+        (priceIntervalsByDateHour.get(`${plan.plan_date}:${hour}`)?.size ?? 0) >
+        1,
+    ),
+  );
 }
 
 export function hasCheaperSafetyRejectedPlan({
