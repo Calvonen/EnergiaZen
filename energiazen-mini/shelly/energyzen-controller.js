@@ -503,7 +503,9 @@ function isTrustedBackendHeartbeat(rows, error, planRow, nowMs) {
 
 function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowMs) {
   let control = resolvePlanControl(planRows, planError, settings, today);
-  if (control.source !== "energyzen" || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
+  // Fixed rows are authoritative user commands, not optimizer publications.
+  // Only automatic rows participate in backend heartbeat/fingerprint trust.
+  if (control.source !== "energyzen" || planRows[0].mode === "fixed" || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
   return settings.enabled
     ? { failSafeReason: null, plannedHours: settings.backupHours, resetHighFillReadings: true, source: "backup" }
     : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], resetHighFillReadings: true, source: "fail-safe" };
@@ -636,7 +638,7 @@ function fetchTodayPlan(settings) {
   let today = getLocalDateKey();
   let planPath =
     "heating_plans" +
-    "?select=plan_date,planned_hours,updated_at" +
+    "?select=plan_date,planned_hours,updated_at,mode" +
     "&plan_date=eq." +
     today +
     "&limit=1";

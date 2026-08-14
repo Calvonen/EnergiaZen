@@ -411,6 +411,11 @@ function trustedControl(heartbeatRows, testSettings = settings) {
   return resolveTrustedPlanControl(todayPlan, null, heartbeatRows, null, testSettings, "2026-08-13", heartbeatNow);
 }
 const freshHeartbeat = [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00.000Z", validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]) }];
+const fixedPlan = [{ plan_date: "2026-08-13", planned_hours: [7, 8], mode: "fixed" }];
+assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan bypasses unhealthy automatic heartbeat");
+assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00Z", validated_plan_fingerprint: null }], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan does not require an optimizer fingerprint");
+assert.strictEqual(resolveTrustedPlanControl([{ ...fixedPlan[0], mode: "automatic" }], null, [{ health_status: "unhealthy" }], null, settings, "2026-08-13", heartbeatNow).source, "backup", "fixed to automatic transition activates heartbeat trust");
+assert.strictEqual(resolveTrustedPlanControl([{ ...todayPlan[0], mode: "fixed" }], null, [], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "automatic to fixed transition drops old heartbeat dependency");
 assert.strictEqual(trustedControl(freshHeartbeat).source, "energyzen", "fresh healthy heartbeat trusts today's plan even when heating_plans.updated_at is old (no_changes)");
 assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-13", planned_hours: [7, 8] }], null, freshHeartbeat, null, settings, "2026-08-13", heartbeatNow).source, "backup", "later changed planned_hours must not inherit trust");
 assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-14", planned_hours: [15] }], null, freshHeartbeat, null, settings, "2026-08-14", heartbeatNow).source, "backup", "a different plan_date must not inherit trust");

@@ -77,6 +77,7 @@ import {
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
+  shouldPublishHeatingPlanFromApp,
   shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "@/lib/heatingPlanPublication";
 import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
@@ -113,6 +114,10 @@ import {
   selectTemperatureDropProfile,
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
+
+// Rollback switch: disable to restore the app's legacy automatic publisher.
+// Fixed plans are deliberately unaffected by this backend-primary rollout.
+const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
 
 const DEBUG_HISTORY_PERFORMANCE = false;
 const DEBUG_HOME_DAY_TAB_PERFORMANCE = false;
@@ -1800,6 +1805,21 @@ export default function HomeScreen() {
         optimizerHourCount: optimizerHours.length,
         optimizerSelectedHeatingHourIds: [],
       });
+      latestHeatingPlanSaveVersionRef.current += 1;
+      return;
+    }
+
+    if (
+      !shouldPublishHeatingPlanFromApp({
+        backendPrimaryEnabled: BACKEND_PRIMARY_HEATING_PLAN_ENABLED,
+        mode: settings.heatingNeedMode,
+      })
+    ) {
+      debugLog("Heating plan app publication skipped in backend-primary mode", {
+        optimizerRunId: activeOptimizationRun.runId,
+      });
+      // Cancel automatic saves queued before a mode/input transition. The
+      // optimizer result remains available for preview and diagnostics.
       latestHeatingPlanSaveVersionRef.current += 1;
       return;
     }

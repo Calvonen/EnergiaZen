@@ -5,6 +5,7 @@ import {
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
   publishLatestHeatingPlan,
+  shouldPublishHeatingPlanFromApp,
   shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "./heatingPlanPublication";
 import type { PublishedHeatingPlanState } from "./heatingPlanPublication";
@@ -24,6 +25,21 @@ function assertSame(actual: unknown, expected: unknown, message: string) {
 }
 
 export function runHeatingPlanPublicationUnitTests() {
+  assertEqual(
+    shouldPublishHeatingPlanFromApp({ backendPrimaryEnabled: true, mode: "automatic" }),
+    false,
+    "backend-primary estaa appin automatic-julkaisun",
+  );
+  assertEqual(
+    shouldPublishHeatingPlanFromApp({ backendPrimaryEnabled: false, mode: "automatic" }),
+    true,
+    "rollback palauttaa appin automatic-julkaisun",
+  );
+  assertEqual(
+    shouldPublishHeatingPlanFromApp({ backendPrimaryEnabled: true, mode: "fixed" }),
+    true,
+    "backend-primary ei esta fixed-planin tallennusta",
+  );
   assertEqual(
     canPublishActiveHeatingPlan({
       isOptimizationCurrent: true,
