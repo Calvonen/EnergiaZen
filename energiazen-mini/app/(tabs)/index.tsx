@@ -115,8 +115,14 @@ import {
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
 
-// Rollback switch: disable to restore the app's legacy automatic publisher.
-// Fixed plans are deliberately unaffected by this backend-primary rollout.
+// Rollback switch: disable to restore the app's legacy automatic publisher
+// for every install regardless of Supabase settings sync state. Fixed plans
+// are deliberately unaffected by this backend-primary rollout. This is only
+// the deploy-time half of the gate - per-install, shouldPublishHeatingPlanFromApp
+// below additionally requires isHeatingControlSettingsSynced, so a single
+// install never loses automatic publication just because its own
+// heating_control_settings row isn't authoritative yet (Codex P1 review, PR
+// #193 upgrade/backfill follow-up).
 const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
 
 const DEBUG_HISTORY_PERFORMANCE = false;
@@ -845,6 +851,7 @@ export default function HomeScreen() {
     areSettingsLoaded,
     draftSettings: scenarioSettings,
     hasUnsavedChanges,
+    isHeatingControlSettingsSynced,
     persistedSettings: activeSettings,
   } = useSettingsScenario();
   const [planView, setPlanView] = useState<"active" | "scenario">("active");
@@ -1888,7 +1895,8 @@ export default function HomeScreen() {
 
     if (
       !shouldPublishHeatingPlanFromApp({
-        backendPrimaryEnabled: BACKEND_PRIMARY_HEATING_PLAN_ENABLED,
+        backendPrimaryEnabled:
+          BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced,
         mode: settings.heatingNeedMode,
       })
     ) {
@@ -2068,6 +2076,7 @@ export default function HomeScreen() {
     finalTargetHours,
     finalTomorrowTargetHours,
     hasAttemptedTankReadingFetch,
+    isHeatingControlSettingsSynced,
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,

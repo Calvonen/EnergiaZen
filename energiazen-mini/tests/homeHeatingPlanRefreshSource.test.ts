@@ -112,7 +112,9 @@ export function runHomeHeatingPlanRefreshSourceTests() {
   // fix only adds a read-side refresh path, never a new write path.
   assertSource(
     homeSource.includes("shouldPublishHeatingPlanFromApp({") &&
-      homeSource.includes("backendPrimaryEnabled: BACKEND_PRIMARY_HEATING_PLAN_ENABLED,"),
+      homeSource.includes(
+        "BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced",
+      ),
     "the app-side automatic publication gate must remain in place - this fix must not restore direct app writes",
   );
 }

@@ -446,17 +446,39 @@ Mikään uusi kirjoituspolku `heating_plans`/heartbeat-tilaan ei synny: kaikki
 PR #193:n CAS-, snapshot- ja fail-safe-suojaukset koskevat myös näin
 käynnistettyä ajoa identtisesti.
 
-**Debounce/coalescing:** singleton-tila
-`backend_heating_optimizer_trigger_state` (rivi `id = 1`) muistaa viimeisen
-dispatch-ajan. Jos pyyntö tulee alle 30 sekunnin sisällä edellisestä
-dispatchista, funktio vain merkitsee `pending = true` eikä tee uutta
-HTTP-kutsua - se ei siis käynnistä uutta optimizer-ajoa jokaisesta
-minuutin välein saapuvasta tankkilukemasta. Koska `tank_readings` päivittyy
-noin minuutin välein, debounce-ikkunan sulkeuduttua seuraava lukema (tai
-seuraava relevantti asetusmuutos, tai viime kädessä tunnin cron) toimii
-luonnostaan trailing-dispatchina - mitään alkuperäisestä eventistä ei
-tarvitse toistaa, koska jokainen dispatch lukee tuoreimman datan
-kutsuhetkellä.
+**Materiaalisuus + per-avain debounce (päivitetty
+`20260814030000_material_change_heating_optimizer_trigger.sql`):** alun
+perin `tank_readings`-triggeri käynnisti dispatchin jokaisesta uudesta
+rivistä (rajoitettuna vain yhdellä jaetulla 30 sekunnin ikkunalla), mikä
+tarkoitti käytännössä uutta optimizer-ajoa lähes jokaisesta minuutin
+välein saapuvasta lukemasta - jopa ~60 kertaa tunnissa. Tämä korvattiin
+kahdella erillisellä mekanismilla:
+
+- **Materiaalisuustarkistus ennen dispatchia.** Singleton-taulu
+  `backend_heating_optimizer_tank_trigger_baseline` (rivi `id = 1`) muistaa
+  viimeisimmän lukeman, jolle ajo on pyydetty (`last_considered_heating`,
+  `last_considered_top_temp`, `last_considered_bottom_temp`). Uusi rivi
+  pyytää ajon vain, jos `heating` muuttuu (mukaan lukien tri-state
+  true/false/unknown-siirtymät) tai jos `top_temp`/`bottom_temp` poikkeaa
+  baselinesta vähintään
+  `waterDrawDetectionLimits.minDropCelsius`:n (5 °C,
+  `supabase/functions/_shared/waterDrawDetection.ts` - ei uusi keksitty
+  raja) verran. Baseline liikkuu vain silloin kun muutos on materiaalinen,
+  joten monta pientä, yksitellen kynnyksen alittavaa askelta ylittää sen
+  silti kumulatiivisesti. Tavallinen lähes muuttumaton minuuttilukema ei
+  koskaan edes yritä dispatchia.
+- **Per-avain cooldown dispatch-funktiossa.** Taulu
+  `backend_heating_optimizer_trigger_debounce` pitää erillistä
+  `last_dispatch_requested_at`-tilaa `'tank'`- ja `'settings'`-avaimille;
+  `request_backend_heating_optimizer_run(p_reason, p_debounce_key,
+  p_min_interval)` ottaa nyt minimi-intervallin parametrina. Materiaalinen
+  tankkimuutos käyttää `'tank'`-avainta 5 minuutin cooldownilla (kova
+  yläraja ajotiheydelle esim. hakkaavaa relettä/anturia vastaan, mutta
+  silti paljon nopeampi kuin tunnin cron-fallback); `heating_control_settings`-
+  muutos käyttää edelleen `'settings'`-avainta 30 sekunnin ikkunalla, joten
+  se pysyy nopeana eikä koskaan odota tankki-cooldownin takana. Ikkunan
+  sisällä tuleva pyyntö vain merkitsee `pending = true` samalla tavalla
+  kuin ennen.
 
 **Trigger-loop-turvallisuus:** triggerit on kiinnitetty vain
 `tank_readings`- ja `heating_control_settings`-tauluihin, joita
@@ -471,6 +493,52 @@ uudelleen.
 `WARNING`-tasolla - se ei koskaan voi kaataa tai rollbackata sitä
 `tank_readings`-inserttiä tai `heating_control_settings`-updatea, joka sen
 laukaisi.
+
+### Asetusten backfill ennen backend-primary-julkaisua
+
+Olemassa olevalla asennuksella `heating_control_settings`-rivi on voinut
+syntyä ennen kuin backend-primaryn vaatimat authoritative-sarakkeet
+(`heating_need_mode`, `automatic_max_heating_hours`,
+`safety_shower_reserve`, `target_shower_reserve`, `full_tank_showers`,
+`full_tank_average_temperature`, `min_tank_temperature`,
+`max_tank_temperature`, `heating_gain_source`) ylipäätään olivat olemassa,
+jolloin ne ovat `NULL`. `resolveOptimizerSettings` (backend) failaa tällöin
+kiinni (`control_mode_missing`/`settings_incomplete`) eikä koskaan
+julkaise - ja koska appin oma legacy-automaattijulkaisija on
+backend-primary-tilassa poissa käytöstä, käyttäjän `heating_plans` voisi
+jäädä jäätyneeksi kunnes hän sattuu avaamaan Asetukset ja painamaan
+Tallenna.
+
+`lib/settingsScenarioContext.tsx` (`SettingsScenarioProvider`, koko sovelluksen
+jaettu asetuskonteksti) ratkaisee tämän ilman käyttäjän toimenpiteitä:
+heti kun `loadSettings()` on ladannut appin todelliset paikalliset
+asetukset AsyncStoragesta, se tarkistaa `lib/heatingControlSettingsBackfill.ts`:n
+`isHeatingControlSettingsRowAuthoritative`-funktiolla onko Supabasen rivi jo
+täydellinen. Jos ei, se kutsuu täsmälleen samaa
+`upsertHeatingControlSettings`/`buildHeatingControlSettingsPayload`-polkua
+jota Asetukset-ruudun oma Tallenna-painike käyttää, ja kirjoittaa appin
+**nykyiset** paikalliset asetukset (ei mitään erillistä "backend-oletusta")
+Supabaseen. `heating_need_mode` kirjoitetaan täsmälleen sellaisena kuin se
+paikallisesti on - `fixed`-tilassa oleva asennus pysyy `fixed`-tilassa,
+backfill ei koskaan pakota sitä automaattiseksi.
+
+Kontekstin `isHeatingControlSettingsSynced`-arvo on `false` oletuksena
+(fail-safe) ja muuttuu `true`:ksi vasta kun rivi on vahvistettu
+täydelliseksi (oli se jo valmiiksi sitä, tai backfill juuri onnistui).
+`app/(tabs)/index.tsx`:n `shouldPublishHeatingPlanFromApp`-portti vaatii nyt
+sekä deploy-aikaisen `BACKEND_PRIMARY_HEATING_PLAN_ENABLED`-lipun että tämän
+per-asennuskohtaisen synkronointivahvistuksen - pelkkä lippu ei enää riitä.
+Näin yksikään asennus ei jää ilman toimivaa automaattijulkaisijaa: kunnes
+oma synkronointi on vahvistettu, appin legacy-automaattijulkaisija pysyy
+käytössä täsmälleen kuten ennen backend-primarya. Epäonnistunut tarkistus
+tai kirjoitus (verkkovirhe, Supabase-virhe) pitää `isHeatingControlSettingsSynced`-
+arvon `false`:na ja yrittää uudelleen 5 minuutin välein taustalla.
+
+Migraatio `20260814020000_grant_heating_control_settings_client_select.sql`
+varmistaa idempotentisti, että `anon`/`authenticated` saavat myös SELECT-
+oikeuden `heating_control_settings`-tauluun (INSERT/UPDATE toimi jo ennen
+tätä appin oman Tallenna-polun kautta, mutta SELECT ei ollut minkään
+migraation varmistama) - tätä tarvitaan backfill-tarkistuksen lukuun.
 
 ### Backend-optimoijan trust-heartbeat
 
