@@ -181,38 +181,37 @@ export function buildHeatingPlanPresentation({
 }
 
 export function buildStoredHeatingPlanPresentation({
-  currentShowers,
-  safetyShowerReserve,
   selectedHours,
-  targetShowerReserve,
 }: {
   currentShowers: number | null;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
   targetShowerReserve: number;
-}) {
-  const currentShowersValue = currentShowers ?? 0;
-  const presentation = buildHeatingPlanPresentation({
-    automaticMaxHeatingHours: selectedHours.length,
-    cheaperPlanRejectedForSafety: false,
-    currentShowers,
-    fallbackInUse: false,
-    finalShowers: currentShowersValue,
-    fixedHeatingHoursPerDay: selectedHours.length,
-    forecastEndLabel: "ennusteen paivittyessa",
-    heatingNeedMode: "automatic",
-    minimumShowers: currentShowersValue,
-    planValid: true,
-    safetyShowerReserve,
-    selectedHours,
-    targetShowerReserve,
-  });
-
+}): HeatingPlanPresentation {
   return {
-    ...presentation,
+    emptyPlanLabel:
+      selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
     forecastDetails: null,
-    forecastSummary: "Ennustetta päivitetään uusilla lämpötilatiedoilla.",
-    reason: "Näytetään viimeksi tallennettu lämmityssuunnitelma.",
+    forecastSummary: "Tallennettu suunnitelma ei sisällä ennustetietoja.",
+    heatingSummary:
+      selectedHours.length === 0
+        ? null
+        : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
+    limitsSummary:
+      "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
+    reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
+    selectedHours: selectedHours.map((hour) => {
+      const priceLabel = formatHeatingHourPrice(hour.price);
+      const costLabel = formatEstimatedCost(hour.estimatedCostEuros);
+
+      return {
+        ...hour,
+        label: [hour.label, priceLabel, costLabel]
+          .filter((label): label is string => Boolean(label))
+          .join(" · "),
+      };
+    }),
     statusSummary: "Viimeksi tallennettu suunnitelma",
   };
 }

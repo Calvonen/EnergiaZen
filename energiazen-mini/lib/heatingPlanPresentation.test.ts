@@ -51,6 +51,33 @@ export function runHeatingPlanPresentationUnitTests() {
     1,
     "tallennetun suunnitelman tunnit sailyvat odotusnakymaan",
   );
+  assertEqual(
+    stored.selectedHours[0]?.label,
+    "06-07 · 2,0 c/kWh",
+    "tallennettujen tuntien hintatieto sailyy esityksessa",
+  );
+  assertEqual(
+    stored.forecastSummary,
+    "Tallennettu suunnitelma ei sisällä ennustetietoja.",
+    "tallennettu suunnitelma ei vihjaa kayttavansa nykyista paikallista ennustetta",
+  );
+  assertEqual(
+    stored.limitsSummary,
+    "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    "tallennettu suunnitelma ei nimea nykyisia paikallisia tavoite- tai turvarajoja",
+  );
+  assertEqual(
+    buildStoredHeatingPlanPresentation({
+      currentShowers: 0.4,
+      safetyShowerReserve: 0.5,
+      selectedHours: [
+        { label: "06-07", period: "Tänään", price: 2 },
+      ],
+      targetShowerReserve: 9,
+    }),
+    stored,
+    "paikallisten asetusten tai suihkuarvion muutos ei muuta tallennetun backend-suunnitelman metadataa",
+  );
 
   const standard = buildHeatingPlanPresentation(baseInput);
   assertEqual(standard.reasonKind, "standard", "tavallinen suunnitelma tunnistetaan");
