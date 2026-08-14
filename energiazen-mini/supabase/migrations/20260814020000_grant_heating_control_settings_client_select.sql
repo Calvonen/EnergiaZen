@@ -11,14 +11,17 @@
 -- deciding whether to backfill it.
 --
 -- Idempotent/forward-only: safe to re-run. A plain GRANT is a no-op if
--- already granted; the policy is only created if RLS is enabled on the
--- table and no existing SELECT/ALL policy already provides permissive
--- coverage for the app's own roles (anon/authenticated). A policy that
--- merely exists but is restrictive, or is scoped to some other role
--- entirely (e.g. service_role-only), would leave the app unable to read
--- the row while this migration silently skipped creating the one policy
--- that actually authorizes it - so role/permissive coverage is checked
--- explicitly rather than just "a SELECT/ALL policy exists".
+-- already granted. For the policy, this deliberately does not try to
+-- semantically prove that some other pre-existing SELECT/ALL policy
+-- already covers the app: a policy can be PERMISSIVE and target
+-- anon/authenticated and still exclude this singleton row (e.g. a USING
+-- predicate scoped to a different id, or to some other condition entirely)
+-- - inspecting arbitrary policies for that would be unreliable and is not
+-- attempted here. Instead this only ever checks for its own specific,
+-- named policy and (re)creates exactly that one if it is missing, with a
+-- USING predicate that unconditionally guarantees id = 1 - this table's
+-- only row - is readable by anon/authenticated regardless of whatever
+-- other policies exist. Existing policies are never dropped or altered.
 grant select on table public.heating_control_settings to anon, authenticated;
 
 do $$
@@ -33,17 +36,12 @@ begin
     from pg_policies
     where schemaname = 'public'
       and tablename = 'heating_control_settings'
-      and cmd in ('SELECT', 'ALL')
-      and permissive = 'PERMISSIVE'
-      and (
-        roles = '{public}'::name[]
-        or roles && array['anon', 'authenticated']::name[]
-      )
+      and policyname = 'heating_control_settings is readable by the app'
   ) then
     create policy "heating_control_settings is readable by the app"
       on public.heating_control_settings for select
       to anon, authenticated
-      using (true);
+      using (id = 1);
   end if;
 end
 $$;
