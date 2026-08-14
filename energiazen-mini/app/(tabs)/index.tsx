@@ -858,7 +858,6 @@ export default function HomeScreen() {
     draftSettings: scenarioSettings,
     hasUnsavedChanges,
     heatingControlSettingsSyncStatus,
-    heatingControlSettingsUpdatedAt,
     persistedSettings: activeSettings,
   } = useSettingsScenario();
   const [planView, setPlanView] = useState<"active" | "scenario">("active");
@@ -1459,24 +1458,21 @@ export default function HomeScreen() {
       }),
     [scenarioOptimizationRun, todayPlanDate, tomorrowPlanDate],
   );
-  const storedPlansForPresentation = useMemo(
-    () =>
-      [
-        storedHeatingPlans[todayPlanDate],
-        storedHeatingPlans[tomorrowPlanDate],
-      ].filter((plan): plan is StoredHeatingPlan => Boolean(plan)),
-    [storedHeatingPlans, todayPlanDate, tomorrowPlanDate],
-  );
   const storedHeatingPlanPresentation = useMemo(() => {
     if (settings.heatingNeedMode !== "automatic") {
       return null;
     }
 
-    if (storedPlansForPresentation.length === 0) {
+    const storedPlans = [
+      storedHeatingPlans[todayPlanDate],
+      storedHeatingPlans[tomorrowPlanDate],
+    ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
+
+    if (storedPlans.length === 0) {
       return null;
     }
 
-    const selectedHours = storedPlansForPresentation.flatMap((plan) => {
+    const selectedHours = storedPlans.flatMap((plan) => {
       const planDate = plan.plan_date;
 
       if (!planDate) {
@@ -1521,28 +1517,23 @@ export default function HomeScreen() {
     settings.heatingNeedMode,
     settings.safetyShowerReserve,
     settings.targetShowerReserve,
-    storedPlansForPresentation,
+    storedHeatingPlans,
     todayPlanDate,
+    tomorrowPlanDate,
     warmWaterEstimate?.showersLeft,
   ]);
   useEffect(() => {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
   }, [hasUnsavedChanges]);
 
-  const backendPrimaryPlanIsAuthoritative =
+  const storedHeatingPlanIsAuthoritative =
     BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
     settings.heatingNeedMode === "automatic" &&
     heatingControlSettingsSyncStatus !== "unsynced";
   const activePlanPresentation = selectActiveHeatingPlanPresentation(
     activeOptimizerPresentation,
     storedHeatingPlanPresentation,
-    {
-      settingsUpdatedAt: heatingControlSettingsUpdatedAt,
-      storedPlanIsAuthoritative: backendPrimaryPlanIsAuthoritative,
-      storedPlanUpdatedAts: storedPlansForPresentation.map(
-        (plan) => plan.updated_at,
-      ),
-    },
+    storedHeatingPlanIsAuthoritative,
   );
   const scenarioPlanPresentation =
     hasUnsavedChanges && scenarioValidation.errors.length === 0

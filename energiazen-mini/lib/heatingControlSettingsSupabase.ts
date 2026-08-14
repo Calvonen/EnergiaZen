@@ -13,9 +13,8 @@ type HeatingControlSettingsClient = {
 export async function upsertHeatingControlSettings(
   client: HeatingControlSettingsClient,
   settings: EnergiaZenSettings,
-  updatedAt?: string,
 ) {
-  const payload = buildHeatingControlSettingsPayload(settings, updatedAt);
+  const payload = buildHeatingControlSettingsPayload(settings);
   const { error } = await client
     .from("heating_control_settings")
     .upsert(payload, { onConflict: "id" });

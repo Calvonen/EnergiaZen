@@ -49,7 +49,7 @@ export function runHeatingGainSourceSyncSourceTests() {
     saveRemoteSource.includes('.from("heating_control_settings")') &&
       saveRemoteSource.includes(".update({") &&
       saveRemoteSource.includes("heating_gain_source: settings.heatingGainSource") &&
-      saveRemoteSource.includes("updated_at: nextSettingsUpdatedAt") &&
+      saveRemoteSource.includes("updated_at: new Date().toISOString()") &&
       saveRemoteSource.includes('.eq("id", 1)'),
     "the remote write must update only heating_gain_source and updated_at on the singleton row",
   );
@@ -88,14 +88,7 @@ export function runHeatingGainSourceSyncSourceTests() {
   }
   assertSource(
     settingsSource.includes("persistSettingsDraft({") &&
-      settingsSource.includes("upsertHeatingControlSettings(") &&
-      settingsSource.includes("heatingControlSettingsUpdatedAt,"),
+      settingsSource.includes("upsertHeatingControlSettings(supabase, nextSettings)"),
     "the main settings screen must keep using the same authoritative settings path",
-  );
-  assertSource(
-    gainSaveSource.includes("const nextSettingsUpdatedAt = new Date().toISOString()") &&
-      gainSaveSource.includes("updated_at: nextSettingsUpdatedAt") &&
-      gainSaveSource.includes("heatingControlSettingsUpdatedAt,"),
-    "gain-source changes must propagate the exact remote settings timestamp and restore the previous timestamp on rollback",
   );
 }

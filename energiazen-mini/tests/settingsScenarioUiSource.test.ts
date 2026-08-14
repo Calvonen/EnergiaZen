@@ -79,19 +79,13 @@ export function runSettingsScenarioUiSourceTests() {
         'BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n    settings.heatingNeedMode === "automatic" &&\n    heatingControlSettingsSyncStatus !== "unsynced"',
       ) &&
       homeSource.includes(
-        "settingsUpdatedAt: heatingControlSettingsUpdatedAt",
-      ) &&
-      homeSource.includes(
-        "storedPlanIsAuthoritative: backendPrimaryPlanIsAuthoritative",
-      ) &&
-      homeSource.includes(
-        "storedPlanUpdatedAts: storedPlansForPresentation.map(",
+        "selectActiveHeatingPlanPresentation(\n    activeOptimizerPresentation,\n    storedHeatingPlanPresentation,\n    storedHeatingPlanIsAuthoritative,",
       ) &&
       homeSource.includes(
         "hasUnsavedChanges && scenarioValidation.errors.length === 0",
       ) &&
       homeSource.includes("? scenarioOptimizerPresentation"),
-    "etusivu suosii backend-primary-tilassa vain nykyisia asetuksia tuoreempaa tallennettua aktiivista suunnitelmaa, mutta skenaarionakyma kayttaa yha suoraan draft-tulosta",
+    "etusivu suosii backend-primary-tilassa tallennettua aktiivista suunnitelmaa pending- ja synced-tiloissa, mutta skenaarionakyma kayttaa yha draft-tulosta",
   );
 
   assertSource(
