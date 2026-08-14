@@ -53,6 +53,22 @@ export function runHeatingGainSourceSyncSourceTests() {
       saveRemoteSource.includes('.eq("id", 1)'),
     "the remote write must update only heating_gain_source and updated_at on the singleton row",
   );
+  // Codex P2 follow-up: PostgREST can report no error while matching zero
+  // rows (e.g. id=1 doesn't exist yet) - .select("id") must be chained so
+  // the update reports which row(s) it actually matched, and an empty
+  // result must be treated as a save failure rather than silently
+  // succeeding. This must not become a fallback upsert - see the
+  // "must not use the full-payload upsert helper" assertion above.
+  assertSource(
+    saveRemoteSource.includes('.select("id")'),
+    "the update must select the matched row so a zero-row match can be detected",
+  );
+  assertSource(
+    saveRemoteSource.includes("data") &&
+      /data\.length\s*===\s*0/.test(saveRemoteSource) &&
+      /throw new Error/.test(saveRemoteSource),
+    "an update that matches zero rows must be treated as a save failure (thrown), not silently ignored",
+  );
   for (const unrelatedField of [
     "heating_need_mode",
     "safety_shower_reserve",

@@ -421,17 +421,30 @@ export default function HeatingLearningScreen() {
         // toggled gain source. A plain UPDATE (not upsert) also means this
         // narrow action never creates a fresh, mostly-empty row on its own -
         // that bootstrap case is SettingsScenarioProvider's backfill's job.
+        //
+        // Codex P2 follow-up: if id=1 doesn't exist yet, PostgREST can
+        // report no error while updating zero rows - .select("id") makes
+        // the update return the row it actually matched, so that silent
+        // no-op can be told apart from a real success instead of reporting
+        // a save that never happened.
         saveRemote: async (settings) => {
-          const { error } = await supabase
+          const { data, error } = await supabase
             .from("heating_control_settings")
             .update({
               heating_gain_source: settings.heatingGainSource,
               updated_at: new Date().toISOString(),
             })
-            .eq("id", 1);
+            .eq("id", 1)
+            .select("id");
 
           if (error) {
             throw error;
+          }
+
+          if (!Array.isArray(data) || data.length === 0) {
+            throw new Error(
+              "heating_control_settings row did not exist to update",
+            );
           }
         },
       });

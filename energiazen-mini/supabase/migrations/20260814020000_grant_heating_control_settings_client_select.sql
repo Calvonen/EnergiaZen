@@ -12,7 +12,13 @@
 --
 -- Idempotent/forward-only: safe to re-run. A plain GRANT is a no-op if
 -- already granted; the policy is only created if RLS is enabled on the
--- table and no SELECT/ALL policy already covers it.
+-- table and no existing SELECT/ALL policy already provides permissive
+-- coverage for the app's own roles (anon/authenticated). A policy that
+-- merely exists but is restrictive, or is scoped to some other role
+-- entirely (e.g. service_role-only), would leave the app unable to read
+-- the row while this migration silently skipped creating the one policy
+-- that actually authorizes it - so role/permissive coverage is checked
+-- explicitly rather than just "a SELECT/ALL policy exists".
 grant select on table public.heating_control_settings to anon, authenticated;
 
 do $$
@@ -28,6 +34,11 @@ begin
     where schemaname = 'public'
       and tablename = 'heating_control_settings'
       and cmd in ('SELECT', 'ALL')
+      and permissive = 'PERMISSIVE'
+      and (
+        roles = '{public}'::name[]
+        or roles && array['anon', 'authenticated']::name[]
+      )
   ) then
     create policy "heating_control_settings is readable by the app"
       on public.heating_control_settings for select
