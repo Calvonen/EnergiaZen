@@ -361,14 +361,22 @@ supabase db push
 ### Ajastus
 
 Migraatio luo jobin `run-heating-optimizer-shadow-hourly`, joka käynnistyy
-kerran tunnissa minuutilla 20 - 10 minuuttia `fetch-electricity-prices-hourly`
-(minuutti 10) jälkeen, jotta jokainen ajo näkee kyseisen tunnin tuoreimmat
-hinnat. Koska `tank_readings` päivittyy noin minuutin välein, sama tunnin
-välein toistuva ajo poimii myös aina tuoreen varaajalukeman - erillistä
-"muutaman kerran päivässä" -jobia ei tarvita. Ajastus on mitoitettu
-vertailutrendin keräämiseen, ei tuotantopäätöksiin - tarkista ennen
-mahdollista production write -vaihetta, tarvitaanko appin omaa
-uudelleenajotiheyttä lähempänä oleva ajastus.
+**viiden minuutin välein** (`*/5 * * * *`). Nimi on historiallinen jäänne
+ensimmäisestä shadow-mode-versiosta (ks. alla "Yksinkertaistushistoria") -
+job ei ole enää shadow-only eikä hourly, mutta sitä ei ole nähty
+tarpeelliseksi nimetä uudelleen ennen kuin mikään tämän PR:n migraatioista
+on koskaan ajettu tuotantoon. Tämä yksi ajastus on **ainoa** tapa pyytää
+`run-heating-optimizer`-ajo - ei erillisiä tietokantatriggereitä millekään
+inputille.
+
+Miksi 5 min riittää ilman erillistä live-triggeriä: Shellyn oma
+luottamusikkuna (`MAX_BACKEND_VALIDATION_AGE_SECONDS`,
+`shelly/energyzen-controller.js`) on 90 minuuttia, ja optimizer joka
+tapauksessa tekee vain tuntitason ajastuspäätöksiä (Shellyn oma
+current-hour-preservation hoitaa reaaliaikaisen releohjauksen paikallisesti).
+5 minuutin ajastus tuo saman käytännön reaktioajan kuin aiempi
+materiaalisuus+debounce+drain-ketju olisi antanut parhaimmillaankin, mutta
+ilman mitään uutta tilaa tai epäonnistumispistettä - ks. alla.
 
 Tarkista jobi ja viimeisimmät ajot:
 
@@ -388,7 +396,8 @@ order by start_time desc
 limit 10;
 ```
 
-Tarkista viimeisimmät shadow-ajot ja niiden vertailu appin julkaisuun:
+Tarkista viimeisimmät ajot ja niiden vertailu appin julkaisuun (shadow-
+diagnostiikka säilytetään toistaiseksi - ks. alla):
 
 ```sql
 select
@@ -420,108 +429,37 @@ from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 ```
 
-### Live-triggeri syöttömuutoksille
+### Yksinkertaistushistoria: live-triggerin poisto
 
-Tunnin välein ajettava cron on edelleen olemassa fallbackina/reconciliationina,
-mutta se ei ole ainoa tapa käynnistää ajo. Migraatio
-`20260814000000_add_live_heating_optimizer_trigger.sql` lisää kaksi
-tietokantatriggeriä, jotka pyytävät saman `run-heating-optimizer`-ajon heti,
-kun julkaisuun vaikuttava input muuttuu:
+Tämän PR:n aiempi versio lisäsi `run-heating-optimizer-shadow-hourly`-cronin
+rinnalle erillisen live-trigger-alijärjestelmän, joka pyysi ajon heti kun
+`tank_readings` sai uuden rivin tai `heating_control_settings` muuttui:
+materiaalisuustarkistus (baseline-taulu), per-avain debounce/pending-taulu
+ja lopulta vielä minuutin välein ajettava erillinen drain-cron sen
+purkamiseen. Kolme peräkkäistä arviointikierrosta löysi siitä P1-tason
+korjattavaa (liian lyhyt debounce, materiaalisuuden puuttuminen, purkamaton
+pending-tila) - jokainen korjaus lisäsi tilaa poistamisen sijaan.
 
-- uusi rivi `tank_readings`-tauluun (`AFTER INSERT`)
-- optimizerin käyttämä muutos `heating_control_settings`-riviin
-  (`AFTER UPDATE OF automatic_max_heating_hours, full_tank_average_temperature,
-  full_tank_showers, heating_gain_source, heating_need_mode,
-  max_tank_temperature, min_tank_temperature, safety_shower_reserve,
-  target_shower_reserve` yhdessä `WHEN`-ehdon kanssa, joka vaatii arvon
-  todella muuttuvan)
-
-Molemmat triggerit kutsuvat `public.request_backend_heating_optimizer_run()`
--funktiota, joka käyttää täsmälleen samaa autentikoitua HTTP-polkua kuin cron:
-sama `project_url`, sama yksityinen `heating_optimizer_cron_secret`-header
-(`x-energyzen-cron-secret`) ja sama `run-heating-optimizer`-Edge Function.
-Pelkkä publishable key ei koskaan riitä - tämä on täsmälleen sama
-`isHeatingOptimizerCronSecretAuthorized`-tarkistus, joka jo suojaa cronia.
-Mikään uusi kirjoituspolku `heating_plans`/heartbeat-tilaan ei synny: kaikki
-PR #193:n CAS-, snapshot- ja fail-safe-suojaukset koskevat myös näin
-käynnistettyä ajoa identtisesti.
-
-**Materiaalisuus + per-avain debounce (päivitetty
-`20260814030000_material_change_heating_optimizer_trigger.sql`):** alun
-perin `tank_readings`-triggeri käynnisti dispatchin jokaisesta uudesta
-rivistä (rajoitettuna vain yhdellä jaetulla 30 sekunnin ikkunalla), mikä
-tarkoitti käytännössä uutta optimizer-ajoa lähes jokaisesta minuutin
-välein saapuvasta lukemasta - jopa ~60 kertaa tunnissa. Tämä korvattiin
-kahdella erillisellä mekanismilla:
-
-- **Materiaalisuustarkistus ennen dispatchia.** Singleton-taulu
-  `backend_heating_optimizer_tank_trigger_baseline` (rivi `id = 1`) muistaa
-  viimeisimmän lukeman, jolle ajo on pyydetty (`last_considered_heating`,
-  `last_considered_top_temp`, `last_considered_bottom_temp`). Uusi rivi
-  pyytää ajon vain, jos `heating` muuttuu (mukaan lukien tri-state
-  true/false/unknown-siirtymät) tai jos `top_temp`/`bottom_temp` poikkeaa
-  baselinesta vähintään
-  `waterDrawDetectionLimits.minDropCelsius`:n (5 °C,
-  `supabase/functions/_shared/waterDrawDetection.ts` - ei uusi keksitty
-  raja) verran. Baseline liikkuu vain silloin kun muutos on materiaalinen,
-  joten monta pientä, yksitellen kynnyksen alittavaa askelta ylittää sen
-  silti kumulatiivisesti. Tavallinen lähes muuttumaton minuuttilukema ei
-  koskaan edes yritä dispatchia.
-- **Per-avain cooldown dispatch-funktiossa.** Taulu
-  `backend_heating_optimizer_trigger_debounce` pitää erillistä
-  `last_dispatch_requested_at`-tilaa `'tank'`- ja `'settings'`-avaimille.
-  Kunkin avaimen oma `min_interval` (`'tank'` = 5 min, `'settings'` = 30 s)
-  on nykyään sarake samassa rivissä, ei enää parametri jonka jokainen
-  kutsuja toistaisi erikseen - `request_backend_heating_optimizer_run(p_reason,
-  p_debounce_key)` lukee sen taulusta. Materiaalinen tankkimuutos käyttää
-  `'tank'`-avainta 5 minuutin cooldownilla (kova yläraja ajotiheydelle esim.
-  hakkaavaa relettä/anturia vastaan, mutta silti paljon nopeampi kuin tunnin
-  cron-fallback); `heating_control_settings`-muutos käyttää edelleen
-  `'settings'`-avainta 30 sekunnin ikkunalla, joten se pysyy nopeana eikä
-  koskaan odota tankki-cooldownin takana. Ikkunan sisällä tuleva pyyntö vain
-  merkitsee `pending = true`.
-
-**Pending-tilan draining (lisätty
-`20260814040000_drain_pending_heating_optimizer_dispatch.sql`):**
-alkuperäisessä versiossa `pending = true` ei koskaan purkautunut, ellei
-jokin *myöhempi* triggeri sattunut ajamaan samaa avainta uudelleen - ja
-koska `backend_heating_optimizer_tank_trigger_baseline` siirtyi jo
-coalesced-tilassa olevan (vasta pyydetyn, ei vielä dispatchatun)
-materiaalisen lukeman kohdalle, seuraavat lähes samanlaiset lukemat eivät
-enää näyttäneet materiaalisilta uutta baselinea vasten - pyyntö saattoi
-jäädä roikkumaan tunnin cron-fallbackiin asti. Ratkaisu:
-`dispatch_backend_heating_optimizer_run(p_reason)` eriytettiin omaksi
-funktiokseen, joka tekee pelkän autentikoidun HTTP-kutsun (sama
-`net.http_post`/`x-energyzen-cron-secret`-polku kuin ennen), ja uusi
-`drain_pending_backend_heating_optimizer_dispatch()` on ajastettu
-`pg_cron`:illa minuutin välein (`drain-heating-optimizer-trigger-dispatch`).
-Se käy läpi jokaisen `pending = true`-rivin ja dispatchaa (kutsuen samaa
-`dispatch_backend_heating_optimizer_run`-funktiota) heti kun **sen oman**
-`min_interval`:n verran aikaa on kulunut edellisestä dispatchista - riippumatta
-siitä tuleeko enää yhtään uutta tankkilukemaa tai asetusmuutosta. Koska
-`pending` on yksi boolean per avain, mikä tahansa määrä samalla
-cooldown-ikkunalla coalescoituneita materiaalisia muutoksia purkautuu
-täsmälleen yhtenä trailing-ajona. `'tank'`- ja `'settings'`-avaimet
-draintuvat toisistaan riippumatta (kumpikin oman `min_interval`:nsa
-mukaan), joten tankki-cooldown ei koskaan viivytä asetusmuutoksen
-draintumista eikä päinvastoin. Draini käyttää `for update skip locked`ia,
-joten se ei koskaan jää jumiin samanaikaisen tankki-/asetustriggerin
-lukitseman rivin taakse - ohitettu rivi käsitellään seuraavalla minuutin
-ajolla.
-
-**Trigger-loop-turvallisuus:** triggerit on kiinnitetty vain
-`tank_readings`- ja `heating_control_settings`-tauluihin, joita
-`run-heating-optimizer` ainoastaan LUKEE. Se kirjoittaa yksinomaan
-`heating_plan_shadow_runs`-, `backend_heating_optimizer_state`- ja (RPC:n
-kautta) `heating_plans`-tauluihin - näissä ei ole tästä migraatiosta
-peräisin olevaa triggeriä, joten käynnistetty ajo ei voi käynnistää itseään
-uudelleen.
-
-**Fail-safe:** virhe dispatch-funktiossa (puuttuva Vault-secret,
-`net.http_post`-virhe tms.) napataan funktion sisällä ja lokitetaan
-`WARNING`-tasolla - se ei koskaan voi kaataa tai rollbackata sitä
-`tank_readings`-inserttiä tai `heating_control_settings`-updatea, joka sen
-laukaisi.
+Arkkitehtuurikatselmus totesi, että koko alijärjestelmällä ei ollut
+omaa turvallisuusvastuuta lainkaan: kaikki vaaditut suojaukset
+(samanaikaiset ajot, muuttuneet hinnat/asetukset, tuntematon
+rele/lämmitystila, osittainen julkaisu) toteutuvat kokonaan
+`run-heating-optimizer`:n heartbeat-CAS:ssa ja transaktionaalisessa
+julkaisu-RPC:ssä, riippumatta siitä mikä pyysi ajon. Koska mikään näistä
+migraatioista ei ollut koskaan ajettu tuotantoon, ne poistettiin suoraan
+historiasta migraatiotiedostoina sen sijaan että niitä olisi kumottu
+uusilla "drop"-migraatioilla - lopputulos on nyt yksi ajastus (yllä) sen
+sijaan että koko alijärjestelmä rakennettaisiin migraatiohistoriaan vain
+purettavaksi heti perään. Poistetut taulut/funktiot:
+`backend_heating_optimizer_trigger_state`,
+`backend_heating_optimizer_trigger_debounce`,
+`backend_heating_optimizer_tank_trigger_baseline`,
+`request_backend_heating_optimizer_run`,
+`dispatch_backend_heating_optimizer_run`,
+`drain_pending_backend_heating_optimizer_dispatch`, sekä
+`tank_readings`- ja `heating_control_settings`-triggerit joita ne
+palvelivat. `BACKEND_PLAN_TRUST_ENABLED` on edelleen `false` Shellyn
+controllerissa - tämä yksinkertaistus ei muuta laitteen luottamustilaa.
 
 ### Asetusten backfill ennen backend-primary-julkaisua
 
@@ -577,9 +515,13 @@ Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden
 `last_run_attempt_at`, `last_validated_plan_at` ja `last_published_at` estävät
 ajoyrityksen, onnistuneen validoinnin ja todellisen kirjoituksen sekoittamisen.
 
-Tunnin välein ajettavalle jobille production trust-raja on 90 minuuttia:
-yksi normaali 60 minuutin ajoväli ja 30 minuutin operatiivinen liikkumavara.
-Kun gate myöhemmin aktivoidaan, Shelly luottaa tämän päivän suunnitelmaan vain,
+Production trust-raja Shellyn puolella (`MAX_BACKEND_VALIDATION_AGE_SECONDS`,
+`shelly/energyzen-controller.js`) on 90 minuuttia - tämä on laitteen oma,
+tarkoituksella konservatiivinen arvo eikä tämä yksinkertaistus (5 min
+ajastus, ks. yllä "Ajastus" ja "Yksinkertaistushistoria") ole muuttanut sitä
+eikä `BACKEND_PLAN_TRUST_ENABLED`-lippua. 5 minuutin ajastuksella
+todellinen liikkumavara on käytännössä paljon suurempi kuin 90 minuuttia
+vaatisi. Kun gate myöhemmin aktivoidaan, Shelly luottaa tämän päivän suunnitelmaan vain,
 kun heartbeat on `healthy`, heartbeatin plan-fingerprint vastaa luettua
 `plan_date` + normalisoitua `planned_hours` -identiteettiä ja
 `last_validated_plan_at` on kelvollinen, enintään 90 minuuttia vanha eikä
