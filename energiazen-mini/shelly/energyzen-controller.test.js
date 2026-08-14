@@ -412,10 +412,58 @@ function trustedControl(heartbeatRows, testSettings = settings) {
 }
 const freshHeartbeat = [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00.000Z", validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]) }];
 const fixedPlan = [{ plan_date: "2026-08-13", planned_hours: [7, 8], mode: "fixed" }];
-assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan bypasses unhealthy automatic heartbeat");
-assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00Z", validated_plan_fingerprint: null }], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan does not require an optimizer fingerprint");
-assert.strictEqual(resolveTrustedPlanControl([{ ...fixedPlan[0], mode: "automatic" }], null, [{ health_status: "unhealthy" }], null, settings, "2026-08-13", heartbeatNow).source, "backup", "fixed to automatic transition activates heartbeat trust");
-assert.strictEqual(resolveTrustedPlanControl([{ ...todayPlan[0], mode: "fixed" }], null, [], null, settings, "2026-08-13", heartbeatNow).source, "energyzen", "automatic to fixed transition drops old heartbeat dependency");
+const authoritativeFixedSettings = { ...settings, heatingNeedMode: "fixed" };
+assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, authoritativeFixedSettings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan bypasses unhealthy automatic heartbeat when authoritative mode confirms fixed");
+assert.strictEqual(resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "healthy", last_validated_plan_at: "2026-08-13T11:30:00Z", validated_plan_fingerprint: null }], null, authoritativeFixedSettings, "2026-08-13", heartbeatNow).source, "energyzen", "fixed plan does not require an optimizer fingerprint when authoritative mode confirms fixed");
+assert.strictEqual(resolveTrustedPlanControl([{ ...fixedPlan[0], mode: "automatic" }], null, [{ health_status: "unhealthy" }], null, authoritativeFixedSettings, "2026-08-13", heartbeatNow).source, "backup", "fixed to automatic transition activates heartbeat trust");
+assert.strictEqual(resolveTrustedPlanControl([{ ...todayPlan[0], mode: "fixed" }], null, [], null, authoritativeFixedSettings, "2026-08-13", heartbeatNow).source, "energyzen", "automatic to fixed transition drops old heartbeat dependency when authoritative mode confirms fixed");
+
+// Codex P1 (PR #193 Shelly follow-up): the fixed-plan heartbeat exemption
+// must also require heating_control_settings.heating_need_mode (fetched
+// fresh every runController() cycle alongside the rest of settings) to
+// confirm "fixed" - otherwise a stored fixed plan left over from before
+// another device switched the authoritative mode to "automatic" would keep
+// bypassing heartbeat trust indefinitely.
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: "fixed" }, "2026-08-13", heartbeatNow).source,
+  "energyzen",
+  "1) plan fixed + authoritative mode fixed: exemption allowed",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: "automatic" }, "2026-08-13", heartbeatNow).source,
+  "backup",
+  "2) plan fixed + authoritative mode automatic: exemption denied, falls through to heartbeat trust and then backup",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: null }, "2026-08-13", heartbeatNow).source,
+  "backup",
+  "3a) plan fixed + authoritative mode missing/null: exemption denied, existing backup fallback path used",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: "not-a-real-mode" }, "2026-08-13", heartbeatNow).source,
+  "backup",
+  "3b) plan fixed + authoritative mode invalid value: exemption denied",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, settings, "2026-08-13", heartbeatNow).source,
+  "backup",
+  "3c) plan fixed + settings fetch failure fell back to cache (heatingNeedMode never cached, so absent): exemption denied, existing fallback path used",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl(fixedPlan, null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: "automatic", enabled: false }, "2026-08-13", heartbeatNow).source,
+  "fail-safe",
+  "3d) exemption denied + fallback disabled: existing fail-safe path used, not a new one",
+);
+assert.strictEqual(
+  resolveTrustedPlanControl([{ ...fixedPlan[0], mode: "automatic" }], null, [{ health_status: "unhealthy" }], null, { ...settings, heatingNeedMode: "fixed" }, "2026-08-13", heartbeatNow).source,
+  "backup",
+  "4a) automatic-plan behavior is unaffected by heatingNeedMode either way",
+);
+assert.strictEqual(
+  trustedControl(freshHeartbeat, { ...settings, heatingNeedMode: "automatic" }).source,
+  "energyzen",
+  "4b) automatic plan with a fresh trusted heartbeat is still trusted regardless of heatingNeedMode",
+);
 assert.strictEqual(trustedControl(freshHeartbeat).source, "energyzen", "fresh healthy heartbeat trusts today's plan even when heating_plans.updated_at is old (no_changes)");
 assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-13", planned_hours: [7, 8] }], null, freshHeartbeat, null, settings, "2026-08-13", heartbeatNow).source, "backup", "later changed planned_hours must not inherit trust");
 assert.strictEqual(resolveTrustedPlanControl([{ plan_date: "2026-08-14", planned_hours: [15] }], null, freshHeartbeat, null, settings, "2026-08-14", heartbeatNow).source, "backup", "a different plan_date must not inherit trust");

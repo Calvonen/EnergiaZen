@@ -124,6 +124,11 @@ function createDefaultSettings() {
     enabled: DEFAULT_FALLBACK_ENABLED,
     fullTankAverageTemperature: null,
     fullTankShowers: null,
+    // Deliberately never cached (see loadCachedSettings/saveCachedSettings) -
+    // a stale cached mode could wrongly authorize the fixed-plan heartbeat
+    // exemption below during a settings fetch failure. null here means
+    // "authoritative mode unknown", which correctly denies that exemption.
+    heatingNeedMode: null,
     maxTankTemperature: null,
     minTankTemperature: null,
     targetShowerReserve: null,
@@ -163,6 +168,14 @@ function normalizeSettingsRow(row, fallbackSettings) {
     fullTankAverageTemperature:
       row.full_tank_average_temperature,
     fullTankShowers: row.full_tank_showers,
+    // Freshly read every runController() cycle from the same authoritative
+    // heating_control_settings row already fetched here - never taken from
+    // fallbackSettings (loadCachedSettings' cache never stores it), so a
+    // settings fetch failure that falls back to cache correctly yields null.
+    heatingNeedMode:
+      typeof row.heating_need_mode === "string"
+        ? row.heating_need_mode
+        : null,
     maxTankTemperature: row.max_tank_temperature,
     minTankTemperature: row.min_tank_temperature,
     targetShowerReserve: row.target_shower_reserve,
@@ -503,9 +516,17 @@ function isTrustedBackendHeartbeat(rows, error, planRow, nowMs) {
 
 function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowMs) {
   let control = resolvePlanControl(planRows, planError, settings, today);
-  // Fixed rows are authoritative user commands, not optimizer publications.
-  // Only automatic rows participate in backend heartbeat/fingerprint trust.
-  if (control.source !== "energyzen" || planRows[0].mode === "fixed" || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
+  // Fixed rows are authoritative user commands, not optimizer publications -
+  // but only when heating_control_settings.heating_need_mode (fetched fresh
+  // every cycle alongside the rest of settings, see runController) still
+  // confirms "fixed" too. Without this, a stored fixed plan left over from
+  // before another device switched the authoritative mode to "automatic"
+  // would keep bypassing heartbeat trust indefinitely. Any other mode value
+  // - "automatic", missing, or invalid (settings fetch failure fell back to
+  // uncached-mode defaults) - denies the exemption and falls through to the
+  // same heartbeat-trust check and backup/fail-safe path automatic rows
+  // already use below.
+  if (control.source !== "energyzen" || (planRows[0].mode === "fixed" && settings.heatingNeedMode === "fixed") || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
   return settings.enabled
     ? { failSafeReason: null, plannedHours: settings.backupHours, resetHighFillReadings: true, source: "backup" }
     : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], resetHighFillReadings: true, source: "fail-safe" };
@@ -673,7 +694,7 @@ function runController() {
     "?select=backup_hours,fallback_enabled," +
     "full_tank_showers,full_tank_average_temperature," +
     "min_tank_temperature,max_tank_temperature," +
-    "target_shower_reserve" +
+    "target_shower_reserve,heating_need_mode" +
     "&id=eq.1" +
     "&limit=1";
 
