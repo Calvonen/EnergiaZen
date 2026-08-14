@@ -376,11 +376,19 @@ Deno.serve(async (request) => {
       settings: optimizerSettingsSource,
       settingsSource,
     } = resolveOptimizerSettings(settingsRow);
-    const inputFetchReadiness = resolveOptimizerInputFetchReadiness([
-      gainHistoryFetch,
-      recoveryReadingsFetch,
-      dropProfileResult,
-    ]);
+    // Codex P2: gain history is only actually consumed in "learned" mode
+    // (runBackendHeatingOptimization derives the learned per-hour gain from
+    // it); "fixed" mode uses the explicit configured heatingGainPerHour and
+    // never reads this history at all. A failed gain-history fetch must
+    // therefore not block publication in fixed mode - only include it in
+    // the readiness check when the authoritative heating_gain_source is
+    // "learned", so a fixed-mode install stays publishable on an input it
+    // doesn't use.
+    const inputFetchReadiness = resolveOptimizerInputFetchReadiness(
+      heatingGainSource === "learned"
+        ? [gainHistoryFetch, recoveryReadingsFetch, dropProfileResult]
+        : [recoveryReadingsFetch, dropProfileResult],
+    );
     const publicationReadiness = combineBackendPublicationReadiness(
       settingsPublicationReadiness,
       inputFetchReadiness,

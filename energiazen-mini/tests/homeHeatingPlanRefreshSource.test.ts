@@ -117,4 +117,69 @@ export function runHomeHeatingPlanRefreshSourceTests() {
       ),
     "the app-side automatic publication gate must remain in place - this fix must not restore direct app writes",
   );
+
+  // Codex P2 (stale refresh race): loadHeatingPlans used to delete every
+  // visible plan_date up front, so the "newer wins" comparison further down
+  // always compared an incoming row against undefined and could never
+  // actually protect a fresher local/backend value from a slower, older
+  // refresh completing later - and a plan_date absent from this particular
+  // fetch was deleted unconditionally, even if a concurrent Realtime/local
+  // write had just set something newer for it.
+  assertSource(
+    loadBodySource.includes(
+      "const plansBeforeFetch = storedHeatingPlansRef.current;",
+    ) &&
+      loadBodySource.indexOf(
+        "const plansBeforeFetch = storedHeatingPlansRef.current;",
+      ) < loadBodySource.indexOf("await supabase"),
+    "a snapshot of the plans visible before the fetch must be captured before the network round trip, so a write that lands during the fetch can be detected afterwards",
+  );
+
+  const setStoredHeatingPlansStart = loadBodySource.indexOf(
+    "setStoredHeatingPlans((currentPlans) => {",
+  );
+  assertSource(
+    setStoredHeatingPlansStart !== -1,
+    "loadHeatingPlans must update storedHeatingPlans via its updater form",
+  );
+  const setStoredHeatingPlansSource = loadBodySource.slice(
+    setStoredHeatingPlansStart,
+  );
+
+  const mergeLoopStart = setStoredHeatingPlansSource.indexOf(
+    "for (const plan of (data ?? []) as StoredHeatingPlan[]) {",
+  );
+  const deletionLoopStart = setStoredHeatingPlansSource.indexOf(
+    "for (const planDate of planDates) {",
+    mergeLoopStart,
+  );
+  assertSource(
+    mergeLoopStart !== -1 && deletionLoopStart > mergeLoopStart,
+    "the incoming-row merge loop must run entirely before the absent-row deletion loop",
+  );
+
+  const mergeLoopSource = setStoredHeatingPlansSource.slice(
+    mergeLoopStart,
+    deletionLoopStart,
+  );
+  assertSource(
+    mergeLoopSource.includes(
+      "const currentPlan = currentPlans[plan.plan_date];",
+    ) &&
+      mergeLoopSource.includes(
+        "isStoredHeatingPlanNewerOrSame(plan, currentPlan)",
+      ) &&
+      !mergeLoopSource.includes("delete nextPlans["),
+    "each incoming row must be compared against currentPlans - the live state - before anything is deleted, so a genuinely newer incoming row still replaces an older cached row and a stale one does not",
+  );
+
+  const deletionLoopSource = setStoredHeatingPlansSource.slice(deletionLoopStart);
+  assertSource(
+    deletionLoopSource.includes("!fetchedPlanDates.has(planDate)") &&
+      deletionLoopSource.includes(
+        "currentPlans[planDate] === plansBeforeFetch[planDate]",
+      ) &&
+      deletionLoopSource.includes("delete nextPlans[planDate];"),
+    "a visible plan_date genuinely absent from this fetch may only be deleted when the live state for it still matches the pre-fetch snapshot - i.e. nothing newer arrived while the fetch was in flight",
+  );
 }

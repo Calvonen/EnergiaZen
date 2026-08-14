@@ -1742,6 +1742,13 @@ export default function HomeScreen() {
   const loadHeatingPlans = useCallback(async () => {
     const planDates = visiblePlanDatesKeyRef.current.split(",");
     const generation = ++loadHeatingPlansGenerationRef.current;
+    // Codex P2: snapshot taken before the await below, so the deletion
+    // guard in the updater can tell "nothing changed this plan_date while
+    // this fetch was in flight" (=== the snapshot) apart from "a newer
+    // Realtime/local write landed mid-fetch" (a different object identity -
+    // every writer, including this function, replaces map entries rather
+    // than mutating them).
+    const plansBeforeFetch = storedHeatingPlansRef.current;
 
     try {
       const { data, error } = await supabase
@@ -1763,18 +1770,37 @@ export default function HomeScreen() {
 
       setStoredHeatingPlans((currentPlans) => {
         const nextPlans = { ...currentPlans };
+        const fetchedPlanDates = new Set<string>();
 
-        for (const planDate of planDates) {
-          delete nextPlans[planDate];
-        }
-
+        // Codex P2: compare each incoming row against currentPlans (the
+        // live state as of this updater running, which already reflects
+        // any concurrent Realtime/local write) BEFORE anything is removed -
+        // deleting every visible plan_date first (as this used to do) made
+        // currentPlan always undefined here, so isStoredHeatingPlanNewerOrSame
+        // never actually got to compare anything and every incoming row won
+        // unconditionally, even a stale one from a slow, older refresh.
         for (const plan of (data ?? []) as StoredHeatingPlan[]) {
           if (plan.plan_date) {
-            const currentPlan = nextPlans[plan.plan_date];
+            fetchedPlanDates.add(plan.plan_date);
+            const currentPlan = currentPlans[plan.plan_date];
 
             if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
               nextPlans[plan.plan_date] = plan;
             }
+          }
+        }
+
+        // A visible plan_date with no row in this fetch is only actually
+        // removed if nothing changed it since the fetch started - if its
+        // identity in currentPlans differs from the pre-fetch snapshot, a
+        // newer write (Realtime or local) landed while this refresh was in
+        // flight and must not be rolled back by this now-stale result.
+        for (const planDate of planDates) {
+          if (
+            !fetchedPlanDates.has(planDate) &&
+            currentPlans[planDate] === plansBeforeFetch[planDate]
+          ) {
+            delete nextPlans[planDate];
           }
         }
 
