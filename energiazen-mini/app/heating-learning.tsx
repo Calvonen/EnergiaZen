@@ -24,6 +24,7 @@ import {
   type EnergiaZenSettings,
   type HeatingGainSource,
 } from "@/lib/settings";
+import { persistSettingsDraft } from "@/lib/settingsDraft";
 import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import type { TankTemperatureReading } from "@/lib/tankTemperatureForecast";
@@ -407,11 +408,49 @@ export default function HeatingLearningScreen() {
     commitPersistedSettings(nextSettings, previousSettings);
 
     try {
-      await saveSettings(nextSettings);
+      await persistSettingsDraft({
+        draftSettings: nextSettings,
+        savedSettings: previousSettings,
+        saveLocal: saveSettings,
+        // Codex P2 (PR #193): must write only heating_gain_source, never the
+        // full heating_control_settings payload - previousSettings here is
+        // this device's local AsyncStorage snapshot, which can be stale for
+        // every OTHER field (heating_need_mode, reserves, calibration,
+        // backup hours, fallback flag). A full upsert would silently revert
+        // any of those to this stale local copy just because the user
+        // toggled gain source. A plain UPDATE (not upsert) also means this
+        // narrow action never creates a fresh, mostly-empty row on its own -
+        // that bootstrap case is SettingsScenarioProvider's backfill's job.
+        //
+        // Codex P2 follow-up: if id=1 doesn't exist yet, PostgREST can
+        // report no error while updating zero rows - .select("id") makes
+        // the update return the row it actually matched, so that silent
+        // no-op can be told apart from a real success instead of reporting
+        // a save that never happened.
+        saveRemote: async (settings) => {
+          const { data, error } = await supabase
+            .from("heating_control_settings")
+            .update({
+              heating_gain_source: settings.heatingGainSource,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", 1)
+            .select("id");
+
+          if (error) {
+            throw error;
+          }
+
+          if (!Array.isArray(data) || data.length === 0) {
+            throw new Error(
+              "heating_control_settings row did not exist to update",
+            );
+          }
+        },
+      });
     } catch {
-      // AsyncStorage-tallennus epäonnistui - peruuta julkaistu muutos, jotta
-      // näytetty tila ei väitä valintaa voimassa olevaksi kun sitä ei
-      // todellisuudessa tallennettu.
+      // The shared save path already rolls AsyncStorage back when the
+      // authoritative Supabase write fails. Keep the live context aligned.
       commitPersistedSettings(previousSettings, nextSettings);
       setGainSourceSaveError(
         "Valinnan tallennus epäonnistui. Yritä uudelleen.",

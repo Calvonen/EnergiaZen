@@ -24,6 +24,7 @@ import { runHeatingEnergyCostUnitTests } from "../lib/heatingEnergyCost.test";
 import { runElectricityPricesUnitTests } from "../lib/electricityPrices.test";
 import { runHistoryUiSourceTests } from "../tests/historyUiSource.test";
 import { runHeatingGainHistorySourceTests } from "../tests/heatingGainHistorySource.test";
+import { runHeatingGainSourceSyncSourceTests } from "../tests/heatingGainSourceSyncSource.test";
 import { runHeatingPlanMarkerUnitTests } from "../lib/heatingPlanMarkers.test";
 import { runElectricityPriceTrendUnitTests } from "../lib/electricityPriceTrend.test";
 import { runElectricityPriceFunctionUnitTests } from "../supabase/functions/fetch-electricity-prices/normalize.test";
@@ -57,7 +58,16 @@ import { runEdgeFunctionRuntimeBindingsUnitTests } from "../tests/edgeFunctionRu
 import { runHeatingOptimizerShadowPermissionsMigrationTests } from "../tests/heatingOptimizerShadowPermissionsMigration.test";
 import { runHeatingBackendWatchdogUnitTests } from "../lib/heatingBackendWatchdog.test";
 import { runBackendOptimizerHeartbeatMigrationTests } from "../tests/backendOptimizerHeartbeatMigration.test";
+import { runBackendHeatingPlanPublicationMigrationTests } from "../tests/backendHeatingPlanPublicationMigration.test";
+import { runBackendHeatingOptimizerSecurityTests } from "../tests/backendHeatingOptimizerSecurity.test";
 import { runHeatingBackendFailSafeSimulationTests } from "../tests/heatingBackendFailSafeSimulation.test";
+import { runHomeHeatingPlanRefreshSourceTests } from "../tests/homeHeatingPlanRefreshSource.test";
+import { runHeatingControlSettingsBackfillUnitTests } from "../lib/heatingControlSettingsBackfill.test";
+import { runHeatingControlSettingsBackfillSourceTests } from "../tests/heatingControlSettingsBackfillSource.test";
+import { runHeatingOptimizerCronOnlySimplificationTests } from "../tests/heatingOptimizerCronOnlySimplification.test";
+import { runTemperatureDropProfileSnapshotAcceptedRiskTests } from "../tests/temperatureDropProfileSnapshotAcceptedRisk.test";
+import { runHeatingPlanFixedModeGuardUnitTests } from "../lib/heatingPlanFixedModeGuard.test";
+import { runHeatingPlanFixedModeGuardSourceTests } from "../tests/heatingPlanFixedModeGuardSource.test";
 
 async function runTests() {
   runTankTemperatureForecastUnitTests();
@@ -67,6 +77,7 @@ async function runTests() {
   runElectricityPricesUnitTests();
   runHistoryUiSourceTests();
   runHeatingGainHistorySourceTests();
+  runHeatingGainSourceSyncSourceTests();
   runHeatingPlanMarkerUnitTests();
   runElectricityPriceTrendUnitTests();
   runElectricityPriceFunctionUnitTests();
@@ -119,10 +130,19 @@ async function runTests() {
   runHeatingOptimizerShadowPermissionsMigrationTests();
   runHeatingBackendWatchdogUnitTests();
   runBackendOptimizerHeartbeatMigrationTests();
+  runBackendHeatingPlanPublicationMigrationTests();
+  runBackendHeatingOptimizerSecurityTests();
   runHeatingBackendFailSafeSimulationTests();
+  runHomeHeatingPlanRefreshSourceTests();
+  await runHeatingControlSettingsBackfillUnitTests();
+  runHeatingControlSettingsBackfillSourceTests();
+  runHeatingOptimizerCronOnlySimplificationTests();
+  runTemperatureDropProfileSnapshotAcceptedRiskTests();
+  await runHeatingPlanFixedModeGuardUnitTests();
+  runHeatingPlanFixedModeGuardSourceTests();
 
   console.log(
-    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources, edgeFunctionImportBoundaries, edgeFunctionRuntimeBindings, heatingOptimizerShadowPermissionsMigration, heatingBackendWatchdog and heatingBackendFailSafeSimulation tests passed",
+    "tankTemperatureForecast, inletTemperature, heatingHistory, heatingEnergyCost, electricityPrices, electricityPriceTrend, electricityPriceFunction, temperatureHistoryDay, temperatureHistoryRpcMigration, getHeatingPeriodsRpcMigration, recalculateTemperatureDropProfileRpcMigration, settingsDraft, settingsScenario, settingsDraftUiSource, settingsScenarioUiSource, historyUiSource, heatingGainHistorySource, heatingGainSourceSyncSource, homeResumeRefreshSource, heatingPlanMarkers, heatingOptimizer, heatingOptimizationRun, heatingOptimizationStatusSource, heatingGain, heatingGainBacktest, heatingRecoveryDrop, recoveryDropEnvironment, heatingPlanPresentation, heatingPlanPublication, heatingPlanOrchestration, runHeatingOptimizerLogic, heatingSettings, settingsSectionSummaries, showerReserveSettings, temperatureDropProfile, colorMixing, temperatureColors, temperaturePresentation, pricePresentation, priceUtils, tankMonitorAlert, tankMonitorAlertLogic, inletTemperatureTrend, waterDrawDetection, tankReadingFreshness, sensorGeometry, replayEngine, energyModelCore, replayValidation, dashboardReplay, dashboardResources, edgeFunctionImportBoundaries, edgeFunctionRuntimeBindings, heatingOptimizerShadowPermissionsMigration, heatingBackendWatchdog, backendHeatingPlanPublicationMigration, backendHeatingOptimizerSecurity, heatingBackendFailSafeSimulation, homeHeatingPlanRefreshSource, heatingControlSettingsBackfill, heatingControlSettingsBackfillSource, heatingOptimizerCronOnlySimplification, temperatureDropProfileSnapshotAcceptedRisk, heatingPlanFixedModeGuard and heatingPlanFixedModeGuardSource tests passed",
   );
 }
 

@@ -77,9 +77,14 @@ import {
   getChangedHeatingPlans,
   getHeatingPlanPresentationSource,
   preserveCurrentHourWhileHeatingUnknown,
+  shouldPublishHeatingPlanFromApp,
   shouldDeferHeatingPlanPublicationForUnknownStatus,
 } from "@/lib/heatingPlanPublication";
 import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
+import {
+  canPublishFixedHeatingPlanFromApp,
+  resolveRemoteHeatingNeedModeForFixedPublish,
+} from "@/lib/heatingPlanFixedModeGuard";
 import {
   DaySelection,
   getCheapestHours,
@@ -113,6 +118,18 @@ import {
   selectTemperatureDropProfile,
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
+
+// Rollback switch: disable to restore the app's legacy automatic publisher
+// for every install regardless of Supabase settings sync state. Fixed plans
+// are deliberately unaffected by this backend-primary rollout. This is only
+// the deploy-time half of the gate - per-install, shouldPublishHeatingPlanFromApp
+// below additionally requires heatingControlSettingsSyncStatus !== "unsynced",
+// so a single install never loses automatic publication just because its own
+// heating_control_settings row isn't authoritative yet (Codex P1 review, PR
+// #193 upgrade/backfill follow-up), while still deferring app publication
+// entirely during the brief "pending" window before the first completeness
+// check has resolved even once (Codex P2 follow-up).
+const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
 
 const DEBUG_HISTORY_PERFORMANCE = false;
 const DEBUG_HOME_DAY_TAB_PERFORMANCE = false;
@@ -154,6 +171,12 @@ const temperatureBarSegmentCount = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
+// Fallback only: the Realtime subscription in the effect below is the
+// primary way a backend publication reaches storedHeatingPlans while this
+// screen stays mounted. This interval exists purely for a dropped or
+// never-established Realtime connection - it is deliberately far looser
+// than the live optimizer trigger's debounce window.
+const heatingPlansBackendPollIntervalMs = 90_000;
 const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -834,6 +857,7 @@ export default function HomeScreen() {
     areSettingsLoaded,
     draftSettings: scenarioSettings,
     hasUnsavedChanges,
+    heatingControlSettingsSyncStatus,
     persistedSettings: activeSettings,
   } = useSettingsScenario();
   const [planView, setPlanView] = useState<"active" | "scenario">("active");
@@ -876,6 +900,27 @@ export default function HomeScreen() {
   // review, PR #147: a cold start could otherwise publish over an
   // already-published current hour before the load request resolves).
   const loadedHeatingPlanDatesRef = useRef<Set<string>>(new Set());
+  // Lets loadHeatingPlans (and the realtime/poll effect that calls it) read
+  // the currently visible plan_dates without depending on
+  // visiblePlanDatesKey directly, so that effect's identity - and the
+  // Supabase Realtime subscription it owns - stays stable across renders.
+  const visiblePlanDatesKeyRef = useRef("");
+  // Guards state updates from an in-flight loadHeatingPlans() call that
+  // resolves after this screen has unmounted (realtime callback, polling
+  // interval, or the plain effect below can all still be awaiting a
+  // response at that point).
+  const isHomeScreenMountedRef = useRef(true);
+  useEffect(() => {
+    isHomeScreenMountedRef.current = true;
+    return () => {
+      isHomeScreenMountedRef.current = false;
+    };
+  }, []);
+  // A newer loadHeatingPlans() call (visible-dates change, realtime event,
+  // or poll tick) must win over a slower older one still in flight for the
+  // same or a different set of plan_dates - mirrors the isActive guard the
+  // single visiblePlanDatesKey-keyed effect used to provide on its own.
+  const loadHeatingPlansGenerationRef = useRef(0);
   // The exact (plan_date, hour) that was current the moment heating first
   // became null with no earlier pin in effect. Only this specific hour may
   // be preserved while heating stays null - an hour that merely happens to
@@ -1689,78 +1734,154 @@ export default function HomeScreen() {
   ).join(",");
 
   useEffect(() => {
-    const planDates = visiblePlanDatesKey.split(",");
-    let isActive = true;
+    visiblePlanDatesKeyRef.current = visiblePlanDatesKey;
+  }, [visiblePlanDatesKey]);
 
-    async function loadHeatingPlans() {
-      try {
-        const { data, error } = await supabase
-          .from("heating_plans")
-          .select(storedHeatingPlanColumns)
-          .in("plan_date", planDates);
+  // Reads visiblePlanDatesKeyRef (not the visiblePlanDatesKey closure
+  // variable) so this identity stays stable across renders - the backend
+  // publication realtime subscription and its polling fallback below both
+  // reuse it without resubscribing every time the visible dates change.
+  const loadHeatingPlans = useCallback(async () => {
+    const planDates = visiblePlanDatesKeyRef.current.split(",");
+    const generation = ++loadHeatingPlansGenerationRef.current;
+    // Codex P2: snapshot taken before the await below, so the deletion
+    // guard in the updater can tell "nothing changed this plan_date while
+    // this fetch was in flight" (=== the snapshot) apart from "a newer
+    // Realtime/local write landed mid-fetch" (a different object identity -
+    // every writer, including this function, replaces map entries rather
+    // than mutating them).
+    const plansBeforeFetch = storedHeatingPlansRef.current;
 
-        if (error) {
-          console.warn("Failed to load heating plans", error);
-          return;
-        }
+    try {
+      const { data, error } = await supabase
+        .from("heating_plans")
+        .select(storedHeatingPlanColumns)
+        .in("plan_date", planDates);
 
-        if (!isActive) {
-          return;
-        }
+      if (error) {
+        console.warn("Failed to load heating plans", error);
+        return;
+      }
 
-        setStoredHeatingPlans((currentPlans) => {
-          const nextPlans = { ...currentPlans };
+      if (
+        !isHomeScreenMountedRef.current ||
+        generation !== loadHeatingPlansGenerationRef.current
+      ) {
+        return;
+      }
 
-          for (const planDate of planDates) {
-            delete nextPlans[planDate];
-          }
+      setStoredHeatingPlans((currentPlans) => {
+        const nextPlans = { ...currentPlans };
+        const fetchedPlanDates = new Set<string>();
 
-          for (const plan of (data ?? []) as StoredHeatingPlan[]) {
-            if (plan.plan_date) {
-              const currentPlan = nextPlans[plan.plan_date];
+        // Codex P2: compare each incoming row against currentPlans (the
+        // live state as of this updater running, which already reflects
+        // any concurrent Realtime/local write) BEFORE anything is removed -
+        // deleting every visible plan_date first (as this used to do) made
+        // currentPlan always undefined here, so isStoredHeatingPlanNewerOrSame
+        // never actually got to compare anything and every incoming row won
+        // unconditionally, even a stale one from a slow, older refresh.
+        for (const plan of (data ?? []) as StoredHeatingPlan[]) {
+          if (plan.plan_date) {
+            fetchedPlanDates.add(plan.plan_date);
+            const currentPlan = currentPlans[plan.plan_date];
 
-              if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
-                nextPlans[plan.plan_date] = plan;
-              }
+            if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
+              nextPlans[plan.plan_date] = plan;
             }
           }
+        }
 
-          debugLog("Heating plans loaded into local state", {
-            loadedPlans: (data ?? []).map((plan) => ({
-              plan_date: plan.plan_date,
-              planned_hours: normalizeStoredHeatingPlanHours(
-                plan.planned_hours,
-              ),
-              target_hours: plan.target_hours,
-              updated_at: plan.updated_at,
-            })),
-            storedHeatingPlansAfterLoad: planDates.map((planDate) => ({
-              plan_date: planDate,
-              planned_hours: normalizeStoredHeatingPlanHours(
-                nextPlans[planDate]?.planned_hours,
-              ),
-              target_hours: nextPlans[planDate]?.target_hours ?? null,
-              updated_at: nextPlans[planDate]?.updated_at ?? null,
-            })),
-          });
+        // A visible plan_date with no row in this fetch is only actually
+        // removed if nothing changed it since the fetch started - if its
+        // identity in currentPlans differs from the pre-fetch snapshot, a
+        // newer write (Realtime or local) landed while this refresh was in
+        // flight and must not be rolled back by this now-stale result.
+        for (const planDate of planDates) {
+          if (
+            !fetchedPlanDates.has(planDate) &&
+            currentPlans[planDate] === plansBeforeFetch[planDate]
+          ) {
+            delete nextPlans[planDate];
+          }
+        }
 
-          return nextPlans;
+        debugLog("Heating plans loaded into local state", {
+          loadedPlans: (data ?? []).map((plan) => ({
+            plan_date: plan.plan_date,
+            planned_hours: normalizeStoredHeatingPlanHours(
+              plan.planned_hours,
+            ),
+            target_hours: plan.target_hours,
+            updated_at: plan.updated_at,
+          })),
+          storedHeatingPlansAfterLoad: planDates.map((planDate) => ({
+            plan_date: planDate,
+            planned_hours: normalizeStoredHeatingPlanHours(
+              nextPlans[planDate]?.planned_hours,
+            ),
+            target_hours: nextPlans[planDate]?.target_hours ?? null,
+            updated_at: nextPlans[planDate]?.updated_at ?? null,
+          })),
         });
 
-        for (const planDate of planDates) {
-          loadedHeatingPlanDatesRef.current.add(planDate);
-        }
-      } catch (error) {
-        console.warn("Failed to load heating plans", error);
-      }
-    }
+        return nextPlans;
+      });
 
+      for (const planDate of planDates) {
+        loadedHeatingPlanDatesRef.current.add(planDate);
+      }
+    } catch (error) {
+      console.warn("Failed to load heating plans", error);
+    }
+  }, []);
+
+  useEffect(() => {
     void loadHeatingPlans();
+  }, [loadHeatingPlans, visiblePlanDatesKey]);
+
+  // Codex P2 (PR #193): with app-side automatic heating_plans writes
+  // disabled in backend-primary mode, nothing local updated
+  // storedHeatingPlans between hourly loads, so a backend publication while
+  // this screen stayed mounted never reached the planned/missed markers
+  // until the visible dates changed or the screen remounted. A Realtime
+  // subscription reflects a publication immediately; the interval is only a
+  // fallback for a dropped/never-established Realtime connection.
+  useEffect(() => {
+    const heatingPlansChannel = supabase
+      .channel("home-heating-plans-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "heating_plans" },
+        (payload) => {
+          const changedPlanDate =
+            (payload.new as { plan_date?: string | null } | null)
+              ?.plan_date ??
+            (payload.old as { plan_date?: string | null } | null)
+              ?.plan_date ??
+            null;
+
+          if (
+            changedPlanDate &&
+            !visiblePlanDatesKeyRef.current.split(",").includes(changedPlanDate)
+          ) {
+            return;
+          }
+
+          void loadHeatingPlans();
+        },
+      )
+      .subscribe();
+
+    const pollIntervalId = setInterval(() => {
+      void loadHeatingPlans();
+    }, heatingPlansBackendPollIntervalMs);
 
     return () => {
-      isActive = false;
+      clearInterval(pollIntervalId);
+      void supabase.removeChannel(heatingPlansChannel);
     };
-  }, [visiblePlanDatesKey]);
+  }, [loadHeatingPlans]);
 
   useEffect(() => {
     // This effect only ever reads activeOptimizationRun/activeHeatingOptimization
@@ -1800,6 +1921,31 @@ export default function HomeScreen() {
         optimizerHourCount: optimizerHours.length,
         optimizerSelectedHeatingHourIds: [],
       });
+      latestHeatingPlanSaveVersionRef.current += 1;
+      return;
+    }
+
+    if (
+      !shouldPublishHeatingPlanFromApp({
+        // Codex P2 follow-up: "pending" must behave like "synced" here
+        // (backend-primary stays enabled, app publication stays deferred)
+        // rather than like "unsynced" - the app must not race a legacy
+        // automatic publish against a possibly-already-synced backend
+        // before the very first completeness check has even resolved once.
+        // Only a check that actually completed and found the row unsynced
+        // may fall back to the legacy publisher. Fixed mode is unaffected
+        // either way - shouldPublishHeatingPlanFromApp always allows it.
+        backendPrimaryEnabled:
+          BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
+          heatingControlSettingsSyncStatus !== "unsynced",
+        mode: settings.heatingNeedMode,
+      })
+    ) {
+      debugLog("Heating plan app publication skipped in backend-primary mode", {
+        optimizerRunId: activeOptimizationRun.runId,
+      });
+      // Cancel automatic saves queued before a mode/input transition. The
+      // optimizer result remains available for preview and diagnostics.
       latestHeatingPlanSaveVersionRef.current += 1;
       return;
     }
@@ -1923,6 +2069,51 @@ export default function HomeScreen() {
           return;
         }
 
+        // Codex P2 (PR #193): shouldPublishHeatingPlanFromApp's fixed-mode
+        // branch bypasses the backend-primary gate unconditionally, so a
+        // mounted client still holding a stale local "fixed" setting could
+        // otherwise keep overwriting backend-primary's automatic
+        // publications forever. Re-verify the AUTHORITATIVE remote mode
+        // immediately before this specific write, not once when the effect
+        // queued - this is what actually cancels an already-queued fixed
+        // publish if another device changed heating_need_mode to
+        // "automatic" in the meantime. Any read failure, a missing row, or
+        // any mode other than "fixed" fails closed and skips the write; only
+        // a confirmed "fixed" proceeds. A local Save in the Settings screen
+        // already writes this same column synchronously, so this check
+        // reads the same source of truth Settings itself just wrote -
+        // deliberately not full bidirectional Realtime settings sync, which
+        // is unnecessary for this one narrow gate. The tiny remaining window
+        // between this check and the upsert two lines below is not worth
+        // closing further: even if it's lost, the next backend-primary cron
+        // run (at most 5 minutes later) recomputes and republishes from its
+        // own authoritative settings read regardless of what this write did.
+        if (settings.heatingNeedMode === "fixed") {
+          const remoteModeOutcome = await resolveRemoteHeatingNeedModeForFixedPublish({
+            fetchRemoteMode: async () => {
+              const { data, error } = await supabase
+                .from("heating_control_settings")
+                .select("heating_need_mode")
+                .eq("id", 1)
+                .maybeSingle();
+
+              return { data, error };
+            },
+          });
+
+          if (saveVersion !== latestHeatingPlanSaveVersionRef.current) {
+            return;
+          }
+
+          if (!canPublishFixedHeatingPlanFromApp(remoteModeOutcome)) {
+            debugLog("Fixed heating plan publish blocked: authoritative mode is not fixed", {
+              optimizerRunId: activeOptimizationRun.runId,
+              remoteModeOutcome,
+            });
+            return;
+          }
+        }
+
         try {
           const { error } = await supabase
             .from("heating_plans")
@@ -1971,6 +2162,7 @@ export default function HomeScreen() {
     finalTargetHours,
     finalTomorrowTargetHours,
     hasAttemptedTankReadingFetch,
+    heatingControlSettingsSyncStatus,
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,

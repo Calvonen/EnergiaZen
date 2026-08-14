@@ -65,12 +65,47 @@ export type RawTankReading = {
   top_temp: number | null;
 };
 
+export type ExpectedTankSnapshot = {
+  bottom_temp: number | null;
+  created_at: string | null;
+  heating: boolean | null;
+  top_temp: number | null;
+};
+
+export function buildExpectedTankSnapshot(
+  reading: RawTankReading | null,
+): ExpectedTankSnapshot {
+  return {
+    bottom_temp: reading?.bottom_temp ?? null,
+    created_at: reading?.created_at ?? null,
+    heating: reading?.heating ?? null,
+    top_temp: reading?.top_temp ?? null,
+  };
+}
+
+export function isHeatingOptimizerCronSecretAuthorized(
+  providedSecret: string | null,
+  expectedSecret: string | undefined,
+): boolean {
+  return Boolean(
+    providedSecret &&
+      expectedSecret &&
+      providedSecret.length > 0 &&
+      providedSecret === expectedSecret,
+  );
+}
+
 export type RawHeatingControlSettingsRow = {
+  automatic_max_heating_hours: number | null;
   full_tank_average_temperature: number | null;
   full_tank_showers: number | null;
+  heating_gain_source: string | null;
+  heating_need_mode: string | null;
   max_tank_temperature: number | null;
   min_tank_temperature: number | null;
+  safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
+  updated_at?: string | null;
 };
 
 export type RawElectricityPriceRow = {
@@ -99,6 +134,7 @@ export type RawHeatingPlanRow = {
   plan_date: string;
   planned_hours: unknown;
   target_hours?: number | null;
+  updated_at?: string | null;
 };
 
 // Cross-runtime plan identity used by the backend heartbeat and Shelly.
@@ -121,6 +157,55 @@ export function wasHeartbeatCompareAndSetCommitted(data: unknown): data is true 
   return data === true;
 }
 
+export function doesHeartbeatRunTokenMatch({
+  currentRunId,
+  currentRunStartedAt,
+  expectedRunId,
+  expectedRunStartedAt,
+}: {
+  currentRunId: string | null | undefined;
+  currentRunStartedAt: string | null | undefined;
+  expectedRunId: string;
+  expectedRunStartedAt: string;
+}): boolean {
+  const currentStartedAt = Date.parse(currentRunStartedAt ?? "");
+  const expectedStartedAt = Date.parse(expectedRunStartedAt);
+  return (
+    currentRunId === expectedRunId &&
+    Number.isFinite(currentStartedAt) &&
+    Number.isFinite(expectedStartedAt) &&
+    currentStartedAt === expectedStartedAt
+  );
+}
+
+export const maxTankSnapshotPublicationRetries = 1;
+
+export type TankSnapshotRetryAction =
+  | "retry"
+  | "retry_exhausted"
+  | "superseded"
+  | "terminal";
+
+export function resolveTankSnapshotRetryAction({
+  attemptIndex,
+  publicationResult,
+  stillOwnsRun,
+}: {
+  attemptIndex: number;
+  publicationResult: unknown;
+  stillOwnsRun: boolean;
+}): TankSnapshotRetryAction {
+  if (publicationResult !== "tank_snapshot_conflict") {
+    return "terminal";
+  }
+  if (!stillOwnsRun) {
+    return "superseded";
+  }
+  return attemptIndex < maxTankSnapshotPublicationRetries
+    ? "retry"
+    : "retry_exhausted";
+}
+
 export function canMarkHeatingPlanValidated(
   heating: unknown,
   isValidReadyDecision: boolean,
@@ -129,39 +214,151 @@ export function canMarkHeatingPlanValidated(
   return typeof heating === "boolean" && isValidReadyDecision && !hasTodayChanges;
 }
 
-// automaticMaxHeatingHours and safetyShowerReserve are settings the
-// optimizer needs that heating_control_settings does not (currently) carry
-// - see the shadow-mode PR report for why. Both fall back to
-// defaultSettings below, and settingsSource records that so shadow rows
-// stay honest about it rather than silently pretending parity.
+export type OptimizerInputFetchFailureReason =
+  | "heating_gain_history_fetch_failed"
+  | "recovery_history_fetch_failed"
+  | "drop_profile_fetch_failed";
+
+export type OptimizerInputFetchResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: OptimizerInputFetchFailureReason; value: T };
+
+export function successfulOptimizerInputFetch<T>(
+  value: T,
+): OptimizerInputFetchResult<T> {
+  return { ok: true, value };
+}
+
+export function failedOptimizerInputFetch<T>(
+  reason: OptimizerInputFetchFailureReason,
+  fallbackValue: T,
+): OptimizerInputFetchResult<T> {
+  return { ok: false, reason, value: fallbackValue };
+}
+
+export type OptimizerInputFetchReadiness =
+  | { failedReasons: []; ok: true; reason: null }
+  | {
+      failedReasons: OptimizerInputFetchFailureReason[];
+      ok: false;
+      reason:
+        | OptimizerInputFetchFailureReason
+        | `optimizer_input_fetch_failed:${string}`;
+    };
+
+export function resolveOptimizerInputFetchReadiness(
+  fetches: readonly OptimizerInputFetchResult<unknown>[],
+): OptimizerInputFetchReadiness {
+  const failedReasons = fetches.flatMap((fetch) =>
+    fetch.ok ? [] : [fetch.reason],
+  );
+
+  if (failedReasons.length === 0) {
+    return { failedReasons: [], ok: true, reason: null };
+  }
+
+  return {
+    failedReasons,
+    ok: false,
+    reason:
+      failedReasons.length === 1
+        ? failedReasons[0]
+        : `optimizer_input_fetch_failed:${failedReasons.join(",")}`,
+  };
+}
+
+export type BackendPublicationReadiness =
+  | { ok: true; reason: null }
+  | {
+      ok: false;
+      reason:
+        | "control_mode_not_automatic"
+        | "control_mode_missing"
+        | "control_mode_invalid"
+        | "settings_missing"
+        | "settings_incomplete"
+        | OptimizerInputFetchFailureReason
+        | `optimizer_input_fetch_failed:${string}`;
+    };
+
+export function combineBackendPublicationReadiness(
+  settingsReadiness: BackendPublicationReadiness,
+  inputFetchReadiness: OptimizerInputFetchReadiness,
+): BackendPublicationReadiness {
+  if (!inputFetchReadiness.ok) {
+    return { ok: false, reason: inputFetchReadiness.reason };
+  }
+  return settingsReadiness;
+}
+
 export type OptimizerSettingsResolution = {
+  heatingGainSource: "learned" | "fixed";
+  heatingNeedMode: "automatic" | "fixed" | null;
+  publicationReadiness: BackendPublicationReadiness;
   settings: HeatingOptimizationSettingsSource;
-  settingsSource: "heating_control_settings+defaults" | "defaults_only";
+  settingsSource: "heating_control_settings" | "heating_control_settings+defaults" | "defaults_only";
 };
 
 export function resolveOptimizerSettings(
   row: RawHeatingControlSettingsRow | null,
 ): OptimizerSettingsResolution {
+  const missingRequiredSettings =
+    !row ||
+    !Number.isFinite(row.automatic_max_heating_hours) ||
+    !Number.isFinite(row.full_tank_average_temperature) ||
+    !Number.isFinite(row.full_tank_showers) ||
+    !Number.isFinite(row.max_tank_temperature) ||
+    !Number.isFinite(row.min_tank_temperature) ||
+    !Number.isFinite(row.safety_shower_reserve) ||
+    !Number.isFinite(row.target_shower_reserve) ||
+    (row.heating_gain_source !== "learned" && row.heating_gain_source !== "fixed");
+  const heatingNeedMode =
+    row?.heating_need_mode === "automatic" || row?.heating_need_mode === "fixed"
+      ? row.heating_need_mode
+      : null;
+  const heatingGainSource =
+    row?.heating_gain_source === "fixed" ? "fixed" : defaultSettings.heatingGainSource;
   const settings: HeatingOptimizationSettingsSource = {
-    automaticMaxHeatingHours: defaultSettings.automaticMaxHeatingHours,
+    automaticMaxHeatingHours:
+      row?.automatic_max_heating_hours ?? defaultSettings.automaticMaxHeatingHours,
     fullTankAverageTemperature:
       row?.full_tank_average_temperature ?? defaultSettings.fullTankAverageTemperature,
     fullTankShowers: row?.full_tank_showers ?? defaultSettings.fullTankShowers,
     maxTankTemperature: row?.max_tank_temperature ?? defaultSettings.maxTankTemperature,
     minTankTemperature: row?.min_tank_temperature ?? defaultSettings.minTankTemperature,
-    safetyShowerReserve: defaultSettings.safetyShowerReserve,
+    safetyShowerReserve:
+      row?.safety_shower_reserve ?? defaultSettings.safetyShowerReserve,
     targetShowerReserve: row?.target_shower_reserve ?? defaultSettings.targetShowerReserve,
   };
+  const publicationReadiness: BackendPublicationReadiness = (() => {
+    if (!row) {
+      return { ok: false, reason: "settings_missing" };
+    }
+    if (row.heating_need_mode === null) {
+      return { ok: false, reason: "control_mode_missing" };
+    }
+    if (row.heating_need_mode !== "automatic" && row.heating_need_mode !== "fixed") {
+      return { ok: false, reason: "control_mode_invalid" };
+    }
+    if (row.heating_need_mode !== "automatic") {
+      return { ok: false, reason: "control_mode_not_automatic" };
+    }
+    if (missingRequiredSettings) {
+      return { ok: false, reason: "settings_incomplete" };
+    }
+    return { ok: true, reason: null };
+  })();
 
   return {
+    heatingGainSource,
+    heatingNeedMode,
+    publicationReadiness,
     settings,
-    // automaticMaxHeatingHours and safetyShowerReserve always come from
-    // defaultSettings today - heating_control_settings does not carry them
-    // (see the shadow-mode PR report). The remaining fields come from the
-    // row when one exists, defaultSettings otherwise.
-    settingsSource: row
-      ? "heating_control_settings+defaults"
-      : "defaults_only",
+    settingsSource: !row
+      ? "defaults_only"
+      : missingRequiredSettings
+        ? "heating_control_settings+defaults"
+        : "heating_control_settings",
   };
 }
 
@@ -198,6 +395,29 @@ export function buildOptimizerHours(
     )
     .sort((first, second) => first.date.getTime() - second.date.getTime())
     .map(({ dateKey: _dateKey, ...hour }) => hour);
+}
+
+export type ExpectedElectricityPriceSnapshotRow = {
+  ends_at: string;
+  region: string;
+  resolution_minutes: 60;
+  spot_price_cents_kwh: number;
+  starts_at: string;
+};
+
+export function buildExpectedElectricityPriceSnapshot(
+  hours: HeatingOptimizationHour[],
+  region = "FI",
+): ExpectedElectricityPriceSnapshotRow[] {
+  return hours
+    .map((hour) => ({
+      ends_at: hour.endDate.toISOString(),
+      region,
+      resolution_minutes: 60 as const,
+      spot_price_cents_kwh: hour.price,
+      starts_at: hour.startDate,
+    }))
+    .sort((first, second) => first.starts_at.localeCompare(second.starts_at));
 }
 
 export type OptimizerReadinessCheck =
@@ -327,6 +547,7 @@ export function runBackendHeatingOptimization({
   heatingGainHistory,
   hourlyDrops,
   hours,
+  heatingGainSource,
   isCurrentlyHeating,
   latestReading,
   now,
@@ -335,6 +556,7 @@ export function runBackendHeatingOptimization({
   heatingGainHistory: TankTemperatureReading[];
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  heatingGainSource: "learned" | "fixed";
   isCurrentlyHeating: boolean;
   latestReading: RawTankReading | null;
   now: Date;
@@ -381,6 +603,8 @@ export function runBackendHeatingOptimization({
     currentWeightedTemperature,
     hourlyDrops,
     hours: materializedHours,
+    heatingGainPerHour:
+      heatingGainSource === "fixed" ? settings.fallbackHeatingGainPerHour : undefined,
     isCurrentlyHeating,
     recoveryDropEnabled: false,
     settings,
@@ -504,6 +728,71 @@ export function buildStoredPlansMap(
   }
 
   return map;
+}
+
+export type ExpectedHeatingPlanVersion = {
+  expected_planned_hours: unknown;
+  expected_updated_at: string | null;
+  existed: boolean;
+  plan_date: string;
+};
+
+export function buildExpectedHeatingPlanVersions(
+  changedPlans: { plan_date: string }[],
+  storedRows: RawHeatingPlanRow[],
+  validatedPlanDate?: string,
+): ExpectedHeatingPlanVersion[] {
+  const planDates = [
+    ...new Set([
+      ...(validatedPlanDate ? [validatedPlanDate] : []),
+      ...changedPlans.map((plan) => plan.plan_date),
+    ]),
+  ];
+
+  return planDates.map((planDate) => {
+    const storedPlan = storedRows.find((row) => row.plan_date === planDate) ?? null;
+
+    return {
+      expected_planned_hours: storedPlan?.planned_hours ?? null,
+      expected_updated_at: storedPlan?.updated_at ?? null,
+      existed: storedPlan !== null,
+      plan_date: planDate,
+    };
+  });
+}
+
+export type ExpectedOptimizerSettingsSnapshot = {
+  automatic_max_heating_hours: number | null;
+  full_tank_average_temperature: number | null;
+  full_tank_showers: number | null;
+  heating_gain_source: string | null;
+  heating_need_mode: string | null;
+  max_tank_temperature: number | null;
+  min_tank_temperature: number | null;
+  safety_shower_reserve: number | null;
+  target_shower_reserve: number | null;
+  updated_at: string | null;
+};
+
+export function buildExpectedOptimizerSettingsSnapshot(
+  row: RawHeatingControlSettingsRow | null,
+): ExpectedOptimizerSettingsSnapshot | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    automatic_max_heating_hours: row.automatic_max_heating_hours,
+    full_tank_average_temperature: row.full_tank_average_temperature,
+    full_tank_showers: row.full_tank_showers,
+    heating_gain_source: row.heating_gain_source,
+    heating_need_mode: row.heating_need_mode,
+    max_tank_temperature: row.max_tank_temperature,
+    min_tank_temperature: row.min_tank_temperature,
+    safety_shower_reserve: row.safety_shower_reserve,
+    target_shower_reserve: row.target_shower_reserve,
+    updated_at: row.updated_at ?? null,
+  };
 }
 
 export {

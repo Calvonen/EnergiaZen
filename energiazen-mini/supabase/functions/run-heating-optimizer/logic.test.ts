@@ -1,18 +1,30 @@
 import {
   buildHeatingPlanFingerprint,
+  buildExpectedElectricityPriceSnapshot,
+  buildExpectedHeatingPlanVersions,
+  buildExpectedOptimizerSettingsSnapshot,
+  buildExpectedTankSnapshot,
   buildHeatingPlanPublicationDecision,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
   canMarkHeatingPlanValidated,
   checkOptimizerReadiness,
+  combineBackendPublicationReadiness,
   createHeatingOptimizationSettings,
+  doesHeartbeatRunTokenMatch,
+  failedOptimizerInputFetch,
   getDateKeyOffset,
   getHelsinkiDateStart,
   latestPriceFetchedAt,
+  isHeatingOptimizerCronSecretAuthorized,
+  maxTankSnapshotPublicationRetries,
   resolveHourlyDropProfile,
+  resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
+  resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
+  successfulOptimizerInputFetch,
   wasHeartbeatCompareAndSetCommitted,
   type HeatingPlanPublicationDecision,
   type RawElectricityPriceRow,
@@ -74,6 +86,307 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  assertEqual(
+    isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),
+    true,
+    "matching private cron secret authorizes the optimizer request",
+  );
+  for (const [provided, expected] of [
+    [null, "private-cron-secret"],
+    ["wrong-secret", "private-cron-secret"],
+    ["publishable-key-only", undefined],
+    ["", "private-cron-secret"],
+  ] as const) {
+    assertEqual(
+      isHeatingOptimizerCronSecretAuthorized(provided, expected),
+      false,
+      "missing, wrong or merely publishable credentials must not authorize the optimizer",
+    );
+  }
+  assertEqual(
+    maxTankSnapshotPublicationRetries,
+    1,
+    "normal tank snapshot races must have exactly one deterministic retry",
+  );
+  assertEqual(
+    doesHeartbeatRunTokenMatch({
+      currentRunId: "run-1",
+      currentRunStartedAt: "2026-08-13T10:00:00+00:00",
+      expectedRunId: "run-1",
+      expectedRunStartedAt: "2026-08-13T10:00:00.000Z",
+    }),
+    true,
+    "heartbeat ownership must compare timestamptz instants rather than their JSON spelling",
+  );
+  assertEqual(
+    doesHeartbeatRunTokenMatch({
+      currentRunId: "newer-run",
+      currentRunStartedAt: "2026-08-13T10:01:00+00:00",
+      expectedRunId: "run-1",
+      expectedRunStartedAt: "2026-08-13T10:00:00.000Z",
+    }),
+    false,
+    "a newer heartbeat token must supersede the retrying run",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 0,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: true,
+    }),
+    "retry",
+    "the first owned tank snapshot conflict must retry",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 1,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: true,
+    }),
+    "retry_exhausted",
+    "a second tank conflict must exhaust the one-retry budget",
+  );
+  assertEqual(
+    resolveTankSnapshotRetryAction({
+      attemptIndex: 0,
+      publicationResult: "tank_snapshot_conflict",
+      stillOwnsRun: false,
+    }),
+    "superseded",
+    "a superseded run must not retry a tank conflict",
+  );
+  for (const publicationResult of [
+    "settings_conflict",
+    "plan_conflict",
+    "price_snapshot_conflict",
+    "relay_conflict",
+  ]) {
+    assertEqual(
+      resolveTankSnapshotRetryAction({
+        attemptIndex: 0,
+        publicationResult,
+        stillOwnsRun: true,
+      }),
+      "terminal",
+      `${publicationResult} must not enter the tank retry path`,
+    );
+  }
+  {
+    type SimulatedPublicationResult =
+      | "heartbeat_superseded"
+      | "no_changes"
+      | "published"
+      | "tank_snapshot_conflict";
+    function simulateTankRetry(
+      publicationResults: SimulatedPublicationResult[],
+      readingIds: string[],
+      stillOwnsRun = true,
+    ) {
+      const optimizedReadingIds: string[] = [];
+
+      for (let attemptIndex = 0; attemptIndex < publicationResults.length; attemptIndex += 1) {
+        optimizedReadingIds.push(readingIds[attemptIndex]);
+        const publicationResult = publicationResults[attemptIndex];
+        const retryAction = resolveTankSnapshotRetryAction({
+          attemptIndex,
+          publicationResult,
+          stillOwnsRun,
+        });
+        if (retryAction === "retry") continue;
+        if (retryAction === "superseded") {
+          return {
+            finalReadingId: readingIds[attemptIndex],
+            health: "superseded",
+            optimizedReadingIds,
+            timestampsAdvanced: false,
+            wrotePlan: false,
+          };
+        }
+        if (retryAction === "retry_exhausted") {
+          return {
+            finalReadingId: readingIds[attemptIndex],
+            health: "unhealthy/deferred",
+            optimizedReadingIds,
+            timestampsAdvanced: false,
+            wrotePlan: false,
+          };
+        }
+        return {
+          finalReadingId: readingIds[attemptIndex],
+          health: "healthy",
+          optimizedReadingIds,
+          timestampsAdvanced: true,
+          wrotePlan: publicationResult === "published",
+        };
+      }
+
+      throw new Error("simulated tank retry did not reach a final outcome");
+    }
+
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "published"],
+        ["old-reading", "fresh-reading"],
+      ),
+      {
+        finalReadingId: "fresh-reading",
+        health: "healthy",
+        optimizedReadingIds: ["old-reading", "fresh-reading"],
+        timestampsAdvanced: true,
+        wrotePlan: true,
+      },
+      "retry publication must rerun against and publish the fresh reading snapshot",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "no_changes"],
+        ["old-reading", "fresh-reading"],
+      ),
+      {
+        finalReadingId: "fresh-reading",
+        health: "healthy",
+        optimizedReadingIds: ["old-reading", "fresh-reading"],
+        timestampsAdvanced: true,
+        wrotePlan: false,
+      },
+      "retry no_changes must validate the fresh reading snapshot without a plan write",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "tank_snapshot_conflict"],
+        ["old-reading", "newer-reading"],
+      ),
+      {
+        finalReadingId: "newer-reading",
+        health: "unhealthy/deferred",
+        optimizedReadingIds: ["old-reading", "newer-reading"],
+        timestampsAdvanced: false,
+        wrotePlan: false,
+      },
+      "retry exhaustion must remain unhealthy and must not write or advance validation state",
+    );
+    assertEqual(
+      simulateTankRetry(
+        ["tank_snapshot_conflict", "published"],
+        ["old-reading", "must-not-run"],
+        false,
+      ),
+      {
+        finalReadingId: "old-reading",
+        health: "superseded",
+        optimizedReadingIds: ["old-reading"],
+        timestampsAdvanced: false,
+        wrotePlan: false,
+      },
+      "a superseding run must stop before another optimizer attempt",
+    );
+  }
+  assertEqual(
+    buildExpectedTankSnapshot({
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: false,
+      top_temp: 55,
+    }),
+    {
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: false,
+      top_temp: 55,
+    },
+    "tank snapshot must carry every current reading value used by the optimizer",
+  );
+  assertEqual(
+    buildExpectedTankSnapshot({
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: null,
+      top_temp: 55,
+    }),
+    {
+      bottom_temp: 45,
+      created_at: "2026-08-13T10:00:00.000Z",
+      heating: null,
+      top_temp: 55,
+    },
+    "unknown original relay state must remain unknown in the full tank snapshot",
+  );
+
+  {
+    const emptyGainHistory = successfulOptimizerInputFetch({ readings: [] });
+    const emptyRecoveryHistory = successfulOptimizerInputFetch({ readings: [] });
+    const missingDropProfile = successfulOptimizerInputFetch(null);
+    const successfulEmptyReadiness = resolveOptimizerInputFetchReadiness([
+      emptyGainHistory,
+      emptyRecoveryHistory,
+      missingDropProfile,
+    ]);
+
+    assertEqual(
+      successfulEmptyReadiness,
+      { failedReasons: [], ok: true, reason: null },
+      "successful empty optimizer inputs must remain publication-ready",
+    );
+    assertEqual(
+      [emptyGainHistory.value, emptyRecoveryHistory.value, missingDropProfile.value],
+      [{ readings: [] }, { readings: [] }, null],
+      "successful empty gain/recovery data and a missing drop profile keep intended fallback values",
+    );
+
+    for (const reason of [
+      "heating_gain_history_fetch_failed",
+      "recovery_history_fetch_failed",
+      "drop_profile_fetch_failed",
+    ] as const) {
+      const failedFetch = failedOptimizerInputFetch(reason, null);
+      assertEqual(
+        resolveOptimizerInputFetchReadiness([failedFetch]),
+        { failedReasons: [reason], ok: false, reason },
+        `${reason} must block publication and preserve its diagnostic reason`,
+      );
+      assertEqual(
+        failedFetch.value,
+        null,
+        `${reason} may still expose its fallback value for shadow calculation`,
+      );
+    }
+
+    const multipleFailures = resolveOptimizerInputFetchReadiness([
+      failedOptimizerInputFetch("heating_gain_history_fetch_failed", []),
+      failedOptimizerInputFetch("recovery_history_fetch_failed", []),
+      successfulOptimizerInputFetch(null),
+    ]);
+    assertEqual(
+      multipleFailures,
+      {
+        failedReasons: [
+          "heating_gain_history_fetch_failed",
+          "recovery_history_fetch_failed",
+        ],
+        ok: false,
+        reason:
+          "optimizer_input_fetch_failed:heating_gain_history_fetch_failed,recovery_history_fetch_failed",
+      },
+      "multiple optimizer input failures must retain every source in deterministic order",
+    );
+    assertEqual(
+      combineBackendPublicationReadiness(
+        { ok: true, reason: null },
+        multipleFailures,
+      ),
+      { ok: false, reason: multipleFailures.reason },
+      "input failure must close the central publication readiness gate",
+    );
+    assertEqual(
+      combineBackendPublicationReadiness(
+        { ok: false, reason: "settings_incomplete" },
+        successfulEmptyReadiness,
+      ),
+      { ok: false, reason: "settings_incomplete" },
+      "successful input fetches must preserve existing settings fail-safe behavior",
+    );
+  }
+
   assertEqual(
     canMarkHeatingPlanValidated(true, true, false),
     true,
@@ -140,11 +453,16 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     top_temp: 40,
   };
   const settingsRow: RawHeatingControlSettingsRow = {
+    automatic_max_heating_hours: 5,
     full_tank_average_temperature: 70,
     full_tank_showers: 6,
+    heating_gain_source: "learned",
+    heating_need_mode: "automatic",
     max_tank_temperature: 70,
     min_tank_temperature: 10,
+    safety_shower_reserve: 2,
     target_shower_reserve: 4,
+    updated_at: "2026-08-12T09:00:00.000Z",
   };
   // UTC hours here are all treated as if they were the price API's own
   // starts_at/ends_at values - buildOptimizerHours only cares about
@@ -172,6 +490,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const run = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: {},
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -203,6 +522,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const run = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: {},
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -303,6 +623,29 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       buildOptimizerHours(quarterHourRows, now, todayPlanDate, tomorrowPlanDate),
       [],
       "15-minute-only prices must leave the hourly optimizer not ready",
+    );
+    const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
+      completeTodayHours,
+    );
+    assertEqual(
+      expectedPriceSnapshot.length,
+      completeTodayHours.length,
+      "price snapshot must contain exactly the rows passed to the optimizer",
+    );
+    assertEqual(
+      expectedPriceSnapshot[0],
+      {
+        ends_at: completeTodayHours[0].endDate.toISOString(),
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: completeTodayHours[0].price,
+        starts_at: completeTodayHours[0].startDate,
+      },
+      "price snapshot must preserve each used interval and price canonically",
+    );
+    assert(
+      expectedPriceSnapshot.every((price) => price.resolution_minutes === 60),
+      "15-minute rows must never enter the hourly optimizer price snapshot",
     );
     assertEqual(
       checkOptimizerReadiness({ latestReading: freshReading, now, priceHours: completeTodayHours }),
@@ -417,6 +760,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     const backendRun = runBackendHeatingOptimization({
       heatingGainHistory: [],
       hourlyDrops: dropProfile.hourlyDrops,
+      heatingGainSource: "learned",
       hours,
       isCurrentlyHeating: false,
       latestReading: freshReading,
@@ -464,13 +808,187 @@ export function runRunHeatingOptimizerLogicUnitTests() {
   );
   assertEqual(latestPriceFetchedAt([]), null, "no price rows means no fetched_at to report");
 
+  // Backend-primary publication must only use settings genuinely present in
+  // heating_control_settings, and only while the user mode is automatic.
+  {
+    const automaticResolution = resolveOptimizerSettings(settingsRow);
+    assertEqual(
+      automaticResolution.publicationReadiness,
+      { ok: true, reason: null },
+      "automatic mode with every optimizer setting present is publication-ready",
+    );
+    assertEqual(
+      automaticResolution.settingsSource,
+      "heating_control_settings",
+      "complete settings must not be reported as defaults-backed",
+    );
+    assertEqual(
+      automaticResolution.settings.automaticMaxHeatingHours,
+      5,
+      "backend must use the user's Supabase automaticMaxHeatingHours value, not defaultSettings",
+    );
+    assertEqual(
+      automaticResolution.settings.safetyShowerReserve,
+      2,
+      "backend must use the user's Supabase safetyShowerReserve value",
+    );
+    assertEqual(
+      buildExpectedOptimizerSettingsSnapshot(settingsRow),
+      {
+        automatic_max_heating_hours: 5,
+        full_tank_average_temperature: 70,
+        full_tank_showers: 6,
+        heating_gain_source: "learned",
+        heating_need_mode: "automatic",
+        max_tank_temperature: 70,
+        min_tank_temperature: 10,
+        safety_shower_reserve: 2,
+        target_shower_reserve: 4,
+        updated_at: "2026-08-12T09:00:00.000Z",
+      },
+      "settings snapshot must include every backend-primary optimizer setting and updated_at",
+    );
+    assertEqual(
+      buildExpectedOptimizerSettingsSnapshot(null),
+      null,
+      "missing settings row cannot produce a publication settings snapshot",
+    );
+
+    const fixedGainResolution = resolveOptimizerSettings({
+      ...settingsRow,
+      heating_gain_source: "fixed",
+    });
+    assertEqual(
+      fixedGainResolution.heatingGainSource,
+      "fixed",
+      "backend must use the synchronized Supabase gain source instead of a stale learned/default value",
+    );
+
+    const fixedResolution = resolveOptimizerSettings({
+      ...settingsRow,
+      heating_need_mode: "fixed",
+    });
+    assertEqual(
+      fixedResolution.publicationReadiness,
+      { ok: false, reason: "control_mode_not_automatic" },
+      "fixed mode must block backend-primary publication even when changedPlans exist",
+    );
+    assertEqual(
+      fixedResolution.settingsSource,
+      "heating_control_settings",
+      "fixed mode with complete settings is blocked by mode, not by defaults",
+    );
+
+    for (const [field, row] of [
+      [
+        "automaticMaxHeatingHours",
+        { ...settingsRow, automatic_max_heating_hours: null },
+      ],
+      ["safetyShowerReserve", { ...settingsRow, safety_shower_reserve: null }],
+      ["heatingGainSource", { ...settingsRow, heating_gain_source: null }],
+    ] as const) {
+      const resolution = resolveOptimizerSettings(row);
+      assertEqual(
+        resolution.publicationReadiness,
+        { ok: false, reason: "settings_incomplete" },
+        `${field} missing must block publication`,
+      );
+      assertEqual(
+        resolution.settingsSource,
+        "heating_control_settings+defaults",
+        `${field} missing must not be reported as publication-ready settings_source`,
+      );
+    }
+
+    for (const row of [
+      null,
+      { ...settingsRow, heating_need_mode: null },
+      { ...settingsRow, heating_need_mode: "manual" },
+    ]) {
+      const resolution = resolveOptimizerSettings(row);
+      assertEqual(
+        resolution.publicationReadiness.ok,
+        false,
+        "missing/unknown/invalid control mode must fail safe",
+      );
+    }
+  }
+
   // buildStoredPlansMap / buildShadowRunRow: sanity-check the shadow row
   // shape and the app-vs-backend match/mismatch comparison.
   {
     const storedPlans = buildStoredPlansMap([
-      { plan_date: todayPlanDate, planned_hours: [14, 15] } as RawHeatingPlanRow,
+      {
+        plan_date: todayPlanDate,
+        planned_hours: [14, 15],
+        updated_at: "2026-08-12T10:00:00.000Z",
+      } as RawHeatingPlanRow,
     ]);
     assertEqual(storedPlans[todayPlanDate]?.planned_hours, [14, 15], "buildStoredPlansMap must index by plan_date");
+    assertEqual(
+      buildExpectedHeatingPlanVersions(
+        [
+          { plan_date: tomorrowPlanDate },
+        ],
+        [
+          {
+            plan_date: todayPlanDate,
+            planned_hours: [14, 15],
+            updated_at: "2026-08-12T10:00:00.000Z",
+          },
+        ] as RawHeatingPlanRow[],
+        todayPlanDate,
+      ),
+      [
+        {
+          expected_planned_hours: [14, 15],
+          expected_updated_at: "2026-08-12T10:00:00.000Z",
+          existed: true,
+          plan_date: todayPlanDate,
+        },
+        {
+          expected_planned_hours: null,
+          expected_updated_at: null,
+          existed: false,
+          plan_date: tomorrowPlanDate,
+        },
+      ],
+      "expected plan versions must include validated today even when only tomorrow is changed",
+    );
+    assertEqual(
+      buildExpectedHeatingPlanVersions(
+        [],
+        [
+          {
+            plan_date: todayPlanDate,
+            planned_hours: [14, 15],
+            updated_at: "2026-08-12T10:00:00.000Z",
+          },
+        ] as RawHeatingPlanRow[],
+        todayPlanDate,
+      ),
+      [
+        {
+          expected_planned_hours: [14, 15],
+          expected_updated_at: "2026-08-12T10:00:00.000Z",
+          existed: true,
+          plan_date: todayPlanDate,
+        },
+      ],
+      "no_changes must still carry today's version and content identity",
+    );
+    assertEqual(
+      buildExpectedHeatingPlanVersions([], [], todayPlanDate),
+      [
+        {
+          expected_planned_hours: null,
+          expected_updated_at: null,
+          existed: false,
+          plan_date: todayPlanDate,
+        },
+      ],
+      "no_changes must preserve an absent-today snapshot for conflict detection",
+    );
 
     const matchingDecision = buildHeatingPlanPublicationDecision({
       currentHourNumber: 14,

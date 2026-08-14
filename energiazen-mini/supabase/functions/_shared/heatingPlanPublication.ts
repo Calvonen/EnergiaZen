@@ -16,6 +16,18 @@ export type PublishedHeatingPlanState<TResult, THour> = {
 
 export type HeatingOptimizationRunSource = "active" | "scenario";
 
+// Rollout gate for the legacy app publisher. Backend-primary owns automatic
+// publications, while fixed plans remain explicit user-authored commands.
+export function shouldPublishHeatingPlanFromApp({
+  backendPrimaryEnabled,
+  mode,
+}: {
+  backendPrimaryEnabled: boolean;
+  mode: "automatic" | "fixed";
+}): boolean {
+  return mode === "fixed" || !backendPrimaryEnabled;
+}
+
 // Whether the heating_plans publish effect must defer entirely rather than
 // upsert this cycle.
 //  - isTodayPlanLoaded gates unconditionally, regardless of heating: with
