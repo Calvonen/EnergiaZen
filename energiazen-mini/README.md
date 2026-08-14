@@ -420,6 +420,58 @@ from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 ```
 
+### Live-triggeri syöttömuutoksille
+
+Tunnin välein ajettava cron on edelleen olemassa fallbackina/reconciliationina,
+mutta se ei ole ainoa tapa käynnistää ajo. Migraatio
+`20260814000000_add_live_heating_optimizer_trigger.sql` lisää kaksi
+tietokantatriggeriä, jotka pyytävät saman `run-heating-optimizer`-ajon heti,
+kun julkaisuun vaikuttava input muuttuu:
+
+- uusi rivi `tank_readings`-tauluun (`AFTER INSERT`)
+- optimizerin käyttämä muutos `heating_control_settings`-riviin
+  (`AFTER UPDATE OF automatic_max_heating_hours, full_tank_average_temperature,
+  full_tank_showers, heating_gain_source, heating_need_mode,
+  max_tank_temperature, min_tank_temperature, safety_shower_reserve,
+  target_shower_reserve` yhdessä `WHEN`-ehdon kanssa, joka vaatii arvon
+  todella muuttuvan)
+
+Molemmat triggerit kutsuvat `public.request_backend_heating_optimizer_run()`
+-funktiota, joka käyttää täsmälleen samaa autentikoitua HTTP-polkua kuin cron:
+sama `project_url`, sama yksityinen `heating_optimizer_cron_secret`-header
+(`x-energyzen-cron-secret`) ja sama `run-heating-optimizer`-Edge Function.
+Pelkkä publishable key ei koskaan riitä - tämä on täsmälleen sama
+`isHeatingOptimizerCronSecretAuthorized`-tarkistus, joka jo suojaa cronia.
+Mikään uusi kirjoituspolku `heating_plans`/heartbeat-tilaan ei synny: kaikki
+PR #193:n CAS-, snapshot- ja fail-safe-suojaukset koskevat myös näin
+käynnistettyä ajoa identtisesti.
+
+**Debounce/coalescing:** singleton-tila
+`backend_heating_optimizer_trigger_state` (rivi `id = 1`) muistaa viimeisen
+dispatch-ajan. Jos pyyntö tulee alle 30 sekunnin sisällä edellisestä
+dispatchista, funktio vain merkitsee `pending = true` eikä tee uutta
+HTTP-kutsua - se ei siis käynnistä uutta optimizer-ajoa jokaisesta
+minuutin välein saapuvasta tankkilukemasta. Koska `tank_readings` päivittyy
+noin minuutin välein, debounce-ikkunan sulkeuduttua seuraava lukema (tai
+seuraava relevantti asetusmuutos, tai viime kädessä tunnin cron) toimii
+luonnostaan trailing-dispatchina - mitään alkuperäisestä eventistä ei
+tarvitse toistaa, koska jokainen dispatch lukee tuoreimman datan
+kutsuhetkellä.
+
+**Trigger-loop-turvallisuus:** triggerit on kiinnitetty vain
+`tank_readings`- ja `heating_control_settings`-tauluihin, joita
+`run-heating-optimizer` ainoastaan LUKEE. Se kirjoittaa yksinomaan
+`heating_plan_shadow_runs`-, `backend_heating_optimizer_state`- ja (RPC:n
+kautta) `heating_plans`-tauluihin - näissä ei ole tästä migraatiosta
+peräisin olevaa triggeriä, joten käynnistetty ajo ei voi käynnistää itseään
+uudelleen.
+
+**Fail-safe:** virhe dispatch-funktiossa (puuttuva Vault-secret,
+`net.http_post`-virhe tms.) napataan funktion sisällä ja lokitetaan
+`WARNING`-tasolla - se ei koskaan voi kaataa tai rollbackata sitä
+`tank_readings`-inserttiä tai `heating_control_settings`-updatea, joka sen
+laukaisi.
+
 ### Backend-optimoijan trust-heartbeat
 
 Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden

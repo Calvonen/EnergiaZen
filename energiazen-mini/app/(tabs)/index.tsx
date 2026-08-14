@@ -159,6 +159,12 @@ const temperatureBarSegmentCount = 8;
 const storedElectricityPriceColumns = "start_date,end_date,price";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
+// Fallback only: the Realtime subscription in the effect below is the
+// primary way a backend publication reaches storedHeatingPlans while this
+// screen stays mounted. This interval exists purely for a dropped or
+// never-established Realtime connection - it is deliberately far looser
+// than the live optimizer trigger's debounce window.
+const heatingPlansBackendPollIntervalMs = 90_000;
 const helsinkiHourFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
   hour12: false,
@@ -881,6 +887,27 @@ export default function HomeScreen() {
   // review, PR #147: a cold start could otherwise publish over an
   // already-published current hour before the load request resolves).
   const loadedHeatingPlanDatesRef = useRef<Set<string>>(new Set());
+  // Lets loadHeatingPlans (and the realtime/poll effect that calls it) read
+  // the currently visible plan_dates without depending on
+  // visiblePlanDatesKey directly, so that effect's identity - and the
+  // Supabase Realtime subscription it owns - stays stable across renders.
+  const visiblePlanDatesKeyRef = useRef("");
+  // Guards state updates from an in-flight loadHeatingPlans() call that
+  // resolves after this screen has unmounted (realtime callback, polling
+  // interval, or the plain effect below can all still be awaiting a
+  // response at that point).
+  const isHomeScreenMountedRef = useRef(true);
+  useEffect(() => {
+    isHomeScreenMountedRef.current = true;
+    return () => {
+      isHomeScreenMountedRef.current = false;
+    };
+  }, []);
+  // A newer loadHeatingPlans() call (visible-dates change, realtime event,
+  // or poll tick) must win over a slower older one still in flight for the
+  // same or a different set of plan_dates - mirrors the isActive guard the
+  // single visiblePlanDatesKey-keyed effect used to provide on its own.
+  const loadHeatingPlansGenerationRef = useRef(0);
   // The exact (plan_date, hour) that was current the moment heating first
   // became null with no earlier pin in effect. Only this specific hour may
   // be preserved while heating stays null - an hour that merely happens to
@@ -1694,78 +1721,128 @@ export default function HomeScreen() {
   ).join(",");
 
   useEffect(() => {
-    const planDates = visiblePlanDatesKey.split(",");
-    let isActive = true;
+    visiblePlanDatesKeyRef.current = visiblePlanDatesKey;
+  }, [visiblePlanDatesKey]);
 
-    async function loadHeatingPlans() {
-      try {
-        const { data, error } = await supabase
-          .from("heating_plans")
-          .select(storedHeatingPlanColumns)
-          .in("plan_date", planDates);
+  // Reads visiblePlanDatesKeyRef (not the visiblePlanDatesKey closure
+  // variable) so this identity stays stable across renders - the backend
+  // publication realtime subscription and its polling fallback below both
+  // reuse it without resubscribing every time the visible dates change.
+  const loadHeatingPlans = useCallback(async () => {
+    const planDates = visiblePlanDatesKeyRef.current.split(",");
+    const generation = ++loadHeatingPlansGenerationRef.current;
 
-        if (error) {
-          console.warn("Failed to load heating plans", error);
-          return;
-        }
+    try {
+      const { data, error } = await supabase
+        .from("heating_plans")
+        .select(storedHeatingPlanColumns)
+        .in("plan_date", planDates);
 
-        if (!isActive) {
-          return;
-        }
+      if (error) {
+        console.warn("Failed to load heating plans", error);
+        return;
+      }
 
-        setStoredHeatingPlans((currentPlans) => {
-          const nextPlans = { ...currentPlans };
+      if (
+        !isHomeScreenMountedRef.current ||
+        generation !== loadHeatingPlansGenerationRef.current
+      ) {
+        return;
+      }
 
-          for (const planDate of planDates) {
-            delete nextPlans[planDate];
-          }
-
-          for (const plan of (data ?? []) as StoredHeatingPlan[]) {
-            if (plan.plan_date) {
-              const currentPlan = nextPlans[plan.plan_date];
-
-              if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
-                nextPlans[plan.plan_date] = plan;
-              }
-            }
-          }
-
-          debugLog("Heating plans loaded into local state", {
-            loadedPlans: (data ?? []).map((plan) => ({
-              plan_date: plan.plan_date,
-              planned_hours: normalizeStoredHeatingPlanHours(
-                plan.planned_hours,
-              ),
-              target_hours: plan.target_hours,
-              updated_at: plan.updated_at,
-            })),
-            storedHeatingPlansAfterLoad: planDates.map((planDate) => ({
-              plan_date: planDate,
-              planned_hours: normalizeStoredHeatingPlanHours(
-                nextPlans[planDate]?.planned_hours,
-              ),
-              target_hours: nextPlans[planDate]?.target_hours ?? null,
-              updated_at: nextPlans[planDate]?.updated_at ?? null,
-            })),
-          });
-
-          return nextPlans;
-        });
+      setStoredHeatingPlans((currentPlans) => {
+        const nextPlans = { ...currentPlans };
 
         for (const planDate of planDates) {
-          loadedHeatingPlanDatesRef.current.add(planDate);
+          delete nextPlans[planDate];
         }
-      } catch (error) {
-        console.warn("Failed to load heating plans", error);
-      }
-    }
 
+        for (const plan of (data ?? []) as StoredHeatingPlan[]) {
+          if (plan.plan_date) {
+            const currentPlan = nextPlans[plan.plan_date];
+
+            if (isStoredHeatingPlanNewerOrSame(plan, currentPlan)) {
+              nextPlans[plan.plan_date] = plan;
+            }
+          }
+        }
+
+        debugLog("Heating plans loaded into local state", {
+          loadedPlans: (data ?? []).map((plan) => ({
+            plan_date: plan.plan_date,
+            planned_hours: normalizeStoredHeatingPlanHours(
+              plan.planned_hours,
+            ),
+            target_hours: plan.target_hours,
+            updated_at: plan.updated_at,
+          })),
+          storedHeatingPlansAfterLoad: planDates.map((planDate) => ({
+            plan_date: planDate,
+            planned_hours: normalizeStoredHeatingPlanHours(
+              nextPlans[planDate]?.planned_hours,
+            ),
+            target_hours: nextPlans[planDate]?.target_hours ?? null,
+            updated_at: nextPlans[planDate]?.updated_at ?? null,
+          })),
+        });
+
+        return nextPlans;
+      });
+
+      for (const planDate of planDates) {
+        loadedHeatingPlanDatesRef.current.add(planDate);
+      }
+    } catch (error) {
+      console.warn("Failed to load heating plans", error);
+    }
+  }, []);
+
+  useEffect(() => {
     void loadHeatingPlans();
+  }, [loadHeatingPlans, visiblePlanDatesKey]);
+
+  // Codex P2 (PR #193): with app-side automatic heating_plans writes
+  // disabled in backend-primary mode, nothing local updated
+  // storedHeatingPlans between hourly loads, so a backend publication while
+  // this screen stayed mounted never reached the planned/missed markers
+  // until the visible dates changed or the screen remounted. A Realtime
+  // subscription reflects a publication immediately; the interval is only a
+  // fallback for a dropped/never-established Realtime connection.
+  useEffect(() => {
+    const heatingPlansChannel = supabase
+      .channel("home-heating-plans-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "heating_plans" },
+        (payload) => {
+          const changedPlanDate =
+            (payload.new as { plan_date?: string | null } | null)
+              ?.plan_date ??
+            (payload.old as { plan_date?: string | null } | null)
+              ?.plan_date ??
+            null;
+
+          if (
+            changedPlanDate &&
+            !visiblePlanDatesKeyRef.current.split(",").includes(changedPlanDate)
+          ) {
+            return;
+          }
+
+          void loadHeatingPlans();
+        },
+      )
+      .subscribe();
+
+    const pollIntervalId = setInterval(() => {
+      void loadHeatingPlans();
+    }, heatingPlansBackendPollIntervalMs);
 
     return () => {
-      isActive = false;
+      clearInterval(pollIntervalId);
+      void supabase.removeChannel(heatingPlansChannel);
     };
-  }, [visiblePlanDatesKey]);
+  }, [loadHeatingPlans]);
 
   useEffect(() => {
     // This effect only ever reads activeOptimizationRun/activeHeatingOptimization
