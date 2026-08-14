@@ -469,16 +469,45 @@ kahdella erillisellä mekanismilla:
   koskaan edes yritä dispatchia.
 - **Per-avain cooldown dispatch-funktiossa.** Taulu
   `backend_heating_optimizer_trigger_debounce` pitää erillistä
-  `last_dispatch_requested_at`-tilaa `'tank'`- ja `'settings'`-avaimille;
-  `request_backend_heating_optimizer_run(p_reason, p_debounce_key,
-  p_min_interval)` ottaa nyt minimi-intervallin parametrina. Materiaalinen
-  tankkimuutos käyttää `'tank'`-avainta 5 minuutin cooldownilla (kova
-  yläraja ajotiheydelle esim. hakkaavaa relettä/anturia vastaan, mutta
-  silti paljon nopeampi kuin tunnin cron-fallback); `heating_control_settings`-
-  muutos käyttää edelleen `'settings'`-avainta 30 sekunnin ikkunalla, joten
-  se pysyy nopeana eikä koskaan odota tankki-cooldownin takana. Ikkunan
-  sisällä tuleva pyyntö vain merkitsee `pending = true` samalla tavalla
-  kuin ennen.
+  `last_dispatch_requested_at`-tilaa `'tank'`- ja `'settings'`-avaimille.
+  Kunkin avaimen oma `min_interval` (`'tank'` = 5 min, `'settings'` = 30 s)
+  on nykyään sarake samassa rivissä, ei enää parametri jonka jokainen
+  kutsuja toistaisi erikseen - `request_backend_heating_optimizer_run(p_reason,
+  p_debounce_key)` lukee sen taulusta. Materiaalinen tankkimuutos käyttää
+  `'tank'`-avainta 5 minuutin cooldownilla (kova yläraja ajotiheydelle esim.
+  hakkaavaa relettä/anturia vastaan, mutta silti paljon nopeampi kuin tunnin
+  cron-fallback); `heating_control_settings`-muutos käyttää edelleen
+  `'settings'`-avainta 30 sekunnin ikkunalla, joten se pysyy nopeana eikä
+  koskaan odota tankki-cooldownin takana. Ikkunan sisällä tuleva pyyntö vain
+  merkitsee `pending = true`.
+
+**Pending-tilan draining (lisätty
+`20260814040000_drain_pending_heating_optimizer_dispatch.sql`):**
+alkuperäisessä versiossa `pending = true` ei koskaan purkautunut, ellei
+jokin *myöhempi* triggeri sattunut ajamaan samaa avainta uudelleen - ja
+koska `backend_heating_optimizer_tank_trigger_baseline` siirtyi jo
+coalesced-tilassa olevan (vasta pyydetyn, ei vielä dispatchatun)
+materiaalisen lukeman kohdalle, seuraavat lähes samanlaiset lukemat eivät
+enää näyttäneet materiaalisilta uutta baselinea vasten - pyyntö saattoi
+jäädä roikkumaan tunnin cron-fallbackiin asti. Ratkaisu:
+`dispatch_backend_heating_optimizer_run(p_reason)` eriytettiin omaksi
+funktiokseen, joka tekee pelkän autentikoidun HTTP-kutsun (sama
+`net.http_post`/`x-energyzen-cron-secret`-polku kuin ennen), ja uusi
+`drain_pending_backend_heating_optimizer_dispatch()` on ajastettu
+`pg_cron`:illa minuutin välein (`drain-heating-optimizer-trigger-dispatch`).
+Se käy läpi jokaisen `pending = true`-rivin ja dispatchaa (kutsuen samaa
+`dispatch_backend_heating_optimizer_run`-funktiota) heti kun **sen oman**
+`min_interval`:n verran aikaa on kulunut edellisestä dispatchista - riippumatta
+siitä tuleeko enää yhtään uutta tankkilukemaa tai asetusmuutosta. Koska
+`pending` on yksi boolean per avain, mikä tahansa määrä samalla
+cooldown-ikkunalla coalescoituneita materiaalisia muutoksia purkautuu
+täsmälleen yhtenä trailing-ajona. `'tank'`- ja `'settings'`-avaimet
+draintuvat toisistaan riippumatta (kumpikin oman `min_interval`:nsa
+mukaan), joten tankki-cooldown ei koskaan viivytä asetusmuutoksen
+draintumista eikä päinvastoin. Draini käyttää `for update skip locked`ia,
+joten se ei koskaan jää jumiin samanaikaisen tankki-/asetustriggerin
+lukitseman rivin taakse - ohitettu rivi käsitellään seuraavalla minuutin
+ajolla.
 
 **Trigger-loop-turvallisuus:** triggerit on kiinnitetty vain
 `tank_readings`- ja `heating_control_settings`-tauluihin, joita
