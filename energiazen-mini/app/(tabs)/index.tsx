@@ -69,6 +69,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
 } from "@/lib/heatingPlanPresentation";
 import {
@@ -1469,6 +1470,10 @@ export default function HomeScreen() {
     ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
 
     if (storedPlans.length !== 2) {
+      return null;
+    }
+
+    if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
       return null;
     }
 

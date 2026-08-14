@@ -2,6 +2,7 @@ import {
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
+  hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
 } from "./heatingPlanPresentation";
 
@@ -33,6 +34,43 @@ const baseInput = {
 };
 
 export function runHeatingPlanPresentationUnitTests() {
+  const priceInterval = (startsAt: string) => ({
+    date: new Date(startsAt),
+    startDate: startsAt,
+  });
+  const rollbackPrices = [
+    priceInterval("2026-10-25T00:00:00.000Z"),
+    priceInterval("2026-10-25T01:00:00.000Z"),
+  ];
+
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: [
+        priceInterval("2026-10-24T00:00:00.000Z"),
+        priceInterval("2026-10-24T01:00:00.000Z"),
+      ],
+      storedPlans: [{ plan_date: "2026-10-24", planned_hours: [3] }],
+    }),
+    false,
+    "normaalipaivan tallennettu tunti ei ole monitulkintainen",
+  );
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: rollbackPrices,
+      storedPlans: [{ plan_date: "2026-10-25", planned_hours: [3] }],
+    }),
+    true,
+    "DST-palautuspaivan kahdesti esiintyva tallennettu tunti vaatii optimizer-varavaihtoehdon",
+  );
+  assertEqual(
+    hasAmbiguousStoredHeatingPlanHour({
+      hourlyPrices: rollbackPrices,
+      storedPlans: [{ plan_date: "2026-10-25", planned_hours: [4] }],
+    }),
+    false,
+    "DST-paivan duplikaatti ei estä tallennettua suunnitelmaa kun suunnitelma ei viittaa siihen",
+  );
+
   const stored = buildStoredHeatingPlanPresentation({
     currentShowers: 5.8,
     safetyShowerReserve: 2,
@@ -80,6 +118,20 @@ export function runHeatingPlanPresentationUnitTests() {
   );
 
   const standard = buildHeatingPlanPresentation(baseInput);
+  assertEqual(
+    selectActiveHeatingPlanPresentation(
+      standard,
+      hasAmbiguousStoredHeatingPlanHour({
+        hourlyPrices: rollbackPrices,
+        storedPlans: [{ plan_date: "2026-10-25", planned_hours: [3] }],
+      })
+        ? null
+        : stored,
+      true,
+    ),
+    standard,
+    "monitulkintainen tallennettu DST-tunti johtaa optimizer-esityksen varavaihtoehtoon",
+  );
   assertEqual(standard.reasonKind, "standard", "tavallinen suunnitelma tunnistetaan");
   assertEqual(
     standard.reason,
