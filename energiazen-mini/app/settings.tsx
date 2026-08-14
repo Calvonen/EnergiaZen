@@ -528,6 +528,7 @@ export default function SettingsScreen() {
 
     const draftSnapshot = draftSettings;
     const settingsToSave = normalizeSettings(draftSnapshot);
+    const heatingControlSettingsUpdatedAt = new Date().toISOString();
     setIsSavingSettings(true);
     setSaveFeedback(null);
 
@@ -537,11 +538,19 @@ export default function SettingsScreen() {
         savedSettings,
         saveLocal: saveSettings,
         saveRemote: async (nextSettings) => {
-          await upsertHeatingControlSettings(supabase, nextSettings);
+          await upsertHeatingControlSettings(
+            supabase,
+            nextSettings,
+            heatingControlSettingsUpdatedAt,
+          );
         },
       });
 
-      commitPersistedSettings(persistedSettings, draftSnapshot);
+      commitPersistedSettings(
+        persistedSettings,
+        draftSnapshot,
+        heatingControlSettingsUpdatedAt,
+      );
       setSaveFeedback({
         kind: "success",
         message: "Asetukset tallennettiin.",

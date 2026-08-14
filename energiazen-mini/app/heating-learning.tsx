@@ -385,8 +385,12 @@ export default function HeatingLearningScreen() {
     TankTemperatureReading[] | null
   >(null);
   const hasRequestedRecoveryReadings = useRef(false);
-  const { areSettingsLoaded, commitPersistedSettings, persistedSettings } =
-    useSettingsScenario();
+  const {
+    areSettingsLoaded,
+    commitPersistedSettings,
+    heatingControlSettingsUpdatedAt,
+    persistedSettings,
+  } = useSettingsScenario();
   const [isSavingGainSource, setIsSavingGainSource] = useState(false);
   const [gainSourceSaveError, setGainSourceSaveError] = useState<string | null>(
     null,
@@ -399,13 +403,18 @@ export default function HeatingLearningScreen() {
       ...previousSettings,
       heatingGainSource: nextSource,
     };
+    const nextSettingsUpdatedAt = new Date().toISOString();
 
     setGainSourceSaveError(null);
     setIsSavingGainSource(true);
     // Julkaise valinta heti jaettuun asetuskontekstiin, jotta etusivun
     // elävä lämmitysoptimointi (SettingsScenarioProvider, ei tämän ruudun
     // omaa paikallista tilaa) huomioi sen ilman sovelluksen uudelleenkäynnistystä.
-    commitPersistedSettings(nextSettings, previousSettings);
+    commitPersistedSettings(
+      nextSettings,
+      previousSettings,
+      nextSettingsUpdatedAt,
+    );
 
     try {
       await persistSettingsDraft({
@@ -432,7 +441,7 @@ export default function HeatingLearningScreen() {
             .from("heating_control_settings")
             .update({
               heating_gain_source: settings.heatingGainSource,
-              updated_at: new Date().toISOString(),
+              updated_at: nextSettingsUpdatedAt,
             })
             .eq("id", 1)
             .select("id");
@@ -451,7 +460,11 @@ export default function HeatingLearningScreen() {
     } catch {
       // The shared save path already rolls AsyncStorage back when the
       // authoritative Supabase write fails. Keep the live context aligned.
-      commitPersistedSettings(previousSettings, nextSettings);
+      commitPersistedSettings(
+        previousSettings,
+        nextSettings,
+        heatingControlSettingsUpdatedAt,
+      );
       setGainSourceSaveError(
         "Valinnan tallennus epäonnistui. Yritä uudelleen.",
       );

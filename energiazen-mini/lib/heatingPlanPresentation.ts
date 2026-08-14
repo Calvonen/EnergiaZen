@@ -220,13 +220,34 @@ export function buildStoredHeatingPlanPresentation({
 export function selectActiveHeatingPlanPresentation(
   freshOptimizerPresentation: HeatingPlanPresentation | null,
   storedPresentation: HeatingPlanPresentation | null,
-  storedPlanIsAuthoritative = false,
+  {
+    settingsUpdatedAt = null,
+    storedPlanIsAuthoritative = false,
+    storedPlanUpdatedAts = [],
+  }: {
+    settingsUpdatedAt?: string | null;
+    storedPlanIsAuthoritative?: boolean;
+    storedPlanUpdatedAts?: (string | null | undefined)[];
+  } = {},
 ) {
-  if (storedPlanIsAuthoritative) {
-    return storedPresentation ?? freshOptimizerPresentation;
+  if (!storedPlanIsAuthoritative) {
+    return freshOptimizerPresentation ?? storedPresentation;
   }
 
-  return freshOptimizerPresentation ?? storedPresentation;
+  const settingsUpdatedAtMs = settingsUpdatedAt
+    ? Date.parse(settingsUpdatedAt)
+    : Number.NaN;
+  const storedPlanIsFresh =
+    storedPresentation !== null &&
+    Number.isFinite(settingsUpdatedAtMs) &&
+    storedPlanUpdatedAts.length > 0 &&
+    storedPlanUpdatedAts.every((updatedAt) => {
+      const updatedAtMs = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+
+      return Number.isFinite(updatedAtMs) && updatedAtMs >= settingsUpdatedAtMs;
+    });
+
+  return storedPlanIsFresh ? storedPresentation : freshOptimizerPresentation;
 }
 
 export function hasCheaperSafetyRejectedPlan({

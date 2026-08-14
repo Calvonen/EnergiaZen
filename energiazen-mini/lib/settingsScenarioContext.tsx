@@ -55,6 +55,7 @@ type SettingsScenarioContextValue = SettingsScenarioState & {
   commitPersistedSettings: (
     settings: EnergiaZenSettings,
     draftSnapshot: EnergiaZenSettings,
+    heatingControlSettingsUpdatedAt: string | null,
   ) => void;
   discardDraftSettings: () => void;
   // "pending" until this install's heating_control_settings row in
@@ -68,6 +69,7 @@ type SettingsScenarioContextValue = SettingsScenarioState & {
   // assumption, and Home must not publish an automatic plan from the app
   // while that first confirmation is still outstanding.
   heatingControlSettingsSyncStatus: HeatingControlSettingsSyncStatus;
+  heatingControlSettingsUpdatedAt: string | null;
   updateDraftSettings: (update: DraftSettingsUpdate) => void;
 };
 
@@ -105,6 +107,8 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
 
   const [heatingControlSettingsSyncStatus, setHeatingControlSettingsSyncStatus] =
     useState<HeatingControlSettingsSyncStatus>("pending");
+  const [heatingControlSettingsUpdatedAt, setHeatingControlSettingsUpdatedAt] =
+    useState<string | null>(null);
 
   // Codex P1 (PR #193, upgrade path): existing installs can have a
   // heating_control_settings row created before the authoritative optimizer
@@ -137,6 +141,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
     let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
     async function attemptSync() {
+      let syncedSettingsUpdatedAt: string | null = null;
       const outcome = await ensureHeatingControlSettingsBackfilled({
         fetchRow: async () => {
           const { data, error } = await supabase
@@ -145,8 +150,11 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
             .eq("id", 1)
             .maybeSingle();
 
+          const row = data as HeatingControlSettingsCompletenessRow | null;
+          syncedSettingsUpdatedAt = row?.updated_at ?? null;
+
           return {
-            data: data as HeatingControlSettingsCompletenessRow | null,
+            data: row,
             error,
           };
         },
@@ -176,7 +184,12 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
               throw error;
             }
 
-            return Array.isArray(data) && data.length > 0;
+            const wrote = Array.isArray(data) && data.length > 0;
+            if (wrote) {
+              syncedSettingsUpdatedAt = payload.updated_at;
+            }
+
+            return wrote;
           }
 
           // A row was observed with this exact updated_at - only overwrite
@@ -202,7 +215,12 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
             throw error;
           }
 
-          return Array.isArray(data) && data.length > 0;
+          const wrote = Array.isArray(data) && data.length > 0;
+          if (wrote) {
+            syncedSettingsUpdatedAt = payload.updated_at;
+          }
+
+          return wrote;
         },
       });
 
@@ -212,6 +230,9 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
 
       const synced = isHeatingControlSettingsSyncOutcomeSynced(outcome);
       setHeatingControlSettingsSyncStatus(synced ? "synced" : "unsynced");
+      setHeatingControlSettingsUpdatedAt(
+        synced ? syncedSettingsUpdatedAt : null,
+      );
 
       if (!synced) {
         retryTimeoutId = setTimeout(
@@ -252,10 +273,15 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
   }, []);
 
   const commitPersistedSettings = useCallback(
-    (settings: EnergiaZenSettings, draftSnapshot: EnergiaZenSettings) => {
+    (
+      settings: EnergiaZenSettings,
+      draftSnapshot: EnergiaZenSettings,
+      settingsUpdatedAt: string | null,
+    ) => {
       setScenarioState((current) =>
         commitSettingsScenario(settings, draftSnapshot, current.draftSettings),
       );
+      setHeatingControlSettingsUpdatedAt(settingsUpdatedAt);
     },
     [],
   );
@@ -267,6 +293,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
       commitPersistedSettings,
       discardDraftSettings,
       heatingControlSettingsSyncStatus,
+      heatingControlSettingsUpdatedAt,
       updateDraftSettings,
     }),
     [
@@ -274,6 +301,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
       commitPersistedSettings,
       discardDraftSettings,
       heatingControlSettingsSyncStatus,
+      heatingControlSettingsUpdatedAt,
       scenarioState,
       updateDraftSettings,
     ],

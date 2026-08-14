@@ -156,9 +156,10 @@ export function runHeatingControlSettingsBackfillSourceTests() {
     valueMemoStart !== -1 &&
       valueMemoSource.includes("...scenarioState,") &&
       valueMemoSource.includes("heatingControlSettingsSyncStatus,") &&
+      valueMemoSource.includes("heatingControlSettingsUpdatedAt,") &&
       valueMemoSource.indexOf("...scenarioState,") <
         valueMemoSource.indexOf("heatingControlSettingsSyncStatus,"),
-    "heatingControlSettingsSyncStatus must be exposed on the context value",
+    "heatingControlSettingsSyncStatus and the observed persisted settings timestamp must be exposed on the context value",
   );
 
   const homeSource = readFileSync(
@@ -167,8 +168,9 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   );
   assertSource(
     homeSource.includes("heatingControlSettingsSyncStatus,") &&
+      homeSource.includes("heatingControlSettingsUpdatedAt,") &&
       homeSource.includes("} = useSettingsScenario();"),
-    "the Home screen must read heatingControlSettingsSyncStatus from the shared settings context",
+    "the Home screen must read sync status and the persisted settings timestamp from the shared settings context",
   );
   // Codex P2 follow-up: "pending" must gate exactly like "synced" here
   // (app publication deferred) - only a completed "unsynced" check may
@@ -176,9 +178,9 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   // unaffected either way (shouldPublishHeatingPlanFromApp always allows
   // it regardless of backendPrimaryEnabled).
   assertSource(
-    homeSource.includes(
-      'backendPrimaryEnabled:\n          BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n          heatingControlSettingsSyncStatus !== "unsynced",',
-    ),
+    homeSource.includes("backendPrimaryEnabled:") &&
+      homeSource.includes("BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&") &&
+      homeSource.includes('heatingControlSettingsSyncStatus !== "unsynced"'),
     "the legacy publisher gate must require both the deploy-time flag AND a completed, confirmed Supabase settings sync - pending or unsynced must not enable it",
   );
 }

@@ -44,7 +44,9 @@ export function runSettingsDraftUiSourceTests() {
     "asetussivulle ei saa jaada autosave- tai debounce-polkua",
   );
   assertSource(
-    source.includes("commitPersistedSettings(persistedSettings, draftSnapshot)") &&
+    source.includes("const heatingControlSettingsUpdatedAt = new Date().toISOString()") &&
+      source.includes("commitPersistedSettings(") &&
+      source.includes("heatingControlSettingsUpdatedAt,") &&
       source.includes("discardDraftSettings()") &&
       source.includes("persistSettingsDraft({") &&
       remoteSaveCall !== -1 &&
@@ -60,7 +62,7 @@ export function runSettingsDraftUiSourceTests() {
   assertSource(
     source.includes("saveLocal: saveSettings") &&
       source.includes("persistSettingsDraft({") &&
-      source.includes("commitPersistedSettings(persistedSettings, draftSnapshot)"),
+      source.includes("commitPersistedSettings("),
     "persistedSettings paivitetaan hallitun tallennuspolun jalkeen",
   );
   const draftSnapshotTaken = source.indexOf("const draftSnapshot = draftSettings;");
@@ -72,7 +74,7 @@ export function runSettingsDraftUiSourceTests() {
     draftSnapshotTaken !== -1 &&
       draftSnapshotTaken > saveHandlerStart &&
       draftSnapshotTaken < persistCallStart &&
-      source.includes("commitPersistedSettings(persistedSettings, draftSnapshot)"),
+      source.includes("commitPersistedSettings("),
     "tallennuksen alussa otettu draftSnapshot suojaa tallennuksen aikana tehtya uudempaa luonnosmuutosta",
   );
   assertSource(

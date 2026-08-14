@@ -294,14 +294,49 @@ export function runHeatingPlanPresentationUnitTests() {
     "legacy-tilassa tuore optimointitulos voittaa tallennetun suunnitelman",
   );
   assertEqual(
-    selectActiveHeatingPlanPresentation(standard, stored, true) === stored,
+    selectActiveHeatingPlanPresentation(standard, stored, {
+      settingsUpdatedAt: "2026-08-14T10:00:00.000Z",
+      storedPlanIsAuthoritative: true,
+      storedPlanUpdatedAts: ["2026-08-14T09:59:59.999Z"],
+    }) === standard,
     true,
-    "backend-primary-tilassa tallennettu suunnitelma voittaa tuoreen optimointituloksen",
+    "asetustallennusta vanhempi backend-suunnitelma ei voita tuoretta optimointitulosta",
   );
   assertEqual(
-    selectActiveHeatingPlanPresentation(standard, null, true) === standard,
+    selectActiveHeatingPlanPresentation(standard, stored, {
+      settingsUpdatedAt: "2026-08-14T10:00:00.000Z",
+      storedPlanIsAuthoritative: true,
+      storedPlanUpdatedAts: ["2026-08-14T10:00:00.000Z"],
+    }) === stored,
     true,
-    "backend-primary-tilassa tuore optimointitulos toimii varavaihtoehtona, kun tallennettua suunnitelmaa ei ole",
+    "asetustallennuksen kanssa samanaikainen backend-suunnitelma on auktoritatiivinen",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, stored, {
+      settingsUpdatedAt: "2026-08-14T10:00:00.000Z",
+      storedPlanIsAuthoritative: true,
+      storedPlanUpdatedAts: ["2026-08-14T10:00:00.001Z"],
+    }) === stored,
+    true,
+    "asetustallennusta uudempi backend-suunnitelma on auktoritatiivinen",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, stored, {
+      settingsUpdatedAt: "2026-08-14T10:00:00.000Z",
+      storedPlanIsAuthoritative: false,
+      storedPlanUpdatedAts: ["2026-08-14T10:00:00.001Z"],
+    }) === standard,
+    true,
+    "unsynced-tilassa sailyy legacy optimizer-first -jarjestys",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(null, stored, {
+      settingsUpdatedAt: "2026-08-14T10:00:00.000Z",
+      storedPlanIsAuthoritative: true,
+      storedPlanUpdatedAts: ["2026-08-14T09:59:59.999Z"],
+    }),
+    null,
+    "vanhaa backend-suunnitelmaa ei nayteta uusien asetusten metadatalla ilman optimizer-varavaihtoehtoa",
   );
   assertEqual(
     selectActiveHeatingPlanPresentation(null, stored) === stored,
