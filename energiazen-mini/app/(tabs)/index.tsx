@@ -1468,7 +1468,7 @@ export default function HomeScreen() {
       storedHeatingPlans[tomorrowPlanDate],
     ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
 
-    if (storedPlans.length === 0) {
+    if (storedPlans.length !== 2) {
       return null;
     }
 
