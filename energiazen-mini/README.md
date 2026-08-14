@@ -507,6 +507,41 @@ oikeuden `heating_control_settings`-tauluun (INSERT/UPDATE toimi jo ennen
 tätä appin oman Tallenna-polun kautta, mutta SELECT ei ollut minkään
 migraation varmistama) - tätä tarvitaan backfill-tarkistuksen lukuun.
 
+### Fixed-tilan julkaisun etätila-tarkistus
+
+`shouldPublishHeatingPlanFromApp` sallii `fixed`-tilan appijulkaisun aina,
+riippumatta `BACKEND_PRIMARY_HEATING_PLAN_ENABLED`/
+`isHeatingControlSettingsSynced`-portista - kiinteä suunnitelma on
+käyttäjän eksplisiittinen komento, ei jotain jonka backend-primary
+omistaisi. Tämä avasi kuitenkin oman aukkonsa (Codex P2, PR #193): jos
+laite pysyy auki paikallisella `fixed`-asetuksella samalla kun toinen
+laite vaihtaa Supabasen authoritative `heating_control_settings.heating_need_mode`-
+arvon `automatic`-tilaan, vanhentunut laite jatkaisi `heating_plans`-taulun
+ylikirjoittamista `fixed`-suunnitelmilla loputtomiin backend-primaryn
+automaattijulkaisujen päälle - mikään ei aiemmin tarkistanut authoritative-
+tilaa juuri tämän kirjoituspolun kohdalla.
+
+`lib/heatingPlanFixedModeGuard.ts` lisää kevyen, yksisuuntaisen
+tarkistuksen: juuri ennen `heating_plans`-kirjoitusta (ei silloin kun
+julkaisu jonotettiin, vaan kun se oikeasti suoritetaan) appi lukee
+`heating_control_settings.heating_need_mode`:n Supabasesta uudelleen ja
+kirjoittaa vain jos vastaus on täsmälleen `'fixed'`. Lukuvirhe, puuttuva
+rivi, `null` tai mikä tahansa muu arvo (mukaan lukien `'automatic'`)
+failaa kiinni - kirjoitusta ei tehdä. Koska tarkistus tapahtuu vasta
+jonotetun `heatingPlanSaveChainRef`-ketjun sisällä suorituksen hetkellä,
+se peruu automaattisesti jo jonotetun `fixed`-julkaisun jos authoritative
+tila on ehtinyt vaihtua `automatic`-tilaan sillä välin - ei tarvitse
+erikseen "peruuttaa" mitään, tarkistus itsessään estää kirjoituksen.
+
+Tämä ei ole kaksisuuntainen Realtime-asetussynkronointi eikä sellaista
+tarvittu: kyse on yhdestä kapeasta portista yhden kirjoituspolun edessä.
+Tarkistuksen ja itse kirjoituksen välillä jää teoriassa hetkellinen ikkuna
+(yksi verkkopyyntö), jota ei erikseen suljettu - jos se joskus lauetaan,
+seuraava backend-primary-cron-ajo (enintään 5 minuutin päässä) laskee ja
+julkaisee joka tapauksessa oman authoritative-lukemansa perusteella
+uudelleen, samalla itsekorjautuvuusperiaatteella kuin muuallakin tässä
+järjestelmässä. Paikallisen Asetukset-näkymän käyttäytymiseen ei koskettu.
+
 ### Backend-optimoijan trust-heartbeat
 
 Migraatio `20260813000000_create_backend_heating_optimizer_state.sql` luo yhden

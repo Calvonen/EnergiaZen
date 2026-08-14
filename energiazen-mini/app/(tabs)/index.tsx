@@ -82,6 +82,10 @@ import {
 } from "@/lib/heatingPlanPublication";
 import type { UnknownHeatingAnchor } from "@/lib/heatingPlanPublication";
 import {
+  canPublishFixedHeatingPlanFromApp,
+  resolveRemoteHeatingNeedModeForFixedPublish,
+} from "@/lib/heatingPlanFixedModeGuard";
+import {
   DaySelection,
   getCheapestHours,
   getDateKeyOffset,
@@ -2026,6 +2030,51 @@ export default function HomeScreen() {
             })),
           });
           return;
+        }
+
+        // Codex P2 (PR #193): shouldPublishHeatingPlanFromApp's fixed-mode
+        // branch bypasses the backend-primary gate unconditionally, so a
+        // mounted client still holding a stale local "fixed" setting could
+        // otherwise keep overwriting backend-primary's automatic
+        // publications forever. Re-verify the AUTHORITATIVE remote mode
+        // immediately before this specific write, not once when the effect
+        // queued - this is what actually cancels an already-queued fixed
+        // publish if another device changed heating_need_mode to
+        // "automatic" in the meantime. Any read failure, a missing row, or
+        // any mode other than "fixed" fails closed and skips the write; only
+        // a confirmed "fixed" proceeds. A local Save in the Settings screen
+        // already writes this same column synchronously, so this check
+        // reads the same source of truth Settings itself just wrote -
+        // deliberately not full bidirectional Realtime settings sync, which
+        // is unnecessary for this one narrow gate. The tiny remaining window
+        // between this check and the upsert two lines below is not worth
+        // closing further: even if it's lost, the next backend-primary cron
+        // run (at most 5 minutes later) recomputes and republishes from its
+        // own authoritative settings read regardless of what this write did.
+        if (settings.heatingNeedMode === "fixed") {
+          const remoteModeOutcome = await resolveRemoteHeatingNeedModeForFixedPublish({
+            fetchRemoteMode: async () => {
+              const { data, error } = await supabase
+                .from("heating_control_settings")
+                .select("heating_need_mode")
+                .eq("id", 1)
+                .maybeSingle();
+
+              return { data, error };
+            },
+          });
+
+          if (saveVersion !== latestHeatingPlanSaveVersionRef.current) {
+            return;
+          }
+
+          if (!canPublishFixedHeatingPlanFromApp(remoteModeOutcome)) {
+            debugLog("Fixed heating plan publish blocked: authoritative mode is not fixed", {
+              optimizerRunId: activeOptimizationRun.runId,
+              remoteModeOutcome,
+            });
+            return;
+          }
         }
 
         try {
