@@ -8,8 +8,12 @@ import type { EnergiaZenSettings } from "./settings";
 // boolean check. Pinned to the exact same field list by
 // tests/heatingControlSettingsBackfillSource.test.ts so the two can't
 // silently drift apart.
+// updated_at is selected purely as an optimistic-concurrency token for the
+// conditional write in ensureHeatingControlSettingsBackfilled below - it
+// plays no part in isHeatingControlSettingsRowAuthoritative's completeness
+// check.
 export const heatingControlSettingsCompletenessColumns =
-  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source";
+  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,updated_at";
 
 export type HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: number | null;
@@ -21,6 +25,7 @@ export type HeatingControlSettingsCompletenessRow = {
   min_tank_temperature: number | null;
   safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
+  updated_at: string | null;
 };
 
 // True only once the Supabase row carries every authoritative optimizer
@@ -63,19 +68,35 @@ export type HeatingControlSettingsSyncOutcome =
 // already resolved from AsyncStorage (the app's own real - possibly still
 // factory-default, but never "backend arbitrary" - effective settings). It
 // never rewrites heating_need_mode to "automatic": buildHeatingControlSettingsPayload
-// (called by upsert) mirrors localSettings.heatingNeedMode verbatim, so a
-// user already on fixed mode stays on fixed mode after a backfill.
+// (called by upsertIfUnchanged) mirrors localSettings.heatingNeedMode
+// verbatim, so a user already on fixed mode stays on fixed mode after a
+// backfill.
+//
+// Race safety (Codex P2, PR #193): fetchRow() and the write below are two
+// separate round trips, so another device or a Settings save can make the
+// row authoritative in between. upsertIfUnchanged is a compare-and-swap
+// gated on the exact row state just observed (rowExisted/observedUpdatedAt)
+// - it must return false, not perform the write, if that state no longer
+// matches. Losing the race means someone else's write already happened, so
+// this re-reads once and trusts it (isHeatingControlSettingsRowAuthoritative
+// on the fresh read) instead of blindly retrying with a now-stale local
+// snapshot. No new tables/state: the CAS token is the row's own existing
+// updated_at column, and the retry-on-loss path reuses fetchRow.
 export async function ensureHeatingControlSettingsBackfilled({
   fetchRow,
   localSettings,
-  upsert,
+  upsertIfUnchanged,
 }: {
   fetchRow: () => Promise<{
     data: HeatingControlSettingsCompletenessRow | null;
     error: unknown;
   }>;
   localSettings: EnergiaZenSettings;
-  upsert: (settings: EnergiaZenSettings) => Promise<void>;
+  upsertIfUnchanged: (
+    settings: EnergiaZenSettings,
+    rowExisted: boolean,
+    observedUpdatedAt: string | null,
+  ) => Promise<boolean>;
 }): Promise<HeatingControlSettingsSyncOutcome> {
   let fetchResult: {
     data: HeatingControlSettingsCompletenessRow | null;
@@ -96,12 +117,41 @@ export async function ensureHeatingControlSettingsBackfilled({
     return "already_synced";
   }
 
+  const rowExisted = fetchResult.data !== null;
+  const observedUpdatedAt = fetchResult.data?.updated_at ?? null;
+
+  let wrote: boolean;
   try {
-    await upsert(localSettings);
-    return "backfilled";
+    wrote = await upsertIfUnchanged(localSettings, rowExisted, observedUpdatedAt);
   } catch {
     return "backfill_failed";
   }
+
+  if (wrote) {
+    return "backfilled";
+  }
+
+  // Lost the compare-and-swap: the row changed between the read above and
+  // this write attempt. Re-read once and defer to whatever is there now
+  // rather than overwrite it with localSettings.
+  let recheckResult: {
+    data: HeatingControlSettingsCompletenessRow | null;
+    error: unknown;
+  };
+
+  try {
+    recheckResult = await fetchRow();
+  } catch {
+    return "backfill_failed";
+  }
+
+  if (recheckResult.error) {
+    return "backfill_failed";
+  }
+
+  return isHeatingControlSettingsRowAuthoritative(recheckResult.data)
+    ? "already_synced"
+    : "backfill_failed";
 }
 
 // Legacy-publisher gate helper: only "already_synced"/"backfilled" may ever

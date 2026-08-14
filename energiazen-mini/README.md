@@ -623,6 +623,50 @@ heartbeatia terminal-tilaan. Jos toinenkin yritys konfliktoi, ajo päättyy
 `tank_snapshot_conflict_retry_exhausted`; settings-, plan-, price- ja
 relay-konflikteja ei retrytetä.
 
+**Tunnettu, hyväksytty jäännösriski: temperature drop -profiilin snapshot.**
+Codex-review totesi, ettei `temperature_drop_profiles`-taulun uusinta riviä
+(`fetchLatestTemperatureDropProfile`, luetaan joka optimizer-yrityksellä
+`resolveHourlyDropProfile`:lle) tarkisteta uudelleen transaktionaalisesti
+`publish_backend_heating_optimizer_plans`-RPC:ssä, toisin kuin settings-,
+plan-, tank- ja price-snapshotit yllä. Viikoittainen
+`recalculate-temperature-drop-profile-weekly` (sunnuntaisin klo 01:30) voisi
+teoriassa päivittää profiilin juuri optimizerin luvun ja julkaisun välissä,
+jolloin yksi julkaisu käyttäisi edellisen viikon profiilia.
+
+Tätä ei korjattu, tietoisena päätöksenä:
+
+- **Ikkuna on paljon pienempi kuin 5 minuutin ajoväli.** Profiili luetaan
+  uudelleen jokaisella retry-yrityksellä (index.ts:n retry-loopin sisällä,
+  ei kerran koko ajon alussa), joten todellinen race-ikkuna rajoittuu yhden
+  yrityksen laskenta-aikaan (sekunnin murto-osia - muutama sekunti), ei koko
+  5 minuutin sykliin.
+- **Todennäköisyys on häviävän pieni.** Viikoittainen kirjoitus osuu tähän
+  sekuntien ikkunaan noin kerran ~604 800 sekunnissa (7 vrk) - satunnaisesti
+  osuessaankin vain jos se sattuu juuri jonkin ~2016 viikoittaisen
+  optimizer-ajon laskentahetkeen.
+- **Seuraus ei riko turvarajaa.** Drop-profiili vaikuttaa vain tuntivalinnan
+  laatuun (lämmönhukka-arvio), ei `optimizeHeatingPlan`:n omiin absoluuttisiin
+  turvatarkistuksiin (min/max-lämpötila, turvavaraus) - ne pysyvät voimassa
+  riippumatta siitä kumman viikon profiilia käytettiin. Väärä tulos on
+  korkeintaan hieman epäoptimaalinen yksi 5 minuutin sykli, ei vaarallinen.
+- **Itsekorjautuu automaattisesti.** Seuraava, enintään 5 minuutin päässä
+  oleva optimizer-ajo lukee tuoreen profiilin normaalisti.
+- **Korjaus olisi ollut suhteettoman monimutkainen tähän riskiin nähden.**
+  `publish_backend_heating_optimizer_plans` on jo viiden sisäkkäisen,
+  toistensa `rename to`+`create or replace` -ketjuun nojaavan tarkistuksen
+  "sipuli" (heartbeat → price → tank → settings/plan/relay - ks.
+  `20260813040000`...`20260813110000`). Kuudennen kerroksen lisääminen
+  tälle jo nyt vaikeasti auditoitavalle, järjestelmän kriittisimmälle
+  koodipolulle olisi oma, ei-triviaali muutos. Kevyempi vaihtoehto
+  (ylimääräinen TypeScript-puolen uudelleenluku juuri ennen RPC-kutsua)
+  harkittiin ja hylättiin: se olisi silti vain check-then-act eikä oikea
+  transaktionaalinen CAS kuten muut snapshotit, joten se ei sulkisi ikkunaa
+  kokonaan - vain kaventaisi sitä entisestään jo muutenkin häviävän pienestä.
+
+Jos tämä joskus halutaan sulkea kokonaan, luontevin hetki on se, jos/kun
+julkaisu-RPC:n sisäkkäinen tarkistusketju muutenkin refaktoroidaan yhdeksi
+läpinäkyvämmäksi tarkistukseksi - ei yksinään tämän yhden riskin vuoksi.
+
 Heartbeat ei yksin todista pg_cronin tai Edge Functionin olevan elossa. Jos
 cron ei käynnistä funktiota tai funktio kaatuu ennen ensimmäistä state-kirjoitusta,
 se ei voi kirjata omaa epäonnistumistaan; Shelly havaitsee tilanteen vasta

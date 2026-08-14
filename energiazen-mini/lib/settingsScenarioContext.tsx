@@ -17,7 +17,7 @@ import {
   discardSettingsScenario,
 } from "./settingsScenario";
 import { supabase } from "./supabase";
-import { upsertHeatingControlSettings } from "./heatingControlSettingsSupabase";
+import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
 import {
   ensureHeatingControlSettingsBackfilled,
   heatingControlSettingsCompletenessColumns,
@@ -99,11 +99,18 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
   // Settings and press Save. This effect runs the same backfill silently,
   // without requiring a settings-screen visit: once loadSettings() resolves
   // the app's real local settings, it checks whether Supabase already has a
-  // complete authoritative row and - only if not - reuses the exact same
-  // upsertHeatingControlSettings/buildHeatingControlSettingsPayload path the
-  // Settings screen's own Save button uses to write it. A fixed-mode
-  // install's heating_need_mode is written back as "fixed", never forced to
-  // "automatic".
+  // complete authoritative row and - only if not - writes localSettings via
+  // buildHeatingControlSettingsPayload, the same payload shape the Settings
+  // screen's own Save button uses. A fixed-mode install's heating_need_mode
+  // is written back as "fixed", never forced to "automatic".
+  //
+  // Codex P2 follow-up: fetchRow() and the write are separate round trips,
+  // so another device (or a Settings save on this one, mid-flight) can make
+  // the row authoritative in between. The write below is a compare-and-swap
+  // on the row's own updated_at (or on "no row exists yet" via
+  // ignoreDuplicates) so it can never blindly overwrite a newer row with
+  // this stale local snapshot - see ensureHeatingControlSettingsBackfilled's
+  // own comment for how a lost race is resolved.
   useEffect(() => {
     if (!areSettingsLoaded) {
       return;
@@ -127,8 +134,49 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
           };
         },
         localSettings: persistedSettingsRef.current,
-        upsert: async (settings) => {
-          await upsertHeatingControlSettings(supabase, settings);
+        upsertIfUnchanged: async (settings, rowExisted, observedUpdatedAt) => {
+          const payload = buildHeatingControlSettingsPayload(settings);
+          const table = supabase.from("heating_control_settings");
+
+          if (!rowExisted) {
+            // No row observed - insert only if one still doesn't exist by
+            // the time this reaches the database; a concurrent insert wins
+            // and this becomes a no-op (empty `data`), not an overwrite.
+            const { data, error } = await table
+              .upsert(payload, { onConflict: "id", ignoreDuplicates: true })
+              .select("id");
+
+            if (error) {
+              throw error;
+            }
+
+            return Array.isArray(data) && data.length > 0;
+          }
+
+          // A row was observed with this exact updated_at - only overwrite
+          // if it still has that value. Anyone else's write in between
+          // changes updated_at (every writer - this backfill,
+          // upsertHeatingControlSettings, and the manual-migration paths -
+          // sets it), so the filter simply matches nothing and no row is
+          // returned.
+          const { data, error } =
+            observedUpdatedAt === null
+              ? await table
+                  .update(payload)
+                  .eq("id", 1)
+                  .is("updated_at", null)
+                  .select("id")
+              : await table
+                  .update(payload)
+                  .eq("id", 1)
+                  .eq("updated_at", observedUpdatedAt)
+                  .select("id");
+
+          if (error) {
+            throw error;
+          }
+
+          return Array.isArray(data) && data.length > 0;
         },
       });
 

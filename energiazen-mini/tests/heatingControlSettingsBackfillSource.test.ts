@@ -89,9 +89,39 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   );
   assertSource(
     contextSource.includes("ensureHeatingControlSettingsBackfilled({") &&
-      contextSource.includes("upsertHeatingControlSettings(supabase, settings)") &&
+      contextSource.includes("buildHeatingControlSettingsPayload(settings)") &&
       contextSource.includes("localSettings: persistedSettingsRef.current"),
-    "the context must run the backfill using the app's own current local settings via the existing upsert helper",
+    "the context must run the backfill using the app's own current local settings via the existing payload builder",
+  );
+  // Codex P2 (startup backfill race): the write must be a compare-and-swap
+  // gated on the exact row state observed by fetchRow(), never a blind
+  // overwrite - see ensureHeatingControlSettingsBackfilled's own contract
+  // (upsertIfUnchanged) enforced by lib/heatingControlSettingsBackfill.test.ts.
+  const upsertIfUnchangedStart = contextSource.indexOf(
+    "upsertIfUnchanged: async (settings, rowExisted, observedUpdatedAt) => {",
+  );
+  const upsertIfUnchangedEnd = contextSource.indexOf(
+    "\n        },\n      });",
+    upsertIfUnchangedStart,
+  );
+  const upsertIfUnchangedSource =
+    upsertIfUnchangedStart !== -1 && upsertIfUnchangedEnd !== -1
+      ? contextSource.slice(upsertIfUnchangedStart, upsertIfUnchangedEnd)
+      : "";
+  assertSource(
+    upsertIfUnchangedStart !== -1 && upsertIfUnchangedEnd !== -1,
+    "the backfill write must be passed as upsertIfUnchanged, not an unconditional upsert",
+  );
+  assertSource(
+    upsertIfUnchangedSource.includes("ignoreDuplicates: true") &&
+      upsertIfUnchangedSource.includes('.is("updated_at", null)') &&
+      upsertIfUnchangedSource.includes('.eq("updated_at", observedUpdatedAt)'),
+    "the conditional write must use insert-only-if-absent for a missing row and an updated_at-gated update for an existing one",
+  );
+  assertSource(
+    upsertIfUnchangedSource.includes('.select("id")') &&
+      upsertIfUnchangedSource.includes("Array.isArray(data) && data.length > 0"),
+    "the conditional write must report whether it actually matched/wrote a row, not assume success",
   );
   assertSource(
     contextSource.includes("retryTimeoutId = setTimeout(") &&
