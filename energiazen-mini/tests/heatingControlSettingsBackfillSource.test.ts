@@ -81,9 +81,9 @@ export function runHeatingControlSettingsBackfillSourceTests() {
   );
   assertSource(
     contextSource.includes(
-      "const [isHeatingControlSettingsSynced, setIsHeatingControlSettingsSynced] =\n    useState(false)",
+      "const [heatingControlSettingsSyncStatus, setHeatingControlSettingsSyncStatus] =\n    useState<HeatingControlSettingsSyncStatus>(\"pending\")",
     ),
-    "isHeatingControlSettingsSynced must default to false (fail-safe: keep the legacy publisher enabled until sync is confirmed)",
+    "heatingControlSettingsSyncStatus must default to the explicit \"pending\" state, distinct from a completed \"unsynced\" check, so Home can defer app publication until the first check resolves",
   );
   assertSource(
     contextSource.includes("ensureHeatingControlSettingsBackfilled({") &&
@@ -137,15 +137,28 @@ export function runHeatingControlSettingsBackfillSourceTests() {
       contextSource.includes("heatingControlSettingsSyncRetryIntervalMs"),
     "a failed sync attempt must be retried, not abandoned",
   );
+  // Codex P2 follow-up: the tri-state status must only ever land on
+  // "synced" or "unsynced" once a check has actually completed - never
+  // back on "pending" - and the completed-unsynced branch must still
+  // trigger the retry above exactly as the plain-boolean version did.
+  assertSource(
+    contextSource.includes(
+      "const synced = isHeatingControlSettingsSyncOutcomeSynced(outcome);",
+    ) &&
+      contextSource.includes(
+        'setHeatingControlSettingsSyncStatus(synced ? "synced" : "unsynced");',
+      ),
+    "a completed check must resolve heatingControlSettingsSyncStatus to exactly \"synced\" or \"unsynced\", never leave it on \"pending\"",
+  );
   const valueMemoStart = contextSource.indexOf("const value = useMemo(");
   const valueMemoSource = contextSource.slice(valueMemoStart);
   assertSource(
     valueMemoStart !== -1 &&
       valueMemoSource.includes("...scenarioState,") &&
-      valueMemoSource.includes("isHeatingControlSettingsSynced,") &&
+      valueMemoSource.includes("heatingControlSettingsSyncStatus,") &&
       valueMemoSource.indexOf("...scenarioState,") <
-        valueMemoSource.indexOf("isHeatingControlSettingsSynced,"),
-    "isHeatingControlSettingsSynced must be exposed on the context value",
+        valueMemoSource.indexOf("heatingControlSettingsSyncStatus,"),
+    "heatingControlSettingsSyncStatus must be exposed on the context value",
   );
 
   const homeSource = readFileSync(
@@ -153,14 +166,19 @@ export function runHeatingControlSettingsBackfillSourceTests() {
     "utf8",
   );
   assertSource(
-    homeSource.includes("isHeatingControlSettingsSynced,") &&
+    homeSource.includes("heatingControlSettingsSyncStatus,") &&
       homeSource.includes("} = useSettingsScenario();"),
-    "the Home screen must read isHeatingControlSettingsSynced from the shared settings context",
+    "the Home screen must read heatingControlSettingsSyncStatus from the shared settings context",
   );
+  // Codex P2 follow-up: "pending" must gate exactly like "synced" here
+  // (app publication deferred) - only a completed "unsynced" check may
+  // fall back to the legacy publisher. Fixed-mode publication is
+  // unaffected either way (shouldPublishHeatingPlanFromApp always allows
+  // it regardless of backendPrimaryEnabled).
   assertSource(
     homeSource.includes(
-      "backendPrimaryEnabled:\n          BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced,",
+      'backendPrimaryEnabled:\n          BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n          heatingControlSettingsSyncStatus !== "unsynced",',
     ),
-    "the legacy publisher gate must require both the deploy-time flag AND a confirmed Supabase settings sync - never the flag alone",
+    "the legacy publisher gate must require both the deploy-time flag AND a completed, confirmed Supabase settings sync - pending or unsynced must not enable it",
   );
 }

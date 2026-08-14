@@ -123,10 +123,12 @@ import {
 // for every install regardless of Supabase settings sync state. Fixed plans
 // are deliberately unaffected by this backend-primary rollout. This is only
 // the deploy-time half of the gate - per-install, shouldPublishHeatingPlanFromApp
-// below additionally requires isHeatingControlSettingsSynced, so a single
-// install never loses automatic publication just because its own
+// below additionally requires heatingControlSettingsSyncStatus !== "unsynced",
+// so a single install never loses automatic publication just because its own
 // heating_control_settings row isn't authoritative yet (Codex P1 review, PR
-// #193 upgrade/backfill follow-up).
+// #193 upgrade/backfill follow-up), while still deferring app publication
+// entirely during the brief "pending" window before the first completeness
+// check has resolved even once (Codex P2 follow-up).
 const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
 
 const DEBUG_HISTORY_PERFORMANCE = false;
@@ -855,7 +857,7 @@ export default function HomeScreen() {
     areSettingsLoaded,
     draftSettings: scenarioSettings,
     hasUnsavedChanges,
-    isHeatingControlSettingsSynced,
+    heatingControlSettingsSyncStatus,
     persistedSettings: activeSettings,
   } = useSettingsScenario();
   const [planView, setPlanView] = useState<"active" | "scenario">("active");
@@ -1925,8 +1927,17 @@ export default function HomeScreen() {
 
     if (
       !shouldPublishHeatingPlanFromApp({
+        // Codex P2 follow-up: "pending" must behave like "synced" here
+        // (backend-primary stays enabled, app publication stays deferred)
+        // rather than like "unsynced" - the app must not race a legacy
+        // automatic publish against a possibly-already-synced backend
+        // before the very first completeness check has even resolved once.
+        // Only a check that actually completed and found the row unsynced
+        // may fall back to the legacy publisher. Fixed mode is unaffected
+        // either way - shouldPublishHeatingPlanFromApp always allows it.
         backendPrimaryEnabled:
-          BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced,
+          BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
+          heatingControlSettingsSyncStatus !== "unsynced",
         mode: settings.heatingNeedMode,
       })
     ) {
@@ -2151,7 +2162,7 @@ export default function HomeScreen() {
     finalTargetHours,
     finalTomorrowTargetHours,
     hasAttemptedTankReadingFetch,
-    isHeatingControlSettingsSynced,
+    heatingControlSettingsSyncStatus,
     optimizerReason,
     optimizerHours.length,
     settings.heatingNeedMode,

@@ -112,7 +112,7 @@ export function runHeatingOptimizerCronOnlySimplificationTests() {
   );
   assertSource(
     contextSource.includes("ensureHeatingControlSettingsBackfilled({") &&
-      contextSource.includes("isHeatingControlSettingsSynced"),
+      contextSource.includes("heatingControlSettingsSyncStatus"),
     "the settings backfill and legacy-app publisher rollout gate must be preserved",
   );
 

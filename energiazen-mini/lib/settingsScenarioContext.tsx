@@ -38,6 +38,18 @@ type DraftSettingsUpdate =
   | EnergiaZenSettings
   | ((current: EnergiaZenSettings) => EnergiaZenSettings);
 
+// Codex P2 follow-up: a plain boolean could not distinguish "the first
+// completeness check hasn't resolved yet" from "it resolved and the row is
+// confirmed incomplete" - both read as the same false, so Home's fail-safe
+// legacy publisher (see app/(tabs)/index.tsx) treated a brand new mount as
+// already-confirmed-unsynced and could publish an automatic plan from the
+// app before the check had even run once. The explicit third state closes
+// that gap: "pending" only ever applies to the window before the FIRST
+// attemptSync call in the effect below resolves; every outcome after that -
+// including every retry - lands on "synced" or "unsynced", never back on
+// "pending".
+export type HeatingControlSettingsSyncStatus = "pending" | "synced" | "unsynced";
+
 type SettingsScenarioContextValue = SettingsScenarioState & {
   areSettingsLoaded: boolean;
   commitPersistedSettings: (
@@ -45,13 +57,17 @@ type SettingsScenarioContextValue = SettingsScenarioState & {
     draftSnapshot: EnergiaZenSettings,
   ) => void;
   discardDraftSettings: () => void;
-  // False until this install's heating_control_settings row in Supabase is
-  // confirmed to carry every authoritative optimizer field (either it
-  // already did, or the backfill below just wrote localSettings into it).
-  // Starts false (fail-safe default) on every mount, including for an
-  // install that was already fully synced before - the check below
-  // re-confirms it quickly rather than trusting a stale assumption.
-  isHeatingControlSettingsSynced: boolean;
+  // "pending" until this install's heating_control_settings row in
+  // Supabase has been checked at least once for carrying every
+  // authoritative optimizer field (either it already did, or the backfill
+  // below just wrote localSettings into it); then "synced" or "unsynced"
+  // for the rest of this mount's lifetime (a failed retry keeps it
+  // "unsynced", it never reverts to "pending"). Starts "pending" on every
+  // mount, including for an install that was already fully synced before -
+  // the check below re-confirms it quickly rather than trusting a stale
+  // assumption, and Home must not publish an automatic plan from the app
+  // while that first confirmation is still outstanding.
+  heatingControlSettingsSyncStatus: HeatingControlSettingsSyncStatus;
   updateDraftSettings: (update: DraftSettingsUpdate) => void;
 };
 
@@ -87,8 +103,8 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
     persistedSettingsRef.current = scenarioState.persistedSettings;
   }, [scenarioState.persistedSettings]);
 
-  const [isHeatingControlSettingsSynced, setIsHeatingControlSettingsSynced] =
-    useState(false);
+  const [heatingControlSettingsSyncStatus, setHeatingControlSettingsSyncStatus] =
+    useState<HeatingControlSettingsSyncStatus>("pending");
 
   // Codex P1 (PR #193, upgrade path): existing installs can have a
   // heating_control_settings row created before the authoritative optimizer
@@ -195,7 +211,7 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
       }
 
       const synced = isHeatingControlSettingsSyncOutcomeSynced(outcome);
-      setIsHeatingControlSettingsSynced(synced);
+      setHeatingControlSettingsSyncStatus(synced ? "synced" : "unsynced");
 
       if (!synced) {
         retryTimeoutId = setTimeout(
@@ -250,14 +266,14 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
       areSettingsLoaded,
       commitPersistedSettings,
       discardDraftSettings,
-      isHeatingControlSettingsSynced,
+      heatingControlSettingsSyncStatus,
       updateDraftSettings,
     }),
     [
       areSettingsLoaded,
       commitPersistedSettings,
       discardDraftSettings,
-      isHeatingControlSettingsSynced,
+      heatingControlSettingsSyncStatus,
       scenarioState,
       updateDraftSettings,
     ],

@@ -73,11 +73,11 @@ export function runHeatingPlanFixedModeGuardSourceTests() {
 
   // The guard is scoped to the fixed-mode write path only - it must not
   // touch or replace the separate automatic-mode backend-primary gate
-  // (BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced),
-  // which stays exactly as the prior PR #193 fix left it.
+  // (BACKEND_PRIMARY_HEATING_PLAN_ENABLED && heatingControlSettingsSyncStatus
+  // !== "unsynced"), which stays exactly as the prior PR #193 fixes left it.
   assertSource(
     homeSource.includes(
-      "backendPrimaryEnabled:\n          BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced,",
+      'backendPrimaryEnabled:\n          BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n          heatingControlSettingsSyncStatus !== "unsynced",',
     ),
     "the existing automatic-mode backend-primary gate must remain unchanged",
   );

@@ -376,6 +376,15 @@ Deno.serve(async (request) => {
       settings: optimizerSettingsSource,
       settingsSource,
     } = resolveOptimizerSettings(settingsRow);
+    // Codex P2 follow-up: resolved before the readiness check below so the
+    // check can see which profile source selectTemperatureDropProfile
+    // actually picked - selection itself is unaffected by this move, it
+    // only now runs a few lines earlier.
+    const dropProfile = resolveHourlyDropProfile({
+      localReadings: recoveryReadings,
+      now: attemptNow,
+      storedProfile: dropProfileResult.value,
+    });
     // Codex P2: gain history is only actually consumed in "learned" mode
     // (runBackendHeatingOptimization derives the learned per-hour gain from
     // it); "fixed" mode uses the explicit configured heatingGainPerHour and
@@ -384,11 +393,20 @@ Deno.serve(async (request) => {
     // the readiness check when the authoritative heating_gain_source is
     // "learned", so a fixed-mode install stays publishable on an input it
     // doesn't use.
-    const inputFetchReadiness = resolveOptimizerInputFetchReadiness(
-      heatingGainSource === "learned"
-        ? [gainHistoryFetch, recoveryReadingsFetch, dropProfileResult]
-        : [recoveryReadingsFetch, dropProfileResult],
-    );
+    //
+    // Codex P2 follow-up: the local 7-day recovery history is likewise only
+    // actually consumed when resolveHourlyDropProfile ends up selecting it
+    // (dropProfile.source === "local-7-day") - when a fresh stored Supabase
+    // profile was selected instead, recovery-history fetch failure must not
+    // by itself block publication. dropProfileResult (the fetch of the
+    // stored profile itself) stays unconditionally required either way: a
+    // failure there already forces selection down to local-7-day (no
+    // stored profile to select), which in turn requires recoveryReadingsFetch.
+    const inputFetchReadiness = resolveOptimizerInputFetchReadiness([
+      ...(heatingGainSource === "learned" ? [gainHistoryFetch] : []),
+      ...(dropProfile.source === "local-7-day" ? [recoveryReadingsFetch] : []),
+      dropProfileResult,
+    ]);
     const publicationReadiness = combineBackendPublicationReadiness(
       settingsPublicationReadiness,
       inputFetchReadiness,
@@ -403,11 +421,6 @@ Deno.serve(async (request) => {
       todayPlanDate,
       tomorrowPlanDate,
     );
-    const dropProfile = resolveHourlyDropProfile({
-      localReadings: recoveryReadings,
-      now: attemptNow,
-      storedProfile: dropProfileResult.value,
-    });
     const heating = latestReading?.heating ?? null;
     const run = runBackendHeatingOptimization({
       heatingGainHistory: gainHistory,

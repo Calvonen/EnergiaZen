@@ -113,7 +113,7 @@ export function runHomeHeatingPlanRefreshSourceTests() {
   assertSource(
     homeSource.includes("shouldPublishHeatingPlanFromApp({") &&
       homeSource.includes(
-        "BACKEND_PRIMARY_HEATING_PLAN_ENABLED && isHeatingControlSettingsSynced",
+        'BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n          heatingControlSettingsSyncStatus !== "unsynced"',
       ),
     "the app-side automatic publication gate must remain in place - this fix must not restore direct app writes",
   );
