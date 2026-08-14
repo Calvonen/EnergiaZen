@@ -212,8 +212,10 @@ export function runBackendHeatingOptimizerSecurityTests() {
     "cron must load the private caller secret from Vault while retaining the publishable gateway credential",
   );
   assertSource(
-    cronMigration.includes("'run-heating-optimizer-shadow-hourly',\n  '*/5 * * * *',"),
-    "the single pg_cron schedule must be the sole, tightened (5-minute) dispatch path after the live-trigger subsystem's removal",
+    cronMigration.includes(
+      "'run-heating-optimizer-shadow-hourly',\n  '3,8,13,18,23,28,33,38,43,48,53,58 * * * *',",
+    ),
+    "the single pg_cron schedule must be the sole, tightened (12x/hour, offset off :10) dispatch path after the live-trigger subsystem's removal",
   );
 
   const retryLoopStart = edgeSource.indexOf(

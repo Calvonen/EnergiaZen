@@ -47,7 +47,7 @@ $$;
 
 select cron.schedule(
   'run-heating-optimizer-shadow-hourly',
-  '*/5 * * * *',
+  '3,8,13,18,23,28,33,38,43,48,53,58 * * * *',
   $cron$
   select net.http_post(
     url := (

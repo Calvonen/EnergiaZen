@@ -78,10 +78,10 @@ export function runHeatingOptimizerCronOnlySimplificationTests() {
   );
   assertSource(
     cronMigration.includes("'run-heating-optimizer-shadow-hourly'") &&
-      cronMigration.includes("'*/5 * * * *'") &&
+      cronMigration.includes("'3,8,13,18,23,28,33,38,43,48,53,58 * * * *'") &&
       cronMigration.includes("'x-energyzen-cron-secret'") &&
       cronMigration.includes("where name = 'heating_optimizer_cron_secret'"),
-    "the single authenticated cron schedule must remain the sole dispatch path, tightened to every 5 minutes",
+    "the single authenticated cron schedule must remain the sole dispatch path, running 12x/hour offset off minute :10 to avoid colliding with fetch-electricity-prices-hourly",
   );
 
   const heartbeatMigration = readFileSync(
