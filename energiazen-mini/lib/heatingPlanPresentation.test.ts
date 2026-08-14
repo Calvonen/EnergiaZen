@@ -291,7 +291,17 @@ export function runHeatingPlanPresentationUnitTests() {
   assertEqual(
     selectActiveHeatingPlanPresentation(standard, stored) === standard,
     true,
-    "tuore optimointitulos voittaa tallennetun suunnitelman",
+    "legacy-tilassa tuore optimointitulos voittaa tallennetun suunnitelman",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, stored, true) === stored,
+    true,
+    "backend-primary-tilassa tallennettu suunnitelma voittaa tuoreen optimointituloksen",
+  );
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, null, true) === standard,
+    true,
+    "backend-primary-tilassa tuore optimointitulos toimii varavaihtoehtona, kun tallennettua suunnitelmaa ei ole",
   );
   assertEqual(
     selectActiveHeatingPlanPresentation(null, stored) === stored,

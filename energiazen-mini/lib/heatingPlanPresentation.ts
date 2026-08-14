@@ -220,7 +220,12 @@ export function buildStoredHeatingPlanPresentation({
 export function selectActiveHeatingPlanPresentation(
   freshOptimizerPresentation: HeatingPlanPresentation | null,
   storedPresentation: HeatingPlanPresentation | null,
+  storedPlanIsAuthoritative = false,
 ) {
+  if (storedPlanIsAuthoritative) {
+    return storedPresentation ?? freshOptimizerPresentation;
+  }
+
   return freshOptimizerPresentation ?? storedPresentation;
 }
 

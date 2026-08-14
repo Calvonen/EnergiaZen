@@ -1526,9 +1526,14 @@ export default function HomeScreen() {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
   }, [hasUnsavedChanges]);
 
+  const storedHeatingPlanIsAuthoritative =
+    BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
+    settings.heatingNeedMode === "automatic" &&
+    heatingControlSettingsSyncStatus !== "unsynced";
   const activePlanPresentation = selectActiveHeatingPlanPresentation(
     activeOptimizerPresentation,
     storedHeatingPlanPresentation,
+    storedHeatingPlanIsAuthoritative,
   );
   const scenarioPlanPresentation =
     hasUnsavedChanges && scenarioValidation.errors.length === 0

@@ -75,12 +75,17 @@ export function runSettingsScenarioUiSourceTests() {
       homeSource.includes(
         "optimizationResult: scenarioOptimizationRun.result",
       ) &&
-      homeSource.includes("selectActiveHeatingPlanPresentation(") &&
+      homeSource.includes(
+        'BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&\n    settings.heatingNeedMode === "automatic" &&\n    heatingControlSettingsSyncStatus !== "unsynced"',
+      ) &&
+      homeSource.includes(
+        "selectActiveHeatingPlanPresentation(\n    activeOptimizerPresentation,\n    storedHeatingPlanPresentation,\n    storedHeatingPlanIsAuthoritative,",
+      ) &&
       homeSource.includes(
         "hasUnsavedChanges && scenarioValidation.errors.length === 0",
       ) &&
       homeSource.includes("? scenarioOptimizerPresentation"),
-    "etusivu valitsee aktiivisen esityksen selectActiveHeatingPlanPresentation-funktiolla ja skenaarionakyma kayttaa draft-tulosta; itse valintasaanto (tuore voittaa tallennetun) on testattu erikseen heatingPlanPresentation.test.ts:ssa",
+    "etusivu suosii backend-primary-tilassa tallennettua aktiivista suunnitelmaa pending- ja synced-tiloissa, mutta skenaarionakyma kayttaa yha draft-tulosta",
   );
 
   assertSource(
