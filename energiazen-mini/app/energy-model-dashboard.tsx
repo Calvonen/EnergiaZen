@@ -23,8 +23,9 @@ import type {
 } from "@/lib/energyModelV2/heatLossDiagnostics";
 import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
-import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
+import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawEnergyQualityWarning, getWaterDrawLabelTitle, joinWaterDrawLabels, waterDrawLabelOptions, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
+import { analyzeLabeledEvents } from "@/lib/energyModelV2/labeledEventValidation";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -251,6 +252,7 @@ export default function EnergyModelDashboardScreen() {
     : null;
   const v2State = data?.v2TankState;
   const labeledWaterDrawEvents = joinWaterDrawLabels(data?.waterDrawEvents ?? [], labels);
+  const labeledEventValidation = analyzeLabeledEvents(labels);
   const v2TimestampLabel = v2State?.timestamp
     ? dateTimeFormatter.format(new Date(v2State.timestamp))
     : NOT_AVAILABLE;
@@ -379,6 +381,80 @@ export default function EnergyModelDashboardScreen() {
                   ))
                 ) : (
                   <Text style={styles.noRejections}>Ei stabiloituneita vedenkäyttötapahtumia</Text>
+                )}
+              </View>
+            </DashboardCard>
+            <DashboardCard title="🧪 Labeled Event Validation" metrics={[
+              { label: "Merkintöjä yhteensä", value: String(labeledEventValidation.entries.length) },
+            ]}>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🏷️ Label-kohtainen diagnostiikka</Text>
+                {waterDrawLabelOptions.map(({ label: kind, title }) => {
+                  const aggregate = labeledEventValidation.aggregatesByLabel[kind];
+                  if (!aggregate.count) return null;
+                  const detectionSummary = (Object.entries(aggregate.detectionKindCounts) as [string, number][])
+                    .filter(([, count]) => count > 0)
+                    .map(([detectionKind, count]) => `${detectionKind} ${count}`)
+                    .join(", ") || NOT_AVAILABLE;
+                  return (
+                    <View key={kind} style={styles.observationCard}>
+                      <Text style={styles.observationTime}>{title}</Text>
+                      {[
+                        ["Tapahtumia", String(aggregate.count)],
+                        ["Mediaani nettoenergia", formatNumber(aggregate.medianNetWaterDrawEnergyKwh, 2, "kWh")],
+                        ["Keskiarvo nettoenergia", formatNumber(aggregate.averageNetWaterDrawEnergyKwh, 2, "kWh")],
+                        ["Min / max nettoenergia", aggregate.minimumNetWaterDrawEnergyKwh !== null && aggregate.maximumNetWaterDrawEnergyKwh !== null
+                          ? `${aggregate.minimumNetWaterDrawEnergyKwh.toFixed(2)} / ${aggregate.maximumNetWaterDrawEnergyKwh.toFixed(2)} kWh`
+                          : NOT_AVAILABLE],
+                        ["Mediaani kesto", aggregate.medianDurationMinutes !== null ? formatDuration(aggregate.medianDurationMinutes) : NOT_AVAILABLE],
+                        ["Luotettavia / yhteensä", `${aggregate.reliableCount} / ${aggregate.count}`],
+                        ["Havaintotyypit", detectionSummary],
+                      ].map(([metricLabel, value]) => (
+                        <View key={metricLabel} style={styles.observationMetricRow}>
+                          <Text style={styles.observationMetricLabel}>{metricLabel}</Text>
+                          <Text style={styles.observationMetricValue}>{value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  );
+                })}
+                {!labeledEventValidation.entries.length ? (
+                  <Text style={styles.noRejections}>Ei ground truth -merkintöjä</Text>
+                ) : null}
+              </View>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🧪 Viimeisimmät merkityt tapahtumat</Text>
+                {labeledEventValidation.entries.length ? (
+                  labeledEventValidation.entries.slice(-10).reverse().map((entry) => {
+                    const warning = getWaterDrawEnergyQualityWarning(entry);
+                    return (
+                      <View key={`${entry.startedAt}-${entry.endedAt}`} style={styles.observationCard}>
+                        <Text style={styles.observationTime}>
+                          🏷️ {dateTimeFormatter.format(new Date(entry.startedAt))} – {dateTimeFormatter.format(new Date(entry.endedAt))}
+                        </Text>
+                        {[
+                          ["Label", getWaterDrawLabelTitle(entry.label)],
+                          ["Kesto", entry.durationMinutes !== null ? formatDuration(entry.durationMinutes) : NOT_AVAILABLE],
+                          ["Nettoenergia", formatNumber(entry.netWaterDrawEnergyKwh, 2, "kWh")],
+                          ["Havainto", entry.detectionKinds?.length ? entry.detectionKinds.join(" / ") : NOT_AVAILABLE],
+                          ["Energia-arvio", entry.energyReliable === null ? NOT_AVAILABLE : entry.energyReliable ? "luotettava" : "epäluotettava"],
+                        ].map(([metricLabel, value]) => (
+                          <View key={metricLabel} style={styles.observationMetricRow}>
+                            <Text style={styles.observationMetricLabel}>{metricLabel}</Text>
+                            <Text style={styles.observationMetricValue}>{value}</Text>
+                          </View>
+                        ))}
+                        {warning ? (
+                          <View style={styles.userLabelBox}>
+                            <Text style={styles.userLabelText}>{warning.title}</Text>
+                            {warning.reason ? <Text style={styles.userLabelNote}>{warning.reason}</Text> : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noRejections}>Ei ground truth -merkintöjä</Text>
                 )}
               </View>
             </DashboardCard>
