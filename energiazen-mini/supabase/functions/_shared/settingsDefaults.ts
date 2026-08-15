@@ -37,6 +37,11 @@ export const defaultSettings = {
   automaticMaxHeatingHours: defaultAutomaticMaxHeatingHours,
   fixedHeatingHoursPerDay: defaultFixedHeatingHoursPerDay,
   priceDifferenceThresholdCents: 2,
+  // price tolerance / hintojen tasoitus (optimizeHeatingPlan's internal hour
+  // ranking only - see heatingOptimizer.ts). Unrelated to
+  // priceDifferenceThresholdCents above, which only affects fixed-mode's
+  // today-vs-tomorrow day shift. 0 = today's exact behaviour, unchanged.
+  priceToleranceCents: 0,
   minTankTemperature: 10,
   maxTankTemperature: 70,
   fullTankAverageTemperature: 70,
@@ -56,7 +61,8 @@ export type EditableSettingKey =
   | "targetShowerReserve"
   | "safetyShowerReserve"
   | "maxTankTemperature"
-  | "fullTankAverageTemperature";
+  | "fullTankAverageTemperature"
+  | "priceToleranceCents";
 
 const editableSettingRanges = {
   tankSizeLiters: { max: 1000, min: 50 },
@@ -67,12 +73,15 @@ const editableSettingRanges = {
   safetyShowerReserve: { max: 9.5, min: 0 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },
+  priceToleranceCents: { max: 2, min: 0 },
 } as const satisfies Record<EditableSettingKey, { max: number; min: number }>;
 
 function clampSettingValue(key: EditableSettingKey, value: number) {
   const range = editableSettingRanges[key];
   const roundedValue =
-    key === "targetShowerReserve" || key === "safetyShowerReserve"
+    key === "targetShowerReserve" ||
+    key === "safetyShowerReserve" ||
+    key === "priceToleranceCents"
       ? Math.round(value * 2) / 2
       : Math.round(value);
 
@@ -139,6 +148,10 @@ export function normalizeSettings(
           )
         : defaultSettings.priceDifferenceThresholdCents,
     minTankTemperature: defaultSettings.minTankTemperature,
+    priceToleranceCents:
+      typeof settings.priceToleranceCents === "number"
+        ? clampSettingValue("priceToleranceCents", settings.priceToleranceCents)
+        : defaultSettings.priceToleranceCents,
     tankSizeLiters:
       typeof tankSizeLiters === "number"
         ? clampSettingValue("tankSizeLiters", tankSizeLiters)

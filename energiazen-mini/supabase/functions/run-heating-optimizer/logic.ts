@@ -103,6 +103,7 @@ export type RawHeatingControlSettingsRow = {
   heating_need_mode: string | null;
   max_tank_temperature: number | null;
   min_tank_temperature: number | null;
+  price_tolerance_cents?: number | null;
   safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
   updated_at?: string | null;
@@ -326,6 +327,8 @@ export function resolveOptimizerSettings(
     fullTankShowers: row?.full_tank_showers ?? defaultSettings.fullTankShowers,
     maxTankTemperature: row?.max_tank_temperature ?? defaultSettings.maxTankTemperature,
     minTankTemperature: row?.min_tank_temperature ?? defaultSettings.minTankTemperature,
+    priceToleranceCents:
+      row?.price_tolerance_cents ?? defaultSettings.priceToleranceCents,
     safetyShowerReserve:
       row?.safety_shower_reserve ?? defaultSettings.safetyShowerReserve,
     targetShowerReserve: row?.target_shower_reserve ?? defaultSettings.targetShowerReserve,

@@ -912,6 +912,33 @@ export function runRunHeatingOptimizerLogicUnitTests() {
         "missing/unknown/invalid control mode must fail safe",
       );
     }
+
+    // price_tolerance_cents: missing/null DB value falls back to 0 (today's
+    // behaviour, unchanged) and never blocks publication readiness - it is
+    // not one of the required optimizer settings.
+    assertEqual(
+      resolveOptimizerSettings(settingsRow).settings.priceToleranceCents,
+      0,
+      "fixture row without price_tolerance_cents falls back to 0",
+    );
+    assertEqual(
+      resolveOptimizerSettings({ ...settingsRow, price_tolerance_cents: null })
+        .settings.priceToleranceCents,
+      0,
+      "explicit null price_tolerance_cents falls back to 0",
+    );
+    assertEqual(
+      resolveOptimizerSettings({ ...settingsRow, price_tolerance_cents: 1.5 })
+        .settings.priceToleranceCents,
+      1.5,
+      "a configured price_tolerance_cents value is threaded through to the optimizer settings",
+    );
+    assertEqual(
+      resolveOptimizerSettings({ ...settingsRow, price_tolerance_cents: null })
+        .publicationReadiness,
+      { ok: true, reason: null },
+      "missing price_tolerance_cents must not block backend-primary publication readiness",
+    );
   }
 
   // buildStoredPlansMap / buildShadowRunRow: sanity-check the shadow row

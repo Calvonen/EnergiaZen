@@ -34,6 +34,7 @@ function createSettings(
     maxTankTemperature: 70,
     minTankTemperature: 10,
     priceDifferenceThresholdCents: 2,
+    priceToleranceCents: 0,
     safetyShowerReserve: 2,
     tankSizeLiters: 290,
     targetShowerReserve: 4,

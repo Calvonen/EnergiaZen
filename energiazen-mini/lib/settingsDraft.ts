@@ -21,6 +21,7 @@ const numericFields: SettingsValidationField[] = [
   "automaticMaxHeatingHours",
   "fixedHeatingHoursPerDay",
   "priceDifferenceThresholdCents",
+  "priceToleranceCents",
   "minTankTemperature",
   "maxTankTemperature",
   "fullTankAverageTemperature",
