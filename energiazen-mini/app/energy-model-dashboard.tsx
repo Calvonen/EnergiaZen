@@ -23,8 +23,9 @@ import type {
 } from "@/lib/energyModelV2/heatLossDiagnostics";
 import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChart";
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
-import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawLabelTitle, joinWaterDrawLabels, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
+import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawEnergyQualityWarning, getWaterDrawLabelTitle, joinWaterDrawLabels, waterDrawLabelOptions, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
+import { validateGroundTruth } from "@/lib/energyModelV2/groundTruthValidation";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -251,6 +252,7 @@ export default function EnergyModelDashboardScreen() {
     : null;
   const v2State = data?.v2TankState;
   const labeledWaterDrawEvents = joinWaterDrawLabels(data?.waterDrawEvents ?? [], labels);
+  const groundTruthValidation = validateGroundTruth(data?.waterDrawEvents ?? [], labels);
   const v2TimestampLabel = v2State?.timestamp
     ? dateTimeFormatter.format(new Date(v2State.timestamp))
     : NOT_AVAILABLE;
@@ -379,6 +381,71 @@ export default function EnergyModelDashboardScreen() {
                   ))
                 ) : (
                   <Text style={styles.noRejections}>Ei stabiloituneita vedenkäyttötapahtumia</Text>
+                )}
+              </View>
+            </DashboardCard>
+            <DashboardCard title="🧪 Ground Truth Validation" metrics={[
+              { label: "Merkintöjä", value: String(groundTruthValidation.summary.labelCount) },
+              { label: "Matchattu", value: `${groundTruthValidation.summary.matchedCount} / ${groundTruthValidation.summary.labelCount}${
+                groundTruthValidation.summary.matchRatePercent !== null ? ` (${groundTruthValidation.summary.matchRatePercent.toFixed(0)} %)` : ""
+              }` },
+              { label: "Ground truth ilman V2-havaintoa", value: String(groundTruthValidation.summary.unmatchedGroundTruthCount), tone: groundTruthValidation.summary.unmatchedGroundTruthCount ? "warning" : "good" },
+              { label: "V2-havainto ilman ground truthia", value: String(groundTruthValidation.summary.unmatchedEventCount), tone: groundTruthValidation.summary.unmatchedEventCount ? "warning" : "good" },
+              { label: "Mediaani start-virhe", value: formatNumber(groundTruthValidation.summary.medianAbsoluteStartErrorMinutes, 1, "min") },
+              { label: "Mediaani end-virhe", value: formatNumber(groundTruthValidation.summary.medianAbsoluteEndErrorMinutes, 1, "min") },
+            ]}>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🏷️ Label-kohtaiset osumat</Text>
+                {waterDrawLabelOptions.map(({ label: kind, title }) => {
+                  const counts = groundTruthValidation.summary.countsByLabel[kind];
+                  if (!counts.total) return null;
+                  return (
+                    <View key={kind} style={styles.energyBandRow}>
+                      <Text style={styles.energyBandLabel}>{title}</Text>
+                      <Text style={styles.energyBandValue}>{counts.matched} / {counts.total}</Text>
+                    </View>
+                  );
+                })}
+                {groundTruthValidation.summary.labelCount === 0 ? (
+                  <Text style={styles.noRejections}>Ei ground truth -merkintöjä</Text>
+                ) : null}
+              </View>
+              <View style={styles.observationSection}>
+                <Text style={styles.diagnosticsSubtitle}>🧪 Viimeisimmät ground truth -tapahtumat</Text>
+                {groundTruthValidation.entries.length ? (
+                  groundTruthValidation.entries.slice(-10).reverse().map((entry) => {
+                    const warning = getWaterDrawEnergyQualityWarning(entry);
+                    return (
+                      <View key={`${entry.groundTruthStart}-${entry.groundTruthEnd}`} style={styles.observationCard}>
+                        <Text style={styles.observationTime}>
+                          {entry.matched ? "✅" : "❌"} {dateTimeFormatter.format(new Date(entry.groundTruthStart))} – {dateTimeFormatter.format(new Date(entry.groundTruthEnd))}
+                        </Text>
+                        {[
+                          ["Label", getWaterDrawLabelTitle(entry.label)],
+                          ["Osuma", entry.matched ? "✅ Match" : "❌ Ei havaintoa"],
+                          ...(entry.matchedEvent ? [
+                            ["V2:n aika", `${dateTimeFormatter.format(new Date(entry.matchedEvent.startedAt))} – ${dateTimeFormatter.format(new Date(entry.matchedEvent.endedAt))}`],
+                            ["Start-virhe", formatNumber(entry.startTimeErrorMinutes, 1, "min")],
+                            ["End-virhe", formatNumber(entry.endTimeErrorMinutes, 1, "min")],
+                            ["Nettoenergia", formatNumber(entry.netWaterDrawEnergyKwh, 2, "kWh")],
+                          ] : []),
+                        ].map(([metricLabel, value]) => (
+                          <View key={metricLabel} style={styles.observationMetricRow}>
+                            <Text style={styles.observationMetricLabel}>{metricLabel}</Text>
+                            <Text style={styles.observationMetricValue}>{value}</Text>
+                          </View>
+                        ))}
+                        {warning ? (
+                          <View style={styles.userLabelBox}>
+                            <Text style={styles.userLabelText}>{warning.title}</Text>
+                            {warning.reason ? <Text style={styles.userLabelNote}>{warning.reason}</Text> : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noRejections}>Ei ground truth -merkintöjä</Text>
                 )}
               </View>
             </DashboardCard>
