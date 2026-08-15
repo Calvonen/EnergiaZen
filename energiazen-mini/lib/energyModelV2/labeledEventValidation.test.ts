@@ -58,13 +58,61 @@ export function runLabeledEventValidationUnitTests() {
   {
     const labels = [
       label("long_hot_shower", { energy_reliable: true }),
-      label("long_hot_shower", { energy_reliable: false }),
+      label("long_hot_shower", { energy_reliable: false, energy_quality_reason: "tank_energy_rising" }),
       label("long_hot_shower", { energy_reliable: null }),
     ];
     const result = analyzeLabeledEvents(labels);
     const aggregate = result.aggregatesByLabel.long_hot_shower;
     assert(aggregate.count === 3, "total must include reliable, unreliable and unknown-reliability entries");
     assert(aggregate.reliableCount === 1, "only entries explicitly marked reliable must be counted as reliable");
+    assert(aggregate.unreliableCount === 1, "energy_reliable === false entries must be counted as unreliable");
+    assert(aggregate.unknownReliabilityCount === 1, "energy_reliable === null entries must be counted as unknown reliability");
+  }
+
+  // 7. Multiple entries sharing the same energy_quality_reason must aggregate into one bucket.
+  {
+    const labels = [
+      label("small_wash", { energy_reliable: false, energy_quality_reason: "tank_energy_rising" }),
+      label("small_wash", { energy_reliable: false, energy_quality_reason: "tank_energy_rising" }),
+    ];
+    const result = analyzeLabeledEvents(labels);
+    const aggregate = result.aggregatesByLabel.small_wash;
+    assert(aggregate.qualityReasonCounts.tank_energy_rising === 2,
+      "repeated identical quality reasons must accumulate into the same bucket");
+  }
+
+  // 8. Different quality reasons must stay in separate buckets, and false+null reason falls into missing_reason.
+  {
+    const labels = [
+      label("large_other_use", { energy_reliable: false, energy_quality_reason: "tank_energy_rising" }),
+      label("large_other_use", { energy_reliable: false, energy_quality_reason: null }),
+    ];
+    const result = analyzeLabeledEvents(labels);
+    const aggregate = result.aggregatesByLabel.large_other_use;
+    assert(aggregate.qualityReasonCounts.tank_energy_rising === 1, "a distinct quality reason must not merge with other buckets");
+    assert(aggregate.qualityReasonCounts.missing_reason === 1,
+      "unreliable entries with a null quality reason must fall into the missing_reason bucket instead of disappearing");
+  }
+
+  // 9. A reliable (true) entry's quality reason must never be counted toward rejection-reason buckets.
+  {
+    const labels = [label("multiple_showers", { energy_reliable: true, energy_quality_reason: "tank_energy_rising" })];
+    const result = analyzeLabeledEvents(labels);
+    const aggregate = result.aggregatesByLabel.multiple_showers;
+    assert(aggregate.qualityReasonCounts.tank_energy_rising === 0,
+      "a reliable entry's quality reason must not be counted as a rejection reason");
+    assert(aggregate.qualityReasonCounts.missing_reason === 0, "a reliable entry must not fall into the missing_reason bucket either");
+  }
+
+  // 10. An unknown-reliability (null) entry must never be counted toward rejection-reason buckets.
+  {
+    const labels = [label("unknown", { energy_reliable: null, energy_quality_reason: null })];
+    const result = analyzeLabeledEvents(labels);
+    const aggregate = result.aggregatesByLabel.unknown;
+    assert(aggregate.qualityReasonCounts.missing_reason === 0,
+      "an unknown-reliability entry must not be counted in the missing_reason bucket");
+    assert(aggregate.qualityReasonCounts.tank_energy_rising === 0,
+      "an unknown-reliability entry must not be counted in any quality reason bucket");
   }
 
   // 4. Label kinds with no entries remain present with zero/null aggregates.

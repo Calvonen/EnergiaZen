@@ -25,7 +25,7 @@ import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChar
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
 import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawEnergyQualityWarning, getWaterDrawLabelTitle, joinWaterDrawLabels, waterDrawLabelOptions, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
-import { analyzeLabeledEvents } from "@/lib/energyModelV2/labeledEventValidation";
+import { analyzeLabeledEvents, type WaterDrawEnergyQualityReasonBucket } from "@/lib/energyModelV2/labeledEventValidation";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -44,6 +44,7 @@ const observationTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
 });
 
 const NOT_AVAILABLE = "Not available";
+const MISSING_QUALITY_REASON_TITLE = "Syy ei saatavilla";
 
 const heatLossRejectionLabels: Record<HeatLossRejectionReason, string> = {
   heating_detected: "🔥 Lämmitys havaittu",
@@ -408,6 +409,8 @@ export default function EnergyModelDashboardScreen() {
                           : NOT_AVAILABLE],
                         ["Mediaani kesto", aggregate.medianDurationMinutes !== null ? formatDuration(aggregate.medianDurationMinutes) : NOT_AVAILABLE],
                         ["Luotettavia / yhteensä", `${aggregate.reliableCount} / ${aggregate.count}`],
+                        ["Epäluotettavia", String(aggregate.unreliableCount)],
+                        ["Luotettavuus tuntematon", String(aggregate.unknownReliabilityCount)],
                         ["Havaintotyypit", detectionSummary],
                       ].map(([metricLabel, value]) => (
                         <View key={metricLabel} style={styles.observationMetricRow}>
@@ -415,6 +418,18 @@ export default function EnergyModelDashboardScreen() {
                           <Text style={styles.observationMetricValue}>{value}</Text>
                         </View>
                       ))}
+                      {aggregate.unreliableCount > 0 ? (
+                        <View style={styles.userLabelBox}>
+                          <Text style={styles.userLabelText}>Hylkäyssyyt</Text>
+                          {(Object.entries(aggregate.qualityReasonCounts) as [WaterDrawEnergyQualityReasonBucket, number][])
+                            .filter(([, count]) => count > 0)
+                            .map(([reason, count]) => (
+                              <Text key={reason} style={styles.userLabelNote}>
+                                {reason === "missing_reason" ? MISSING_QUALITY_REASON_TITLE : getWaterDrawEnergyQualityReasonTitle(reason)}: {count}
+                              </Text>
+                            ))}
+                        </View>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -447,7 +462,7 @@ export default function EnergyModelDashboardScreen() {
                         {warning ? (
                           <View style={styles.userLabelBox}>
                             <Text style={styles.userLabelText}>{warning.title}</Text>
-                            {warning.reason ? <Text style={styles.userLabelNote}>{warning.reason}</Text> : null}
+                            <Text style={styles.userLabelNote}>{warning.reason ?? MISSING_QUALITY_REASON_TITLE}</Text>
                           </View>
                         ) : null}
                       </View>

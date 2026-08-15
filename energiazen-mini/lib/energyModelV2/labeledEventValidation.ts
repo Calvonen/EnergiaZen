@@ -12,6 +12,8 @@ export type LabeledEventEntry = {
   startedAt: string;
 };
 
+export type WaterDrawEnergyQualityReasonBucket = WaterDrawEnergyQualityReason | "missing_reason";
+
 export type LabeledEventAggregate = {
   averageNetWaterDrawEnergyKwh: number | null;
   count: number;
@@ -20,7 +22,10 @@ export type LabeledEventAggregate = {
   medianDurationMinutes: number | null;
   medianNetWaterDrawEnergyKwh: number | null;
   minimumNetWaterDrawEnergyKwh: number | null;
+  qualityReasonCounts: Record<WaterDrawEnergyQualityReasonBucket, number>;
   reliableCount: number;
+  unknownReliabilityCount: number;
+  unreliableCount: number;
 };
 
 export type LabeledEventValidationResult = {
@@ -39,6 +44,10 @@ function emptyDetectionKindCounts(): Record<WaterDrawDetectionKind, number> {
   return { cold_inlet: 0, rapid_drop: 0 };
 }
 
+function emptyQualityReasonCounts(): Record<WaterDrawEnergyQualityReasonBucket, number> {
+  return { missing_reason: 0, tank_energy_rising: 0 };
+}
+
 function toTime(value: string): number | null {
   const time = Date.parse(value);
   return Number.isFinite(time) ? time : null;
@@ -51,6 +60,10 @@ function aggregate(entries: LabeledEventEntry[]): LabeledEventAggregate {
     entry.detectionKinds?.forEach((kind) => { counts[kind] += 1; });
     return counts;
   }, emptyDetectionKindCounts());
+  const qualityReasonCounts = entries.reduce((counts, entry) => {
+    if (entry.energyReliable === false) counts[entry.energyQualityReason ?? "missing_reason"] += 1;
+    return counts;
+  }, emptyQualityReasonCounts());
 
   return {
     averageNetWaterDrawEnergyKwh: netEnergyValues.length
@@ -62,7 +75,10 @@ function aggregate(entries: LabeledEventEntry[]): LabeledEventAggregate {
     medianDurationMinutes: median(durationValues),
     medianNetWaterDrawEnergyKwh: median(netEnergyValues),
     minimumNetWaterDrawEnergyKwh: netEnergyValues.length ? Math.min(...netEnergyValues) : null,
+    qualityReasonCounts,
     reliableCount: entries.filter((entry) => entry.energyReliable === true).length,
+    unknownReliabilityCount: entries.filter((entry) => entry.energyReliable === null).length,
+    unreliableCount: entries.filter((entry) => entry.energyReliable === false).length,
   };
 }
 
