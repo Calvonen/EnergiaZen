@@ -262,7 +262,7 @@ Deno.serve(async (request) => {
       supabase
         .from("heating_control_settings")
         .select(
-          "automatic_max_heating_hours,full_tank_average_temperature,full_tank_showers,heating_gain_source,heating_need_mode,max_tank_temperature,min_tank_temperature,safety_shower_reserve,target_shower_reserve,updated_at",
+          "automatic_max_heating_hours,full_tank_average_temperature,full_tank_showers,heating_gain_source,heating_need_mode,max_tank_temperature,min_tank_temperature,price_tolerance_cents,safety_shower_reserve,target_shower_reserve,updated_at",
         )
         .eq("id", 1)
         .maybeSingle(),
