@@ -1,10 +1,18 @@
 import {
+  buildHeatingPlanForecastFields,
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
   hasCheaperSafetyRejectedPlan,
   hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
+  simulateStoredHeatingPlanForecast,
 } from "./heatingPlanPresentation";
+import {
+  calculateStratifiedShowersLeft,
+  createHeatingOptimizationSettings,
+  HeatingOptimizationHour,
+} from "./heatingOptimizer";
+import { HourlyTemperatureDropProfile } from "./tankTemperatureForecast";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -32,6 +40,29 @@ const baseInput = {
   ],
   targetShowerReserve: 4,
 };
+
+function forecastTestOptimizationHour(
+  helsinkiHour: number,
+  price: number,
+): HeatingOptimizationHour {
+  const startDate = new Date(Date.UTC(2026, 7, 15, helsinkiHour - 3));
+
+  return {
+    date: startDate,
+    endDate: new Date(startDate.getTime() + 60 * 60 * 1000),
+    id: `2026-08-15:${String(helsinkiHour).padStart(2, "0")}`,
+    isCurrentHour: false,
+    price,
+    segmentHours: 1,
+    startDate: startDate.toISOString(),
+  };
+}
+
+function uniformHourlyDrops(drop: number): HourlyTemperatureDropProfile {
+  return Object.fromEntries(
+    Array.from({ length: 24 }, (_, hour) => [hour, drop]),
+  );
+}
 
 export function runHeatingPlanPresentationUnitTests() {
   const priceInterval = (startsAt: string) => ({
@@ -455,5 +486,120 @@ export function runHeatingPlanPresentationUnitTests() {
     selectActiveHeatingPlanPresentation(null, null),
     null,
     "molempien puuttuessa aktiivista esitysta ei ole",
+  );
+
+  // Todistaa etta stored-planin ennuste lasketaan simulateStoredHeatingPlanForecast-
+  // funktiolla (sama simulateHeatingPlan-helper jota aktiivinen optimoija itse
+  // kayttaa) nimenomaan BACKENDIN tallennetuilla tunneilla - ei paikallisen
+  // optimoijan omilla valituilla tunneilla, eika kopioimalla optimoijan omaa
+  // ennustetta sellaisenaan.
+  const forecastHours: HeatingOptimizationHour[] = [
+    forecastTestOptimizationHour(10, 5),
+    forecastTestOptimizationHour(11, 1),
+    forecastTestOptimizationHour(12, 2),
+  ];
+  const forecastSettings = createHeatingOptimizationSettings(
+    {
+      automaticMaxHeatingHours: 2,
+      fullTankAverageTemperature: 70,
+      fullTankShowers: 6,
+      maxTankTemperature: 80,
+      minTankTemperature: 10,
+      safetyShowerReserve: 1,
+      targetShowerReserve: 5,
+    },
+    10,
+  );
+  const forecastCurrentShowers = calculateStratifiedShowersLeft({
+    bottomTemperature: 30,
+    fullTankAverageTemperature: 70,
+    fullTankShowers: 6,
+    maxTankTemperature: 80,
+    minTankTemperature: 10,
+    topTemperature: 50,
+  }).showersLeft;
+  const forecastCommonInputs = {
+    currentBottomTemperature: 30,
+    currentTopTemperature: 50,
+    heatingGainPerHour: 10,
+    hourlyDrops: uniformHourlyDrops(0.3),
+    hours: forecastHours,
+    settings: forecastSettings,
+  };
+
+  // "Paikallinen optimoija" olisi valinnut vain ensimmaisen (kalleimman) tunnin.
+  const localOptimizerSelectedHourIds = [forecastHours[0].id];
+  // Backend on kuitenkin tallentanut TOISEN, eri kokoisen tuntijoukon (kaksi
+  // myohaisempaa, halvempaa tuntia) - juuri tama tilanne, jossa
+  // storedHeatingPlanPresentation-kortin pitaa naytta ennuste noiden
+  // backend-tuntien, ei paikallisen optimoijan omien tuntien, mukaan.
+  const backendSelectedHourIds = [forecastHours[1].id, forecastHours[2].id];
+  assertEqual(
+    JSON.stringify(backendSelectedHourIds) ===
+      JSON.stringify(localOptimizerSelectedHourIds),
+    false,
+    "testiskenaarion backend-tunnit eroavat tarkoituksella paikallisen optimoijan tunneista",
+  );
+
+  const localOptimizerSimulation = simulateStoredHeatingPlanForecast({
+    ...forecastCommonInputs,
+    selectedHeatingHourIds: localOptimizerSelectedHourIds,
+  });
+  const backendSimulation = simulateStoredHeatingPlanForecast({
+    ...forecastCommonInputs,
+    selectedHeatingHourIds: backendSelectedHourIds,
+  });
+  assertEqual(
+    localOptimizerSimulation.finalShowers === backendSimulation.finalShowers,
+    false,
+    "stored-planin backend-tunneilla simuloitu ennuste (finalShowers) muuttuu ja eroaa paikallisen optimoijan omilla tunneilla simuloidusta ennusteesta",
+  );
+
+  const localOptimizerForecastFields = buildHeatingPlanForecastFields({
+    currentShowers: forecastCurrentShowers,
+    finalShowers: localOptimizerSimulation.finalShowers,
+    forecastEndLabel: "tänään klo 13:00",
+    minimumShowersBeforeNextHeating:
+      localOptimizerSimulation.minimumShowersBeforeNextHeating,
+    minimumShowersTimeLabel: null,
+  });
+  const backendForecastFields = buildHeatingPlanForecastFields({
+    currentShowers: forecastCurrentShowers,
+    finalShowers: backendSimulation.finalShowers,
+    forecastEndLabel: "tänään klo 13:00",
+    minimumShowersBeforeNextHeating:
+      backendSimulation.minimumShowersBeforeNextHeating,
+    minimumShowersTimeLabel: null,
+  });
+  assertEqual(
+    backendForecastFields.forecastSummary ===
+      localOptimizerForecastFields.forecastSummary,
+    false,
+    "stored-planin ennusteteksti ei ole sama kuin aktiivisen (paikallisen) optimoijan oma forecastSummary, kun tuntijoukot eroavat",
+  );
+
+  const backendSelectedHourLabels = [
+    { label: "11–12", period: "Tänään" as const, price: 1 },
+    { label: "12–13", period: "Tänään" as const, price: 2 },
+  ];
+  const storedBackendPresentation = buildStoredHeatingPlanPresentation({
+    forecast: backendForecastFields,
+    selectedHours: backendSelectedHourLabels,
+  });
+  assertEqual(
+    storedBackendPresentation.forecastSummary,
+    backendForecastFields.forecastSummary,
+    "stored-planin kortti nayttaa juuri backend-tunneille simuloidun ennusteen (ei neutraalia oletustekstia eika optimoijan omaa)",
+  );
+  assertEqual(
+    storedBackendPresentation.forecastSummary ===
+      localOptimizerForecastFields.forecastSummary,
+    false,
+    "stored-planin kortin ennuste ei ole kopio aktiivisen (paikallisen) optimoijan omasta ennusteesta - ainoa oikotie jota tehtava kielsi",
+  );
+  assertEqual(
+    storedBackendPresentation.selectedHours.map((hour) => hour.label),
+    ["11–12 · 1,0 c/kWh", "12–13 · 2,0 c/kWh"],
+    "stored-planin nayttamat tunnit (selectedHours) pysyvat backendin tunneissa myos ennusteen laskennan jalkeen - ennuste ei muuta niita",
   );
 }

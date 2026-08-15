@@ -4,6 +4,14 @@ import {
   getHelsinkiHourNumber,
   type HourlyPrice,
 } from "./heatingLogic";
+import {
+  simulateHeatingPlan,
+  type ConsumptionSpike,
+  type HeatingOptimizationHour,
+  type HeatingOptimizationSettings,
+  type HourlyHeatingForecast,
+} from "./heatingOptimizer";
+import type { HourlyTemperatureDropProfile } from "./tankTemperatureForecast";
 
 export type HeatingPlanReasonKind =
   | "early-for-safety"
@@ -68,6 +76,148 @@ function formatEstimatedCost(costEuros: number | null | undefined) {
   }
 
   return `n. ${formatFinnishCurrency(costEuros)} €`;
+}
+
+// "Alimmillaan"-lukeman pitaa kuvata lahiaikaista pohjaa - alinta
+// ennustettua suihkumaaraa ennen SEURAAVAA suunniteltua lammitysta - eika
+// koko ennustejakson minimia. Koko jakson minimi osuu usein jakson
+// viimeiseen tuntiin (nayttaen samalta kuin "lopussa"-rivi), varsinkin
+// kun tulevaisuudessa ei viela ole toista lammityskertaa naissa. Siksi
+// haku pysahtyy ensimmaiseen valittuun lammitystuntiin: sen showersLeftBefore
+// otetaan viela mukaan (pohja juuri ennen lammityksen alkua), mutta
+// showersLeftAfter (lammityksen jalkeinen, jo noussut arvo) ei enaa.
+export function findMinimumShowersBeforeNextHeating(
+  forecast: Pick<
+    HourlyHeatingForecast,
+    | "isHeatingSelected"
+    | "showersLeftAfter"
+    | "showersLeftBefore"
+    | "segmentHours"
+    | "startDate"
+  >[],
+): { date: Date; value: number } | null {
+  let minimum: { date: Date; value: number } | null = null;
+
+  const updateMinimum = (value: number, date: Date) => {
+    if (!minimum || value < minimum.value) {
+      minimum = { date, value };
+    }
+  };
+
+  for (const hour of forecast) {
+    const startDate = new Date(hour.startDate);
+
+    updateMinimum(hour.showersLeftBefore, startDate);
+
+    if (hour.isHeatingSelected) {
+      break;
+    }
+
+    updateMinimum(
+      hour.showersLeftAfter,
+      new Date(startDate.getTime() + hour.segmentHours * 60 * 60 * 1000),
+    );
+  }
+
+  return minimum;
+}
+
+export function buildHeatingPlanForecastFields({
+  currentShowers,
+  finalShowers,
+  forecastEndLabel,
+  minimumShowersBeforeNextHeating,
+  minimumShowersTimeLabel,
+}: {
+  currentShowers: number | null;
+  finalShowers: number;
+  forecastEndLabel: string;
+  minimumShowersBeforeNextHeating: number;
+  minimumShowersTimeLabel: string | null;
+}): {
+  forecastDetails: HeatingPlanForecastDetails;
+  forecastSummary: string;
+} {
+  const currentShowersLabel =
+    currentShowers === null ? "--" : formatFinnishDecimal(currentShowers);
+
+  return {
+    forecastDetails: {
+      currentShowersLabel,
+      finalShowersLabel: formatFinnishDecimal(finalShowers),
+      finalShowersTimeLabel: forecastEndLabel,
+      minimumShowersLabel: formatFinnishDecimal(minimumShowersBeforeNextHeating),
+      minimumShowersTimeLabel,
+    },
+    forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowersBeforeNextHeating)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
+  };
+}
+
+// Simuloi ennusteen (simulateHeatingPlan - sama helper jota aktiivinen
+// optimoija itse kayttaa) BACKENDIN tallennetuilla selectedHeatingHourIds-
+// tunneilla nykyisen optimoinnin lahtotilaa, asetuksia ja ennustemallia
+// (heatingGainPerHour, spikes, hourlyDrops, settings) vasten. Kutsujan
+// vastuulla on antaa samat nama arvot kuin aktiivinen optimointiajo kaytti,
+// jotta ainoa ero optimoijan omaan ennusteeseen on valittu tuntijoukko.
+export function simulateStoredHeatingPlanForecast({
+  currentBottomTemperature,
+  currentTopTemperature,
+  currentWeightedTemperature,
+  heatingGainPerHour,
+  hourlyDrops,
+  hours,
+  isCurrentlyHeating = false,
+  recoveryDropEnabled = false,
+  recoveryDropPerHour,
+  selectedHeatingHourIds,
+  settings,
+  spikes,
+}: {
+  currentBottomTemperature: number;
+  currentTopTemperature: number;
+  currentWeightedTemperature?: number;
+  heatingGainPerHour: number;
+  hourlyDrops: HourlyTemperatureDropProfile;
+  hours: HeatingOptimizationHour[];
+  isCurrentlyHeating?: boolean;
+  recoveryDropEnabled?: boolean;
+  recoveryDropPerHour?: number;
+  selectedHeatingHourIds: string[];
+  settings: HeatingOptimizationSettings;
+  spikes?: ConsumptionSpike[];
+}): {
+  finalShowers: number;
+  minimumShowersBeforeNextHeating: number;
+  minimumShowersBeforeNextHeatingDate: Date | null;
+} {
+  const result = simulateHeatingPlan({
+    currentBottomTemperature,
+    currentTopTemperature,
+    currentWeightedTemperature,
+    heatingGainPerHour,
+    hourlyDrops,
+    hours,
+    isCurrentlyHeating,
+    recoveryDropEnabled,
+    recoveryDropPerHour,
+    selectedHeatingHourIds,
+    settings,
+    spikes,
+  });
+  const finalShowers =
+    result.forecast[result.forecast.length - 1]?.showersLeftAfter ??
+    result.minimumPredictedShowersLeft;
+  const minimumBeforeNextHeating = findMinimumShowersBeforeNextHeating(
+    result.forecast,
+  );
+
+  return {
+    finalShowers,
+    minimumShowersBeforeNextHeating:
+      minimumBeforeNextHeating?.value ?? result.minimumPredictedShowersLeft,
+    minimumShowersBeforeNextHeatingDate:
+      minimumBeforeNextHeating?.date ?? null,
+  };
 }
 
 export function buildHeatingPlanPresentation({
@@ -159,21 +309,20 @@ export function buildHeatingPlanPresentation({
         : targetReserveMet
           ? "Tavoite saavutetaan, mutta turvaraja ei täyty"
           : "Tavoitetta eikä turvarajaa saavuteta";
-  const currentShowersLabel =
-    currentShowers === null ? "--" : formatFinnishDecimal(currentShowers);
+  const { forecastDetails, forecastSummary } = buildHeatingPlanForecastFields({
+    currentShowers,
+    finalShowers,
+    forecastEndLabel,
+    minimumShowersBeforeNextHeating,
+    minimumShowersTimeLabel,
+  });
 
   return {
     emptyPlanLabel:
       selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
-    forecastDetails: {
-      currentShowersLabel,
-      finalShowersLabel: formatFinnishDecimal(finalShowers),
-      finalShowersTimeLabel: forecastEndLabel,
-      minimumShowersLabel: formatFinnishDecimal(minimumShowersBeforeNextHeating),
-      minimumShowersTimeLabel,
-    },
+    forecastDetails,
     forecastSectionLabel: "Ennuste",
-    forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowersBeforeNextHeating)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
+    forecastSummary,
     heatingSummary:
       selectedHours.length === 0
         ? null
@@ -199,31 +348,32 @@ export function buildHeatingPlanPresentation({
 
 export function buildStoredHeatingPlanPresentation({
   currentOptimizerPresentation = null,
+  forecast = null,
   selectedHours,
 }: {
   // Nykyinen paikallinen optimointiesitys (esim. activeOptimizerPresentation),
   // jolla rikastetaan vain Käytetyt rajat -tiedot. targetShowerReserve/
   // safetyShowerReserve tulevat suoraan asetuksista eivatka riipu valituista
   // tunneista, joten ne pysyvat oikeina vaikka esitys on eri optimointiajosta.
-  //
-  // Ennustetta (forecastDetails/forecastSummary) EI rikasteta samoin: sen
-  // "alimmillaan" ja "lopussa"-arvot on simuloitu (simulateHeatingPlan)
-  // paikallisen optimoijan OMILLA selectedHeatingHourIds-tunneilla, ei
-  // tallennetun backend-suunnitelman tunneilla. Jos nama kaksi tuntijoukkoa
-  // eroavat (juuri se tilanne jossa tallennettua suunnitelmaa naytetaan
-  // autoritatiivisena), rikastettu ennuste vaittaisi tankin tyhjenevan tai
-  // taytyvan eri hetkella kuin mita naytetyt (tallennetun suunnitelman)
-  // tunnit oikeasti aiheuttaisivat. Siksi ennuste jatetaan neutraaliksi
-  // tekstiksi, kunnes se voidaan laskea nimenomaan backend-tunteja vasten.
   currentOptimizerPresentation?: HeatingPlanPresentation | null;
+  // Ennuste (forecastDetails/forecastSummary) BACKENDIN tallennetuille
+  // tunneille - kutsujan on laskettava tama simulateStoredHeatingPlanForecast-
+  // funktiolla (tai vastaavalla) juuri backendin selectedHours-tunteja
+  // vasten, ei paikallisen optimoijan omilla valituilla tunneilla. Jos jatetaan
+  // pois (null), ennuste jaa neutraaliksi tekstiksi.
+  forecast?: {
+    forecastDetails: HeatingPlanForecastDetails;
+    forecastSummary: string;
+  } | null;
   selectedHours: HeatingPlanPresentation["selectedHours"];
 }): HeatingPlanPresentation {
   return {
     emptyPlanLabel:
       selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
-    forecastDetails: null,
+    forecastDetails: forecast?.forecastDetails ?? null,
     forecastSectionLabel: "Ennuste",
     forecastSummary:
+      forecast?.forecastSummary ??
       "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",
     heatingSummary:
       selectedHours.length === 0
