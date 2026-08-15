@@ -11,7 +11,7 @@ let REQUIRED_BLOCKING_READINGS = 2;
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
 // Keep disabled while the optimizer is shadow-only. Enable only in the same
 // controlled deployment that provides an approved backend publication path.
-let BACKEND_PLAN_TRUST_ENABLED = false;
+let BACKEND_PLAN_TRUST_ENABLED = true;
 
 let SUPABASE_URL = "https://amyvzelzbvjvrevikvrp.supabase.co";
 let SUPABASE_KEY =

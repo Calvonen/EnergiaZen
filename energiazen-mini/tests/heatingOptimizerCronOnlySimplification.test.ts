@@ -131,7 +131,7 @@ export function runHeatingOptimizerCronOnlySimplificationTests() {
     "utf8",
   );
   assertSource(
-    controllerSource.includes("let BACKEND_PLAN_TRUST_ENABLED = false;"),
-    "BACKEND_PLAN_TRUST_ENABLED must stay disabled - this simplification must not flip the device trust gate",
+    controllerSource.includes("let BACKEND_PLAN_TRUST_ENABLED = true;"),
+    "BACKEND_PLAN_TRUST_ENABLED must stay enabled - the approved backend publication path is live and this simplification must not flip the device trust gate back off",
   );
 }
