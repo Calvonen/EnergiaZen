@@ -49,23 +49,89 @@ function pad2(value) {
   return value < 10 ? "0" + value : "" + value;
 }
 
-function getHelsinkiParts(now) {
-  let year = now.getUTCFullYear();
-  let marchLast = new Date(Date.UTC(year, 2, 31));
-  let octoberLast = new Date(Date.UTC(year, 9, 31));
-  let dstStart = Date.UTC(year, 2, 31 - marchLast.getUTCDay(), 1);
-  let dstEnd = Date.UTC(year, 9, 31 - octoberLast.getUTCDay(), 1);
-  let offsetHours = now.getTime() >= dstStart && now.getTime() < dstEnd ? 3 : 2;
-  let local = new Date(now.getTime() + offsetHours * 60 * 60 * 1000);
+// Shelly's mJS runtime does not implement Date's getUTC-prefixed accessors
+// or the UTC-constructing static Date helper (confirmed in production by a
+// "function not found" crash on one of them), so the current Helsinki
+// date/hour is derived from the device's own Sys status
+// instead of a self-computed DST table: sys.time is already local
+// wall-clock time (device timezone is assumed to be Europe/Helsinki), and
+// sys.unixtime (a UTC epoch) is only used, via plain integer arithmetic,
+// to tell whether that local time has rolled past midnight into the next
+// calendar day.
+//
+// Shelly's Sys.GetStatus documentation guarantees sys.time is fixed-width
+// "HH:MM" with a leading zero, so the hour is read with a plain string
+// slice + Number() conversion - both definitely supported by Shelly's
+// mJS runtime.
+function parseSysLocalHour(time) {
+  if (typeof time !== "string" || time.length !== 5 || time.indexOf(":") !== 2) {
+    return -1;
+  }
+
+  let hour = Number(time.slice(0, 2));
+
+  if (!(hour >= 0 && hour <= 23)) {
+    return -1;
+  }
+
+  return hour;
+}
+
+// Howard Hinnant's days_from_civil/civil_from_days algorithm
+// (http://howardhinnant.github.io/date_algorithms.html), pure integer
+// arithmetic only - no UTC-family Date methods involved.
+function civilDateFromDays(days) {
+  let z = days + 719468;
+  let era = Math.floor(z / 146097);
+  let dayOfEra = z - era * 146097;
+  let yearOfEra = Math.floor(
+    (dayOfEra - Math.floor(dayOfEra / 1460) + Math.floor(dayOfEra / 36524) - Math.floor(dayOfEra / 146096)) / 365,
+  );
+  let year = yearOfEra + era * 400;
+  let dayOfYear = dayOfEra - (365 * yearOfEra + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100));
+  let monthPrime = Math.floor((5 * dayOfYear + 2) / 153);
+  let day = dayOfYear - Math.floor((153 * monthPrime + 2) / 5) + 1;
+  let month = monthPrime < 10 ? monthPrime + 3 : monthPrime - 9;
 
   return {
-    dateKey: local.getUTCFullYear() + "-" + pad2(local.getUTCMonth() + 1) + "-" + pad2(local.getUTCDate()),
-    hour: local.getUTCHours(),
+    day: day,
+    month: month,
+    year: month <= 2 ? year + 1 : year,
   };
 }
 
-function getLocalDateKey() {
-  return getHelsinkiParts(new Date()).dateKey;
+function resolveHelsinkiFromSysStatus(sysStatus) {
+  // 1577836800 = 2020-01-01T00:00:00Z, a sanity floor that rejects an
+  // unsynced device clock (unixtime near 0) instead of trusting a bogus
+  // 1970 date.
+  if (!sysStatus || typeof sysStatus.unixtime !== "number" || sysStatus.unixtime < 1577836800) {
+    return null;
+  }
+
+  let localHour = parseSysLocalHour(sysStatus.time);
+
+  if (localHour < 0) {
+    return null;
+  }
+
+  let unixtime = sysStatus.unixtime;
+  let utcDays = Math.floor(unixtime / 86400);
+  let utcHour = Math.floor((unixtime - utcDays * 86400) / 3600);
+  // Helsinki is always ahead of UTC (winter +2h / summer +3h, never
+  // behind), so the local calendar date only ever equals the UTC date or
+  // is one day ahead of it - that rollover happens exactly when the local
+  // hour has wrapped past midnight below the UTC hour.
+  let localDays = localHour < utcHour ? utcDays + 1 : utcDays;
+  let date = civilDateFromDays(localDays);
+
+  return {
+    dateKey: date.year + "-" + pad2(date.month) + "-" + pad2(date.day),
+    hour: localHour,
+  };
+}
+
+function resolveHelsinkiNow() {
+  return resolveHelsinkiFromSysStatus(Shelly.getComponentStatus("sys"));
 }
 
 function isFiniteNumber(value) {
@@ -587,9 +653,10 @@ function executeDecision(control, settings, reading) {
     { id: SWITCH_ID },
     function (status, errorCode, errorMessage) {
       if (errorCode !== 0 || !status) {
+        let helsinkiNow = resolveHelsinkiNow();
         let failedDecision = decideHeating(
           {
-            currentHour: getHelsinkiParts(new Date()).hour,
+            currentHour: helsinkiNow ? helsinkiNow.hour : -1,
             failSafeReason: "relay-status-error",
             nowMs: new Date().getTime(),
             plannedHours: control.plannedHours,
@@ -606,10 +673,11 @@ function executeDecision(control, settings, reading) {
         return;
       }
 
+      let helsinkiNow = resolveHelsinkiNow();
       let decision = decideHeating(
         {
-          currentHour: getHelsinkiParts(new Date()).hour,
-          failSafeReason: control.failSafeReason,
+          currentHour: helsinkiNow ? helsinkiNow.hour : -1,
+          failSafeReason: control.failSafeReason || (helsinkiNow ? null : "device-time-unavailable"),
           nowMs: new Date().getTime(),
           plannedHours: control.plannedHours,
           reading: reading,
@@ -656,7 +724,22 @@ function fetchLatestReading(control, settings) {
 }
 
 function fetchTodayPlan(settings) {
-  let today = getLocalDateKey();
+  let helsinkiNow = resolveHelsinkiNow();
+
+  if (helsinkiNow === null) {
+    executeDecision(
+      {
+        failSafeReason: "device-time-unavailable",
+        plannedHours: [],
+        source: "fail-safe",
+      },
+      settings,
+      null,
+    );
+    return;
+  }
+
+  let today = helsinkiNow.dateKey;
   let planPath =
     "heating_plans" +
     "?select=plan_date,planned_hours,updated_at,mode" +
@@ -761,9 +844,9 @@ if (typeof module !== "undefined" && module.exports) {
     createControllerState: createControllerState,
     createRequestError: createRequestError,
     decideHeating: decideHeating,
-    getHelsinkiParts: getHelsinkiParts,
     isTrustedBackendHeartbeat: isTrustedBackendHeartbeat,
     isValidCalibration: isValidCalibration,
+    resolveHelsinkiFromSysStatus: resolveHelsinkiFromSysStatus,
     resolvePlanControl: resolvePlanControl,
     resolveTrustedPlanControl: resolveTrustedPlanControl,
   };

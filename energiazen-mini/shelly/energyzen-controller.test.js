@@ -1,4 +1,6 @@
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 const {
   REQUIRED_BLOCKING_READINGS,
   START_HEATING_FILL_RATIO,
@@ -7,7 +9,7 @@ const {
   createControllerState,
   createRequestError,
   decideHeating,
-  getHelsinkiParts,
+  resolveHelsinkiFromSysStatus,
   resolvePlanControl,
   resolveTrustedPlanControl,
 } = require("./energyzen-controller");
@@ -477,9 +479,83 @@ assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_pl
 const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
 assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
 assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
-assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T00:30:00Z")), { dateKey: "2026-03-29", hour: 2 });
-assert.deepStrictEqual(getHelsinkiParts(new Date("2026-03-29T01:30:00Z")), { dateKey: "2026-03-29", hour: 4 });
-assert.deepStrictEqual(getHelsinkiParts(new Date("2026-10-25T00:30:00Z")), { dateKey: "2026-10-25", hour: 3 });
-assert.deepStrictEqual(getHelsinkiParts(new Date("2026-10-25T01:30:00Z")), { dateKey: "2026-10-25", hour: 3 }, "both repeated autumn instants retain existing local-hour semantics");
+// resolveHelsinkiFromSysStatus trusts the device's own Sys status (sys.time
+// for local wall-clock hour, sys.unixtime as a UTC epoch used only to
+// detect a local midnight rollover) instead of computing DST itself - the
+// production bug this replaced was a "getUTCFullYear not found" mJS crash.
+function sysStatus(isoUtc, localTime) {
+  return { time: localTime, unixtime: Math.floor(Date.parse(isoUtc) / 1000) };
+}
+
+// Same instants/expectations as the DST table this function replaced -
+// only now the local time comes from the (simulated) device clock, not a
+// self-computed DST rule, matching what a correctly NTP/tz-configured
+// device reports on each side of the spring/autumn transitions.
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-03-29T00:30:00Z", "02:30")), { dateKey: "2026-03-29", hour: 2 });
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-03-29T01:30:00Z", "04:30")), { dateKey: "2026-03-29", hour: 4 });
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-10-25T00:30:00Z", "03:30")), { dateKey: "2026-10-25", hour: 3 });
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-10-25T01:30:00Z", "03:30")), { dateKey: "2026-10-25", hour: 3 }, "both repeated autumn instants retain existing local-hour semantics");
+
+// Local date must roll forward across a UTC midnight boundary...
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T22:30:00Z", "01:30")), { dateKey: "2026-06-16", hour: 1 }, "summer offset (+3h) rolls the local date forward past UTC midnight");
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-01-10T22:30:00Z", "00:30")), { dateKey: "2026-01-11", hour: 0 }, "winter offset (+2h) rolls the local date forward past UTC midnight");
+// ...but not when local time has not yet crossed midnight...
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-01-10T10:00:00Z", "12:00")), { dateKey: "2026-01-10", hour: 12 }, "no rollover when the local hour has not wrapped past UTC midnight");
+// ...and the rollover must also cross month/year boundaries correctly,
+// which is what civilDateFromDays (not Date.UTC) is responsible for.
+assert.deepStrictEqual(resolveHelsinkiFromSysStatus(sysStatus("2025-12-31T23:30:00Z", "01:30")), { dateKey: "2026-01-01", hour: 1 }, "local date rollover crosses a year boundary correctly");
+
+// Fail safely (return null) whenever the device's own time cannot be
+// trusted, instead of falling back to any self-computed guess.
+assert.strictEqual(resolveHelsinkiFromSysStatus(null), null, "missing sys status fails safe");
+assert.strictEqual(resolveHelsinkiFromSysStatus({}), null, "sys status without unixtime fails safe");
+assert.strictEqual(resolveHelsinkiFromSysStatus({ time: "12:00", unixtime: 0 }), null, "an unsynced device clock (unixtime near epoch) fails safe");
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:00:00Z", null)), null, "missing sys.time fails safe");
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:00:00Z", "bogus")), null, "unparseable sys.time fails safe");
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:00:00Z", "24:00")), null, "out-of-range sys.time hour fails safe");
+// Sys.GetStatus documents sys.time as fixed-width "HH:MM" with a leading
+// zero, so parsing only reads/validates the two-character hour - a
+// malformed minute is not a documented sys.time shape.
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:00:00Z", "bogus")), null, "wrong-length/no-colon sys.time fails safe");
+
+// Boundary hours read directly via slice(0, 2) + Number(), the documented
+// fixed-width "HH:MM" shape.
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:05:00Z", "00:05")).hour, 0, "leading-zero midnight hour parses correctly");
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:05:00Z", "09:05")).hour, 9, "leading-zero single-digit hour parses correctly");
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:59:00Z", "23:59")).hour, 23, "last hour of the day parses correctly");
+
+// Assumes sys.time is always zero-padded two-digit "HH:MM" (matches every
+// documented Shelly Sys.GetStatus example, e.g. "09:05") - verify this
+// against real device output if it is ever observed otherwise.
+assert.strictEqual(resolveHelsinkiFromSysStatus(sysStatus("2026-06-15T12:00:00Z", "9:05")), null, "a non-zero-padded hour is not a format sys.time is documented to produce");
+
+// Regression guard: the getUTC*/Date.UTC family is not implemented by
+// Shelly's mJS runtime (this is exactly what crashed getHelsinkiParts in
+// production) - fail the build if it ever reappears in the controller
+// source or its regenerated minified build.
+let controllerFiles = ["energyzen-controller.js", "energyzen-controller.min.js"];
+let bannedDateApis = [
+  "getUTCFullYear",
+  "getUTCMonth",
+  "getUTCDate",
+  "getUTCDay",
+  "getUTCHours",
+  "getUTCMinutes",
+  "getUTCSeconds",
+  "getUTCMilliseconds",
+  "Date.UTC",
+];
+
+for (let fileIndex = 0; fileIndex < controllerFiles.length; fileIndex++) {
+  let filePath = path.join(__dirname, controllerFiles[fileIndex]);
+  let source = fs.readFileSync(filePath, "utf8");
+
+  for (let apiIndex = 0; apiIndex < bannedDateApis.length; apiIndex++) {
+    assert.ok(
+      source.indexOf(bannedDateApis[apiIndex]) === -1,
+      controllerFiles[fileIndex] + " must not use unsupported mJS Date API " + bannedDateApis[apiIndex],
+    );
+  }
+}
 
 console.log("EnergyZen Shelly controller tests passed");
