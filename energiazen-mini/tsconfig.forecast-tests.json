@@ -139,6 +139,7 @@
     "tests/heatingOptimizerShadowPermissionsMigration.test.ts",
     "scripts/run-tank-temperature-forecast-tests.ts",
     "tests/backendOptimizerHeartbeatMigration.test.ts",
-    "tests/backendHeatingOptimizerSecurity.test.ts"
+    "tests/backendHeatingOptimizerSecurity.test.ts",
+    "tests/heatingOptimizerSettingsSelectSource.test.ts"
   ]
 }
