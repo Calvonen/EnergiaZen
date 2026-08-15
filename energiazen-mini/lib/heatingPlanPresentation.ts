@@ -24,8 +24,16 @@ export type HeatingPlanForecastDetails = {
 export type HeatingPlanPresentation = {
   emptyPlanLabel: string | null;
   forecastDetails: HeatingPlanForecastDetails | null;
+  forecastSectionLabel: string;
   forecastSummary: string;
   heatingSummary: string | null;
+  // Rajat-osion otsikko. Tallennetulle backend-suunnitelmalle rikastettu
+  // "Nykyiset rajat" kertoo etta kyseessa ovat nykyiset paikalliset
+  // tavoite-/turvarajat, ei valttamatta ne joilla tallennettu suunnitelma
+  // alun perin optimoitiin (rajat itse eivat kuitenkaan riipu valituista
+  // tunneista, joten arvot ovat oikeat niin kauan kuin asetukset eivat ole
+  // muuttuneet suunnitelman tallentamisen jalkeen).
+  limitsSectionLabel: string;
   limitsSummary: string;
   reason: string;
   reasonKind: HeatingPlanReasonKind;
@@ -164,11 +172,13 @@ export function buildHeatingPlanPresentation({
       minimumShowersLabel: formatFinnishDecimal(minimumShowersBeforeNextHeating),
       minimumShowersTimeLabel,
     },
+    forecastSectionLabel: "Ennuste",
     forecastSummary: `Nyt ${currentShowersLabel} · alimmillaan ${formatFinnishDecimal(minimumShowersBeforeNextHeating)} · ${forecastEndLabel} ${formatFinnishDecimal(finalShowers)} suihkua`,
     heatingSummary:
       selectedHours.length === 0
         ? null
         : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
+    limitsSectionLabel: "Käytetyt rajat",
     limitsSummary: `Tavoite ${targetShowerReserve} suihkua · turvaraja ${safetyShowerReserve} suihkua`,
     reason,
     reasonKind,
@@ -188,24 +198,43 @@ export function buildHeatingPlanPresentation({
 }
 
 export function buildStoredHeatingPlanPresentation({
+  currentOptimizerPresentation = null,
   selectedHours,
 }: {
-  currentShowers: number | null;
-  safetyShowerReserve: number;
+  // Nykyinen paikallinen optimointiesitys (esim. activeOptimizerPresentation),
+  // jolla rikastetaan vain Käytetyt rajat -tiedot. targetShowerReserve/
+  // safetyShowerReserve tulevat suoraan asetuksista eivatka riipu valituista
+  // tunneista, joten ne pysyvat oikeina vaikka esitys on eri optimointiajosta.
+  //
+  // Ennustetta (forecastDetails/forecastSummary) EI rikasteta samoin: sen
+  // "alimmillaan" ja "lopussa"-arvot on simuloitu (simulateHeatingPlan)
+  // paikallisen optimoijan OMILLA selectedHeatingHourIds-tunneilla, ei
+  // tallennetun backend-suunnitelman tunneilla. Jos nama kaksi tuntijoukkoa
+  // eroavat (juuri se tilanne jossa tallennettua suunnitelmaa naytetaan
+  // autoritatiivisena), rikastettu ennuste vaittaisi tankin tyhjenevan tai
+  // taytyvan eri hetkella kuin mita naytetyt (tallennetun suunnitelman)
+  // tunnit oikeasti aiheuttaisivat. Siksi ennuste jatetaan neutraaliksi
+  // tekstiksi, kunnes se voidaan laskea nimenomaan backend-tunteja vasten.
+  currentOptimizerPresentation?: HeatingPlanPresentation | null;
   selectedHours: HeatingPlanPresentation["selectedHours"];
-  targetShowerReserve: number;
 }): HeatingPlanPresentation {
   return {
     emptyPlanLabel:
       selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
     forecastDetails: null,
-    forecastSummary: "Tallennettu suunnitelma ei sisällä ennustetietoja.",
+    forecastSectionLabel: "Ennuste",
+    forecastSummary:
+      "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",
     heatingSummary:
       selectedHours.length === 0
         ? null
         : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
-    limitsSummary:
-      "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    limitsSectionLabel: currentOptimizerPresentation
+      ? "Nykyiset rajat"
+      : "Käytetyt rajat",
+    limitsSummary: currentOptimizerPresentation
+      ? currentOptimizerPresentation.limitsSummary
+      : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
     reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
     selectedHours: selectedHours.map((hour) => {

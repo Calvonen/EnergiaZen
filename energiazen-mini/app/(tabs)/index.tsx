@@ -1512,20 +1512,16 @@ export default function HomeScreen() {
     });
 
     return buildStoredHeatingPlanPresentation({
-      currentShowers: warmWaterEstimate?.showersLeft ?? null,
-      safetyShowerReserve: settings.safetyShowerReserve,
+      currentOptimizerPresentation: activeOptimizerPresentation,
       selectedHours,
-      targetShowerReserve: settings.targetShowerReserve,
     });
   }, [
+    activeOptimizerPresentation,
     hourlyPrices,
     settings.heatingNeedMode,
-    settings.safetyShowerReserve,
-    settings.targetShowerReserve,
     storedHeatingPlans,
     todayPlanDate,
     tomorrowPlanDate,
-    warmWaterEstimate?.showersLeft,
   ]);
   useEffect(() => {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
@@ -3374,7 +3370,7 @@ export default function HomeScreen() {
                       </Text>
                     )}
                     <Text style={styles.heatingPlanForecastSubtitle}>
-                      Ennuste
+                      {heatingPlanPresentation.forecastSectionLabel}
                     </Text>
                     {heatingPlanPresentation.forecastDetails ? (
                       <>
@@ -3421,7 +3417,7 @@ export default function HomeScreen() {
                     )}
 
                     <Text style={styles.heatingPlanLimitsSubtitle}>
-                      Käytetyt rajat
+                      {heatingPlanPresentation.limitsSectionLabel}
                     </Text>
                     {(() => {
                       const limitsParts = splitLimitsSummary(
