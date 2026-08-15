@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
+import * as Updates from "expo-updates";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Animated,
@@ -60,18 +61,23 @@ import {
 } from "@/lib/heatingPlanMarkers";
 import {
   calculateStratifiedShowersLeft,
+  createHeatingOptimizationSettings,
   HeatingOptimizationHour,
   HeatingOptimizationResult,
-  HourlyHeatingForecast,
 } from "@/lib/heatingOptimizer";
 import { useHeatingOptimizationRun } from "@/lib/useHeatingOptimizationRun";
 import {
+  buildHeatingPlanForecastFields,
   buildHeatingPlanPresentation,
   buildStoredHeatingPlanPresentation,
+  findMinimumShowersBeforeNextHeating,
   hasCheaperSafetyRejectedPlan,
   hasAmbiguousStoredHeatingPlanHour,
   selectActiveHeatingPlanPresentation,
+  simulateStoredHeatingPlanForecast,
 } from "@/lib/heatingPlanPresentation";
+import { estimateRecoveryDropPerHour } from "@/lib/heatingRecoveryDrop";
+import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
 import {
   canPublishActiveHeatingPlan,
   computeNextUnknownHeatingAnchor,
@@ -109,6 +115,7 @@ import {
   getCurrentWeightedTemperature,
   getForecastTargetHeatingStart,
   getForecastHeatingHours,
+  HourlyTemperatureDropProfile,
   isHeatingShiftedToTomorrow,
   predictWeightedTemperature,
   TankTemperatureReading,
@@ -131,6 +138,11 @@ import {
 // entirely during the brief "pending" window before the first completeness
 // check has resolved even once (Codex P2 follow-up).
 const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
+
+// Sama arvo kuin useHeatingOptimizationRun.ts kayttaa aktiivisen optimoijan
+// ajossa - tallennetun backend-suunnitelman ennuste (simulateStoredHeatingPlanForecast)
+// kayttaa tata, jotta ennustemalli pysyy identtisena aktiivisen optimoijan kanssa.
+const recoveryDropEnabled = isRecoveryDropEnabledForChannel(Updates.channel);
 
 const DEBUG_HISTORY_PERFORMANCE = false;
 const DEBUG_HOME_DAY_TAB_PERFORMANCE = false;
@@ -403,50 +415,6 @@ function getPointInTimeLabel({
   }
 
   return `klo ${time}`;
-}
-
-// "Alimmillaan"-lukeman pitaa kuvata lahiaikaista pohjaa - alinta
-// ennustettua suihkumaaraa ennen SEURAAVAA suunniteltua lammitysta - eika
-// koko ennustejakson minimia. Koko jakson minimi osuu usein jakson
-// viimeiseen tuntiin (nayttaen samalta kuin "lopussa"-rivi), varsinkin
-// kun tulevaisuudessa ei viela ole toista lammityskertaa naissa. Siksi
-// haku pysahtyy ensimmaiseen valittuun lammitystuntiin: sen showersLeftBefore
-// otetaan viela mukaan (pohja juuri ennen lammityksen alkua), mutta
-// showersLeftAfter (lammityksen jalkeinen, jo noussut arvo) ei enaa.
-function findMinimumShowersBeforeNextHeating(
-  forecast: Pick<
-    HourlyHeatingForecast,
-    | "isHeatingSelected"
-    | "showersLeftAfter"
-    | "showersLeftBefore"
-    | "segmentHours"
-    | "startDate"
-  >[],
-): { date: Date; value: number } | null {
-  let minimum: { date: Date; value: number } | null = null;
-
-  const updateMinimum = (value: number, date: Date) => {
-    if (!minimum || value < minimum.value) {
-      minimum = { date, value };
-    }
-  };
-
-  for (const hour of forecast) {
-    const startDate = new Date(hour.startDate);
-
-    updateMinimum(hour.showersLeftBefore, startDate);
-
-    if (hour.isHeatingSelected) {
-      break;
-    }
-
-    updateMinimum(
-      hour.showersLeftAfter,
-      new Date(startDate.getTime() + hour.segmentHours * 60 * 60 * 1000),
-    );
-  }
-
-  return minimum;
 }
 
 function getTankUpdatedStatus(updatedAt: string | null, now = new Date()) {
@@ -841,6 +809,94 @@ function buildOptimizerHeatingPlanPresentation({
     selectedHours,
     targetCheckShowersLeft: optimizationResult.targetCheckShowersLeft,
     targetShowerReserve: runSettings.targetShowerReserve,
+  });
+}
+
+// Laskee tallennetun backend-suunnitelman ennusteen (forecastDetails/
+// forecastSummary) simuloimalla saman ennustemallin (simulateStoredHeatingPlanForecast
+// - sama simulateHeatingPlan-helper jota buildOptimizerHeatingPlanPresentation kayttaa)
+// samalla nykyisella lahtotilalla, asetuksilla ja optimizerHours-riveilla kuin
+// aktiivinen optimoija (optimizationResult), mutta BACKENDIN tallennetuilla
+// selectedHeatingHourIds-tunneilla optimoijan omien valittujen tuntien sijaan.
+function buildStoredHeatingPlanForecastFields({
+  currentBottomTemperature,
+  currentTopTemperature,
+  currentWeightedTemperature,
+  hourlyDrops,
+  isCurrentlyHeating,
+  optimizationResult,
+  optimizerHours,
+  recoveryReadings,
+  runSettings,
+  storedSelectedHeatingHourIds,
+  todayPlanDate,
+  tomorrowPlanDate,
+}: {
+  currentBottomTemperature: number | null;
+  currentTopTemperature: number | null;
+  currentWeightedTemperature: number | null;
+  hourlyDrops: HourlyTemperatureDropProfile;
+  isCurrentlyHeating: boolean;
+  optimizationResult: HeatingOptimizationResult | null;
+  optimizerHours: HeatingOptimizationHour[];
+  recoveryReadings: TankTemperatureReading[];
+  runSettings: EnergiaZenSettings;
+  storedSelectedHeatingHourIds: string[];
+  todayPlanDate: string;
+  tomorrowPlanDate: string;
+}) {
+  if (
+    !optimizationResult ||
+    currentBottomTemperature === null ||
+    currentTopTemperature === null
+  ) {
+    return null;
+  }
+
+  const recoveryDropPerHour = recoveryDropEnabled
+    ? estimateRecoveryDropPerHour(recoveryReadings).dropPerHour
+    : undefined;
+  const settings = createHeatingOptimizationSettings(
+    runSettings,
+    fallbackHeatingGainPerHour,
+  );
+  const simulation = simulateStoredHeatingPlanForecast({
+    currentBottomTemperature,
+    currentTopTemperature,
+    currentWeightedTemperature: currentWeightedTemperature ?? undefined,
+    heatingGainPerHour: optimizationResult.heatingGainEstimate.gainPerHour,
+    hourlyDrops,
+    hours: optimizerHours,
+    isCurrentlyHeating,
+    recoveryDropEnabled,
+    recoveryDropPerHour,
+    selectedHeatingHourIds: storedSelectedHeatingHourIds,
+    settings,
+    spikes: optimizationResult.spikes,
+  });
+  const lastForecastHour = optimizerHours[optimizerHours.length - 1];
+  const forecastEndLabel = lastForecastHour
+    ? getForecastEndLabel({
+        endDate: lastForecastHour.endDate,
+        startDate: lastForecastHour.startDate,
+        todayDateKey: todayPlanDate,
+        tomorrowDateKey: tomorrowPlanDate,
+      })
+    : "suunnittelujakson päättyessä";
+  const minimumShowersTimeLabel = simulation.minimumShowersBeforeNextHeatingDate
+    ? getPointInTimeLabel({
+        date: simulation.minimumShowersBeforeNextHeatingDate,
+        todayDateKey: todayPlanDate,
+        tomorrowDateKey: tomorrowPlanDate,
+      })
+    : null;
+
+  return buildHeatingPlanForecastFields({
+    currentShowers: optimizationResult.diagnostics.currentShowers,
+    finalShowers: simulation.finalShowers,
+    forecastEndLabel,
+    minimumShowersBeforeNextHeating: simulation.minimumShowersBeforeNextHeating,
+    minimumShowersTimeLabel,
   });
 }
 
@@ -1511,17 +1567,60 @@ export default function HomeScreen() {
       });
     });
 
+    const storedSelectedHeatingHourIds = storedPlans.flatMap((plan) => {
+      const planDate = plan.plan_date;
+
+      if (!planDate) {
+        return [];
+      }
+
+      return normalizeStoredHeatingPlanHours(plan.planned_hours).flatMap(
+        (hour) => {
+          const optimizerHour = activeOptimizationRun.hours.find(
+            (item) =>
+              getFinnishDateKey(item.startDate) === planDate &&
+              getHelsinkiHourNumber(item.date) === hour,
+          );
+
+          return optimizerHour ? [optimizerHour.id] : [];
+        },
+      );
+    });
+
+    const forecast = buildStoredHeatingPlanForecastFields({
+      currentBottomTemperature: bottomTemp,
+      currentTopTemperature: topTemp,
+      currentWeightedTemperature,
+      hourlyDrops: hourlyTemperatureDropProfile,
+      isCurrentlyHeating: isCurrentlyHeatingConfirmed,
+      optimizationResult: activeOptimizationRun.result,
+      optimizerHours: activeOptimizationRun.hours,
+      recoveryReadings: tankTemperatureHistory,
+      runSettings: activeOptimizationRun.appSettings,
+      storedSelectedHeatingHourIds,
+      todayPlanDate,
+      tomorrowPlanDate,
+    });
+
     return buildStoredHeatingPlanPresentation({
       currentOptimizerPresentation: activeOptimizerPresentation,
+      forecast,
       selectedHours,
     });
   }, [
+    activeOptimizationRun,
     activeOptimizerPresentation,
+    bottomTemp,
+    currentWeightedTemperature,
     hourlyPrices,
+    hourlyTemperatureDropProfile,
+    isCurrentlyHeatingConfirmed,
     settings.heatingNeedMode,
     storedHeatingPlans,
+    tankTemperatureHistory,
     todayPlanDate,
     tomorrowPlanDate,
+    topTemp,
   ]);
   useEffect(() => {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
