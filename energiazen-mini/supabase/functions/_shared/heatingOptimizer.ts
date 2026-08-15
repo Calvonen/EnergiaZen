@@ -311,6 +311,39 @@ function getSelectedHoursEffectiveCost(
   );
 }
 
+// Tie-break for combinations that land on the same effectiveCost: prefer the
+// LATER schedule (deferring heating, less unnecessary early-heat loss)
+// instead of whichever combination the enumeration happens to find first.
+// Only ever compares two already-VALID results (simulateHeatingPlan's own
+// safety/reserve/fill-ratio checks already ran and passed for both), so this
+// never overrides those checks - an unsafe later hour is simply never a
+// candidate here. Deliberately NOT based on minimumPredictedShowersLeft or
+// any other thermal margin, which would bias toward the earlier hour and
+// defeat the point of this tie-break.
+function isLaterHeatingSchedule(
+  hours: HeatingOptimizationHour[],
+  candidateIds: string[],
+  currentBestIds: string[],
+) {
+  const startTimeById = new Map(
+    hours.map((hour) => [hour.id, hour.date.getTime()]),
+  );
+  const sortedTimes = (ids: string[]) =>
+    ids.map((id) => startTimeById.get(id) ?? 0).sort((first, second) => first - second);
+  const candidateTimes = sortedTimes(candidateIds);
+  const currentBestTimes = sortedTimes(currentBestIds);
+
+  for (let index = candidateTimes.length - 1; index >= 0; index -= 1) {
+    if (candidateTimes[index] !== currentBestTimes[index]) {
+      return candidateTimes[index] > currentBestTimes[index];
+    }
+  }
+
+  // Practically the same schedule (identical start times) - keep today's
+  // deterministic behaviour (first found wins) rather than replacing it.
+  return false;
+}
+
 function createCombinations(
   itemCount: number,
   selectionCount: number,
@@ -950,10 +983,7 @@ export function optimizeHeatingPlan({
       const resultCost = getSelectedHoursCost(sortedHours, selectedHeatingHourIds);
       // Ranking only - never replaces resultCost (the real price, kept in
       // totalCost below for diagnostics/UI/publication) or hour.price
-      // anywhere else. Ties under tolerance keep today's tie-break: the
-      // first combination found wins (strict "<"), same as before this
-      // change - see the price-tolerance design report for why a
-      // thermal-aware tie-break is deliberately out of scope here.
+      // anywhere else.
       const effectiveCost = getSelectedHoursEffectiveCost(
         sortedHours,
         selectedHeatingHourIds,
@@ -964,7 +994,13 @@ export function optimizeHeatingPlan({
 
       if (
         !bestResultForSelectionCount ||
-        effectiveCost < bestEffectiveCostForSelectionCount
+        effectiveCost < bestEffectiveCostForSelectionCount ||
+        (effectiveCost === bestEffectiveCostForSelectionCount &&
+          isLaterHeatingSchedule(
+            sortedHours,
+            selectedHeatingHourIds,
+            bestResultForSelectionCount.selectedHeatingHourIds,
+          ))
       ) {
         bestResultForSelectionCount = {
           ...result,
