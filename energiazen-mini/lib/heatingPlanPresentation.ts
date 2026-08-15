@@ -43,6 +43,12 @@ export type HeatingPlanPresentation = {
   // muuttuneet suunnitelman tallentamisen jalkeen).
   limitsSectionLabel: string;
   limitsSummary: string;
+  // Sama lahde kuin limitsSummaryn tavoite-/turvaraja-arvot: normaalitilassa
+  // tallennettu asetus, skenaariotilassa luonnoksen arvo - ei koskaan
+  // heating_plans-datasta laskettu. Null vain silloin kun limitsSummarykaan
+  // ei sisalla rajatietoa (buildStoredHeatingPlanPresentation ilman
+  // currentOptimizerPresentation-rikastusta).
+  priceToleranceSummary: string | null;
   reason: string;
   reasonKind: HeatingPlanReasonKind;
   selectedHours: {
@@ -76,6 +82,12 @@ function formatEstimatedCost(costEuros: number | null | undefined) {
   }
 
   return `n. ${formatFinnishCurrency(costEuros)} €`;
+}
+
+function formatPriceToleranceSummary(priceToleranceCents: number) {
+  return priceToleranceCents > 0
+    ? `Hintatoleranssi ${formatFinnishDecimal(priceToleranceCents)} c/kWh`
+    : "Hintatoleranssi pois käytöstä";
 }
 
 // "Alimmillaan"-lukeman pitaa kuvata lahiaikaista pohjaa - alinta
@@ -233,6 +245,7 @@ export function buildHeatingPlanPresentation({
   minimumShowersBeforeNextHeating = minimumShowers,
   minimumShowersTimeLabel = null,
   planValid,
+  priceToleranceCents,
   safetyShowerReserve,
   selectedHours,
   targetCheckShowersLeft,
@@ -257,6 +270,10 @@ export function buildHeatingPlanPresentation({
   minimumShowersBeforeNextHeating?: number;
   minimumShowersTimeLabel?: string | null;
   planValid: boolean;
+  // Sama asetuslahde kuin safetyShowerReserve/targetShowerReserve - kutsuja
+  // antaa kaytossa olevan (normaalitila) tai luonnoksen (skenaariotila)
+  // priceToleranceCentsin, ei koskaan heating_plans-datasta laskettua arvoa.
+  priceToleranceCents: number;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
   // Suihkumaara heti viimeisen valitun lammitystunnin jalkeen - tama on se
@@ -329,6 +346,7 @@ export function buildHeatingPlanPresentation({
         : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
     limitsSectionLabel: "Käytetyt rajat",
     limitsSummary: `Tavoite ${targetShowerReserve} suihkua · turvaraja ${safetyShowerReserve} suihkua`,
+    priceToleranceSummary: formatPriceToleranceSummary(priceToleranceCents),
     reason,
     reasonKind,
     selectedHours: selectedHours.map((hour) => {
@@ -385,6 +403,9 @@ export function buildStoredHeatingPlanPresentation({
     limitsSummary: currentOptimizerPresentation
       ? currentOptimizerPresentation.limitsSummary
       : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+    priceToleranceSummary: currentOptimizerPresentation
+      ? currentOptimizerPresentation.priceToleranceSummary
+      : null,
     reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
     selectedHours: selectedHours.map((hour) => {

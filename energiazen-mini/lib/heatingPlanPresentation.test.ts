@@ -33,6 +33,7 @@ const baseInput = {
   heatingNeedMode: "automatic" as const,
   minimumShowers: 2.3,
   planValid: true,
+  priceToleranceCents: 2,
   safetyShowerReserve: 2,
   selectedHours: [
     { label: "23–00", period: "Tänään" as const },
@@ -147,6 +148,11 @@ export function runHeatingPlanPresentationUnitTests() {
     "Käytetyt rajat",
     "ilman rikastusta rajaotsikko pysyy oletuksena",
   );
+  assertEqual(
+    stored.priceToleranceSummary,
+    null,
+    "ilman nykyista optimointiesitysta hintatoleranssia ei nayteta",
+  );
 
   // Todistaa etta stored-planin rikastus kayttaa nykyista paikallista
   // optimizer-presentationia (esim. activeOptimizerPresentation) VAIN
@@ -202,6 +208,11 @@ export function runHeatingPlanPresentationUnitTests() {
     "rikastetut rajat nimetaan neutraalisti nykyisiksi eika vaiteta niiden olevan tallennetun suunnitelman alkuperaiset rajat",
   );
   assertEqual(
+    enrichedStored.priceToleranceSummary,
+    currentOptimizerPresentation.priceToleranceSummary,
+    "hintatoleranssi rikastetaan nykyisesta optimizer-presentationista samalla tavalla kuin tavoite-/turvaraja",
+  );
+  assertEqual(
     enrichedStored.reason,
     stored.reason,
     "rikastus ei muuta tallennetun suunnitelman perustelua",
@@ -237,6 +248,27 @@ export function runHeatingPlanPresentationUnitTests() {
     standard.heatingSummary,
     "Lämmitystä 2 tuntia",
     "valittujen tuntien maara naytetaan luonnollisesti",
+  );
+  assertEqual(
+    standard.priceToleranceSummary,
+    "Hintatoleranssi 2,0 c/kWh",
+    "kaytossa oleva hintatoleranssi naytetaan suomalaisella desimaalipilkulla",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      priceToleranceCents: 0,
+    }).priceToleranceSummary,
+    "Hintatoleranssi pois käytöstä",
+    "nolla-hintatoleranssi naytetaan pois kaytosta -tekstina, ei 0,0 c/kWh",
+  );
+  assertEqual(
+    buildHeatingPlanPresentation({
+      ...baseInput,
+      priceToleranceCents: 0.5,
+    }).priceToleranceSummary,
+    "Hintatoleranssi 0,5 c/kWh",
+    "hintatoleranssin desimaali pyoristyy ja muotoillaan suomalaisittain",
   );
   assertEqual(
     buildHeatingPlanPresentation({

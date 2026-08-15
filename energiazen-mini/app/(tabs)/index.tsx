@@ -805,6 +805,7 @@ function buildOptimizerHeatingPlanPresentation({
       optimizationResult.minimumPredictedShowersLeft,
     minimumShowersTimeLabel,
     planValid: optimizationResult.valid,
+    priceToleranceCents: runSettings.priceToleranceCents,
     safetyShowerReserve: runSettings.safetyShowerReserve,
     selectedHours,
     targetCheckShowersLeft: optimizationResult.targetCheckShowersLeft,
@@ -3580,6 +3581,17 @@ export default function HomeScreen() {
                         </Text>
                       );
                     })()}
+                    {heatingPlanPresentation.priceToleranceSummary ? (
+                      <>
+                        <Text style={styles.heatingPlanLimitsText}>
+                          {heatingPlanPresentation.priceToleranceSummary}
+                        </Text>
+                        <Text style={styles.heatingPlanLimitsCaption}>
+                          Lähes saman hintaisista tunneista suositaan
+                          myöhempää turvallista lämmitysajankohtaa.
+                        </Text>
+                      </>
+                    ) : null}
                   </View>
                 ) : settings.heatingNeedMode === "fixed" ? (
                   <View style={styles.heatingPlanInfo}>
@@ -3867,6 +3879,14 @@ const styles = StyleSheet.create({
   },
   heatingPlanLimitValue: {
     fontWeight: "700",
+  },
+  heatingPlanLimitsCaption: {
+    color: "#7fa0c9",
+    fontSize: 11,
+    fontStyle: "italic",
+    fontWeight: "500",
+    lineHeight: 15,
+    marginTop: 1,
   },
   heatingPlanInfoReason: {
     color: "#9fc7ff",
