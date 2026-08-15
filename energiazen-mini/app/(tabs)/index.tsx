@@ -805,6 +805,7 @@ function buildOptimizerHeatingPlanPresentation({
       optimizationResult.minimumPredictedShowersLeft,
     minimumShowersTimeLabel,
     planValid: optimizationResult.valid,
+    priceToleranceCents: runSettings.priceToleranceCents,
     safetyShowerReserve: runSettings.safetyShowerReserve,
     selectedHours,
     targetCheckShowersLeft: optimizationResult.targetCheckShowersLeft,
@@ -3580,6 +3581,11 @@ export default function HomeScreen() {
                         </Text>
                       );
                     })()}
+                    {heatingPlanPresentation.priceToleranceSummary ? (
+                      <Text style={styles.heatingPlanLimitsText}>
+                        {heatingPlanPresentation.priceToleranceSummary}
+                      </Text>
+                    ) : null}
                   </View>
                 ) : settings.heatingNeedMode === "fixed" ? (
                   <View style={styles.heatingPlanInfo}>
