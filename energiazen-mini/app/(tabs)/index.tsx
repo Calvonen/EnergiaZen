@@ -1567,6 +1567,19 @@ export default function HomeScreen() {
       });
     });
 
+    // Backendin tallennettujen suunnittelutuntien kokonaismaara - kaytetaan
+    // alla fail-closed-tarkistukseen: ennuste saa nakya vain, jos JOKAINEN
+    // naista tunneista loytyy yksikasitteisesti optimizer-hour-ID:na. Jos
+    // yhtakin tuntia ei loydy (esim. se on jo poistunut optimoijan
+    // aikaikkunasta), vajaalla tuntijoukolla simuloitu ennuste olisi
+    // harhaanjohtava, joten koko ennuste jatetaan pois (forecast = null)
+    // eika naytata osittaista tulosta.
+    const storedPlannedHourCount = storedPlans.reduce(
+      (sum, plan) =>
+        sum + normalizeStoredHeatingPlanHours(plan.planned_hours).length,
+      0,
+    );
+
     const storedSelectedHeatingHourIds = storedPlans.flatMap((plan) => {
       const planDate = plan.plan_date;
 
@@ -1587,20 +1600,23 @@ export default function HomeScreen() {
       );
     });
 
-    const forecast = buildStoredHeatingPlanForecastFields({
-      currentBottomTemperature: bottomTemp,
-      currentTopTemperature: topTemp,
-      currentWeightedTemperature,
-      hourlyDrops: hourlyTemperatureDropProfile,
-      isCurrentlyHeating: isCurrentlyHeatingConfirmed,
-      optimizationResult: activeOptimizationRun.result,
-      optimizerHours: activeOptimizationRun.hours,
-      recoveryReadings: tankTemperatureHistory,
-      runSettings: activeOptimizationRun.appSettings,
-      storedSelectedHeatingHourIds,
-      todayPlanDate,
-      tomorrowPlanDate,
-    });
+    const forecast =
+      storedSelectedHeatingHourIds.length === storedPlannedHourCount
+        ? buildStoredHeatingPlanForecastFields({
+            currentBottomTemperature: bottomTemp,
+            currentTopTemperature: topTemp,
+            currentWeightedTemperature,
+            hourlyDrops: hourlyTemperatureDropProfile,
+            isCurrentlyHeating: isCurrentlyHeatingConfirmed,
+            optimizationResult: activeOptimizationRun.result,
+            optimizerHours: activeOptimizationRun.hours,
+            recoveryReadings: tankTemperatureHistory,
+            runSettings: activeOptimizationRun.appSettings,
+            storedSelectedHeatingHourIds,
+            todayPlanDate,
+            tomorrowPlanDate,
+          })
+        : null;
 
     return buildStoredHeatingPlanPresentation({
       currentOptimizerPresentation: activeOptimizerPresentation,
