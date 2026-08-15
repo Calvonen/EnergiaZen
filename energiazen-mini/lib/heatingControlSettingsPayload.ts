@@ -11,6 +11,7 @@ export type HeatingControlSettingsPayload = {
   id: 1;
   max_tank_temperature: number;
   min_tank_temperature: number;
+  price_tolerance_cents: number;
   safety_shower_reserve: number;
   target_shower_reserve: number;
   timezone: "Europe/Helsinki";
@@ -32,6 +33,7 @@ export function buildHeatingControlSettingsPayload(
     id: 1,
     max_tank_temperature: settings.maxTankTemperature,
     min_tank_temperature: settings.minTankTemperature,
+    price_tolerance_cents: settings.priceToleranceCents,
     safety_shower_reserve: settings.safetyShowerReserve,
     target_shower_reserve: settings.targetShowerReserve,
     timezone: "Europe/Helsinki",

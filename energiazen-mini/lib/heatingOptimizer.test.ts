@@ -805,6 +805,10 @@ export function runHeatingOptimizerUnitTests() {
       ["2026-07-23:04"],
       "oletusarvolla live-datan kaltainen reserve 2 huomioi yhteisen suihkuvarauskaavan",
     );
+    // priceToleranceCents on tassa oletusarvo 0 (ei aseteta lainkaan), joten
+    // isLaterHeatingSchedule-tie-break ei ole aktiivinen taalla - tolerance 0
+    // sailyttaa tasan alkuperaisen "ensin loydetty voittaa" -kayttaytymisen
+    // myos aidosti tasahintaisten (todellinen hinta 2) tuntien kohdalla.
     assertEqual(
       reserve3.selectedHeatingHourIds,
       ["2026-07-22:17", "2026-07-23:04"],
@@ -1827,6 +1831,315 @@ export function runHeatingOptimizerUnitTests() {
       result.forecast[0].temperatureAfter >= 75,
       true,
       "lammitetyn tunnin lampotila ei laske alle referenssin ylapuolella olleen lahtoarvon",
+    );
+  }
+
+  // price tolerance / hintojen tasoitus: effective_price = price <=
+  // minimumPrice + tolerance ? minimumPrice : price, kaytetaan VAIN
+  // optimizeHeatingPlan:n optionalHours-kombinaatioiden keskinaisessa
+  // hintavertailussa (ks. heatingOptimizer.ts:n getEffectivePrice). Todelliset
+  // hinnat (hour.price, diagnostics.selectedPlanCost) eivat koskaan muutu.
+  // effectiveCost-tasatilanteen ratkaisee isLaterHeatingSchedule: MYOHEMPI
+  // validi suunnitelma voittaa (ks. heatingOptimizer.ts:n kommentti) - vain
+  // simulateHeatingPlan:n jo hyvaksymien validien tulosten kesken, koskaan
+  // ei ohita safety-/reserve-/fill-ratio-ehtoja.
+  {
+    // hourEarly on kronologisesti ENSIMMAINEN mutta nimellisesti kalliimpi;
+    // hourCheap on myohempi ja ikkunan todellinen halvin tunti. Jarjestys on
+    // tarkoituksella tallainen: jos toleranssi kaantaa voittajan hourEarly:ksi,
+    // se todistaa etta hourEarly:n hinta todella sulautui toleranssiryhmaan -
+    // pelkka ajallinen jarjestys ei sita selittaisi.
+    // Nolla-pudotusprofiili (hourlyDrops(0)) + korkea lammitysteho tekee
+    // molemmista kandidaattitunneista (12 ja 13) yhta turvallisia riippumatta
+    // KUMPI niista valitaan lammitykseen - naiden testien voittaja maaraytyy
+    // siis puhtaasti hinnasta (real tai effective) ja tie-breakista, ei
+    // fysikaalisesta validiteetista. Tama eroaa tarkoituksella muualla
+    // tiedostossa olevista "halvin turvallinen tunti" -testeista, joissa
+    // validiteetti itsessaan jo ratkaisee voittajan riippumatta hinnasta.
+    const runArgs = {
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0),
+    };
+    const hourAtBoundary = optimizationHour("2026-07-22", 12, 4.5);
+    const hourJustOutsideBoundary = optimizationHour("2026-07-22", 12, 4.51);
+    const hourCheap = optimizationHour("2026-07-22", 13, 3.5);
+
+    // Testi 1: tolerance 0 (eksplisiittinen) ja puuttuva kentta kayttaytyvat
+    // tasan samoin kuin ennen tata muutosta - todellinen halvin tunti voittaa
+    // (ei tasatilannetta, joten tie-break ei koskaan laukea).
+    const zeroTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hourAtBoundary, hourCheap],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 0,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+    const omittedTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hourAtBoundary, hourCheap],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      zeroTolerance.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "tolerance 0: todellinen halvin tunti (3,50) voittaa",
+    );
+    assertEqual(
+      omittedTolerance.selectedHeatingHourIds,
+      zeroTolerance.selectedHeatingHourIds,
+      "puuttuva priceToleranceCents-kentta kayttaytyy tasan kuin tolerance 0 - nykyinen valinta sailyy ennallaan",
+    );
+
+    // Testi 2: alin hinta 3,50 ja tolerance 1,0 -> 4,50 kuuluu samaan
+    // ryhmaan (3,50 + 1,0 = 4,50, raja on mukaan lukeva "<="). Molemmat
+    // suunnitelmat ovat valideja, joten effective-price-tasatilanteessa
+    // MYOHEMPI tunti (13) voittaa - ei enaa se, joka sattuu loytymaan
+    // ensin kombinaatioiden enumeroinnissa.
+    const toleranceOne = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hourAtBoundary, hourCheap],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      toleranceOne.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "4,50 on 3,50 + 1,0 -toleranssin sisalla (tasatilanne) - myohempi validi tunti (13) voittaa",
+    );
+    assertClose(
+      toleranceOne.diagnostics.selectedPlanCost,
+      3.5,
+      "valitun tunnin todellinen (ei tasoitettu) hinta raportoidaan diagnostiikassa",
+    );
+
+    // Testi 3: 4,51 EI kuulu samaan ryhmaan (3,50 + 1,0 = 4,50 < 4,51) ->
+    // ei tasatilannetta, joten todellinen halvin tunti voittaa suoraan
+    // (tama sattuu olemaan sama tunti (13) kuin testissa 2, mutta nyt
+    // syyna on puhtaasti sen halvempi hinta, ei tie-break).
+    const toleranceOneExcluded = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hourJustOutsideBoundary, hourCheap],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      toleranceOneExcluded.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "4,51 ylittaa 3,50 + 1,0 -toleranssin, joten se ei tasoitu eika voita todellista halvinta tuntia",
+    );
+  }
+
+  // Testi 3b: kaksi AIDOSTI samanhintaista (ei toleranssin tasoittamaa)
+  // validia tuntia. tolerance 0:n pitaa sailyttaa tasan vanha "ensin
+  // loydetty voittaa" -kaytanto myos taman kaltaisissa exact-price-tie
+  // -tilanteissa - priceToleranceCents === 0 tarkoittaa ominaisuus KOKONAAN
+  // pois paalta, ei vain "ei tasoitusta mutta silti eri tie-break".
+  {
+    const hourEqualA = optimizationHour("2026-07-22", 12, 3.0);
+    const hourEqualB = optimizationHour("2026-07-22", 13, 3.0);
+    const runArgs = {
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [hourEqualA, hourEqualB],
+    };
+
+    const exactTieNoTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 0,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+    const exactTieWithTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      exactTieNoTolerance.selectedHeatingHourIds,
+      ["2026-07-22:12"],
+      "tolerance 0: aidosti samanhintaisten tuntien tasatilanteessa vanha/ensimmainen loydetty tunti (12) voittaa - later-schedule-tie-break ei ole aktiivinen",
+    );
+    assertEqual(
+      exactTieWithTolerance.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "tolerance > 0: samat aidosti samanhintaiset tunnit, mutta nyt myohempi tunti (13) voittaa tasatilanteessa",
+    );
+    assertClose(
+      exactTieWithTolerance.diagnostics.selectedPlanCost,
+      3.0,
+      "todellinen hinta pysyy ennallaan tie-breakista riippumatta",
+    );
+  }
+
+  // Testi 4: myohempi tunti EI voita, jos sen oma suunnitelma on invalidi -
+  // aikaisempi turvallinen tunti sailyy, vaikka hinnat olisivat tasan
+  // toleranssin sisalla. hourLate:n oma suuri pudotus (40) tapahtuu AINA
+  // ENNEN mahdollista lammitysta samalla tunnilla (ks. simulateHeatingPlan:n
+  // appliedDrop-jarjestys), joten pelkka hourLate:n lammitys ei ehdi
+  // suojata sita omalta pudotukseltaan - vain hourEarly:n aikaisempi lammitys
+  // antaa riittavan lampopuskurin. Talla testataan ettei
+  // isLaterHeatingSchedule koskaan paase ohittamaan simulateHeatingPlan:n
+  // omaa validiteettitarkistusta - invalidi kombinaatio ei koskaan paady
+  // edes vertailtavaksi tie-breakissa.
+  {
+    const hourEarly = optimizationHour("2026-07-22", 10, 4.0);
+    const hourLate = optimizationHour("2026-07-22", 14, 3.0);
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0, { 14: 40 }),
+      hours: [hourEarly, hourLate],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 0,
+      }),
+    });
+
+    assertEqual(
+      result.valid,
+      true,
+      "suunnitelma on validi - aikaisempi turvallinen tunti loytyy",
+    );
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:10"],
+      "myohempi tunti (14) olisi effective-price-tasan mutta sen oma suunnitelma on invalidi, joten aikaisempi (10) sailyy voittajana",
+    );
+  }
+
+  // Testi 5: kahden lammitystunnin kombinaatioissa myohempi validi schedule
+  // voittaa saman effectiveCostin sisalla. Kolme tuntia (10, 12, 14) tasoittuvat
+  // kaikki samaksi effective-hinnaksi (1,0 + 5,0 toleranssi kattaa 2,0 ja 6,0),
+  // joten kaikki kolme 2-tunnin yhdistelmaa {10,12}, {10,14}, {12,14} ovat
+  // effectiveCostiltaan tasan - myohaisin pari {12,14} voittaa.
+  {
+    const hourA = optimizationHour("2026-07-22", 10, 1.0);
+    const hourB = optimizationHour("2026-07-22", 12, 2.0);
+    const hourC = optimizationHour("2026-07-22", 14, 6.0);
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [hourA, hourB, hourC],
+      settings: defaultSettings({
+        maxHeatingHours: 3,
+        priceToleranceCents: 5,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 5,
+      }),
+    });
+
+    assertEqual(
+      result.diagnostics.firstValidSelectionCount,
+      2,
+      "yksi tunti ei riita tavoitteeseen 5, kaksi riittaa (katossa 70 astetta)",
+    );
+    assertEqual(
+      result.selectedHeatingHourIds,
+      ["2026-07-22:12", "2026-07-22:14"],
+      "kaikki kolme 2-tunnin yhdistelmaa ovat effectiveCostiltaan tasan - myohaisin pari (12,14) voittaa",
+    );
+    assertClose(
+      result.diagnostics.selectedPlanCost,
+      8,
+      "todellinen hinta (2,0 + 6,0) raportoidaan, ei tasoitettu effective-hinta (1,0 + 1,0)",
+    );
+  }
+
+  // Testi 6: lukittu/kaynnissa oleva nykyinen tunti ei muutu toleranssin
+  // takia. lockedHours/lockedHourIds rakennetaan optimizeHeatingPlan:ssa
+  // ehdoitta ennen getMinimumPrice/getSelectedHoursEffectiveCost-laskentaa,
+  // joten toleranssi ei koskaan paase kasiksi lukittuun tuntiin.
+  {
+    const currentHour = {
+      ...optimizationHour("2026-07-22", 20, 6),
+      isCurrentHour: true,
+    };
+    const optionalHour = optimizationHour("2026-07-22", 21, 1);
+    const runArgs = {
+      ...stratifiedTemperatureInput(45.12),
+      heatingGainPerHour: 6,
+      hourlyDrops: createHourlyDrops(2),
+      hours: [currentHour, optionalHour],
+      isCurrentlyHeating: true,
+    };
+
+    const noTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 0,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 3,
+      }),
+    });
+    const wideTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 5,
+        safetyShowerReserve: 2,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      noTolerance.selectedHeatingHourIds.includes(currentHour.id),
+      true,
+      "lukittu kaynnissa oleva tunti on mukana ilman toleranssia",
+    );
+    assertEqual(
+      wideTolerance.selectedHeatingHourIds.includes(currentHour.id),
+      true,
+      "lukittu kaynnissa oleva tunti pysyy mukana myos leveaalla hintatoleranssilla",
+    );
+    assertEqual(
+      wideTolerance.selectedHeatingHourIds,
+      noTolerance.selectedHeatingHourIds,
+      "hintatoleranssi ei muuta lukitun nykyisen tunnin kasittelya tassa asetelmassa",
+    );
+    assertEqual(
+      wideTolerance.diagnostics.selectedPlanCost,
+      noTolerance.diagnostics.selectedPlanCost,
+      "lukitun tunnin todellinen hinta pysyy samana toleranssista riippumatta",
     );
   }
 }

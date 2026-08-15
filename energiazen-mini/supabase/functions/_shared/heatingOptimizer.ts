@@ -26,6 +26,10 @@ export type HeatingOptimizationSettings = {
   fullTankShowers: number;
   maxHeatingHours: number;
   maxTankTemperature: number;
+  // Optional so every existing call site that builds this object directly
+  // (bypassing createHeatingOptimizationSettings) keeps compiling unchanged.
+  // optimizeHeatingPlan treats a missing value as 0 (today's behaviour).
+  priceToleranceCents?: number;
   safetyShowerReserve: number;
   targetShowerReserve: number;
 };
@@ -36,6 +40,8 @@ export type HeatingOptimizationSettingsSource = {
   automaticMaxHeatingHours: number;
   maxTankTemperature?: number;
   minTankTemperature: number;
+  // See HeatingOptimizationSettings.priceToleranceCents - same "missing = 0" rule.
+  priceToleranceCents?: number;
   safetyShowerReserve: number;
   targetShowerReserve: number;
 };
@@ -266,6 +272,83 @@ function getSelectedHoursCost(
   );
 }
 
+function getMinimumPrice(hours: HeatingOptimizationHour[]) {
+  return hours.reduce(
+    (minimum, hour) => Math.min(minimum, hour.price),
+    Number.POSITIVE_INFINITY,
+  );
+}
+
+// price tolerance / hintojen tasoitus: hours priced within `priceToleranceCents`
+// of the window's cheapest hour are treated as equally cheap for the purpose
+// of RANKING optionalHours combinations against each other. This never
+// changes hour.price itself (real electricity_prices values, and everything
+// reported to the UI/DB, stay untouched) - it only changes which combination
+// optimizeHeatingPlan considers "the cheapest" when several are tied under
+// tolerance.
+function getEffectivePrice(
+  price: number,
+  minimumPrice: number,
+  priceToleranceCents: number,
+) {
+  return price <= minimumPrice + priceToleranceCents ? minimumPrice : price;
+}
+
+function getSelectedHoursEffectiveCost(
+  hours: HeatingOptimizationHour[],
+  selectedHeatingHourIds: string[],
+  minimumPrice: number,
+  priceToleranceCents: number,
+) {
+  const selectedIds = new Set(selectedHeatingHourIds);
+
+  return hours.reduce(
+    (sum, hour) =>
+      selectedIds.has(hour.id)
+        ? sum + getEffectivePrice(hour.price, minimumPrice, priceToleranceCents)
+        : sum,
+    0,
+  );
+}
+
+// Tie-break for combinations that land on the same effectiveCost: prefer the
+// LATER schedule (deferring heating, less unnecessary early-heat loss)
+// instead of whichever combination the enumeration happens to find first.
+// Only called by the caller below when priceToleranceCents > 0, so
+// priceToleranceCents === 0 (the default) keeps the exact pre-existing
+// "first found wins" behaviour for ties, including genuine exact-price ties
+// unrelated to price tolerance - 0 must mean the feature is fully off, not
+// just "no band flattening but still a different tie rule". Only ever
+// compares two already-VALID results (simulateHeatingPlan's own
+// safety/reserve/fill-ratio checks already ran and passed for both), so this
+// never overrides those checks - an unsafe later hour is simply never a
+// candidate here. Deliberately NOT based on minimumPredictedShowersLeft or
+// any other thermal margin, which would bias toward the earlier hour and
+// defeat the point of this tie-break.
+function isLaterHeatingSchedule(
+  hours: HeatingOptimizationHour[],
+  candidateIds: string[],
+  currentBestIds: string[],
+) {
+  const startTimeById = new Map(
+    hours.map((hour) => [hour.id, hour.date.getTime()]),
+  );
+  const sortedTimes = (ids: string[]) =>
+    ids.map((id) => startTimeById.get(id) ?? 0).sort((first, second) => first - second);
+  const candidateTimes = sortedTimes(candidateIds);
+  const currentBestTimes = sortedTimes(currentBestIds);
+
+  for (let index = candidateTimes.length - 1; index >= 0; index -= 1) {
+    if (candidateTimes[index] !== currentBestTimes[index]) {
+      return candidateTimes[index] > currentBestTimes[index];
+    }
+  }
+
+  // Practically the same schedule (identical start times) - keep today's
+  // deterministic behaviour (first found wins) rather than replacing it.
+  return false;
+}
+
 function createCombinations(
   itemCount: number,
   selectionCount: number,
@@ -389,6 +472,7 @@ export function createHeatingOptimizationSettings(
     maxHeatingHours: settings.automaticMaxHeatingHours,
     maxTankTemperature:
       settings.maxTankTemperature ?? settings.fullTankAverageTemperature,
+    priceToleranceCents: settings.priceToleranceCents ?? 0,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
   };
@@ -838,6 +922,11 @@ export function optimizeHeatingPlan({
   let bestInvalidResult: HeatingSimulationResult | null = null;
   let firstValidSelectionCount: number | null = null;
   const validCombinationCountsBySelectionCount: Record<number, number> = {};
+  // See getEffectivePrice's comment: this is the "tarkasteluikkunan alin
+  // hinta" the price tolerance band is measured from, computed once over the
+  // whole candidate window (same hours the optimizer already considers).
+  const minimumPrice = getMinimumPrice(sortedHours);
+  const priceToleranceCents = settings.priceToleranceCents ?? 0;
 
   for (
     let selectionCount = 0;
@@ -845,6 +934,7 @@ export function optimizeHeatingPlan({
     selectionCount += 1
   ) {
     let bestResultForSelectionCount: HeatingSimulationResult | null = null;
+    let bestEffectiveCostForSelectionCount = Number.POSITIVE_INFINITY;
     let validCombinationCount = 0;
 
     createCombinations(optionalHours.length, selectionCount, (selectedIndexes) => {
@@ -896,16 +986,33 @@ export function optimizeHeatingPlan({
       }
 
       const resultCost = getSelectedHoursCost(sortedHours, selectedHeatingHourIds);
+      // Ranking only - never replaces resultCost (the real price, kept in
+      // totalCost below for diagnostics/UI/publication) or hour.price
+      // anywhere else.
+      const effectiveCost = getSelectedHoursEffectiveCost(
+        sortedHours,
+        selectedHeatingHourIds,
+        minimumPrice,
+        priceToleranceCents,
+      );
       validCombinationCount += 1;
 
       if (
         !bestResultForSelectionCount ||
-        resultCost < bestResultForSelectionCount.totalCost
+        effectiveCost < bestEffectiveCostForSelectionCount ||
+        (priceToleranceCents > 0 &&
+          effectiveCost === bestEffectiveCostForSelectionCount &&
+          isLaterHeatingSchedule(
+            sortedHours,
+            selectedHeatingHourIds,
+            bestResultForSelectionCount.selectedHeatingHourIds,
+          ))
       ) {
         bestResultForSelectionCount = {
           ...result,
           totalCost: resultCost,
         };
+        bestEffectiveCostForSelectionCount = effectiveCost;
       }
     });
 

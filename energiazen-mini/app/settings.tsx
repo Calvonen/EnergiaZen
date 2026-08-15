@@ -172,6 +172,10 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     min: 20,
     unit: "°C",
   },
+  priceToleranceCents: {
+    options: [0, 0.5, 1, 2],
+    unit: "snt/kWh",
+  },
 };
 
 const heatingNeedModeOptions: {
@@ -377,6 +381,14 @@ export default function SettingsScreen() {
             key: "automaticMaxHeatingHours",
             label: "Lämmitystuntien enimmäismäärä",
             value: `${settings.automaticMaxHeatingHours} h`,
+          },
+          {
+            accent: "#ff7bd1",
+            description:
+              "Tämän toleranssin sisällä olevat hinnat käsitellään optimoinnissa samanarvoisina, jotta pieni hintaero ei yksin ratkaise lämmitystunnin valintaa. Näytetyt ja tallennetut hinnat pysyvät ennallaan.",
+            key: "priceToleranceCents",
+            label: "Hintatoleranssi",
+            value: `${settings.priceToleranceCents} snt/kWh`,
           },
         ],
       } as SettingsSection]
