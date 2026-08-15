@@ -25,7 +25,7 @@ import { getVisibleHeatLossTrendSegment } from "@/lib/energyModelV2/heatLossChar
 import type { DiagnosticHeatLossModel } from "@/lib/energyModelV2/heatLossModel";
 import { fetchWaterDrawLabels, getWaterDrawEnergyQualityReasonTitle, getWaterDrawEnergyQualityWarning, getWaterDrawLabelTitle, joinWaterDrawLabels, waterDrawLabelOptions, type WaterDrawLabel } from "@/lib/energyModelV2/waterDrawLabels";
 import { loadDashboardResources } from "@/lib/energyModelV2/dashboardResources";
-import { validateGroundTruth } from "@/lib/energyModelV2/groundTruthValidation";
+import { analyzeLabeledEvents } from "@/lib/energyModelV2/labeledEventValidation";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fi-FI", {
   dateStyle: "short",
@@ -252,7 +252,7 @@ export default function EnergyModelDashboardScreen() {
     : null;
   const v2State = data?.v2TankState;
   const labeledWaterDrawEvents = joinWaterDrawLabels(data?.waterDrawEvents ?? [], labels);
-  const groundTruthValidation = validateGroundTruth(data?.waterDrawEvents ?? [], labels);
+  const labeledEventValidation = analyzeLabeledEvents(labels);
   const v2TimestampLabel = v2State?.timestamp
     ? dateTimeFormatter.format(new Date(v2State.timestamp))
     : NOT_AVAILABLE;
@@ -384,51 +384,60 @@ export default function EnergyModelDashboardScreen() {
                 )}
               </View>
             </DashboardCard>
-            <DashboardCard title="🧪 Ground Truth Validation" metrics={[
-              { label: "Merkintöjä", value: String(groundTruthValidation.summary.labelCount) },
-              { label: "Matchattu", value: `${groundTruthValidation.summary.matchedCount} / ${groundTruthValidation.summary.labelCount}${
-                groundTruthValidation.summary.matchRatePercent !== null ? ` (${groundTruthValidation.summary.matchRatePercent.toFixed(0)} %)` : ""
-              }` },
-              { label: "Ground truth ilman V2-havaintoa", value: String(groundTruthValidation.summary.unmatchedGroundTruthCount), tone: groundTruthValidation.summary.unmatchedGroundTruthCount ? "warning" : "good" },
-              { label: "V2-havainto ilman ground truthia", value: String(groundTruthValidation.summary.unmatchedEventCount), tone: groundTruthValidation.summary.unmatchedEventCount ? "warning" : "good" },
-              { label: "Mediaani start-virhe", value: formatNumber(groundTruthValidation.summary.medianAbsoluteStartErrorMinutes, 1, "min") },
-              { label: "Mediaani end-virhe", value: formatNumber(groundTruthValidation.summary.medianAbsoluteEndErrorMinutes, 1, "min") },
+            <DashboardCard title="🧪 Labeled Event Validation" metrics={[
+              { label: "Merkintöjä yhteensä", value: String(labeledEventValidation.entries.length) },
             ]}>
               <View style={styles.observationSection}>
-                <Text style={styles.diagnosticsSubtitle}>🏷️ Label-kohtaiset osumat</Text>
+                <Text style={styles.diagnosticsSubtitle}>🏷️ Label-kohtainen diagnostiikka</Text>
                 {waterDrawLabelOptions.map(({ label: kind, title }) => {
-                  const counts = groundTruthValidation.summary.countsByLabel[kind];
-                  if (!counts.total) return null;
+                  const aggregate = labeledEventValidation.aggregatesByLabel[kind];
+                  if (!aggregate.count) return null;
+                  const detectionSummary = (Object.entries(aggregate.detectionKindCounts) as [string, number][])
+                    .filter(([, count]) => count > 0)
+                    .map(([detectionKind, count]) => `${detectionKind} ${count}`)
+                    .join(", ") || NOT_AVAILABLE;
                   return (
-                    <View key={kind} style={styles.energyBandRow}>
-                      <Text style={styles.energyBandLabel}>{title}</Text>
-                      <Text style={styles.energyBandValue}>{counts.matched} / {counts.total}</Text>
+                    <View key={kind} style={styles.observationCard}>
+                      <Text style={styles.observationTime}>{title}</Text>
+                      {[
+                        ["Tapahtumia", String(aggregate.count)],
+                        ["Mediaani nettoenergia", formatNumber(aggregate.medianNetWaterDrawEnergyKwh, 2, "kWh")],
+                        ["Keskiarvo nettoenergia", formatNumber(aggregate.averageNetWaterDrawEnergyKwh, 2, "kWh")],
+                        ["Min / max nettoenergia", aggregate.minimumNetWaterDrawEnergyKwh !== null && aggregate.maximumNetWaterDrawEnergyKwh !== null
+                          ? `${aggregate.minimumNetWaterDrawEnergyKwh.toFixed(2)} / ${aggregate.maximumNetWaterDrawEnergyKwh.toFixed(2)} kWh`
+                          : NOT_AVAILABLE],
+                        ["Mediaani kesto", aggregate.medianDurationMinutes !== null ? formatDuration(aggregate.medianDurationMinutes) : NOT_AVAILABLE],
+                        ["Luotettavia / yhteensä", `${aggregate.reliableCount} / ${aggregate.count}`],
+                        ["Havaintotyypit", detectionSummary],
+                      ].map(([metricLabel, value]) => (
+                        <View key={metricLabel} style={styles.observationMetricRow}>
+                          <Text style={styles.observationMetricLabel}>{metricLabel}</Text>
+                          <Text style={styles.observationMetricValue}>{value}</Text>
+                        </View>
+                      ))}
                     </View>
                   );
                 })}
-                {groundTruthValidation.summary.labelCount === 0 ? (
+                {!labeledEventValidation.entries.length ? (
                   <Text style={styles.noRejections}>Ei ground truth -merkintöjä</Text>
                 ) : null}
               </View>
               <View style={styles.observationSection}>
-                <Text style={styles.diagnosticsSubtitle}>🧪 Viimeisimmät ground truth -tapahtumat</Text>
-                {groundTruthValidation.entries.length ? (
-                  groundTruthValidation.entries.slice(-10).reverse().map((entry) => {
+                <Text style={styles.diagnosticsSubtitle}>🧪 Viimeisimmät merkityt tapahtumat</Text>
+                {labeledEventValidation.entries.length ? (
+                  labeledEventValidation.entries.slice(-10).reverse().map((entry) => {
                     const warning = getWaterDrawEnergyQualityWarning(entry);
                     return (
-                      <View key={`${entry.groundTruthStart}-${entry.groundTruthEnd}`} style={styles.observationCard}>
+                      <View key={`${entry.startedAt}-${entry.endedAt}`} style={styles.observationCard}>
                         <Text style={styles.observationTime}>
-                          {entry.matched ? "✅" : "❌"} {dateTimeFormatter.format(new Date(entry.groundTruthStart))} – {dateTimeFormatter.format(new Date(entry.groundTruthEnd))}
+                          🏷️ {dateTimeFormatter.format(new Date(entry.startedAt))} – {dateTimeFormatter.format(new Date(entry.endedAt))}
                         </Text>
                         {[
                           ["Label", getWaterDrawLabelTitle(entry.label)],
-                          ["Osuma", entry.matched ? "✅ Match" : "❌ Ei havaintoa"],
-                          ...(entry.matchedEvent ? [
-                            ["V2:n aika", `${dateTimeFormatter.format(new Date(entry.matchedEvent.startedAt))} – ${dateTimeFormatter.format(new Date(entry.matchedEvent.endedAt))}`],
-                            ["Start-virhe", formatNumber(entry.startTimeErrorMinutes, 1, "min")],
-                            ["End-virhe", formatNumber(entry.endTimeErrorMinutes, 1, "min")],
-                            ["Nettoenergia", formatNumber(entry.netWaterDrawEnergyKwh, 2, "kWh")],
-                          ] : []),
+                          ["Kesto", entry.durationMinutes !== null ? formatDuration(entry.durationMinutes) : NOT_AVAILABLE],
+                          ["Nettoenergia", formatNumber(entry.netWaterDrawEnergyKwh, 2, "kWh")],
+                          ["Havainto", entry.detectionKinds?.length ? entry.detectionKinds.join(" / ") : NOT_AVAILABLE],
+                          ["Energia-arvio", entry.energyReliable === null ? NOT_AVAILABLE : entry.energyReliable ? "luotettava" : "epäluotettava"],
                         ].map(([metricLabel, value]) => (
                           <View key={metricLabel} style={styles.observationMetricRow}>
                             <Text style={styles.observationMetricLabel}>{metricLabel}</Text>
