@@ -1567,38 +1567,60 @@ export default function HomeScreen() {
       });
     });
 
-    // Backendin tallennettujen suunnittelutuntien kokonaismaara - kaytetaan
-    // alla fail-closed-tarkistukseen: ennuste saa nakya vain, jos JOKAINEN
-    // naista tunneista loytyy yksikasitteisesti optimizer-hour-ID:na. Jos
-    // yhtakin tuntia ei loydy (esim. se on jo poistunut optimoijan
-    // aikaikkunasta), vajaalla tuntijoukolla simuloitu ennuste olisi
-    // harhaanjohtava, joten koko ennuste jatetaan pois (forecast = null)
-    // eika naytata osittaista tulosta.
-    const storedPlannedHourCount = storedPlans.reduce(
-      (sum, plan) =>
-        sum + normalizeStoredHeatingPlanHours(plan.planned_hours).length,
-      0,
-    );
-
-    const storedSelectedHeatingHourIds = storedPlans.flatMap((plan) => {
+    // Vain forecastin AIKAIKKUNAAN (activeOptimizationRun.hours - sama raja
+    // kuin optimizerHours-useMemo kayttaa) osuvat backend-tunnit ovat
+    // relevantteja ennusteen mapping/count-tarkistukselle. Jo paattyneet
+    // tamanpaivaiset backend-tunnit rajataan pois: ennuste alkaa nykyisesta
+    // tankkitilasta, joten niita ei simuloida uudelleen eika niiden
+    // puuttuminen (koska ne eivat enaa kuulu optimoijan aikaikkunaan) saa
+    // fail-closedata koko ennustetta. Huomisen tunnit ovat aina relevantteja.
+    // Jos hintatietoa tunnin paattymisajalle ei loydy, tuntia EI voida
+    // todeta jo paattyneeksi, joten se pidetaan relevanttina (fail-closed).
+    const relevantStoredPlanHours = storedPlans.flatMap((plan) => {
       const planDate = plan.plan_date;
 
       if (!planDate) {
         return [];
       }
 
-      return normalizeStoredHeatingPlanHours(plan.planned_hours).flatMap(
-        (hour) => {
-          const optimizerHour = activeOptimizationRun.hours.find(
+      return normalizeStoredHeatingPlanHours(plan.planned_hours)
+        .filter((hour) => {
+          if (planDate !== todayPlanDate) {
+            return true;
+          }
+
+          const priceHour = hourlyPrices.find(
             (item) =>
               getFinnishDateKey(item.startDate) === planDate &&
               getHelsinkiHourNumber(item.date) === hour,
           );
 
-          return optimizerHour ? [optimizerHour.id] : [];
-        },
-      );
+          return (
+            !priceHour ||
+            priceHour.endDate.getTime() > currentHourStart.getTime()
+          );
+        })
+        .map((hour) => ({ hour, planDate }));
     });
+
+    // Ennuste saa nakya vain, jos JOKAINEN relevantti backend-tunti loytyy
+    // yksikasitteisesti optimizer-hour-ID:na. Jos yhtakin niista ei loydy,
+    // vajaalla tuntijoukolla simuloitu ennuste olisi harhaanjohtava, joten
+    // koko ennuste jatetaan pois (forecast = null) eika naytata osittaista
+    // tulosta.
+    const storedPlannedHourCount = relevantStoredPlanHours.length;
+
+    const storedSelectedHeatingHourIds = relevantStoredPlanHours.flatMap(
+      ({ hour, planDate }) => {
+        const optimizerHour = activeOptimizationRun.hours.find(
+          (item) =>
+            getFinnishDateKey(item.startDate) === planDate &&
+            getHelsinkiHourNumber(item.date) === hour,
+        );
+
+        return optimizerHour ? [optimizerHour.id] : [];
+      },
+    );
 
     const forecast =
       storedSelectedHeatingHourIds.length === storedPlannedHourCount
@@ -1627,6 +1649,7 @@ export default function HomeScreen() {
     activeOptimizationRun,
     activeOptimizerPresentation,
     bottomTemp,
+    currentHourStart,
     currentWeightedTemperature,
     hourlyPrices,
     hourlyTemperatureDropProfile,
