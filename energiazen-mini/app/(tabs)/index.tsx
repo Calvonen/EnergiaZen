@@ -3582,15 +3582,9 @@ export default function HomeScreen() {
                       );
                     })()}
                     {heatingPlanPresentation.priceToleranceSummary ? (
-                      <>
-                        <Text style={styles.heatingPlanLimitsText}>
-                          {heatingPlanPresentation.priceToleranceSummary}
-                        </Text>
-                        <Text style={styles.heatingPlanLimitsCaption}>
-                          Lähes saman hintaisista tunneista suositaan
-                          myöhempää turvallista lämmitysajankohtaa.
-                        </Text>
-                      </>
+                      <Text style={styles.heatingPlanLimitsText}>
+                        {heatingPlanPresentation.priceToleranceSummary}
+                      </Text>
                     ) : null}
                   </View>
                 ) : settings.heatingNeedMode === "fixed" ? (
@@ -3879,14 +3873,6 @@ const styles = StyleSheet.create({
   },
   heatingPlanLimitValue: {
     fontWeight: "700",
-  },
-  heatingPlanLimitsCaption: {
-    color: "#7fa0c9",
-    fontSize: 11,
-    fontStyle: "italic",
-    fontWeight: "500",
-    lineHeight: 15,
-    marginTop: 1,
   },
   heatingPlanInfoReason: {
     color: "#9fc7ff",
