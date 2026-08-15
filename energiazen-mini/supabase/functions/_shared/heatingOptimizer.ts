@@ -314,7 +314,12 @@ function getSelectedHoursEffectiveCost(
 // Tie-break for combinations that land on the same effectiveCost: prefer the
 // LATER schedule (deferring heating, less unnecessary early-heat loss)
 // instead of whichever combination the enumeration happens to find first.
-// Only ever compares two already-VALID results (simulateHeatingPlan's own
+// Only called by the caller below when priceToleranceCents > 0, so
+// priceToleranceCents === 0 (the default) keeps the exact pre-existing
+// "first found wins" behaviour for ties, including genuine exact-price ties
+// unrelated to price tolerance - 0 must mean the feature is fully off, not
+// just "no band flattening but still a different tie rule". Only ever
+// compares two already-VALID results (simulateHeatingPlan's own
 // safety/reserve/fill-ratio checks already ran and passed for both), so this
 // never overrides those checks - an unsafe later hour is simply never a
 // candidate here. Deliberately NOT based on minimumPredictedShowersLeft or
@@ -995,7 +1000,8 @@ export function optimizeHeatingPlan({
       if (
         !bestResultForSelectionCount ||
         effectiveCost < bestEffectiveCostForSelectionCount ||
-        (effectiveCost === bestEffectiveCostForSelectionCount &&
+        (priceToleranceCents > 0 &&
+          effectiveCost === bestEffectiveCostForSelectionCount &&
           isLaterHeatingSchedule(
             sortedHours,
             selectedHeatingHourIds,

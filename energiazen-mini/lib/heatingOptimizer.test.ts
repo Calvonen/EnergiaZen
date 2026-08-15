@@ -805,17 +805,14 @@ export function runHeatingOptimizerUnitTests() {
       ["2026-07-23:04"],
       "oletusarvolla live-datan kaltainen reserve 2 huomioi yhteisen suihkuvarauskaavan",
     );
-    // Monella liveLikeHours-tunnilla on sama todellinen hinta (2), joten
-    // useampi 2 tunnin yhdistelma on effectiveCostiltaan tasan jo pelkalla
-    // todellisella hinnalla (priceToleranceCents on tassa 0 - kyse ei ole
-    // toleranssin aiheuttamasta tasoituksesta). isLaterHeatingSchedule
-    // ratkaisee tallaiset tasatilanteet nyt aina MYOHEMMAN parin hyvaksi -
-    // "2026-07-22:17" vaihtui "2026-07-23:01":ksi, koska se on myohempi
-    // validi pari samalla effectiveCostilla.
+    // priceToleranceCents on tassa oletusarvo 0 (ei aseteta lainkaan), joten
+    // isLaterHeatingSchedule-tie-break ei ole aktiivinen taalla - tolerance 0
+    // sailyttaa tasan alkuperaisen "ensin loydetty voittaa" -kayttaytymisen
+    // myos aidosti tasahintaisten (todellinen hinta 2) tuntien kohdalla.
     assertEqual(
       reserve3.selectedHeatingHourIds,
-      ["2026-07-23:01", "2026-07-23:04"],
-      "oletusarvolla live-datan kaltainen reserve 3 tuottaa yhteisella kaavalla kaksi tuntia - tasatilanteessa myohaisin validi pari voittaa",
+      ["2026-07-22:17", "2026-07-23:04"],
+      "oletusarvolla live-datan kaltainen reserve 3 tuottaa yhteisella kaavalla kaksi tuntia",
     );
   }
 
@@ -1950,6 +1947,59 @@ export function runHeatingOptimizerUnitTests() {
       toleranceOneExcluded.selectedHeatingHourIds,
       ["2026-07-22:13"],
       "4,51 ylittaa 3,50 + 1,0 -toleranssin, joten se ei tasoitu eika voita todellista halvinta tuntia",
+    );
+  }
+
+  // Testi 3b: kaksi AIDOSTI samanhintaista (ei toleranssin tasoittamaa)
+  // validia tuntia. tolerance 0:n pitaa sailyttaa tasan vanha "ensin
+  // loydetty voittaa" -kaytanto myos taman kaltaisissa exact-price-tie
+  // -tilanteissa - priceToleranceCents === 0 tarkoittaa ominaisuus KOKONAAN
+  // pois paalta, ei vain "ei tasoitusta mutta silti eri tie-break".
+  {
+    const hourEqualA = optimizationHour("2026-07-22", 12, 3.0);
+    const hourEqualB = optimizationHour("2026-07-22", 13, 3.0);
+    const runArgs = {
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0),
+      hours: [hourEqualA, hourEqualB],
+    };
+
+    const exactTieNoTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 0,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+    const exactTieWithTolerance = optimizeHeatingPlan({
+      ...runArgs,
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      exactTieNoTolerance.selectedHeatingHourIds,
+      ["2026-07-22:12"],
+      "tolerance 0: aidosti samanhintaisten tuntien tasatilanteessa vanha/ensimmainen loydetty tunti (12) voittaa - later-schedule-tie-break ei ole aktiivinen",
+    );
+    assertEqual(
+      exactTieWithTolerance.selectedHeatingHourIds,
+      ["2026-07-22:13"],
+      "tolerance > 0: samat aidosti samanhintaiset tunnit, mutta nyt myohempi tunti (13) voittaa tasatilanteessa",
+    );
+    assertClose(
+      exactTieWithTolerance.diagnostics.selectedPlanCost,
+      3.0,
+      "todellinen hinta pysyy ennallaan tie-breakista riippumatta",
     );
   }
 
