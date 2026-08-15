@@ -34,6 +34,7 @@ const completeAutomaticRow: HeatingControlSettingsCompletenessRow = {
   heating_need_mode: "automatic",
   max_tank_temperature: 70,
   min_tank_temperature: 10,
+  price_tolerance_cents: 0.5,
   safety_shower_reserve: 1.5,
   target_shower_reserve: 3,
   updated_at: "2026-08-14T10:00:00.000Z",
@@ -51,6 +52,7 @@ const legacyEmptyRow: HeatingControlSettingsCompletenessRow = {
   heating_need_mode: null,
   max_tank_temperature: null,
   min_tank_temperature: null,
+  price_tolerance_cents: null,
   safety_shower_reserve: null,
   target_shower_reserve: null,
   updated_at: null,
@@ -66,6 +68,7 @@ const localPayload: HeatingControlSettingsBackfillPayloadFields = {
   heating_need_mode: "fixed",
   max_tank_temperature: 65,
   min_tank_temperature: 12,
+  price_tolerance_cents: 0,
   safety_shower_reserve: 1,
   target_shower_reserve: 2,
 };
@@ -189,16 +192,22 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
       localPayload.fallback_enabled,
       "a genuinely missing remote fallback_enabled must fall back to the local value",
     );
+    assertEqual(
+      merged.price_tolerance_cents,
+      localPayload.price_tolerance_cents,
+      "a genuinely missing remote price_tolerance_cents must fall back to the local value",
+    );
   }
 
-  // backup_hours/fallback_enabled must be part of the same merge policy as
-  // every other field - including preserving an explicit `false`, not just
-  // truthy values.
+  // backup_hours/fallback_enabled/price_tolerance_cents must be part of the
+  // same merge policy as every other field - including preserving an
+  // explicit `false`/`0`, not just truthy values.
   {
     const rowWithBackupHoursAndFallback: HeatingControlSettingsCompletenessRow = {
       ...completeAutomaticRow,
       backup_hours: [5, 6, 7],
       fallback_enabled: false,
+      price_tolerance_cents: 0,
     };
     const merged = mergeHeatingControlSettingsBackfillPayload(
       localPayload,
@@ -214,6 +223,70 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
       false,
       "an already-set remote fallback_enabled (including false) must be preserved",
     );
+    assertEqual(
+      merged.price_tolerance_cents,
+      0,
+      "an already-set remote price_tolerance_cents (including 0) must be preserved",
+    );
+  }
+
+  // Regression (code review finding on the price tolerance PR): a remote row
+  // that already has price_tolerance_cents set must keep that value even
+  // when the backfill is triggered by some OTHER, genuinely missing field -
+  // a stale/default local priceToleranceCents must never silently overwrite
+  // an already-configured remote value on another device.
+  {
+    const rowWithRemoteToleranceButMissingOtherField: HeatingControlSettingsCompletenessRow = {
+      ...legacyEmptyRow,
+      heating_need_mode: "automatic",
+      price_tolerance_cents: 1.5,
+      // min_tank_temperature stays null here - the genuinely missing field
+      // that triggers this backfill in the first place.
+    };
+    const localPayloadWithZeroTolerance: HeatingControlSettingsBackfillPayloadFields = {
+      ...localPayload,
+      price_tolerance_cents: 0,
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayloadWithZeroTolerance,
+      rowWithRemoteToleranceButMissingOtherField,
+    );
+
+    assertEqual(
+      merged.price_tolerance_cents,
+      1.5,
+      "an already-set remote price_tolerance_cents must survive a backfill triggered by an unrelated missing field, not be overwritten by this device's local 0",
+    );
+    assertEqual(
+      merged.min_tank_temperature,
+      localPayloadWithZeroTolerance.min_tank_temperature,
+      "the genuinely missing field (min_tank_temperature) must still fall back to the local value, exactly as before this fix",
+    );
+  }
+
+  // The counterpart case: when the remote price_tolerance_cents is
+  // genuinely missing/null, the backfill must be free to use this device's
+  // local value instead of leaving it unset.
+  {
+    const rowWithMissingRemoteTolerance: HeatingControlSettingsCompletenessRow = {
+      ...legacyEmptyRow,
+      heating_need_mode: "automatic",
+      // price_tolerance_cents stays null (inherited from legacyEmptyRow).
+    };
+    const localPayloadWithTolerance: HeatingControlSettingsBackfillPayloadFields = {
+      ...localPayload,
+      price_tolerance_cents: 1.0,
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayloadWithTolerance,
+      rowWithMissingRemoteTolerance,
+    );
+
+    assertEqual(
+      merged.price_tolerance_cents,
+      1.0,
+      "a genuinely missing/null remote price_tolerance_cents must fall back to this device's local value",
+    );
   }
 
   // A fully authoritative remote row must win on every field - the merge
@@ -223,6 +296,7 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
       ...completeAutomaticRow,
       backup_hours: [7, 8],
       fallback_enabled: true,
+      price_tolerance_cents: 2,
     };
     const merged = mergeHeatingControlSettingsBackfillPayload(
       localPayload,
@@ -241,6 +315,7 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
         heating_need_mode: fullyAuthoritativeRow.heating_need_mode,
         max_tank_temperature: fullyAuthoritativeRow.max_tank_temperature,
         min_tank_temperature: fullyAuthoritativeRow.min_tank_temperature,
+        price_tolerance_cents: fullyAuthoritativeRow.price_tolerance_cents,
         safety_shower_reserve: fullyAuthoritativeRow.safety_shower_reserve,
         target_shower_reserve: fullyAuthoritativeRow.target_shower_reserve,
       },

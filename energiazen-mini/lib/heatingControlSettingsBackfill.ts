@@ -11,13 +11,16 @@ import type { EnergiaZenSettings } from "./settings";
 // updated_at is selected purely as an optimistic-concurrency token for the
 // conditional write in ensureHeatingControlSettingsBackfilled below - it
 // plays no part in isHeatingControlSettingsRowAuthoritative's completeness
-// check. backup_hours/fallback_enabled are selected purely so
-// mergeHeatingControlSettingsBackfillPayload below can preserve them too if
-// already authoritative - they likewise play no part in the completeness
-// check (Shelly's own fail-safe fields, not run-heating-optimizer readiness
-// inputs).
+// check. backup_hours/fallback_enabled/price_tolerance_cents are selected
+// purely so mergeHeatingControlSettingsBackfillPayload below can preserve
+// them too if already set remotely - they likewise play no part in the
+// completeness check (backup_hours/fallback_enabled are Shelly's own
+// fail-safe fields; price_tolerance_cents is an optional optimizer tuning
+// value with a safe default of 0 - see resolveOptimizerSettings in
+// run-heating-optimizer/logic.ts, which never requires it for publication
+// readiness - none of the three are run-heating-optimizer readiness inputs).
 export const heatingControlSettingsCompletenessColumns =
-  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,backup_hours,fallback_enabled,updated_at";
+  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,backup_hours,fallback_enabled,price_tolerance_cents,updated_at";
 
 export type HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: number | null;
@@ -29,6 +32,7 @@ export type HeatingControlSettingsCompletenessRow = {
   heating_need_mode: string | null;
   max_tank_temperature: number | null;
   min_tank_temperature: number | null;
+  price_tolerance_cents: number | null;
   safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
   updated_at: string | null;
@@ -95,6 +99,7 @@ export type HeatingControlSettingsBackfillPayloadFields = {
   heating_need_mode: "automatic" | "fixed";
   max_tank_temperature: number;
   min_tank_temperature: number;
+  price_tolerance_cents: number;
   safety_shower_reserve: number;
   target_shower_reserve: number;
 };
@@ -161,6 +166,9 @@ export function mergeHeatingControlSettingsBackfillPayload<
     min_tank_temperature: Number.isFinite(observedRow.min_tank_temperature)
       ? (observedRow.min_tank_temperature as number)
       : localPayload.min_tank_temperature,
+    price_tolerance_cents: Number.isFinite(observedRow.price_tolerance_cents)
+      ? (observedRow.price_tolerance_cents as number)
+      : localPayload.price_tolerance_cents,
     safety_shower_reserve: Number.isFinite(observedRow.safety_shower_reserve)
       ? (observedRow.safety_shower_reserve as number)
       : localPayload.safety_shower_reserve,
