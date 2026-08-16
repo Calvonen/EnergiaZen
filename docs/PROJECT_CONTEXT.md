@@ -173,6 +173,21 @@ migraatio).
     virheellinen lukemakin; `backup_hours`-varapolulla se sen sijaan
     lasketaan yhä samaan `"reading-fetch-error"`-datavikasyyhyn ja
     kolmen kierroksen debounssiin kuin ennenkin (ks. alla).
+  - **`isTrustedBackendHeartbeat` ei enää käytä `Date.parse()`:a
+    `last_validated_plan_at`-aikaleiman jäsentämiseen.** Tuotannosta
+    löytyi vika: Shellyn mJS-ajoympäristön `Date.parse()` tulkitsi
+    Supabasen/PostgreSQL:n palauttaman `"YYYY-MM-DD HH:MM:SS(.sss)+00"`-
+    muotoisen aikaleiman väärin (todennettu fyysisellä laitteella –
+    tunteja pielessä oleva epoch), minkä seurauksena validi heartbeat
+    näytti jatkuvasti epäluotettavalta ja ohjain jäi jumiin
+    `source: "backup"`-tilaan vaikka backend oli aidosti kunnossa. Korjattu
+    `parsePostgresTimestampMs`-funktiolla, joka jäsentää aikaleiman
+    deterministisesti pelkällä merkkijonoviipaloinnilla ja
+    kokonaislukuaritmetiikalla (`daysFromCivil`, `civilDateFromDays`:n
+    käänteisfunktio) – sama mJS-yhteensopivuusperiaate kuin
+    `resolveHelsinkiFromSysStatus`:ssa. Hyväksyy sekä PostgreSQL:n
+    natiivimuodon (`" "`-erotin, `+00`-offset) että ISO 8601 -muodon
+    (`"T"`-erotin, `Z`/`+HH:MM`-offset).
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua

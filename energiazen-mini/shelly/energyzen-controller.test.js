@@ -9,6 +9,8 @@ const {
   createControllerState,
   createRequestError,
   decideHeating,
+  isTrustedBackendHeartbeat,
+  parsePostgresTimestampMs,
   resolveHelsinkiFromSysStatus,
   resolvePlanControl,
   resolveTrustedPlanControl,
@@ -672,6 +674,102 @@ assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_pl
 const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
 assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
 assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
+
+// ---------------------------------------------------------------------
+// parsePostgresTimestampMs: Shelly's mJS Date.parse() misparses the
+// "YYYY-MM-DD HH:MM:SS(.sss)?+00" format Supabase/PostgreSQL actually
+// emits for last_validated_plan_at (confirmed on a real device - see PR
+// #205 follow-up). isTrustedBackendHeartbeat must no longer depend on
+// Date.parse for this format; these tests exercise the real production
+// timestamp shape end to end, not just the ISO "T"/"Z" fixtures used
+// above (which parsePostgresTimestampMs also still accepts, confirmed by
+// every "backup"/"energyzen" assertion above still passing unchanged).
+// ---------------------------------------------------------------------
+
+// 2026-08-16 04:23:01.034+00 -> correct epoch ms (hand-verified: 20681
+// days since 1970-01-01 * 86400000 + 04:23:01.034 of that day).
+assert.strictEqual(
+  parsePostgresTimestampMs("2026-08-16 04:23:01.034+00"),
+  1786854181034,
+  "PostgreSQL timestamp format must parse to the correct epoch ms without relying on Date.parse",
+);
+
+// heartbeat fresh + matching fingerprint -> trusted, using the real
+// Postgres timestamp shape (space separator, "+00" offset) rather than
+// the ISO fixtures used elsewhere in this file.
+const postgresFormatNow = Date.parse("2026-08-13T12:00:00.000Z");
+const postgresFormatPlanRow = { plan_date: "2026-08-13", planned_hours: [15] };
+assert.strictEqual(
+  isTrustedBackendHeartbeat(
+    [{
+      health_status: "healthy",
+      last_validated_plan_at: "2026-08-13 11:30:00.034+00",
+      validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]),
+    }],
+    null,
+    postgresFormatPlanRow,
+    postgresFormatNow,
+  ),
+  true,
+  "a fresh heartbeat in the real PostgreSQL timestamp format with a matching fingerprint must be trusted",
+);
+
+// stale heartbeat -> untrusted, same Postgres format, timestamp older
+// than MAX_BACKEND_VALIDATION_AGE_SECONDS (90 min) before postgresFormatNow.
+assert.strictEqual(
+  isTrustedBackendHeartbeat(
+    [{
+      health_status: "healthy",
+      last_validated_plan_at: "2026-08-13 10:29:59.000+00",
+      validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]),
+    }],
+    null,
+    postgresFormatPlanRow,
+    postgresFormatNow,
+  ),
+  false,
+  "a stale heartbeat in the real PostgreSQL timestamp format must be untrusted",
+);
+
+// malformed timestamp -> untrusted (parsePostgresTimestampMs returns NaN,
+// isFinite(NaN) is false, so isTrustedBackendHeartbeat fails closed).
+assert.strictEqual(
+  parsePostgresTimestampMs("not-a-timestamp"),
+  NaN,
+);
+assert.ok(Number.isNaN(parsePostgresTimestampMs("2026-08-16 04:23:01.034+00 extra junk")), "trailing garbage after a valid timestamp must be rejected");
+assert.ok(Number.isNaN(parsePostgresTimestampMs("2026-08-16T04:23:01+")), "a truncated/incomplete offset must be rejected");
+assert.ok(Number.isNaN(parsePostgresTimestampMs("2026/08/16 04:23:01+00")), "wrong date-part separators must be rejected");
+assert.ok(Number.isNaN(parsePostgresTimestampMs(null)), "a non-string value must be rejected");
+assert.strictEqual(
+  isTrustedBackendHeartbeat(
+    [{
+      health_status: "healthy",
+      last_validated_plan_at: "not-a-timestamp",
+      validated_plan_fingerprint: buildPlanFingerprint("2026-08-13", [15]),
+    }],
+    null,
+    postgresFormatPlanRow,
+    postgresFormatNow,
+  ),
+  false,
+  "a malformed last_validated_plan_at must be untrusted",
+);
+
+// Boundary/round-trip sanity checks against the existing civilDateFromDays
+// inverse (daysFromCivil is not exported, so this is exercised indirectly
+// via parsePostgresTimestampMs at both a UTC-offset and a non-zero-offset
+// timestamp that should land on the exact same instant).
+assert.strictEqual(
+  parsePostgresTimestampMs("2026-08-16 06:23:01.034+02"),
+  parsePostgresTimestampMs("2026-08-16 04:23:01.034+00"),
+  "a +02 offset must be subtracted correctly, landing on the same UTC instant as +00",
+);
+assert.strictEqual(
+  parsePostgresTimestampMs("2026-08-16T04:23:01.034Z"),
+  parsePostgresTimestampMs("2026-08-16 04:23:01.034+00"),
+  "the ISO Z suffix and the PostgreSQL +00 offset must parse to the same instant",
+);
 
 // applyControlPlaneDebounce: a transient plan-/heartbeat-fetch problem that
 // resolvePlanControl/resolveTrustedPlanControl would resolve to
