@@ -92,7 +92,14 @@ export type HeatingPlanPublicationDecision =
 // today's own coverage; this mirrors that rule for an arbitrary day instead
 // of anchoring to `now`, since a future day like tomorrow has no "now" to
 // anchor to.
-function hasCompleteHelsinkiDayCoverage(
+//
+// Exported (in addition to being used internally below) so the app's own
+// Home screen can reuse this exact rule to decide whether tomorrow's prices
+// are complete enough to show as "available" - see lib/heatingPlanOrchestration.ts's
+// re-export and app/(tabs)/index.tsx. One canonical implementation, not a
+// second parallel one - purely additive, no behavior change to this
+// module's own callers (run-heating-optimizer).
+export function hasCompleteHelsinkiDayCoverage(
   hours: HeatingOptimizationHour[],
   dateKey: string,
   dateKeyOf: (startDate: string) => string,

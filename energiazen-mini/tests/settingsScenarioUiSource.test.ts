@@ -81,12 +81,12 @@ export function runSettingsScenarioUiSourceTests() {
       homeSource.includes(
         "selectActiveHeatingPlanPresentation(\n    activeOptimizerPresentation,\n    storedHeatingPlanPresentation,\n    storedHeatingPlanIsAuthoritative,",
       ) &&
-      homeSource.includes("if (storedPlans.length !== 2) {") &&
+      homeSource.includes("if (!storedHeatingPlans[todayPlanDate]) {") &&
       homeSource.includes(
         "hasUnsavedChanges && scenarioValidation.errors.length === 0",
       ) &&
       homeSource.includes("? scenarioOptimizerPresentation"),
-    "etusivu suosii backend-primary-tilassa vain tanaan ja huomenna kattavaa tallennettua aktiivista suunnitelmaa pending- ja synced-tiloissa, mutta skenaarionakyma kayttaa yha draft-tulosta",
+    "etusivu suosii backend-primary-tilassa tallennettua aktiivista suunnitelmaa heti kun tanaan on julkaistu (huominen ei ole pakollinen) pending- ja synced-tiloissa, mutta skenaarionakyma kayttaa yha draft-tulosta",
   );
 
   assertSource(

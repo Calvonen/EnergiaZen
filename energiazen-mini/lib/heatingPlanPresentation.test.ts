@@ -509,6 +509,26 @@ export function runHeatingPlanPresentationUnitTests() {
     true,
     "backend-primary-tilassa tuore optimointitulos toimii varavaihtoehtona, kun tallennettua suunnitelmaa ei ole",
   );
+  // Product scenario (app-side shared price source PR): backend-primary
+  // mode, today's real backend plan is published but tomorrow's is not
+  // (e.g. tomorrow's prices are not yet complete in electricity_prices, so
+  // run-heating-optimizer has not published a tomorrow row - see PR #209's
+  // tomorrowHasCompletePriceData). The today-only stored presentation must
+  // still win over the local optimizer preview - app/(tabs)/index.tsx's
+  // storedHeatingPlanPresentation must not return null just because
+  // tomorrow is missing, which would otherwise let this same authoritative
+  // branch fall through to the app's own unpublished tomorrow guess.
+  const todayOnlyStored = buildStoredHeatingPlanPresentation({
+    selectedHours: [
+      { label: "14:00-15:00 · 5,0 c/kWh", period: "Tänään", price: 5 },
+    ],
+  });
+  assertEqual(
+    selectActiveHeatingPlanPresentation(standard, todayOnlyStored, true) ===
+      todayOnlyStored,
+    true,
+    "backend-primary-tilassa tanaan julkaistu tallennettu suunnitelma voittaa paikallisen optimoijan esityksen, vaikka huomisen rivia ei viela ole",
+  );
   assertEqual(
     selectActiveHeatingPlanPresentation(null, stored) === stored,
     true,
