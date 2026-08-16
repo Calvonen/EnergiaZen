@@ -76,7 +76,10 @@ hakee [Spot-hinta.fi](https://api.spot-hinta.fi/JustNow?region=FI&priceResolutio
 -palvelusta Suomen (`FI`) sähkön hinnat, oletuksena 60 minuutin resoluutiolla
 (vaihdettavissa 15 minuuttiin secretillä `PRICE_RESOLUTION_MINUTES`), ja
 tallentaa ne `electricity_prices`-tauluun. Haku on ajastettu `pg_cron`-jobilla
-(`fetch-electricity-prices-hourly`) kerran tunnissa minuutilla 10 (migraatio
+(`fetch-electricity-prices-hourly`) kahdesti tunnissa minuuteilla 20 ja 50
+(migraatio
+`energiazen-mini/supabase/migrations/20260816000000_reschedule_electricity_price_fetch_every_30min.sql`,
+alkuperäinen kerran tunnissa minuutilla 10 tapahtunut ajastus
 `energiazen-mini/supabase/migrations/20260724020000_schedule_electricity_price_fetch.sql`).
 Katso `energiazen-mini/README.md` ajastuksen ja Edge Functionin täydet
 ohjeet.
