@@ -199,6 +199,22 @@ migraatio).
     omasta Sys-statuksesta, ei `new Date().getTime()`:lla. Hyväksyy sekä
     PostgreSQL:n natiivimuodon (`" "`-erotin, `+00`-offset) että ISO 8601
     -muodon (`"T"`-erotin, `Z`/`+HH:MM`-offset).
+  - **Shelly-ohjaimen koodissa ei käytetä lainkaan regex-literaaleja eikä
+    regex-pohjaisia API:ta.** Fyysinen laite paljasti tuotannosta vielä
+    kolmannen vian: `buildPlanFingerprint`:n `/^\d{4}-\d{2}-\d{2}$/.test(...)`
+    -regex kaatoi ohjaimen suoraan (`"Uncaught SyntaxError: RegEx are not
+    supported in this version of Espruino"`) osalla Shellyn mJS-laiteohjelmisto-
+    versioista. `plan_date`:n `YYYY-MM-DD`-muodon validointi tehdään nyt
+    `isValidDateKey`-funktiolla pelkällä `length`/`charAt`/`slice`/`Number`-
+    viipaloinnilla ja numeroalueiden tarkistuksella, sama
+    mJS-yhteensopivuusperiaate kuin muualla tiedostossa. Yksikkötestit
+    sisältävät myös oman pienen tokenisoijan (`findRegexLiteralOffsets`),
+    joka skannaa sekä `energyzen-controller.js`:n että `.min.js`:n ja
+    kaatuu jos regex-literaali tai `RegExp`-konstruktori ilmestyy koodiin
+    uudelleen – erottaa oikeasti division-operaattorin (esim.
+    `Math.floor(z / 146097)`) regex-literaalista samalla säännöllä kuin
+    oikeat JS-lekserit, jotta se ei anna vääriä positiivisia tuloksia
+    tiedoston lukuisista jakolaskuista.
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua

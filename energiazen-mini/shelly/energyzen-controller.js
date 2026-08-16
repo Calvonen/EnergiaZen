@@ -695,9 +695,36 @@ function resolvePlanControl(rows, error, settings, today) {
 }
 
 
+// No regex literals are supported by Shelly's mJS runtime on some device
+// firmware (confirmed on real hardware: "Uncaught SyntaxError: RegEx are
+// not supported in this version of Espruino") - validated here with plain
+// length/charAt/slice/Number + numeric range checks instead, the same
+// mJS-compatibility approach as parseSysLocalHour/parsePostgresTimestampSeconds
+// above. No regex-based APIs are used anywhere else in this file either -
+// see the banned-regex-literal guard in the test suite.
+function isValidDateKey(value) {
+  if (typeof value !== "string" || value.length !== 10) {
+    return false;
+  }
+
+  if (value.charAt(4) !== "-" || value.charAt(7) !== "-") {
+    return false;
+  }
+
+  let year = Number(value.slice(0, 4));
+  let month = Number(value.slice(5, 7));
+  let day = Number(value.slice(8, 10));
+
+  return (
+    isFiniteNumber(year) &&
+    isFiniteNumber(month) && month >= 1 && month <= 12 &&
+    isFiniteNumber(day) && day >= 1 && day <= 31
+  );
+}
+
 function buildPlanFingerprint(planDate, plannedHours) {
   let hours = normalizeHours(plannedHours);
-  return typeof planDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(planDate)
+  return isValidDateKey(planDate)
     ? planDate + "|" + hours.join(",")
     : null;
 }
@@ -1030,6 +1057,7 @@ if (typeof module !== "undefined" && module.exports) {
     createRequestError: createRequestError,
     decideHeating: decideHeating,
     isTrustedBackendHeartbeat: isTrustedBackendHeartbeat,
+    isValidDateKey: isValidDateKey,
     parsePostgresTimestampSeconds: parsePostgresTimestampSeconds,
     resolveHelsinkiFromSysStatus: resolveHelsinkiFromSysStatus,
     resolvePlanControl: resolvePlanControl,

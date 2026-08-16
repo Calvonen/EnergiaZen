@@ -10,6 +10,7 @@ const {
   createRequestError,
   decideHeating,
   isTrustedBackendHeartbeat,
+  isValidDateKey,
   parsePostgresTimestampSeconds,
   resolveHelsinkiFromSysStatus,
   resolvePlanControl,
@@ -602,6 +603,31 @@ assert.strictEqual(
 assert.strictEqual(missingPlanFallbackDisabledControl.failSafeReason, "plan-missing");
 
 
+// buildPlanFingerprint/isValidDateKey: regex literals are not supported by
+// Shelly's mJS runtime on some device firmware (confirmed on real
+// hardware - see the regex-literal guard at the bottom of this file), so
+// the YYYY-MM-DD shape is validated with plain length/charAt/slice/Number
+// + numeric range checks instead of /^\d{4}-\d{2}-\d{2}$/.
+assert.strictEqual(buildPlanFingerprint("2026-08-16", [23]), "2026-08-16|23", "physical-device acceptance case");
+assert.strictEqual(isValidDateKey("2026-08-16"), true);
+assert.strictEqual(isValidDateKey("2026-01-01"), true);
+assert.strictEqual(isValidDateKey("2026-12-31"), true);
+assert.strictEqual(isValidDateKey("2026-13-01"), false, "month out of range");
+assert.strictEqual(isValidDateKey("2026-00-01"), false, "month out of range (zero)");
+assert.strictEqual(isValidDateKey("2026-08-32"), false, "day out of range");
+assert.strictEqual(isValidDateKey("2026-08-00"), false, "day out of range (zero)");
+assert.strictEqual(isValidDateKey("2026/08/16"), false, "wrong separators");
+assert.strictEqual(isValidDateKey("2026-8-16"), false, "wrong width (unpadded month)");
+assert.strictEqual(isValidDateKey("2026-08-1"), false, "wrong width (unpadded day)");
+assert.strictEqual(isValidDateKey("2026-08-160"), false, "wrong length (too long)");
+assert.strictEqual(isValidDateKey("not-a-date"), false);
+assert.strictEqual(isValidDateKey(""), false);
+assert.strictEqual(isValidDateKey(null), false, "non-string value");
+assert.strictEqual(isValidDateKey(undefined), false, "non-string value");
+assert.strictEqual(isValidDateKey(20260816), false, "non-string value (number)");
+assert.strictEqual(buildPlanFingerprint("not-a-date", [15]), null, "an invalid plan_date must fail closed to null, not throw");
+assert.strictEqual(buildPlanFingerprint(null, [15]), null);
+
 // resolveTrustedPlanControl/isTrustedBackendHeartbeat now compare whole
 // UNIX SECONDS (matching parsePostgresTimestampSeconds and Shelly's own
 // sys.unixtime), never epoch-milliseconds - Date.parse() is only used
@@ -1066,5 +1092,193 @@ for (let fileIndex = 0; fileIndex < controllerFiles.length; fileIndex++) {
     );
   }
 }
+
+// Regression guard: Shelly's mJS runtime does not support regex literals on
+// some device firmware (confirmed on real hardware: buildPlanFingerprint's
+// old /^\d{4}-\d{2}-\d{2}$/.test(...) crashed with "Uncaught SyntaxError:
+// RegEx are not supported in this version of Espruino") - fail the build if
+// a regex literal or the RegExp constructor ever reappears in the
+// controller source or its regenerated minified build. This is a small
+// hand-written tokenizer (not a regex-based scan, since a naive
+// "contains a /" search would false-positive on every division operator
+// in this file, e.g. Math.floor(z / 146097)) that walks the source
+// character by character, skipping strings/comments, and classifies each
+// remaining "/" as division or a regex-literal start using the same rule
+// real JS lexers use: division follows an identifier/number/string/")"/
+// "]", a regex literal starts everywhere else (after operators, "(", ",",
+// "return", etc.).
+function findRegexLiteralOffsets(source) {
+  let offsets = [];
+  let i = 0;
+  let n = source.length;
+  let prevType = null;
+  let prevText = null;
+  let regexPrecedingKeywords = {
+    case: true, delete: true, do: true, else: true, in: true, instanceof: true,
+    new: true, of: true, return: true, throw: true, typeof: true, void: true,
+    yield: true,
+  };
+
+  while (i < n) {
+    let ch = source[i];
+
+    if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") {
+      i += 1;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "/") {
+      let end = source.indexOf("\n", i);
+      i = end === -1 ? n : end;
+      continue;
+    }
+
+    if (ch === "/" && source[i + 1] === "*") {
+      let end = source.indexOf("*/", i + 2);
+      i = end === -1 ? n : end + 2;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let quote = ch;
+      let j = i + 1;
+      while (j < n) {
+        if (source[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (source[j] === quote) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      i = j;
+      prevType = "string";
+      prevText = null;
+      continue;
+    }
+
+    if (/[0-9]/.test(ch) || (ch === "." && /[0-9]/.test(source[i + 1] || ""))) {
+      let j = i;
+      if (ch === "0" && (source[j + 1] === "x" || source[j + 1] === "X")) {
+        j += 2;
+        while (j < n && /[0-9a-fA-F]/.test(source[j])) j += 1;
+      } else {
+        while (j < n && /[0-9]/.test(source[j])) j += 1;
+        if (source[j] === ".") {
+          j += 1;
+          while (j < n && /[0-9]/.test(source[j])) j += 1;
+        }
+        if (source[j] === "e" || source[j] === "E") {
+          j += 1;
+          if (source[j] === "+" || source[j] === "-") j += 1;
+          while (j < n && /[0-9]/.test(source[j])) j += 1;
+        }
+      }
+      i = j;
+      prevType = "number";
+      prevText = null;
+      continue;
+    }
+
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1;
+      while (j < n && /[A-Za-z0-9_$]/.test(source[j])) j += 1;
+      prevText = source.slice(i, j);
+      i = j;
+      prevType = "ident";
+      continue;
+    }
+
+    if (ch === "/") {
+      let isDivision =
+        prevType === "number" ||
+        prevType === "string" ||
+        (prevType === "ident" && regexPrecedingKeywords[prevText] !== true) ||
+        (prevType === "punct" && (prevText === ")" || prevText === "]"));
+
+      if (isDivision) {
+        i += 1;
+        prevType = "punct";
+        prevText = "/";
+        continue;
+      }
+
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < n) {
+        let c = source[j];
+        if (c === "\\") {
+          j += 2;
+          continue;
+        }
+        if (c === "\n") break;
+        if (c === "[") {
+          inClass = true;
+          j += 1;
+          continue;
+        }
+        if (c === "]") {
+          inClass = false;
+          j += 1;
+          continue;
+        }
+        if (c === "/" && !inClass) {
+          closed = true;
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+
+      if (closed) {
+        while (j < n && /[a-zA-Z]/.test(source[j])) j += 1;
+        offsets.push(i);
+        i = j;
+        prevType = "punct";
+        prevText = "regex";
+        continue;
+      }
+
+      i += 1;
+      prevType = "punct";
+      prevText = "/";
+      continue;
+    }
+
+    prevType = "punct";
+    prevText = ch;
+    i += 1;
+  }
+
+  return offsets;
+}
+
+for (let fileIndex = 0; fileIndex < controllerFiles.length; fileIndex++) {
+  let filePath = path.join(__dirname, controllerFiles[fileIndex]);
+  let source = fs.readFileSync(filePath, "utf8");
+
+  assert.ok(
+    source.indexOf("RegExp") === -1,
+    controllerFiles[fileIndex] + " must not use the RegExp constructor - not supported by Shelly's mJS runtime on some device firmware",
+  );
+
+  let regexOffsets = findRegexLiteralOffsets(source);
+  assert.deepStrictEqual(
+    regexOffsets.map((offset) => source.slice(offset, offset + 40)),
+    [],
+    controllerFiles[fileIndex] + " must not contain any regex literal - not supported by Shelly's mJS runtime on some device firmware",
+  );
+}
+
+// Self-test for the tokenizer above: confirm it actually distinguishes
+// division from a real regex literal, so a future refactor of it can't
+// silently turn this guard into a no-op.
+assert.strictEqual(findRegexLiteralOffsets("let x = z / 146097;").length, 0, "division after an identifier must not be flagged as a regex literal");
+assert.strictEqual(findRegexLiteralOffsets("let x = 10 / 2;").length, 0, "division after a number must not be flagged as a regex literal");
+assert.strictEqual(findRegexLiteralOffsets('let u = "https://example.com";').length, 0, "a URL inside a string must not be flagged as a regex literal");
+assert.strictEqual(findRegexLiteralOffsets("return /^\\d{4}$/.test(x);").length, 1, "the tokenizer must still detect an actual regex literal");
 
 console.log("EnergyZen Shelly controller tests passed");
