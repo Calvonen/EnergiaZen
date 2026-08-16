@@ -746,6 +746,16 @@ Deno.serve(async (request) => {
       today_planned_hours: shadowRow.today_planned_hours,
       tomorrow_plan_date: tomorrowPlanDate,
       tomorrow_planned_hours: shadowRow.tomorrow_planned_hours,
+      // Diagnostic only (HTTP response body, not a persisted column - see
+      // buildHeatingPlanPublicationDecision's own comment): true/false only
+      // when decision.status === "ready", so an operator/log reader can
+      // tell a genuine "optimizer saw tomorrow's COMPLETE prices and chose
+      // 0 h" plan apart from "tomorrow's prices weren't fully in
+      // electricity_prices yet (missing entirely or only a partial window),
+      // so no tomorrow plan was published this run" without needing a new
+      // database column.
+      tomorrow_price_data_complete:
+        decision.status === "ready" ? decision.tomorrowHasCompletePriceData : null,
       wrote_to_heating_plans: wroteToHeatingPlans,
     });
     }
