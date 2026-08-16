@@ -138,13 +138,21 @@ migraatio).
   repossa – aiempi versio tästä dokumentista väitti virheellisesti, ettei
   Shellyn puoleista logiikkaa löydy repositoriosta.
   - Ajastimella kerran minuutissa (`CHECK_INTERVAL_MS`): hakee
-    `heating_control_settings`-rivin (kalibrointi, `backup_hours`,
-    `fallback_enabled`) ja `heating_plans`-taulusta kuluvan päivän
+    `heating_control_settings`-rivin (`backup_hours`, `fallback_enabled`,
+    `heating_need_mode`) ja `heating_plans`-taulusta kuluvan päivän
     `planned_hours`-listan suoraan Supabasen REST-rajapinnasta, sekä
-    tuoreimman `tank_readings`-rivin täyttöasteen laskemiseksi.
-    Kalibrointiasetukset välimuistoidaan laitteen omaan
-    `Script.storage`:en, jotta ohjaus toimii myös hetkellisen
+    tuoreimman `tank_readings`-rivin anturidatan tuoreuden/kelvollisuuden
+    tarkistamiseksi (ks. alla). `backup_hours`/`fallback_enabled`
+    välimuistoidaan laitteen omaan `Script.storage`:en
+    (`hasStoredFallback`-lippu erottaa aidon aiemman synkan pelkistä
+    oletusarvoista), jotta ohjaus toimii myös hetkellisen
     verkko-/Supabase-katkon yli.
+    **Backend on ainoa lämmityspäätöksen tekijä normaalilla
+    suunnitellulla tunnilla** – Shelly ei enää laske paikallisesti
+    täyttöastetta/suihkumäärää eikä kalibrointia (poistettu, ks. alla),
+    vaan luottaa `heating_plans.planned_hours`-listaan sellaisenaan koko
+    suunnitellun tunnin ajan, kunhan tuorein `tank_readings`-lukema on
+    validi.
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua
@@ -165,17 +173,33 @@ migraatio).
     kuvattu tank-reading-datavikalaskuri - molemmat näkyvät erikseen
     Shellyn lokissa (`consecutiveControlPlaneUnreliableCycles` vs.
     `consecutiveUnreliableCycles`).
-  - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois lasketun
-    suihkuvarausarvion ja suunniteltujen tuntien perusteella, sisältäen
-    värähtelyn eston (`REQUIRED_BLOCKING_READINGS`) ja lukeman
-    vanhenemistarkistuksen (`MAX_READING_AGE_SECONDS = 120`). **Tämä kahden
-    minuutin ohjausraja on tarkoituksella eri asia kuin appin ja
-    monitorointifunktion 30 minuutin käyttäjähälytysraja:** Shelly tarkistaa
-    tilanteen kerran minuutissa ja lakkaa luottamasta reaaliaikaiseen
-    ohjausdataan nopeasti, jotta yhden tunnin varatunti ei ehdi kulua
-    suurelta osin ennen fallbackia. Lyhyt katko voi siis käynnistää paikallisen
-    varatoiminnan ilman käyttäjähälytystä. Arvoa 120 ei pidä synkronoida 30
-    minuutin hälytysrajan kanssa.
+  - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois suunniteltujen
+    tuntien perusteella, sisältäen lukeman vanhenemistarkistuksen
+    (`MAX_READING_AGE_SECONDS = 120`). **Tämä kahden minuutin ohjausraja on
+    tarkoituksella eri asia kuin appin ja monitorointifunktion 30 minuutin
+    käyttäjähälytysraja:** Shelly tarkistaa tilanteen kerran minuutissa ja
+    lakkaa luottamasta reaaliaikaiseen ohjausdataan nopeasti, jotta yhden
+    tunnin varatunti ei ehdi kulua suurelta osin ennen fallbackia. Lyhyt
+    katko voi siis käynnistää paikallisen varatoiminnan ilman
+    käyttäjähälytystä. Arvoa 120 ei pidä synkronoida 30 minuutin
+    hälytysrajan kanssa.
+  - **Poistettu (backend-primary-arkkitehtuurin myötä tarpeettomaksi
+    jäänyt paikallinen heuristiikka):** aiemmin Shelly laski itse
+    suihkuvarausarvion (`fullTankShowers`/`fullTankAverageTemperature`/
+    `minTankTemperature`/`maxTankTemperature`/`targetShowerReserve`-
+    kalibroinnista ja tuoreimmasta lukemasta) ja käytti sitä 92 %
+    täyttöasterajana (`START_HEATING_FILL_RATIO`) päättämään KESKEN
+    suunnitellun tunnin pitäisikö lämmitys jo lopettaa/olla aloittamatta
+    (`REQUIRED_BLOCKING_READINGS`-värähtelyn esto). Tämä oli suora
+    duplikaatti backendin `heatingOptimizer`-laskennasta, joka jo ottaa
+    kalibroinnin huomioon `planned_hours`-listaa muodostaessaan, ja saattoi
+    jopa estää backendin suunnitteleman lämmityksen paikallisen laskennan
+    perusteella. Poistettu kokonaan yhdessä siihen liittyvän
+    kalibrointivalidoinnin (`isValidCalibration`, `"invalid-calibration"`-
+    syy) ja kalibrointikenttien Shelly-puoleisen haun/välimuistituksen
+    kanssa – nämä samat `heating_control_settings`-sarakkeet pysyvät
+    edelleen käytössä backendissä, vain Shellyn paikallinen kopio/
+    uudelleenlasku poistui.
   - **Anturi-/datavika varatunnilla ohittaa lukeman validoinnin kokonaan,
     mutta vasta kolmannen PERÄKKÄISEN epäluotettavan kierroksen jälkeen.**
     Jos mittausdataa ei voi luottaa (vanha/puuttuva/virheellinen
@@ -196,8 +220,8 @@ migraatio).
     turvaraja, joten ohjelmisto suosii "lämmitä varmuuden vuoksi"
     -oletusta "älä lämmitä epävarmuuden vuoksi" -oletuksen sijaan silloin
     kun katko on aidosti pitkittynyt. Muut vikatilat (esim.
-    `hour-not-planned`, `invalid-calibration`, releen oman tilan kysely
-    epäonnistuu) eivät kuulu tähän ohitukseen eivätkä kartuta laskuria.
+    `hour-not-planned`, releen oman tilan kysely epäonnistuu) eivät kuulu
+    tähän ohitukseen eivätkä kartuta laskuria.
   - **Mitä jää silti versionhallinnan ulkopuolelle:** Shellyn WiFi-
     verkkoasetukset (laitteen oma ensiasennus), sekä itse
     käyttöönotto/päivitys – `energyzen-controller.min.js`:n vieminen
