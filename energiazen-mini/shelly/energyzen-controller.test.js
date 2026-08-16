@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   REQUIRED_BLOCKING_READINGS,
+  REQUIRED_UNRELIABLE_CYCLES,
   START_HEATING_FILL_RATIO,
   buildPlanFingerprint,
   calculateCurrentShowers,
@@ -79,6 +80,7 @@ function decide({
 
 assert.strictEqual(START_HEATING_FILL_RATIO, 0.92);
 assert.strictEqual(REQUIRED_BLOCKING_READINGS, 2);
+assert.strictEqual(REQUIRED_UNRELIABLE_CYCLES, 3);
 
 const highFillState = createControllerState();
 const firstHighFill = decide({
@@ -130,6 +132,21 @@ const lowFirst = decide({
 });
 assert.strictEqual(lowFirst.finalTargetOn, true);
 assert.strictEqual(lowFirst.reason, "planned-heating-starts");
+assert.strictEqual(lowFirst.consecutiveUnreliableCycles, 0);
+
+// Uusi consecutiveUnreliableCycles-laskuri ei muuta normaalia suunnitellun
+// lammityksen kaytosta millaan tavoin - useampi perakkainen terve/normaali
+// kierros pitaa laskurin nollassa koko ajan.
+const normalPlanState = createControllerState();
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES + 1; index += 1) {
+  const normalPlanDecision = decide({
+    reading: readingForShowers(settings.fullTankShowers * 0.91),
+    state: normalPlanState,
+  });
+  assert.strictEqual(normalPlanDecision.reason, "planned-heating-starts");
+  assert.strictEqual(normalPlanDecision.finalTargetOn, true);
+  assert.strictEqual(normalPlanDecision.consecutiveUnreliableCycles, 0);
+}
 
 const relayOnState = createControllerState();
 decide({ reading: readingForShowers(6), state: relayOnState });
@@ -159,11 +176,33 @@ assert.strictEqual(exactReadingAgeThreshold.reason, "planned-heating-starts");
 assert.strictEqual(exactReadingAgeThreshold.finalTargetOn, true);
 
 // currentHour 15 on myos settings.backupHours - eli oletusparametrit
-// osuvat varatunnille. Anturivika varatunnilla lammittaa nyt ehdoitta
-// (varaajan oma termostaatti estaa ylikuumenemisen), toisin kuin
-// tunnilla joka ei ole varatunti (ks. staleOutsideBackupHour alla).
+// osuvat varatunnille. Anturivika varatunnilla lammittaa nyt vasta kolmannen
+// PERAKKAISEN epaluotettavan kierroksen jalkeen (varaajan oma termostaatti
+// estaa ylikuumenemisen), toisin kuin tunnilla joka ei ole varatunti (ks.
+// staleOutsideBackupHour alla).
 const staleState = createControllerState();
 decide({ reading: readingForShowers(6), state: staleState });
+
+// 1) ensimmainen epaluotettava varatuntikierros -> ei viela lammitysta.
+const staleFirst = decide({
+  reading: readingForShowers(3, 121),
+  state: staleState,
+});
+assert.strictEqual(staleFirst.reason, "stale-reading");
+assert.strictEqual(staleFirst.finalTargetOn, false);
+assert.strictEqual(staleFirst.consecutiveUnreliableCycles, 1);
+
+// 2) toinen epaluotettava varatuntikierros -> ei viela lammitysta.
+const staleSecond = decide({
+  reading: readingForShowers(3, 121),
+  state: staleState,
+});
+assert.strictEqual(staleSecond.reason, "stale-reading");
+assert.strictEqual(staleSecond.finalTargetOn, false);
+assert.strictEqual(staleSecond.consecutiveUnreliableCycles, 2);
+
+// 3) kolmas peräkkäinen epaluotettava varatuntikierros -> nykyinen
+// backup-fault-override-kaytos sallitaan, lammitys paalle.
 const stale = decide({
   reading: readingForShowers(3, 121),
   state: staleState,
@@ -171,6 +210,42 @@ const stale = decide({
 assert.strictEqual(stale.reason, "backup-fault-override");
 assert.strictEqual(stale.finalTargetOn, true);
 assert.strictEqual(stale.consecutiveHighFillReadings, 0);
+assert.strictEqual(stale.consecutiveUnreliableCycles, 3);
+assert.strictEqual(stale.requiredUnreliableCycles, 3);
+
+// Luotettava kierros valissa nollaa laskurin heti: neljas kierros olisi
+// muuten ollut yli kynnyksen, mutta valiin osunut terve lukema katkaisee
+// putken eika seuraava epaluotettava kierros yksinaan enaa lammita.
+const reliableBetweenState = createControllerState();
+decide({ reading: readingForShowers(3, 121), state: reliableBetweenState });
+decide({ reading: readingForShowers(3, 121), state: reliableBetweenState });
+const reliableBetween = decide({
+  reading: readingForShowers(3),
+  state: reliableBetweenState,
+});
+assert.strictEqual(reliableBetween.consecutiveUnreliableCycles, 0);
+const afterReliableBetween = decide({
+  reading: readingForShowers(3, 121),
+  state: reliableBetweenState,
+});
+assert.strictEqual(afterReliableBetween.reason, "stale-reading");
+assert.strictEqual(afterReliableBetween.finalTargetOn, false);
+assert.strictEqual(afterReliableBetween.consecutiveUnreliableCycles, 1);
+
+// Epaluotettava kierros joka EI ole varatunnilla ei koskaan saa lammittaa,
+// eika se myoskaan kartuta varatunti-override-laskuria (ks.
+// unreliableCycleEligible: vaatii isBackupHour).
+const nonBackupUnreliableState = createControllerState();
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES + 1; index += 1) {
+  const nonBackupUnreliable = decide({
+    currentHour: 8,
+    plannedHours: [8],
+    reading: readingForShowers(3, 121),
+    state: nonBackupUnreliableState,
+  });
+  assert.strictEqual(nonBackupUnreliable.finalTargetOn, false);
+  assert.strictEqual(nonBackupUnreliable.consecutiveUnreliableCycles, 0);
+}
 
 // Varatila ei saa jaada paalle: kun seuraavan tarkistuksen lukema on taas
 // tuore, paatos tehdaan normaalisti suunnitelman ja tayttoasteen perusteella.
@@ -201,27 +276,37 @@ assert.strictEqual(staleOutsideBackupHour.finalTargetOn, false);
 // itsessaan vika. Jos anturidata on samaan aikaan vanhentunut, ohituksen
 // pitaa silti laueta, koska "hour-not-planned" ei saa peittaa alleen
 // oikeaa datavikaa varatunnilla.
-const staleBackupHourNotInTodaysPlan = decide({
-  currentHour: 15,
-  plannedHours: [10],
-  reading: readingForShowers(3, 121),
-});
+const staleBackupHourNotInTodaysPlanState = createControllerState();
+let staleBackupHourNotInTodaysPlan;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  staleBackupHourNotInTodaysPlan = decide({
+    currentHour: 15,
+    plannedHours: [10],
+    reading: readingForShowers(3, 121),
+    state: staleBackupHourNotInTodaysPlanState,
+  });
+}
 assert.strictEqual(
   staleBackupHourNotInTodaysPlan.reason,
   "backup-fault-override",
-  "anturivika varatunnilla ohittaa vaikka tunti ei ole mukana taman paivan optimoidussa suunnitelmassa",
+  "anturivika varatunnilla ohittaa vaikka tunti ei ole mukana taman paivan optimoidussa suunnitelmassa, kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
 assert.strictEqual(staleBackupHourNotInTodaysPlan.finalTargetOn, true);
 
-const missingReadingBackupHourNotInTodaysPlan = decide({
-  currentHour: 15,
-  plannedHours: [10],
-  reading: null,
-});
+const missingReadingBackupHourNotInTodaysPlanState = createControllerState();
+let missingReadingBackupHourNotInTodaysPlan;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  missingReadingBackupHourNotInTodaysPlan = decide({
+    currentHour: 15,
+    plannedHours: [10],
+    reading: null,
+    state: missingReadingBackupHourNotInTodaysPlanState,
+  });
+}
 assert.strictEqual(
   missingReadingBackupHourNotInTodaysPlan.reason,
   "backup-fault-override",
-  "puuttuva lukema varatunnilla ohittaa myos vaikka tunti ei ole mukana suunnitelmassa",
+  "puuttuva lukema varatunnilla ohittaa myos vaikka tunti ei ole mukana suunnitelmassa, kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
 assert.strictEqual(missingReadingBackupHourNotInTodaysPlan.finalTargetOn, true);
 
@@ -261,12 +346,20 @@ assert.strictEqual(
   false,
   "puuttuva lukema tunnilla joka ei ole varatunti ei saa lammittaa",
 );
+const missingReadingBackupHourState = createControllerState();
+let missingReadingBackupHour;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  missingReadingBackupHour = decide({
+    reading: null,
+    state: missingReadingBackupHourState,
+  });
+}
 assert.strictEqual(
-  decide({ reading: null }).reason,
+  missingReadingBackupHour.reason,
   "backup-fault-override",
-  "puuttuva lukema varatunnilla lammittaa ehdoitta",
+  "puuttuva lukema varatunnilla lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(decide({ reading: null }).finalTargetOn, true);
+assert.strictEqual(missingReadingBackupHour.finalTargetOn, true);
 
 assert.strictEqual(
   decide({
@@ -289,14 +382,19 @@ assert.strictEqual(
 );
 assert.strictEqual(failSafe.consecutiveHighFillReadings, 0);
 
-const readingFetchErrorOnBackupHour = decide({
-  failSafeReason: "reading-fetch-error",
-  reading: null,
-});
+const readingFetchErrorOnBackupHourState = createControllerState();
+let readingFetchErrorOnBackupHour;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  readingFetchErrorOnBackupHour = decide({
+    failSafeReason: "reading-fetch-error",
+    reading: null,
+    state: readingFetchErrorOnBackupHourState,
+  });
+}
 assert.strictEqual(
   readingFetchErrorOnBackupHour.reason,
   "backup-fault-override",
-  "lukeman hakuvirhe varatunnilla lammittaa ehdoitta",
+  "lukeman hakuvirhe varatunnilla lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
 assert.strictEqual(readingFetchErrorOnBackupHour.finalTargetOn, true);
 
@@ -338,13 +436,19 @@ assert.strictEqual(
   true,
   "Supabase error fallback may start below 92 percent",
 );
-assert.strictEqual(
-  decide({
+const fallbackStaleState = createControllerState();
+let fallbackStaleDecision;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  fallbackStaleDecision = decide({
     plannedHours: fallbackControl.plannedHours,
     reading: readingForShowers(3, 121),
-  }).finalTargetOn,
+    state: fallbackStaleState,
+  });
+}
+assert.strictEqual(
+  fallbackStaleDecision.finalTargetOn,
   true,
-  "Supabase error fallback on a backup hour now heats through a stale reading too - the tank's own thermostat is the real safety net",
+  "Supabase error fallback on a backup hour now heats through a stale reading too (after three consecutive unreliable cycles) - the tank's own thermostat is the real safety net",
 );
 assert.strictEqual(
   decide({

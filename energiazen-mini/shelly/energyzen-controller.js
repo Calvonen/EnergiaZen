@@ -6,6 +6,11 @@ let CHECK_INTERVAL_MS = 60000;
 let MAX_READING_AGE_SECONDS = 120;
 let START_HEATING_FILL_RATIO = 0.92;
 let REQUIRED_BLOCKING_READINGS = 2;
+// Yksittainen epaluotettava kierros (esim. hetkellinen Wi-Fi-katko) ei enaa
+// yksinaan riita kaynnistamaan varatuntilammitysta sokeasti - vasta kolmas
+// PERAKKAINEN epaluotettava kierros sallii nykyisen
+// backup-fault-override-kayttaytymisen (ks. DATA_FAULT_REASONS alla).
+let REQUIRED_UNRELIABLE_CYCLES = 3;
 // Hourly pg_cron cadence plus one half-hour operational grace period.
 // This gates validation time, never heating_plans.updated_at.
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
@@ -36,13 +41,17 @@ let DATA_FAULT_REASONS = {
 };
 
 function createControllerState() {
-  return { consecutiveHighFillReadings: 0 };
+  return { consecutiveHighFillReadings: 0, consecutiveUnreliableCycles: 0 };
 }
 
 let controllerState = createControllerState();
 
 function resetHighFillReadings(state) {
   state.consecutiveHighFillReadings = 0;
+}
+
+function resetUnreliableCycles(state) {
+  state.consecutiveUnreliableCycles = 0;
 }
 
 function pad2(value) {
@@ -448,15 +457,32 @@ function decideHeating(input, state) {
   }
 
   // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
-  // varakaytto ole kaytoston pois - lammitetaan sokeana, koska varaajan
-  // oma termostaatti hoitaa turvallisuuden. Katso DATA_FAULT_REASONS.
-  let backupFaultOverride =
+  // varakaytto ole kaytoston pois - tama kierros VOISI johtaa
+  // backup-fault-overrideen. Katso DATA_FAULT_REASONS.
+  let unreliableCycleEligible =
     reason !== null &&
     DATA_FAULT_REASONS[reason] === true &&
     settings !== null &&
     settings !== undefined &&
     settings.enabled === true &&
     isBackupHour;
+
+  if (unreliableCycleEligible) {
+    decisionState.consecutiveUnreliableCycles = Math.min(
+      decisionState.consecutiveUnreliableCycles + 1,
+      REQUIRED_UNRELIABLE_CYCLES,
+    );
+  } else {
+    resetUnreliableCycles(decisionState);
+  }
+
+  // Yksi tai kaksi perakkaista epaluotettavaa kierrosta ei viela riita -
+  // vasta kolmas peräkkäinen sallii sokean lammityksen, koska varaajan oma
+  // termostaatti hoitaa turvallisuuden vasta silloin kun katko on aidosti
+  // pitkittynyt eika vain hetkellinen.
+  let backupFaultOverride =
+    unreliableCycleEligible &&
+    decisionState.consecutiveUnreliableCycles >= REQUIRED_UNRELIABLE_CYCLES;
 
   if (backupFaultOverride) {
     resetHighFillReadings(decisionState);
@@ -493,6 +519,8 @@ function decideHeating(input, state) {
     backupHours: backupHours,
     consecutiveHighFillReadings:
       decisionState.consecutiveHighFillReadings,
+    consecutiveUnreliableCycles:
+      decisionState.consecutiveUnreliableCycles,
     currentHour: input.currentHour,
     currentShowers: currentShowers,
     finalTargetOn: finalTargetOn,
@@ -503,6 +531,7 @@ function decideHeating(input, state) {
     reason: reason,
     relayCurrentlyOn: relayCurrentlyOn,
     requiredBlockingReadings: REQUIRED_BLOCKING_READINGS,
+    requiredUnreliableCycles: REQUIRED_UNRELIABLE_CYCLES,
     startBlockedByFillRatio: startBlockedByFillRatio,
     startHeatingFillRatio: START_HEATING_FILL_RATIO,
     startThresholdShowers: startThresholdShowers,
@@ -605,6 +634,8 @@ function logDecision(decision, source) {
       backupHours: decision.backupHours,
       consecutiveHighFillReadings:
         decision.consecutiveHighFillReadings,
+      consecutiveUnreliableCycles:
+        decision.consecutiveUnreliableCycles,
       currentHour: decision.currentHour,
       currentShowers: decision.currentShowers,
       finalTargetOn: decision.finalTargetOn,
@@ -615,6 +646,8 @@ function logDecision(decision, source) {
       relayCurrentlyOn: decision.relayCurrentlyOn,
       requiredBlockingReadings:
         decision.requiredBlockingReadings,
+      requiredUnreliableCycles:
+        decision.requiredUnreliableCycles,
       source: source,
       startBlockedByFillRatio:
         decision.startBlockedByFillRatio,
@@ -838,6 +871,7 @@ function startController() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REQUIRED_BLOCKING_READINGS: REQUIRED_BLOCKING_READINGS,
+    REQUIRED_UNRELIABLE_CYCLES: REQUIRED_UNRELIABLE_CYCLES,
     START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
     buildPlanFingerprint: buildPlanFingerprint,
     calculateCurrentShowers: calculateCurrentShowers,
