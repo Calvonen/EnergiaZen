@@ -150,6 +150,164 @@ function resolveHelsinkiNow() {
   return resolveHelsinkiFromSysStatus(Shelly.getComponentStatus("sys"));
 }
 
+// "Now" for the heartbeat-trust age comparison, as whole UNIX SECONDS
+// straight from the device's own Sys status - never derived from
+// new Date().getTime() (epoch-milliseconds), matching
+// parsePostgresTimestampSeconds above. Same unsynced-clock sanity floor as
+// resolveHelsinkiFromSysStatus, kept independent of it so this file's two
+// device-time reads (local Helsinki date/hour vs. heartbeat "now") stay
+// simple to reason about separately.
+function resolveSysUnixtimeSeconds() {
+  let sysStatus = Shelly.getComponentStatus("sys");
+
+  if (!sysStatus || typeof sysStatus.unixtime !== "number" || sysStatus.unixtime < 1577836800) {
+    return NaN;
+  }
+
+  return sysStatus.unixtime;
+}
+
+// Inverse of civilDateFromDays above (Howard Hinnant's days_from_civil,
+// same source), same pure-integer-arithmetic constraint - no unsupported
+// UTC-family Date methods involved.
+function daysFromCivil(year, month, day) {
+  let y = month <= 2 ? year - 1 : year;
+  let era = Math.floor((y >= 0 ? y : y - 399) / 400);
+  let yearOfEra = y - era * 400;
+  let dayOfYear =
+    Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1;
+  let dayOfEra =
+    yearOfEra * 365 +
+    Math.floor(yearOfEra / 4) -
+    Math.floor(yearOfEra / 100) +
+    dayOfYear;
+
+  return era * 146097 + dayOfEra - 719468;
+}
+
+// Shelly's mJS Date.parse() misparses the "YYYY-MM-DD HH:MM:SS(.sss)?+00"
+// timestamp format Supabase/PostgreSQL emits for
+// backend_heating_optimizer_state.last_validated_plan_at - confirmed on a
+// real device: Date.parse("2026-08-16 04:23:01.034+00") returned a value
+// hours off from the correct epoch. Parsed here deterministically with
+// plain string slicing + integer arithmetic instead (the same
+// mJS-compatibility approach as parseSysLocalHour/civilDateFromDays
+// above), so isTrustedBackendHeartbeat no longer depends on Date.parse
+// for this format at all.
+//
+// Returns whole UNIX SECONDS, never epoch-milliseconds: a second on-device
+// test confirmed Shelly's mJS also loses several milliseconds of precision
+// doing arithmetic at epoch-millisecond magnitude (~1.7e12), even with
+// this same deterministic integer parser. Heartbeat freshness only ever
+// needs whole-second precision (MAX_BACKEND_VALIDATION_AGE_SECONDS), and
+// epoch-SECONDS magnitude (~1.7e9) is the same range as sys.unixtime,
+// already used elsewhere in this file without any precision issue - so
+// the fractional-second part is read only far enough to validate it and
+// find the following timezone offset, then deliberately dropped. Also
+// accepts the ISO "T" separator and a "Z" or "+HH:MM"/"-HH:MM" offset,
+// since existing tests and any future ISO-formatted source should keep
+// working too.
+function parsePostgresTimestampSeconds(value) {
+  if (typeof value !== "string" || value.length < 19) {
+    return NaN;
+  }
+
+  if (
+    value.charAt(4) !== "-" ||
+    value.charAt(7) !== "-" ||
+    (value.charAt(10) !== " " && value.charAt(10) !== "T") ||
+    value.charAt(13) !== ":" ||
+    value.charAt(16) !== ":"
+  ) {
+    return NaN;
+  }
+
+  let year = Number(value.slice(0, 4));
+  let month = Number(value.slice(5, 7));
+  let day = Number(value.slice(8, 10));
+  let hour = Number(value.slice(11, 13));
+  let minute = Number(value.slice(14, 16));
+  let second = Number(value.slice(17, 19));
+
+  if (
+    !isFiniteNumber(year) ||
+    !isFiniteNumber(month) || month < 1 || month > 12 ||
+    !isFiniteNumber(day) || day < 1 || day > 31 ||
+    !isFiniteNumber(hour) || hour < 0 || hour > 23 ||
+    !isFiniteNumber(minute) || minute < 0 || minute > 59 ||
+    !isFiniteNumber(second) || second < 0 || second > 59
+  ) {
+    return NaN;
+  }
+
+  let rest = value.slice(19);
+
+  if (rest.charAt(0) === ".") {
+    let fractionEnd = 1;
+
+    while (
+      fractionEnd < rest.length &&
+      rest.charAt(fractionEnd) >= "0" &&
+      rest.charAt(fractionEnd) <= "9"
+    ) {
+      fractionEnd += 1;
+    }
+
+    if (fractionEnd === 1) {
+      return NaN;
+    }
+
+    rest = rest.slice(fractionEnd);
+  }
+
+  let offsetMinutes = 0;
+
+  if (rest.length > 0) {
+    if (rest === "Z") {
+      offsetMinutes = 0;
+    } else {
+      let sign = rest.charAt(0);
+
+      if ((sign !== "+" && sign !== "-") || rest.length < 3) {
+        return NaN;
+      }
+
+      let offsetHour = Number(rest.slice(1, 3));
+      let offsetMinute = 0;
+      let minutePart = rest.slice(3);
+
+      if (minutePart.length > 0) {
+        if (minutePart.charAt(0) === ":") {
+          minutePart = minutePart.slice(1);
+        }
+
+        if (minutePart.length !== 2) {
+          return NaN;
+        }
+
+        offsetMinute = Number(minutePart);
+      }
+
+      if (
+        !isFiniteNumber(offsetHour) || offsetHour < 0 || offsetHour > 23 ||
+        !isFiniteNumber(offsetMinute) || offsetMinute < 0 || offsetMinute > 59
+      ) {
+        return NaN;
+      }
+
+      offsetMinutes = (offsetHour * 60 + offsetMinute) * (sign === "-" ? -1 : 1);
+    }
+  }
+
+  let localAsUtcSeconds =
+    daysFromCivil(year, month, day) * 86400 +
+    hour * 3600 +
+    minute * 60 +
+    second;
+
+  return localAsUtcSeconds - offsetMinutes * 60;
+}
+
 function isFiniteNumber(value) {
   return typeof value === "number" && isFinite(value);
 }
@@ -544,16 +702,18 @@ function buildPlanFingerprint(planDate, plannedHours) {
     : null;
 }
 
-function isTrustedBackendHeartbeat(rows, error, planRow, nowMs) {
+// nowSeconds: whole UNIX SECONDS (e.g. Shelly's own sys.unixtime) - never
+// epoch-milliseconds, see parsePostgresTimestampSeconds above.
+function isTrustedBackendHeartbeat(rows, error, planRow, nowSeconds) {
   if (error !== null || !Array.isArray(rows) || rows.length !== 1 || !planRow) return false;
   let row = rows[0];
-  let validatedAt = typeof row.last_validated_plan_at === "string" ? Date.parse(row.last_validated_plan_at) : NaN;
-  let ageSeconds = (nowMs - validatedAt) / 1000;
+  let validatedAtSeconds = parsePostgresTimestampSeconds(row.last_validated_plan_at);
+  let ageSeconds = nowSeconds - validatedAtSeconds;
   let planFingerprint = buildPlanFingerprint(planRow.plan_date, planRow.planned_hours);
-  return row.health_status === "healthy" && isFinite(validatedAt) && ageSeconds >= 0 && ageSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS && planFingerprint !== null && row.validated_plan_fingerprint === planFingerprint;
+  return row.health_status === "healthy" && isFinite(validatedAtSeconds) && ageSeconds >= 0 && ageSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS && planFingerprint !== null && row.validated_plan_fingerprint === planFingerprint;
 }
 
-function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowMs) {
+function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowSeconds) {
   let control = resolvePlanControl(planRows, planError, settings, today);
   // Fixed rows are authoritative user commands, not optimizer publications -
   // but only when heating_control_settings.heating_need_mode (fetched fresh
@@ -565,7 +725,7 @@ function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeat
   // uncached-mode defaults) - denies the exemption and falls through to the
   // same heartbeat-trust check and backup/fail-safe path automatic rows
   // already use below.
-  if (control.source !== "energyzen" || (planRows[0].mode === "fixed" && settings.heatingNeedMode === "fixed") || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
+  if (control.source !== "energyzen" || (planRows[0].mode === "fixed" && settings.heatingNeedMode === "fixed") || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowSeconds)) return control;
   return settings.enabled
     ? { failSafeReason: null, plannedHours: settings.backupHours, source: "backup" }
     : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], source: "fail-safe" };
@@ -788,7 +948,7 @@ function fetchTodayPlan(settings) {
     let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
     supabaseRequest(heartbeatPath, function (heartbeatRows, heartbeatError) {
       let control = applyControlPlaneDebounce(
-        resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime()),
+        resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, resolveSysUnixtimeSeconds()),
         controllerState,
       );
       if (control.failSafeReason !== null) executeDecision(control, settings, null);
@@ -870,6 +1030,7 @@ if (typeof module !== "undefined" && module.exports) {
     createRequestError: createRequestError,
     decideHeating: decideHeating,
     isTrustedBackendHeartbeat: isTrustedBackendHeartbeat,
+    parsePostgresTimestampSeconds: parsePostgresTimestampSeconds,
     resolveHelsinkiFromSysStatus: resolveHelsinkiFromSysStatus,
     resolvePlanControl: resolvePlanControl,
     resolveTrustedPlanControl: resolveTrustedPlanControl,

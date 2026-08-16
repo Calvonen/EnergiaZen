@@ -173,6 +173,32 @@ migraatio).
     virheellinen lukemakin; `backup_hours`-varapolulla se sen sijaan
     lasketaan yhä samaan `"reading-fetch-error"`-datavikasyyhyn ja
     kolmen kierroksen debounssiin kuin ennenkin (ks. alla).
+  - **`isTrustedBackendHeartbeat` ei enää käytä `Date.parse()`:a
+    `last_validated_plan_at`-aikaleiman jäsentämiseen, eikä rakenna
+    epoch-millisekunti-suuruusluokan (~1.7e12) lukuja lainkaan.**
+    Tuotannosta löytyi kaksi peräkkäistä vikaa fyysisellä laitteella ennen
+    käyttöönottoa: (1) Shellyn mJS-ajoympäristön `Date.parse()` tulkitsi
+    Supabasen/PostgreSQL:n palauttaman `"YYYY-MM-DD HH:MM:SS(.sss)+00"`-
+    muotoisen aikaleiman väärin (tunteja pielessä oleva epoch); (2) myös
+    oma deterministinen parseri, kun se rakensi epoch-**millisekunti**-
+    arvon (~1.7e12), menetti mJS:ssä muutaman millisekunnin tarkkuutta
+    suuren luvun laskennassa. Kummankin seurauksena validi heartbeat
+    saattoi näyttää epäluotettavalta ja ohjain jäädä jumiin
+    `source: "backup"`-tilaan vaikka backend oli aidosti kunnossa.
+    Korjattu `parsePostgresTimestampSeconds`-funktiolla, joka jäsentää
+    aikaleiman deterministisesti pelkällä merkkijonoviipaloinnilla ja
+    kokonaislukuaritmetiikalla (`daysFromCivil`, `civilDateFromDays`:n
+    käänteisfunktio) ja palauttaa **UNIX-sekunteina**, ei millisekunteina
+    – sama suuruusluokka (~1.7e9) kuin `sys.unixtime`, jota käytetään jo
+    muualla tässä tiedostossa ilman tarkkuusongelmia. Millisekuntiosa
+    luetaan vain sen verran että se voidaan ohittaa ja aikavyöhyke-offset
+    löytää perästä, mutta pudotetaan tarkoituksella – heartbeatin
+    tuoreustarkistus tarvitsee vain kokonaisia sekunteja
+    (`MAX_BACKEND_VALIDATION_AGE_SECONDS`). "Nyt"-arvo heartbeat-
+    vertailuun luetaan `resolveSysUnixtimeSeconds`:lla suoraan laitteen
+    omasta Sys-statuksesta, ei `new Date().getTime()`:lla. Hyväksyy sekä
+    PostgreSQL:n natiivimuodon (`" "`-erotin, `+00`-offset) että ISO 8601
+    -muodon (`"T"`-erotin, `Z`/`+HH:MM`-offset).
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua
