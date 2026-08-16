@@ -3,8 +3,10 @@ const fs = require("fs");
 const path = require("path");
 const {
   REQUIRED_BLOCKING_READINGS,
+  REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
   REQUIRED_UNRELIABLE_CYCLES,
   START_HEATING_FILL_RATIO,
+  applyControlPlaneDebounce,
   buildPlanFingerprint,
   calculateCurrentShowers,
   createControllerState,
@@ -81,6 +83,7 @@ function decide({
 assert.strictEqual(START_HEATING_FILL_RATIO, 0.92);
 assert.strictEqual(REQUIRED_BLOCKING_READINGS, 2);
 assert.strictEqual(REQUIRED_UNRELIABLE_CYCLES, 3);
+assert.strictEqual(REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES, 3);
 
 const highFillState = createControllerState();
 const firstHighFill = decide({
@@ -583,6 +586,196 @@ assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_pl
 const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
 assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
 assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
+
+// applyControlPlaneDebounce: a transient plan-/heartbeat-fetch problem that
+// resolvePlanControl/resolveTrustedPlanControl would resolve to
+// source:"backup" must not immediately let backup_hours drive the relay -
+// only the third CONSECUTIVE such cycle may. currentHour 15 is on
+// settings.backupHours, so a reading that is otherwise healthy and below
+// the fill threshold would start heating immediately if plannedHours
+// actually included it.
+const transientPlanErrorControl = () =>
+  resolvePlanControl(null, createRequestError("transient network blip", true), settings, "2026-07-26");
+assert.strictEqual(transientPlanErrorControl().source, "backup", "sanity check: this raw resolution is exactly the 'backup' source being debounced");
+
+const planDebounceState = createControllerState();
+
+const planPending1 = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planPending1.source, "backup-pending", "1st consecutive transient plan-fetch backup resolution is still pending");
+assert.deepStrictEqual(planPending1.plannedHours, [], "pending cycle must not let backup_hours drive the relay yet");
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, 1);
+const planPending1Decision = decide({
+  currentHour: 15,
+  plannedHours: planPending1.plannedHours,
+  failSafeReason: planPending1.failSafeReason,
+  reading: readingForShowers(3),
+  state: planDebounceState,
+});
+assert.strictEqual(planPending1Decision.finalTargetOn, false, "1) transient plan-fetch error on a backup hour must not heat yet");
+assert.strictEqual(planPending1Decision.reason, "hour-not-planned");
+
+const planPending2 = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planPending2.source, "backup-pending", "2nd consecutive transient plan-fetch backup resolution is still pending");
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, 2);
+const planPending2Decision = decide({
+  currentHour: 15,
+  plannedHours: planPending2.plannedHours,
+  failSafeReason: planPending2.failSafeReason,
+  reading: readingForShowers(3),
+  state: planDebounceState,
+});
+assert.strictEqual(planPending2Decision.finalTargetOn, false, "2) transient plan-fetch error on a backup hour must still not heat");
+
+const planAdopted = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planAdopted.source, "backup", "3rd consecutive transient plan-fetch backup resolution is finally adopted");
+assert.deepStrictEqual(planAdopted.plannedHours, settings.backupHours);
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES);
+const planAdoptedDecision = decide({
+  currentHour: 15,
+  plannedHours: planAdopted.plannedHours,
+  failSafeReason: planAdopted.failSafeReason,
+  reading: readingForShowers(3),
+  state: planDebounceState,
+});
+assert.strictEqual(planAdoptedDecision.finalTargetOn, true, "3) after three consecutive transient plan-fetch errors backup_hours may finally start heating");
+assert.strictEqual(planAdoptedDecision.reason, "planned-heating-starts");
+
+// A transient heartbeat-fetch failure/untrusted heartbeat is debounced
+// exactly the same way, since resolveTrustedPlanControl also resolves it to
+// source:"backup".
+const transientHeartbeatControl = () =>
+  resolveTrustedPlanControl(todayPlan, null, null, createRequestError("heartbeat unavailable", true), settings, "2026-08-13", heartbeatNow);
+assert.strictEqual(transientHeartbeatControl().source, "backup", "sanity check: heartbeat fetch failure resolves to the same 'backup' source being debounced");
+
+const heartbeatDebounceState = createControllerState();
+const heartbeatPending1 = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatPending1.source, "backup-pending");
+const heartbeatPending1Decision = decide({
+  currentHour: 15,
+  plannedHours: heartbeatPending1.plannedHours,
+  failSafeReason: heartbeatPending1.failSafeReason,
+  reading: readingForShowers(3),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatPending1Decision.finalTargetOn, false, "transient heartbeat-fetch failure on a backup hour must not heat on the 1st cycle");
+
+const heartbeatPending2 = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatPending2.source, "backup-pending");
+const heartbeatPending2Decision = decide({
+  currentHour: 15,
+  plannedHours: heartbeatPending2.plannedHours,
+  failSafeReason: heartbeatPending2.failSafeReason,
+  reading: readingForShowers(3),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatPending2Decision.finalTargetOn, false, "transient heartbeat-fetch failure on a backup hour must not heat on the 2nd cycle either");
+
+const heartbeatAdopted = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatAdopted.source, "backup", "3rd consecutive transient heartbeat failure is finally adopted");
+const heartbeatAdoptedDecision = decide({
+  currentHour: 15,
+  plannedHours: heartbeatAdopted.plannedHours,
+  failSafeReason: heartbeatAdopted.failSafeReason,
+  reading: readingForShowers(3),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatAdoptedDecision.finalTargetOn, true, "after three consecutive transient heartbeat failures backup_hours may finally start heating");
+
+// A single successful/trusted "energyzen" cycle in between resets the
+// control-plane counter immediately, exactly like decideHeating's own
+// tank-reading counter resets on a reliable cycle.
+const resetState = createControllerState();
+applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 2);
+const trustedInBetween = applyControlPlaneDebounce(
+  resolvePlanControl([{ plan_date: "2026-07-26", planned_hours: [15] }], null, settings, "2026-07-26"),
+  resetState,
+);
+assert.strictEqual(trustedInBetween.source, "energyzen");
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 0, "a trusted energyzen cycle in between resets the control-plane counter immediately");
+const afterResetPending = applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+assert.strictEqual(afterResetPending.source, "backup-pending", "the next transient cycle after a reset starts counting from zero again, not from where it left off");
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 1);
+
+// A transient control-plane cycle on an hour that is not a backup hour must
+// never start heating, even once backup_hours has been fully adopted (3rd
+// consecutive cycle) - matches the existing rule that backup_hours only
+// ever applies to hours actually listed in it.
+const nonBackupHourDebounceState = createControllerState();
+for (let index = 0; index < REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES; index += 1) {
+  applyControlPlaneDebounce(transientPlanErrorControl(), nonBackupHourDebounceState);
+}
+assert.strictEqual(nonBackupHourDebounceState.consecutiveControlPlaneUnreliableCycles, REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES);
+const adoptedButNotBackupHour = applyControlPlaneDebounce(transientPlanErrorControl(), nonBackupHourDebounceState);
+assert.strictEqual(adoptedButNotBackupHour.source, "backup");
+const nonBackupHourDecision = decide({
+  currentHour: 8,
+  plannedHours: adoptedButNotBackupHour.plannedHours,
+  failSafeReason: adoptedButNotBackupHour.failSafeReason,
+  reading: readingForShowers(3, 121),
+  state: nonBackupHourDebounceState,
+});
+assert.strictEqual(nonBackupHourDecision.finalTargetOn, false, "backup_hours never drives the relay on an hour that is not itself a backup hour");
+
+// The control-plane debounce and the pre-existing tank-reading debounce are
+// fully independent: adopting backup_hours (3 consecutive control-plane
+// cycles) must not itself grant the tank-reading backup-fault-override -
+// that still separately needs its own 3 consecutive unreliable readings.
+const combinedState = createControllerState();
+let combinedControl;
+for (let index = 0; index < REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES; index += 1) {
+  combinedControl = applyControlPlaneDebounce(transientPlanErrorControl(), combinedState);
+}
+assert.strictEqual(combinedControl.source, "backup", "control-plane debounce has fully adopted backup_hours");
+const combinedFirstStale = decide({
+  currentHour: 15,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: readingForShowers(3, 121),
+  state: combinedState,
+});
+assert.strictEqual(combinedFirstStale.reason, "stale-reading", "even with backup_hours adopted, a single stale reading must not yet trigger backup-fault-override");
+assert.strictEqual(combinedFirstStale.finalTargetOn, false);
+assert.strictEqual(combinedFirstStale.consecutiveUnreliableCycles, 1);
+const combinedSecondStale = decide({
+  currentHour: 15,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: readingForShowers(3, 121),
+  state: combinedState,
+});
+assert.strictEqual(combinedSecondStale.finalTargetOn, false);
+assert.strictEqual(combinedSecondStale.consecutiveUnreliableCycles, 2);
+const combinedThirdStale = decide({
+  currentHour: 15,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: readingForShowers(3, 121),
+  state: combinedState,
+});
+assert.strictEqual(combinedThirdStale.reason, "backup-fault-override", "the tank-reading 3-cycle debounce still fires on its own after being independently satisfied");
+assert.strictEqual(combinedThirdStale.finalTargetOn, true);
+
+// A normal, trusted EnergyZen plan cycle must never be delayed by this
+// debounce - it applies immediately on the very first cycle.
+const normalEnergyzenState = createControllerState();
+const normalEnergyzenControl = applyControlPlaneDebounce(
+  resolvePlanControl([{ plan_date: "2026-07-26", planned_hours: [15] }], null, settings, "2026-07-26"),
+  normalEnergyzenState,
+);
+assert.strictEqual(normalEnergyzenControl.source, "energyzen");
+assert.strictEqual(normalEnergyzenState.consecutiveControlPlaneUnreliableCycles, 0);
+const normalEnergyzenDecision = decide({
+  currentHour: 15,
+  plannedHours: normalEnergyzenControl.plannedHours,
+  failSafeReason: normalEnergyzenControl.failSafeReason,
+  reading: readingForShowers(3),
+  state: normalEnergyzenState,
+});
+assert.strictEqual(normalEnergyzenDecision.finalTargetOn, true, "a normal trusted EnergyZen plan heats immediately, on the very first cycle");
+assert.strictEqual(normalEnergyzenDecision.reason, "planned-heating-starts");
+
 // resolveHelsinkiFromSysStatus trusts the device's own Sys status (sys.time
 // for local wall-clock hour, sys.unixtime as a UTC epoch used only to
 // detect a local midnight rollover) instead of computing DST itself - the

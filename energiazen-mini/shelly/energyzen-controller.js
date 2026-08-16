@@ -11,6 +11,12 @@ let REQUIRED_BLOCKING_READINGS = 2;
 // PERAKKAINEN epaluotettava kierros sallii nykyisen
 // backup-fault-override-kayttaytymisen (ks. DATA_FAULT_REASONS alla).
 let REQUIRED_UNRELIABLE_CYCLES = 3;
+// Sama suoja control-plane-puolelle: yksittainen transientti plan-/
+// heartbeat-haun hairio (resolvePlanControl/resolveTrustedPlanControl
+// paatyy source:"backup") ei enaa yksinaan saa ottaa backup_hours-listaa
+// kayttoon ohjaukseen - vasta kolmas PERAKKAINEN tallainen kierros sallii
+// sen. Katso applyControlPlaneDebounce.
+let REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES = 3;
 // Hourly pg_cron cadence plus one half-hour operational grace period.
 // This gates validation time, never heating_plans.updated_at.
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
@@ -41,7 +47,11 @@ let DATA_FAULT_REASONS = {
 };
 
 function createControllerState() {
-  return { consecutiveHighFillReadings: 0, consecutiveUnreliableCycles: 0 };
+  return {
+    consecutiveControlPlaneUnreliableCycles: 0,
+    consecutiveHighFillReadings: 0,
+    consecutiveUnreliableCycles: 0,
+  };
 }
 
 let controllerState = createControllerState();
@@ -52,6 +62,10 @@ function resetHighFillReadings(state) {
 
 function resetUnreliableCycles(state) {
   state.consecutiveUnreliableCycles = 0;
+}
+
+function resetControlPlaneUnreliableCycles(state) {
+  state.consecutiveControlPlaneUnreliableCycles = 0;
 }
 
 function pad2(value) {
@@ -627,11 +641,61 @@ function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeat
     : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], resetHighFillReadings: true, source: "fail-safe" };
 }
 
+// Debounces the transition into control.source === "backup" (a transient
+// plan-fetch/heartbeat problem, resolved by resolvePlanControl/
+// resolveTrustedPlanControl above) the same way decideHeating debounces the
+// tank-reading backup-fault-override: a single or second consecutive
+// "backup" resolution must not yet let backup_hours drive the relay -
+// only the third consecutive one does. Any other source ("energyzen" -
+// the normal, trusted plan - or the already-safe "fail-safe" path) resets
+// the counter immediately and passes control through untouched, so normal
+// EnergyZen-planned heating is never delayed by this.
+function applyControlPlaneDebounce(control, state) {
+  let decisionState = state || controllerState;
+
+  if (control.source !== "backup") {
+    resetControlPlaneUnreliableCycles(decisionState);
+    return control;
+  }
+
+  decisionState.consecutiveControlPlaneUnreliableCycles = Math.min(
+    decisionState.consecutiveControlPlaneUnreliableCycles + 1,
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
+  );
+
+  if (
+    decisionState.consecutiveControlPlaneUnreliableCycles >=
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES
+  ) {
+    return control;
+  }
+
+  // Pending: not yet debounced through, so backup_hours must not influence
+  // the relay this cycle. failSafeReason stays null (not a fail-safe short
+  // circuit) so the tank reading is still fetched and decideHeating's own
+  // independent stale/missing-reading debounce keeps running exactly as it
+  // would on a normal cycle - only the plan-derived planned-hours list is
+  // withheld.
+  return {
+    failSafeReason: null,
+    plannedHours: [],
+    resetHighFillReadings: true,
+    source: "backup-pending",
+  };
+}
+
 function logDecision(decision, source) {
   console.log(
     "EnergyZen decision:",
     JSON.stringify({
       backupHours: decision.backupHours,
+      // Kaksi ERI laskuria tarkoituksella: consecutive*ControlPlane*
+      // koskee plan-/heartbeat-haun luotettavuutta (applyControlPlaneDebounce
+      // yllä), consecutiveUnreliableCycles (ilman ControlPlane-etuliitetta)
+      // koskee tank_readings-lukeman luotettavuutta (decideHeating) - nayta
+      // molemmat erikseen, jotta lokista nakee kumpi kynnys kasvaa.
+      consecutiveControlPlaneUnreliableCycles:
+        controllerState.consecutiveControlPlaneUnreliableCycles,
       consecutiveHighFillReadings:
         decision.consecutiveHighFillReadings,
       consecutiveUnreliableCycles:
@@ -646,6 +710,8 @@ function logDecision(decision, source) {
       relayCurrentlyOn: decision.relayCurrentlyOn,
       requiredBlockingReadings:
         decision.requiredBlockingReadings,
+      requiredControlPlaneUnreliableCycles:
+        REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
       requiredUnreliableCycles:
         decision.requiredUnreliableCycles,
       source: source,
@@ -782,14 +848,20 @@ function fetchTodayPlan(settings) {
 
   supabaseRequest(planPath, function (rows, error) {
     if (!BACKEND_PLAN_TRUST_ENABLED) {
-      let shadowControl = resolvePlanControl(rows, error, settings, today);
+      let shadowControl = applyControlPlaneDebounce(
+        resolvePlanControl(rows, error, settings, today),
+        controllerState,
+      );
       if (shadowControl.failSafeReason !== null) executeDecision(shadowControl, settings, null);
       else fetchLatestReading(shadowControl, settings);
       return;
     }
     let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
     supabaseRequest(heartbeatPath, function (heartbeatRows, heartbeatError) {
-      let control = resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime());
+      let control = applyControlPlaneDebounce(
+        resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime()),
+        controllerState,
+      );
       if (control.failSafeReason !== null) executeDecision(control, settings, null);
       else fetchLatestReading(control, settings);
     });
@@ -871,8 +943,11 @@ function startController() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REQUIRED_BLOCKING_READINGS: REQUIRED_BLOCKING_READINGS,
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES:
+      REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
     REQUIRED_UNRELIABLE_CYCLES: REQUIRED_UNRELIABLE_CYCLES,
     START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
+    applyControlPlaneDebounce: applyControlPlaneDebounce,
     buildPlanFingerprint: buildPlanFingerprint,
     calculateCurrentShowers: calculateCurrentShowers,
     createControllerState: createControllerState,

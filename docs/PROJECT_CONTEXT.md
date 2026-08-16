@@ -146,10 +146,25 @@ migraatio).
     `Script.storage`:en, jotta ohjaus toimii myös hetkellisen
     verkko-/Supabase-katkon yli.
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
-    väärä `plan_date`) **ja** fallback on käytössä, käytetään
-    Supabasesta/välimuistista luettua `backup_hours`-tuntilistaa – tämä ei
-    ole sovelluksen koodiin kovakoodattu lista, vaan konfiguroitava,
-    tietokannassa asuva arvo.
+    väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
+    fallback on käytössä, käytetään Supabasesta/välimuistista luettua
+    `backup_hours`-tuntilistaa – tämä ei ole sovelluksen koodiin
+    kovakoodattu lista, vaan konfiguroitava, tietokannassa asuva arvo.
+    Myös tämä control-plane-fallback (`resolvePlanControl`/
+    `resolveTrustedPlanControl`, tulos `source: "backup"`) on debounssattu
+    `applyControlPlaneDebounce`-funktiolla samalla periaatteella kuin
+    alla kuvattu anturi-/datavikaohitus: yksittäinen transientti plan- tai
+    heartbeat-haun häiriö (esim. hetkellinen Wi-Fi-katko) ei enää yksinään
+    saa ottaa `backup_hours`-listaa käyttöön ohjaukseen (`source:
+    "backup-pending"`, `plannedHours: []` sillä kierroksella) - vasta
+    kolmas PERÄKKÄINEN tällainen kierros sallii sen
+    (`REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES`). Yksikin sitä ennen
+    onnistunut, luotettu `source: "energyzen"`-kierros nollaa laskurin
+    heti, eikä normaalia EnergyZen-suunnitelman mukaista lämmitystä
+    koskaan viivytetä tällä. Tämä on eri, itsenäinen laskuri kuin alla
+    kuvattu tank-reading-datavikalaskuri - molemmat näkyvät erikseen
+    Shellyn lokissa (`consecutiveControlPlaneUnreliableCycles` vs.
+    `consecutiveUnreliableCycles`).
   - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois lasketun
     suihkuvarausarvion ja suunniteltujen tuntien perusteella, sisältäen
     värähtelyn eston (`REQUIRED_BLOCKING_READINGS`) ja lukeman
