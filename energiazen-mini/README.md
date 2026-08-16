@@ -142,8 +142,8 @@ supabase link --project-ref amyvzelzbvjvrevikvrp
 supabase db push
 ```
 
-Migraatio luo jobin `fetch-electricity-prices-hourly`, joka käynnistyy kerran
-tunnissa minuutilla 10. Tarkista jobi:
+Migraatio luo jobin `fetch-electricity-prices-hourly`, joka käynnistyy kahdesti
+tunnissa minuuteilla 20 ja 50. Tarkista jobi:
 
 ```sql
 select jobid, jobname, schedule, active
