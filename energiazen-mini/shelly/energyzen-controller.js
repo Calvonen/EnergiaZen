@@ -4,8 +4,17 @@
 let SWITCH_ID = 0;
 let CHECK_INTERVAL_MS = 60000;
 let MAX_READING_AGE_SECONDS = 120;
-let START_HEATING_FILL_RATIO = 0.92;
-let REQUIRED_BLOCKING_READINGS = 2;
+// Yksittainen epaluotettava kierros (esim. hetkellinen Wi-Fi-katko) ei enaa
+// yksinaan riita kaynnistamaan varatuntilammitysta sokeasti - vasta kolmas
+// PERAKKAINEN epaluotettava kierros sallii nykyisen
+// backup-fault-override-kayttaytymisen (ks. DATA_FAULT_REASONS alla).
+let REQUIRED_UNRELIABLE_CYCLES = 3;
+// Sama suoja control-plane-puolelle: yksittainen transientti plan-/
+// heartbeat-haun hairio (resolvePlanControl/resolveTrustedPlanControl
+// paatyy source:"backup") ei enaa yksinaan saa ottaa backup_hours-listaa
+// kayttoon ohjaukseen - vasta kolmas PERAKKAINEN tallainen kierros sallii
+// sen. Katso applyControlPlaneDebounce.
+let REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES = 3;
 // Hourly pg_cron cadence plus one half-hour operational grace period.
 // This gates validation time, never heating_plans.updated_at.
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
@@ -25,8 +34,8 @@ let requestRunning = false;
 // virheellinen lukema tai sen hakeminen epaonnistui) - emme siis tieda onko
 // varaaja jo taysi. Silloin varaaja lammitetaan silti ehdoitta jos ollaan
 // varatunnilla, koska varaajan oma termostaatti estaa ylikuumenemisen; muut
-// vikasyyt (esim. "hour-not-planned", "invalid-calibration") eivat kata
-// mittausdataa eivatka siis laukaise tata ohitusta.
+// vikasyyt (esim. "hour-not-planned") eivat kata mittausdataa eivatka
+// siis laukaise tata ohitusta.
 let DATA_FAULT_REASONS = {
   "invalid-reading": true,
   "missing-reading": true,
@@ -36,13 +45,20 @@ let DATA_FAULT_REASONS = {
 };
 
 function createControllerState() {
-  return { consecutiveHighFillReadings: 0 };
+  return {
+    consecutiveControlPlaneUnreliableCycles: 0,
+    consecutiveUnreliableCycles: 0,
+  };
 }
 
 let controllerState = createControllerState();
 
-function resetHighFillReadings(state) {
-  state.consecutiveHighFillReadings = 0;
+function resetUnreliableCycles(state) {
+  state.consecutiveUnreliableCycles = 0;
+}
+
+function resetControlPlaneUnreliableCycles(state) {
+  state.consecutiveControlPlaneUnreliableCycles = 0;
 }
 
 function pad2(value) {
@@ -138,10 +154,6 @@ function isFiniteNumber(value) {
   return typeof value === "number" && isFinite(value);
 }
 
-function clamp(value, minimum, maximum) {
-  return Math.min(Math.max(value, minimum), maximum);
-}
-
 function isValidHour(value) {
   return (
     typeof value === "number" &&
@@ -188,35 +200,12 @@ function createDefaultSettings() {
   return {
     backupHours: DEFAULT_BACKUP_HOURS,
     enabled: DEFAULT_FALLBACK_ENABLED,
-    fullTankAverageTemperature: null,
-    fullTankShowers: null,
     // Deliberately never cached (see loadCachedSettings/saveCachedSettings) -
     // a stale cached mode could wrongly authorize the fixed-plan heartbeat
     // exemption below during a settings fetch failure. null here means
     // "authoritative mode unknown", which correctly denies that exemption.
     heatingNeedMode: null,
-    maxTankTemperature: null,
-    minTankTemperature: null,
-    targetShowerReserve: null,
   };
-}
-
-function isValidCalibration(settings) {
-  return (
-    settings !== null &&
-    isFiniteNumber(settings.fullTankShowers) &&
-    settings.fullTankShowers > 0 &&
-    isFiniteNumber(settings.fullTankAverageTemperature) &&
-    isFiniteNumber(settings.minTankTemperature) &&
-    isFiniteNumber(settings.maxTankTemperature) &&
-    isFiniteNumber(settings.targetShowerReserve) &&
-    settings.targetShowerReserve >= 0 &&
-    settings.targetShowerReserve <= settings.fullTankShowers &&
-    settings.fullTankAverageTemperature > settings.minTankTemperature &&
-    settings.fullTankAverageTemperature > 42 &&
-    settings.maxTankTemperature > settings.minTankTemperature &&
-    settings.fullTankAverageTemperature <= settings.maxTankTemperature
-  );
 }
 
 function normalizeSettingsRow(row, fallbackSettings) {
@@ -231,9 +220,6 @@ function normalizeSettingsRow(row, fallbackSettings) {
       typeof row.fallback_enabled === "boolean"
         ? row.fallback_enabled
         : fallbackSettings.enabled,
-    fullTankAverageTemperature:
-      row.full_tank_average_temperature,
-    fullTankShowers: row.full_tank_showers,
     // Freshly read every runController() cycle from the same authoritative
     // heating_control_settings row already fetched here - never taken from
     // fallbackSettings (loadCachedSettings' cache never stores it), so a
@@ -242,14 +228,17 @@ function normalizeSettingsRow(row, fallbackSettings) {
       typeof row.heating_need_mode === "string"
         ? row.heating_need_mode
         : null,
-    maxTankTemperature: row.max_tank_temperature,
-    minTankTemperature: row.min_tank_temperature,
-    targetShowerReserve: row.target_shower_reserve,
   };
 }
 
+// hasStoredFallback tells runController() whether Script.storage actually
+// held a previously-cached row (vs. these being untouched defaults) - a
+// device that has never once synced successfully must fail closed on a
+// transient settings-fetch error instead of trusting unconfigured
+// DEFAULT_BACKUP_HOURS.
 function loadCachedSettings() {
   let settings = createDefaultSettings();
+  settings.hasStoredFallback = false;
 
   try {
     let stored = Script.storage.getItem("fallback");
@@ -266,12 +255,7 @@ function loadCachedSettings() {
         settings.enabled = parsed.enabled;
       }
 
-      settings.fullTankAverageTemperature =
-        parsed.fullTankAverageTemperature;
-      settings.fullTankShowers = parsed.fullTankShowers;
-      settings.maxTankTemperature = parsed.maxTankTemperature;
-      settings.minTankTemperature = parsed.minTankTemperature;
-      settings.targetShowerReserve = parsed.targetShowerReserve;
+      settings.hasStoredFallback = true;
     }
   } catch (error) {
     console.log("EnergyZen: cached settings error", error);
@@ -281,12 +265,11 @@ function loadCachedSettings() {
 }
 
 function saveCachedSettings(settings) {
-  if (!isValidCalibration(settings)) {
-    return;
-  }
-
   try {
-    Script.storage.setItem("fallback", JSON.stringify(settings));
+    Script.storage.setItem(
+      "fallback",
+      JSON.stringify({ backupHours: settings.backupHours, enabled: settings.enabled }),
+    );
   } catch (error) {
     console.log("EnergyZen: settings cache write failed", error);
   }
@@ -341,35 +324,16 @@ function supabaseRequest(path, callback) {
   );
 }
 
-function calculateCurrentShowers(reading, settings) {
-  let topTemperature = reading ? reading.top_temp : null;
-  let bottomTemperature = reading ? reading.bottom_temp : null;
-
-  if (
-    !isFiniteNumber(topTemperature) ||
-    !isFiniteNumber(bottomTemperature) ||
-    !isValidCalibration(settings)
-  ) {
-    return null;
-  }
-
-  let weightedTemperature =
-    0.7 * topTemperature + 0.3 * bottomTemperature;
-  let energyRatio = clamp(
-    (weightedTemperature - settings.minTankTemperature) /
-      (settings.fullTankAverageTemperature -
-        settings.minTankTemperature),
-    0,
-    1,
+// Sensor sanity check only - no local shower-count/fill-ratio math anymore
+// (the backend already accounts for tank calibration when it computes
+// planned_hours; a valid EnergyZen plan is trusted as-is for the whole
+// planned hour). A reading missing/garbled top_temp or bottom_temp is
+// still real data-quality signal though, and feeds "invalid-reading" into
+// DATA_FAULT_REASONS below exactly as before.
+function isValidReading(reading) {
+  return (
+    isFiniteNumber(reading.top_temp) && isFiniteNumber(reading.bottom_temp)
   );
-  let topUsability = clamp(
-    (topTemperature - 42) /
-      (settings.fullTankAverageTemperature - 42),
-    0,
-    1,
-  );
-
-  return energyRatio * topUsability * settings.fullTankShowers;
 }
 
 function decideHeating(input, state) {
@@ -380,77 +344,92 @@ function decideHeating(input, state) {
   let settings = input.settings;
   let reading = input.reading;
   let readingAgeSeconds = null;
-  let currentShowers = null;
-  let startThresholdShowers = null;
-  let startBlockedByFillRatio = false;
   let finalTargetOn = false;
   let backupHours = settings ? normalizeHours(settings.backupHours) : [];
   let isBackupHour = containsHour(backupHours, input.currentHour);
   let reason = input.failSafeReason || null;
 
-  // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
-  // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
-  // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
-  // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
-  // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
-  // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
-  // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
-  // tank_readings vanhenee.
-  if (!reason && !planned && !isBackupHour) {
-    reason = "hour-not-planned";
-  }
+  // Trusted/control-plane-approved planned hour: input.planSource is
+  // control.source from resolveTrustedPlanControl/applyControlPlaneDebounce
+  // (set by executeDecision below) - "energyzen" means this plannedHours
+  // list IS the backend's own heartbeat-verified heating_plans.planned_hours,
+  // not a backup_hours substitution. Only THAT case (plus no other upstream
+  // fail-safe condition - relay/device-time/settings/plan-fetch/heartbeat/
+  // reading-fetch problems all still block below, exactly as before) heats
+  // unconditionally regardless of Shelly's own tank_readings visibility.
+  // Once control-plane fallback adopts backup_hours as plannedHours
+  // (source "backup", after its own 3-cycle debounce), every backup hour
+  // trivially becomes "planned" too - but planSource stays "backup" there,
+  // so this stays false and tank-reading freshness/validity below is still
+  // required, preserving the separate tank-reading 3-cycle debounce for an
+  // hour that is NOT actually on the backend's real plan.
+  let trustedPlannedHour = !reason && planned && input.planSource === "energyzen";
 
-  if (!reason && !isValidCalibration(settings)) {
-    reason = "invalid-calibration";
-  }
+  if (!trustedPlannedHour) {
+    // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
+    // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
+    // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
+    // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
+    // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
+    // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
+    // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
+    // tank_readings vanhenee.
+    if (!reason && !planned && !isBackupHour) {
+      reason = "hour-not-planned";
+    }
 
-  if (!reason && !reading) {
-    reason = "missing-reading";
-  }
+    // input.readingFetchError (set by fetchLatestReading when the
+    // tank_readings REST request itself failed, as opposed to succeeding
+    // with an empty/stale/invalid row) is deliberately NOT passed as
+    // failSafeReason - a failSafeReason would short-circuit reason before
+    // trustedPlannedHour is even computed above, blocking a trusted
+    // energyzen-planned hour purely because Shelly's own tank_readings
+    // fetch hiccuped. Evaluating it here instead means a trusted planned
+    // hour skips it entirely (like every other tank-reading check in this
+    // block), while the backup/fallback path below still treats it as the
+    // same "reading-fetch-error" DATA_FAULT_REASON it always has, subject
+    // to the same 3-cycle debounce.
+    if (!reason && input.readingFetchError === true) {
+      reason = "reading-fetch-error";
+    } else if (!reason && !reading) {
+      reason = "missing-reading";
+    }
 
-  if (!reason) {
-    let timestamp = reading.created_at || reading.measured_at || null;
-    let readingTime = timestamp ? new Date(timestamp).getTime() : NaN;
+    if (!reason) {
+      let timestamp = reading.created_at || reading.measured_at || null;
+      let readingTime = timestamp ? new Date(timestamp).getTime() : NaN;
 
-    if (!isFinite(readingTime)) {
-      reason = "missing-reading-time";
-    } else {
-      readingAgeSeconds = (input.nowMs - readingTime) / 1000;
+      if (!isFinite(readingTime)) {
+        reason = "missing-reading-time";
+      } else {
+        readingAgeSeconds = (input.nowMs - readingTime) / 1000;
 
-      if (
-        readingAgeSeconds < 0 ||
-        readingAgeSeconds > MAX_READING_AGE_SECONDS
-      ) {
-        reason = "stale-reading";
+        if (
+          readingAgeSeconds < 0 ||
+          readingAgeSeconds > MAX_READING_AGE_SECONDS
+        ) {
+          reason = "stale-reading";
+        }
       }
     }
-  }
 
-  if (!reason) {
-    currentShowers = calculateCurrentShowers(reading, settings);
-
-    if (!isFiniteNumber(currentShowers)) {
+    if (!reason && !isValidReading(reading)) {
       reason = "invalid-reading";
     }
-  }
 
-  // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
-  // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
-  // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
-  // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
-  if (!reason && !planned) {
-    reason = "hour-not-planned";
-  }
-
-  if (isValidCalibration(settings)) {
-    startThresholdShowers =
-      settings.fullTankShowers * START_HEATING_FILL_RATIO;
+    // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
+    // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
+    // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
+    // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
+    if (!reason && !planned) {
+      reason = "hour-not-planned";
+    }
   }
 
   // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
-  // varakaytto ole kaytoston pois - lammitetaan sokeana, koska varaajan
-  // oma termostaatti hoitaa turvallisuuden. Katso DATA_FAULT_REASONS.
-  let backupFaultOverride =
+  // varakaytto ole kaytoston pois - tama kierros VOISI johtaa
+  // backup-fault-overrideen. Katso DATA_FAULT_REASONS.
+  let unreliableCycleEligible =
     reason !== null &&
     DATA_FAULT_REASONS[reason] === true &&
     settings !== null &&
@@ -458,43 +437,44 @@ function decideHeating(input, state) {
     settings.enabled === true &&
     isBackupHour;
 
+  if (unreliableCycleEligible) {
+    decisionState.consecutiveUnreliableCycles = Math.min(
+      decisionState.consecutiveUnreliableCycles + 1,
+      REQUIRED_UNRELIABLE_CYCLES,
+    );
+  } else {
+    resetUnreliableCycles(decisionState);
+  }
+
+  // Yksi tai kaksi perakkaista epaluotettavaa kierrosta ei viela riita -
+  // vasta kolmas peräkkäinen sallii sokean lammityksen, koska varaajan oma
+  // termostaatti hoitaa turvallisuuden vasta silloin kun katko on aidosti
+  // pitkittynyt eika vain hetkellinen.
+  let backupFaultOverride =
+    unreliableCycleEligible &&
+    decisionState.consecutiveUnreliableCycles >= REQUIRED_UNRELIABLE_CYCLES;
+
+  // reason on viela null tassa vaiheessa juuri silloin kun trustedPlannedHour
+  // oli tosi (ohitettiin ylla) tai kun mittausdata paatyi lopulta kelvolliseksi
+  // suunnitellulla tunnilla ilman muuta failSafeReasonia - molemmissa
+  // tapauksissa lammitetaan. Backend on jo paattanyt MITKA tunnit
+  // lammitetaan (heating_plans.planned_hours) - Shelly ei enaa laske
+  // paikallisesti tayttoastetta paattaakseen KESKEN suunnitellun tunnin
+  // pitaisiko lammitys jo lopettaa, vaan luottaa suunnitelmaan sellaisenaan
+  // koko tunnin ajan.
   if (backupFaultOverride) {
-    resetHighFillReadings(decisionState);
     finalTargetOn = true;
     reason = "backup-fault-override";
-  } else if (reason) {
-    resetHighFillReadings(decisionState);
-  } else if (relayCurrentlyOn) {
-    resetHighFillReadings(decisionState);
+  } else if (!reason) {
     finalTargetOn = true;
-    reason = "planned-heating-continues";
-  } else if (currentShowers < startThresholdShowers) {
-    resetHighFillReadings(decisionState);
-    finalTargetOn = true;
-    reason = "planned-heating-starts";
-  } else {
-    decisionState.consecutiveHighFillReadings = Math.min(
-      decisionState.consecutiveHighFillReadings + 1,
-      REQUIRED_BLOCKING_READINGS,
-    );
-
-    if (
-      decisionState.consecutiveHighFillReadings >=
-      REQUIRED_BLOCKING_READINGS
-    ) {
-      startBlockedByFillRatio = true;
-      reason = "start-fill-ratio";
-    } else {
-      reason = "start-fill-ratio-pending";
-    }
+    reason = "planned-heating";
   }
 
   return {
     backupHours: backupHours,
-    consecutiveHighFillReadings:
-      decisionState.consecutiveHighFillReadings,
+    consecutiveUnreliableCycles:
+      decisionState.consecutiveUnreliableCycles,
     currentHour: input.currentHour,
-    currentShowers: currentShowers,
     finalTargetOn: finalTargetOn,
     isBackupHour: isBackupHour,
     planned: planned,
@@ -502,10 +482,7 @@ function decideHeating(input, state) {
     readingAgeSeconds: readingAgeSeconds,
     reason: reason,
     relayCurrentlyOn: relayCurrentlyOn,
-    requiredBlockingReadings: REQUIRED_BLOCKING_READINGS,
-    startBlockedByFillRatio: startBlockedByFillRatio,
-    startHeatingFillRatio: START_HEATING_FILL_RATIO,
-    startThresholdShowers: startThresholdShowers,
+    requiredUnreliableCycles: REQUIRED_UNRELIABLE_CYCLES,
   };
 }
 
@@ -515,7 +492,6 @@ function resolvePlanControl(rows, error, settings, today) {
       return {
         failSafeReason: null,
         plannedHours: settings.backupHours,
-        resetHighFillReadings: true,
         source: "backup",
       };
     }
@@ -526,7 +502,6 @@ function resolvePlanControl(rows, error, settings, today) {
           ? "fallback-disabled"
           : "plan-response-invalid",
       plannedHours: [],
-      resetHighFillReadings: true,
       source: "fail-safe",
     };
   }
@@ -540,7 +515,6 @@ function resolvePlanControl(rows, error, settings, today) {
       return {
         failSafeReason: null,
         plannedHours: settings.backupHours,
-        resetHighFillReadings: true,
         source: "backup",
       };
     }
@@ -551,7 +525,6 @@ function resolvePlanControl(rows, error, settings, today) {
           ? "plan-missing"
           : "wrong-plan-date",
       plannedHours: [],
-      resetHighFillReadings: true,
       source: "fail-safe",
     };
   }
@@ -594,8 +567,50 @@ function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeat
   // already use below.
   if (control.source !== "energyzen" || (planRows[0].mode === "fixed" && settings.heatingNeedMode === "fixed") || isTrustedBackendHeartbeat(heartbeatRows, heartbeatError, planRows[0], nowMs)) return control;
   return settings.enabled
-    ? { failSafeReason: null, plannedHours: settings.backupHours, resetHighFillReadings: true, source: "backup" }
-    : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], resetHighFillReadings: true, source: "fail-safe" };
+    ? { failSafeReason: null, plannedHours: settings.backupHours, source: "backup" }
+    : { failSafeReason: "backend-heartbeat-untrusted", plannedHours: [], source: "fail-safe" };
+}
+
+// Debounces the transition into control.source === "backup" (a transient
+// plan-fetch/heartbeat problem, resolved by resolvePlanControl/
+// resolveTrustedPlanControl above) the same way decideHeating debounces the
+// tank-reading backup-fault-override: a single or second consecutive
+// "backup" resolution must not yet let backup_hours drive the relay -
+// only the third consecutive one does. Any other source ("energyzen" -
+// the normal, trusted plan - or the already-safe "fail-safe" path) resets
+// the counter immediately and passes control through untouched, so normal
+// EnergyZen-planned heating is never delayed by this.
+function applyControlPlaneDebounce(control, state) {
+  let decisionState = state || controllerState;
+
+  if (control.source !== "backup") {
+    resetControlPlaneUnreliableCycles(decisionState);
+    return control;
+  }
+
+  decisionState.consecutiveControlPlaneUnreliableCycles = Math.min(
+    decisionState.consecutiveControlPlaneUnreliableCycles + 1,
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
+  );
+
+  if (
+    decisionState.consecutiveControlPlaneUnreliableCycles >=
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES
+  ) {
+    return control;
+  }
+
+  // Pending: not yet debounced through, so backup_hours must not influence
+  // the relay this cycle. failSafeReason stays null (not a fail-safe short
+  // circuit) so the tank reading is still fetched and decideHeating's own
+  // independent stale/missing-reading debounce keeps running exactly as it
+  // would on a normal cycle - only the plan-derived planned-hours list is
+  // withheld.
+  return {
+    failSafeReason: null,
+    plannedHours: [],
+    source: "backup-pending",
+  };
 }
 
 function logDecision(decision, source) {
@@ -603,23 +618,27 @@ function logDecision(decision, source) {
     "EnergyZen decision:",
     JSON.stringify({
       backupHours: decision.backupHours,
-      consecutiveHighFillReadings:
-        decision.consecutiveHighFillReadings,
+      // Kaksi ERI laskuria tarkoituksella: consecutive*ControlPlane*
+      // koskee plan-/heartbeat-haun luotettavuutta (applyControlPlaneDebounce
+      // yllä), consecutiveUnreliableCycles (ilman ControlPlane-etuliitetta)
+      // koskee tank_readings-lukeman luotettavuutta (decideHeating) - nayta
+      // molemmat erikseen, jotta lokista nakee kumpi kynnys kasvaa.
+      consecutiveControlPlaneUnreliableCycles:
+        controllerState.consecutiveControlPlaneUnreliableCycles,
+      consecutiveUnreliableCycles:
+        decision.consecutiveUnreliableCycles,
       currentHour: decision.currentHour,
-      currentShowers: decision.currentShowers,
       finalTargetOn: decision.finalTargetOn,
       isBackupHour: decision.isBackupHour,
       planned: decision.planned,
       readingAgeSeconds: decision.readingAgeSeconds,
       reason: decision.reason,
       relayCurrentlyOn: decision.relayCurrentlyOn,
-      requiredBlockingReadings:
-        decision.requiredBlockingReadings,
+      requiredControlPlaneUnreliableCycles:
+        REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
+      requiredUnreliableCycles:
+        decision.requiredUnreliableCycles,
       source: source,
-      startBlockedByFillRatio:
-        decision.startBlockedByFillRatio,
-      startHeatingFillRatio: decision.startHeatingFillRatio,
-      startThresholdShowers: decision.startThresholdShowers,
     }),
   );
 }
@@ -644,10 +663,6 @@ function setOutput(targetOn, currentOn) {
 }
 
 function executeDecision(control, settings, reading) {
-  if (control.resetHighFillReadings === true) {
-    resetHighFillReadings(controllerState);
-  }
-
   Shelly.call(
     "Switch.GetStatus",
     { id: SWITCH_ID },
@@ -659,8 +674,10 @@ function executeDecision(control, settings, reading) {
             currentHour: helsinkiNow ? helsinkiNow.hour : -1,
             failSafeReason: "relay-status-error",
             nowMs: new Date().getTime(),
+            planSource: control.source,
             plannedHours: control.plannedHours,
             reading: reading,
+            readingFetchError: control.readingFetchError === true,
             relayCurrentlyOn: false,
             settings: settings,
           },
@@ -679,8 +696,10 @@ function executeDecision(control, settings, reading) {
           currentHour: helsinkiNow ? helsinkiNow.hour : -1,
           failSafeReason: control.failSafeReason || (helsinkiNow ? null : "device-time-unavailable"),
           nowMs: new Date().getTime(),
+          planSource: control.source,
           plannedHours: control.plannedHours,
           reading: reading,
+          readingFetchError: control.readingFetchError === true,
           relayCurrentlyOn: status.output === true,
           settings: settings,
         },
@@ -702,11 +721,20 @@ function fetchLatestReading(control, settings) {
 
   supabaseRequest(readingPath, function (rows, error) {
     if (error !== null) {
+      // Preserve the ORIGINAL control (source/plannedHours) instead of
+      // forcing source:"fail-safe" here - a tank_readings fetch hiccup
+      // must not by itself defeat an otherwise heartbeat-verified
+      // energyzen plan. readingFetchError (not failSafeReason) lets
+      // decideHeating exempt a trusted planned hour from it while still
+      // treating it as the usual "reading-fetch-error" DATA_FAULT_REASON
+      // - and thus still subject to the 3-cycle debounce - on the
+      // backup/fallback path.
       executeDecision(
         {
-          failSafeReason: "reading-fetch-error",
+          failSafeReason: null,
           plannedHours: control.plannedHours,
-          source: "fail-safe",
+          readingFetchError: true,
+          source: control.source,
         },
         settings,
         null,
@@ -749,14 +777,20 @@ function fetchTodayPlan(settings) {
 
   supabaseRequest(planPath, function (rows, error) {
     if (!BACKEND_PLAN_TRUST_ENABLED) {
-      let shadowControl = resolvePlanControl(rows, error, settings, today);
+      let shadowControl = applyControlPlaneDebounce(
+        resolvePlanControl(rows, error, settings, today),
+        controllerState,
+      );
       if (shadowControl.failSafeReason !== null) executeDecision(shadowControl, settings, null);
       else fetchLatestReading(shadowControl, settings);
       return;
     }
     let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
     supabaseRequest(heartbeatPath, function (heartbeatRows, heartbeatError) {
-      let control = resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime());
+      let control = applyControlPlaneDebounce(
+        resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, new Date().getTime()),
+        controllerState,
+      );
       if (control.failSafeReason !== null) executeDecision(control, settings, null);
       else fetchLatestReading(control, settings);
     });
@@ -774,19 +808,12 @@ function runController() {
   let cachedSettings = loadCachedSettings();
   let settingsPath =
     "heating_control_settings" +
-    "?select=backup_hours,fallback_enabled," +
-    "full_tank_showers,full_tank_average_temperature," +
-    "min_tank_temperature,max_tank_temperature," +
-    "target_shower_reserve,heating_need_mode" +
+    "?select=backup_hours,fallback_enabled,heating_need_mode" +
     "&id=eq.1" +
     "&limit=1";
 
   supabaseRequest(settingsPath, function (rows, error) {
     let settings = null;
-
-    if (error !== null) {
-      resetHighFillReadings(controllerState);
-    }
 
     if (
       error === null &&
@@ -794,26 +821,23 @@ function runController() {
       rows.length > 0
     ) {
       settings = normalizeSettingsRow(rows[0], cachedSettings);
-
-      if (isValidCalibration(settings)) {
-        saveCachedSettings(settings);
-      }
+      saveCachedSettings(settings);
     } else if (
       error !== null &&
       error.allowFallback === true &&
-      isValidCalibration(cachedSettings)
+      cachedSettings.hasStoredFallback === true
     ) {
       settings = cachedSettings;
       console.log(
-        "EnergyZen: settings connection failed, using valid cache",
+        "EnergyZen: settings connection failed, using stored cache",
         error.message,
       );
     }
 
-    if (!isValidCalibration(settings)) {
+    if (settings === null) {
       executeDecision(
         {
-          failSafeReason: "invalid-calibration",
+          failSafeReason: "settings-unavailable",
           plannedHours: [],
           source: "fail-safe",
         },
@@ -837,15 +861,15 @@ function startController() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    REQUIRED_BLOCKING_READINGS: REQUIRED_BLOCKING_READINGS,
-    START_HEATING_FILL_RATIO: START_HEATING_FILL_RATIO,
+    REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES:
+      REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
+    REQUIRED_UNRELIABLE_CYCLES: REQUIRED_UNRELIABLE_CYCLES,
+    applyControlPlaneDebounce: applyControlPlaneDebounce,
     buildPlanFingerprint: buildPlanFingerprint,
-    calculateCurrentShowers: calculateCurrentShowers,
     createControllerState: createControllerState,
     createRequestError: createRequestError,
     decideHeating: decideHeating,
     isTrustedBackendHeartbeat: isTrustedBackendHeartbeat,
-    isValidCalibration: isValidCalibration,
     resolveHelsinkiFromSysStatus: resolveHelsinkiFromSysStatus,
     resolvePlanControl: resolvePlanControl,
     resolveTrustedPlanControl: resolveTrustedPlanControl,

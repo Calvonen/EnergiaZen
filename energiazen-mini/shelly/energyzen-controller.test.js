@@ -2,10 +2,10 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const {
-  REQUIRED_BLOCKING_READINGS,
-  START_HEATING_FILL_RATIO,
+  REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES,
+  REQUIRED_UNRELIABLE_CYCLES,
+  applyControlPlaneDebounce,
   buildPlanFingerprint,
-  calculateCurrentShowers,
   createControllerState,
   createRequestError,
   decideHeating,
@@ -18,47 +18,45 @@ const nowMs = Date.parse("2026-07-26T12:00:00.000Z");
 const settings = {
   backupHours: [15],
   enabled: true,
-  fullTankAverageTemperature: 70,
-  fullTankShowers: 6,
-  maxTankTemperature: 80,
-  minTankTemperature: 10,
-  targetShowerReserve: 3,
 };
 
-function readingForShowers(showers, ageSeconds = 30) {
-  let lower = 42;
-  let upper = settings.fullTankAverageTemperature;
-
-  for (let iteration = 0; iteration < 80; iteration += 1) {
-    let temperature = (lower + upper) / 2;
-    let estimate = calculateCurrentShowers(
-      {
-        bottom_temp: temperature,
-        top_temp: temperature,
-      },
-      settings,
-    );
-
-    if (estimate < showers) {
-      lower = temperature;
-    } else {
-      upper = temperature;
-    }
-  }
-
+// No local shower-count/fill-ratio math is left to derive a reading from -
+// backend-primary now means Shelly trusts a planned hour as-is for its
+// whole duration. top_temp/bottom_temp only need to be finite numbers
+// (isValidReading); the actual values are otherwise irrelevant to the
+// ON/OFF decision.
+function freshReading(ageSeconds = 30) {
   return {
-    bottom_temp: (lower + upper) / 2,
+    bottom_temp: 55,
     created_at: new Date(nowMs - ageSeconds * 1000).toISOString(),
-    heating: false,
-    top_temp: (lower + upper) / 2,
+    top_temp: 55,
   };
 }
 
+function invalidTempReading(ageSeconds = 30) {
+  return {
+    bottom_temp: 55,
+    created_at: new Date(nowMs - ageSeconds * 1000).toISOString(),
+    top_temp: null,
+  };
+}
+
+// planSource mirrors control.source (from resolvePlanControl/
+// resolveTrustedPlanControl/applyControlPlaneDebounce), exactly what
+// executeDecision passes in production. Only "energyzen" means "this IS
+// the backend's own heartbeat-verified plan" - the default here, since
+// most tests below exercise a genuinely trusted plan. Debounce-path tests
+// override it to "backup" (or leave plannedHours not containing
+// currentHour, which makes the distinction moot) to correctly model the
+// backup_hours-adopted-as-plannedHours fallback, where the hour becomes
+// "planned" too but is NOT actually on the backend's real plan.
 function decide({
   currentHour = 15,
   failSafeReason = null,
+  planSource = "energyzen",
   plannedHours = [15],
-  reading = readingForShowers(3),
+  reading = freshReading(),
+  readingFetchError = false,
   relayCurrentlyOn = false,
   state = createControllerState(),
   testSettings = settings,
@@ -68,8 +66,10 @@ function decide({
       currentHour,
       failSafeReason,
       nowMs,
+      planSource,
       plannedHours,
       reading,
+      readingFetchError,
       relayCurrentlyOn,
       settings: testSettings,
     },
@@ -77,171 +77,249 @@ function decide({
   );
 }
 
-assert.strictEqual(START_HEATING_FILL_RATIO, 0.92);
-assert.strictEqual(REQUIRED_BLOCKING_READINGS, 2);
+assert.strictEqual(REQUIRED_UNRELIABLE_CYCLES, 3);
+assert.strictEqual(REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES, 3);
 
-const highFillState = createControllerState();
-const firstHighFill = decide({
-  reading: readingForShowers(6),
-  state: highFillState,
-});
-assert.strictEqual(firstHighFill.finalTargetOn, false);
-assert.strictEqual(firstHighFill.startBlockedByFillRatio, false);
-assert.strictEqual(firstHighFill.consecutiveHighFillReadings, 1);
-assert.strictEqual(firstHighFill.reason, "start-fill-ratio-pending");
+// The backend already decided WHICH hours to heat (heating_plans.planned_hours)
+// - a planned hour with a valid, fresh reading heats unconditionally for its
+// whole duration. There is no local shower-count/fill-ratio math left that
+// could second-guess or cut this short mid-hour.
+const plannedHeats = decide({ reading: freshReading() });
+assert.strictEqual(plannedHeats.finalTargetOn, true);
+assert.strictEqual(plannedHeats.reason, "planned-heating");
+assert.strictEqual(plannedHeats.consecutiveUnreliableCycles, 0);
 
-const secondHighFill = decide({
-  reading: readingForShowers(6),
-  state: highFillState,
-});
-assert.strictEqual(secondHighFill.finalTargetOn, false);
-assert.strictEqual(secondHighFill.startBlockedByFillRatio, true);
-assert.strictEqual(secondHighFill.consecutiveHighFillReadings, 2);
-assert.strictEqual(secondHighFill.reason, "start-fill-ratio");
+// Regression guard for the removed 92% fill-ratio gate: a reading that
+// would previously have reported the tank as already full (and blocked/
+// stopped heating after two such readings) must not affect the decision
+// at all anymore - the exact same "hot" reading still heats because the
+// hour is planned.
+const hotReadingState = createControllerState();
+for (let index = 0; index < 3; index += 1) {
+  const hotDecision = decide({
+    reading: { bottom_temp: 78, created_at: freshReading().created_at, top_temp: 78 },
+    state: hotReadingState,
+  });
+  assert.strictEqual(hotDecision.finalTargetOn, true, "a 'tank full' reading must no longer block or stop planned heating");
+  assert.strictEqual(hotDecision.reason, "planned-heating");
+}
 
-const exactThresholdState = createControllerState();
-const exactThresholdShowers = settings.fullTankShowers * 0.92;
-decide({
-  reading: readingForShowers(exactThresholdShowers),
-  state: exactThresholdState,
-});
-const exactThresholdDecision = decide({
-  reading: readingForShowers(exactThresholdShowers),
-  state: exactThresholdState,
-});
-assert.strictEqual(exactThresholdDecision.finalTargetOn, false);
-assert.strictEqual(
-  exactThresholdDecision.startThresholdShowers,
-  exactThresholdShowers,
-);
-
-const resetBelowState = createControllerState();
-decide({ reading: readingForShowers(6), state: resetBelowState });
-const belowThreshold = decide({
-  reading: readingForShowers(settings.fullTankShowers * 0.91),
-  state: resetBelowState,
-});
-assert.strictEqual(belowThreshold.finalTargetOn, true);
-assert.strictEqual(belowThreshold.consecutiveHighFillReadings, 0);
-assert.strictEqual(belowThreshold.reason, "planned-heating-starts");
-
-const lowFirst = decide({
-  reading: readingForShowers(settings.fullTankShowers * 0.91),
-});
-assert.strictEqual(lowFirst.finalTargetOn, true);
-assert.strictEqual(lowFirst.reason, "planned-heating-starts");
-
+// relayCurrentlyOn no longer changes the outcome or the reason - there is
+// no more "starting" vs "continuing" distinction now that there is no
+// local threshold to have crossed.
 const relayOnState = createControllerState();
-decide({ reading: readingForShowers(6), state: relayOnState });
 const relayAlreadyOn = decide({
-  reading: readingForShowers(6),
+  reading: freshReading(),
   relayCurrentlyOn: true,
   state: relayOnState,
 });
 assert.strictEqual(relayAlreadyOn.finalTargetOn, true);
-assert.strictEqual(relayAlreadyOn.consecutiveHighFillReadings, 0);
-assert.strictEqual(relayAlreadyOn.reason, "planned-heating-continues");
+assert.strictEqual(relayAlreadyOn.reason, "planned-heating");
 
-const unplannedState = createControllerState();
-decide({ reading: readingForShowers(6), state: unplannedState });
-const unplanned = decide({ currentHour: 14, state: unplannedState });
+const unplanned = decide({ currentHour: 14 });
 assert.strictEqual(unplanned.finalTargetOn, false);
-assert.strictEqual(unplanned.consecutiveHighFillReadings, 0);
+assert.strictEqual(unplanned.reason, "hour-not-planned");
 
-// Ohjausdatan 120 sekunnin tuoreusraja on tarkoituksella paljon tiukempi
-// kuin appin ja sahkopostihalytyksen 30 minuutin vikaraja. Shelly tarkistaa
-// kerran minuutissa, joten 120 sekuntia vanha lukema kelpaa viela mutta heti
-// sen jalkeen siirrytaan vain ennalta maaritettyjen varatuntien ohjaukseen.
-const exactReadingAgeThreshold = decide({
-  reading: readingForShowers(3, 120),
+// Uusi consecutiveUnreliableCycles-laskuri ei muuta normaalia suunnitellun
+// lammityksen kaytosta millaan tavoin - useampi perakkainen terve/normaali
+// kierros pitaa laskurin nollassa koko ajan.
+const normalPlanState = createControllerState();
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES + 1; index += 1) {
+  const normalPlanDecision = decide({
+    reading: freshReading(),
+    state: normalPlanState,
+  });
+  assert.strictEqual(normalPlanDecision.reason, "planned-heating");
+  assert.strictEqual(normalPlanDecision.finalTargetOn, true);
+  assert.strictEqual(normalPlanDecision.consecutiveUnreliableCycles, 0);
+}
+
+// ---------------------------------------------------------------------
+// A trusted/control-plane-approved planned hour (planSource "energyzen")
+// heats regardless of Shelly's own tank_readings visibility - missing,
+// stale, or invalid readings no longer block it at all. Only the backup/
+// fallback path below (an hour NOT actually on the backend's plan) still
+// needs tank-reading freshness/validity.
+// ---------------------------------------------------------------------
+
+const plannedHourStaleReadingState = createControllerState();
+const plannedHourStaleReading = decide({
+  reading: freshReading(99999),
+  state: plannedHourStaleReadingState,
 });
-assert.strictEqual(exactReadingAgeThreshold.reason, "planned-heating-starts");
-assert.strictEqual(exactReadingAgeThreshold.finalTargetOn, true);
+assert.strictEqual(plannedHourStaleReading.finalTargetOn, true, "planned hour + stale reading -> ON");
+assert.strictEqual(plannedHourStaleReading.reason, "planned-heating");
+assert.strictEqual(plannedHourStaleReadingState.consecutiveUnreliableCycles, 0, "a trusted planned hour must not spuriously accumulate the tank-reading debounce counter");
+
+const plannedHourMissingReadingState = createControllerState();
+const plannedHourMissingReading = decide({
+  reading: null,
+  state: plannedHourMissingReadingState,
+});
+assert.strictEqual(plannedHourMissingReading.finalTargetOn, true, "planned hour + missing reading -> ON");
+assert.strictEqual(plannedHourMissingReading.reason, "planned-heating");
+assert.strictEqual(plannedHourMissingReadingState.consecutiveUnreliableCycles, 0);
+
+const plannedHourInvalidReadingState = createControllerState();
+const plannedHourInvalidReading = decide({
+  reading: invalidTempReading(),
+  state: plannedHourInvalidReadingState,
+});
+assert.strictEqual(plannedHourInvalidReading.finalTargetOn, true, "planned hour + invalid reading -> ON");
+assert.strictEqual(plannedHourInvalidReading.reason, "planned-heating");
+assert.strictEqual(plannedHourInvalidReadingState.consecutiveUnreliableCycles, 0);
+
+// A REAL upstream fail-safe reason (relay/device-time/settings/plan-fetch/
+// heartbeat problems, arriving via failSafeReason) must still block even an
+// otherwise-planned hour - trusting the plan only exempts the tank-reading
+// checks computed inside decideHeating itself, never an upstream
+// infrastructure failure.
+const plannedHourWithFailSafeReason = decide({
+  failSafeReason: "device-time-unavailable",
+  reading: null,
+});
+assert.strictEqual(
+  plannedHourWithFailSafeReason.finalTargetOn,
+  false,
+  "an upstream fail-safe reason must not become permissive just because the hour happens to be planned",
+);
+assert.notStrictEqual(plannedHourWithFailSafeReason.reason, "planned-heating");
+
+// A tank_readings REST fetch failure is deliberately NOT plumbed through as
+// failSafeReason (see fetchLatestReading/executeDecision) - it must not by
+// itself defeat an otherwise heartbeat-verified trusted plan. This is
+// distinct from the missing/stale/invalid-reading cases above: here Shelly
+// could not even ask Supabase for a reading, yet a genuinely trusted
+// planned hour still heats.
+const plannedHourReadingFetchErrorState = createControllerState();
+const plannedHourReadingFetchError = decide({
+  reading: null,
+  readingFetchError: true,
+  state: plannedHourReadingFetchErrorState,
+});
+assert.strictEqual(plannedHourReadingFetchError.finalTargetOn, true, "trusted energyzen planned hour + reading fetch error -> ON");
+assert.strictEqual(plannedHourReadingFetchError.reason, "planned-heating");
+assert.strictEqual(plannedHourReadingFetchErrorState.consecutiveUnreliableCycles, 0);
+
+// ---------------------------------------------------------------------
+// The pre-existing tank-reading 3-cycle debounce is preserved, but only
+// for the backup/fallback path: an hour that is NOT actually on the
+// backend's plan (planSource "backup", as applyControlPlaneDebounce would
+// pass once it adopts backup_hours as plannedHours) but is a configured
+// backup hour.
+// ---------------------------------------------------------------------
 
 // currentHour 15 on myos settings.backupHours - eli oletusparametrit
-// osuvat varatunnille. Anturivika varatunnilla lammittaa nyt ehdoitta
-// (varaajan oma termostaatti estaa ylikuumenemisen), toisin kuin
-// tunnilla joka ei ole varatunti (ks. staleOutsideBackupHour alla).
+// osuvat varatunnille. planSource "backup" mallintaa control-plane-
+// fallbackin adoptoiman backup_hours-listan (control.plannedHours ==
+// settings.backupHours), jolloin tunti on teknisesti "planned" mutta EI
+// todellisuudessa backendin oikea suunnitelma - anturivika lammittaa nyt
+// vasta kolmannen PERAKKAISEN epaluotettavan kierroksen jalkeen (varaajan
+// oma termostaatti estaa ylikuumenemisen).
 const staleState = createControllerState();
-decide({ reading: readingForShowers(6), state: staleState });
+
+// 1) ensimmainen epaluotettava varatuntikierros -> ei viela lammitysta.
+const staleFirst = decide({
+  planSource: "backup",
+  reading: freshReading(121),
+  state: staleState,
+});
+assert.strictEqual(staleFirst.reason, "stale-reading");
+assert.strictEqual(staleFirst.finalTargetOn, false);
+assert.strictEqual(staleFirst.consecutiveUnreliableCycles, 1);
+
+// 2) toinen epaluotettava varatuntikierros -> ei viela lammitysta.
+const staleSecond = decide({
+  planSource: "backup",
+  reading: freshReading(121),
+  state: staleState,
+});
+assert.strictEqual(staleSecond.reason, "stale-reading");
+assert.strictEqual(staleSecond.finalTargetOn, false);
+assert.strictEqual(staleSecond.consecutiveUnreliableCycles, 2);
+
+// 3) kolmas peräkkäinen epaluotettava varatuntikierros -> nykyinen
+// backup-fault-override-kaytos sallitaan, lammitys paalle.
 const stale = decide({
-  reading: readingForShowers(3, 121),
+  planSource: "backup",
+  reading: freshReading(121),
   state: staleState,
 });
 assert.strictEqual(stale.reason, "backup-fault-override");
 assert.strictEqual(stale.finalTargetOn, true);
-assert.strictEqual(stale.consecutiveHighFillReadings, 0);
+assert.strictEqual(stale.consecutiveUnreliableCycles, 3);
+assert.strictEqual(stale.requiredUnreliableCycles, 3);
 
-// Varatila ei saa jaada paalle: kun seuraavan tarkistuksen lukema on taas
-// tuore, paatos tehdaan normaalisti suunnitelman ja tayttoasteen perusteella.
-const recoveredAfterStale = decide({
-  currentHour: 15,
-  plannedHours: [10],
-  reading: readingForShowers(3),
-  state: staleState,
-});
-assert.strictEqual(recoveredAfterStale.reason, "hour-not-planned");
-assert.strictEqual(recoveredAfterStale.finalTargetOn, false);
-
-const staleOutsideBackupHour = decide({
-  currentHour: 8,
-  plannedHours: [8],
-  reading: readingForShowers(3, 121),
-});
+// Sama kolmen kierroksen debounssi puuttuvalle ja virheelliselle lukemalle.
+const missingReadingBackupState = createControllerState();
+let missingReadingBackupDecision;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  missingReadingBackupDecision = decide({
+    planSource: "backup",
+    reading: null,
+    state: missingReadingBackupState,
+  });
+}
 assert.strictEqual(
-  staleOutsideBackupHour.reason,
-  "stale-reading",
-  "vanha lukema tunnilla joka ei ole varatunti ei saa lammittaa",
-);
-assert.strictEqual(staleOutsideBackupHour.finalTargetOn, false);
-
-// Regressiotesti Codexin P1-loydokselle: kelvollinen paivittainen
-// optimointisuunnitelma EI sisalla nykyista varatuntia (talla paivalla
-// valittiin joku muu, halvempi tunti) - tama on normaali tilanne, ei
-// itsessaan vika. Jos anturidata on samaan aikaan vanhentunut, ohituksen
-// pitaa silti laueta, koska "hour-not-planned" ei saa peittaa alleen
-// oikeaa datavikaa varatunnilla.
-const staleBackupHourNotInTodaysPlan = decide({
-  currentHour: 15,
-  plannedHours: [10],
-  reading: readingForShowers(3, 121),
-});
-assert.strictEqual(
-  staleBackupHourNotInTodaysPlan.reason,
+  missingReadingBackupDecision.reason,
   "backup-fault-override",
-  "anturivika varatunnilla ohittaa vaikka tunti ei ole mukana taman paivan optimoidussa suunnitelmassa",
+  "puuttuva lukema varatunnilla (ei todellisessa suunnitelmassa) lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(staleBackupHourNotInTodaysPlan.finalTargetOn, true);
+assert.strictEqual(missingReadingBackupDecision.finalTargetOn, true);
 
-const missingReadingBackupHourNotInTodaysPlan = decide({
-  currentHour: 15,
-  plannedHours: [10],
-  reading: null,
-});
+const invalidReadingBackupState = createControllerState();
+let invalidReadingBackupDecision;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  invalidReadingBackupDecision = decide({
+    planSource: "backup",
+    reading: invalidTempReading(),
+    state: invalidReadingBackupState,
+  });
+}
 assert.strictEqual(
-  missingReadingBackupHourNotInTodaysPlan.reason,
+  invalidReadingBackupDecision.reason,
   "backup-fault-override",
-  "puuttuva lukema varatunnilla ohittaa myos vaikka tunti ei ole mukana suunnitelmassa",
+  "virheellinen lukema varatunnilla (ei todellisessa suunnitelmassa) lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(missingReadingBackupHourNotInTodaysPlan.finalTargetOn, true);
+assert.strictEqual(invalidReadingBackupDecision.finalTargetOn, true);
 
-// Sama tilanne mutta data ONKIN kelvollista - talloin "hour-not-planned"
-// pitaa silti raportoitua lopulta oikein, eika varatuntistatus yksinaan
-// saa laukaista lammitysta ilman oikeaa datavikaa.
-const healthyBackupHourNotInTodaysPlan = decide({
-  currentHour: 15,
+// Tarkka 120 sekunnin raja pitaa yha paikkansa off-plan-varatuntipolulla
+// (trusted-suunniteltu tunti ohittaisi taman tarkistuksen kokonaan).
+// plannedHours=[10] varmistaa etta planned=false riippumatta planSourcesta,
+// joten lukema todella arvioidaan eika ohiteta luottamuksen takia.
+const exactReadingAgeThresholdOffPlan = decide({
   plannedHours: [10],
-  reading: readingForShowers(3),
+  reading: freshReading(120),
 });
-assert.strictEqual(
-  healthyBackupHourNotInTodaysPlan.reason,
-  "hour-not-planned",
-  "terve data varatunnilla joka ei ole suunnitelmassa ei saa lammittaa pelkan varatuntistatuksen perusteella",
-);
-assert.strictEqual(healthyBackupHourNotInTodaysPlan.finalTargetOn, false);
+assert.strictEqual(exactReadingAgeThresholdOffPlan.reason, "hour-not-planned", "tarkalleen 120s vanha lukema ei ole viela stale off-plan-varatuntipolulla");
+assert.strictEqual(exactReadingAgeThresholdOffPlan.finalTargetOn, false);
 
+// Luotettava kierros valissa nollaa laskurin heti: neljas kierros olisi
+// muuten ollut yli kynnyksen, mutta valiin osunut terve lukema katkaisee
+// putken eika seuraava epaluotettava kierros yksinaan enaa lammita.
+const reliableBetweenState = createControllerState();
+decide({ planSource: "backup", reading: freshReading(121), state: reliableBetweenState });
+decide({ planSource: "backup", reading: freshReading(121), state: reliableBetweenState });
+const reliableBetween = decide({
+  planSource: "backup",
+  reading: freshReading(),
+  state: reliableBetweenState,
+});
+assert.strictEqual(reliableBetween.consecutiveUnreliableCycles, 0);
+const afterReliableBetween = decide({
+  planSource: "backup",
+  reading: freshReading(121),
+  state: reliableBetweenState,
+});
+assert.strictEqual(afterReliableBetween.reason, "stale-reading");
+assert.strictEqual(afterReliableBetween.finalTargetOn, false);
+assert.strictEqual(afterReliableBetween.consecutiveUnreliableCycles, 1);
+
+// settings.enabled=false estaa myos anturivikaohituksen off-plan-
+// varatuntipolulla - ei muutu permissiiviseksi trusted-suunnittelun takia.
 const staleWithFallbackDisabled = decide({
-  reading: readingForShowers(3, 121),
+  planSource: "backup",
+  reading: freshReading(121),
   testSettings: { ...settings, enabled: false },
 });
 assert.strictEqual(
@@ -251,60 +329,168 @@ assert.strictEqual(
 );
 assert.strictEqual(staleWithFallbackDisabled.finalTargetOn, false);
 
+// ---------------------------------------------------------------------
+// unplanned non-backup hour + stale/missing/invalid reading -> OFF, aina.
+// currentHour 8 ei ole plannedHoursissa eika settings.backupHoursissa.
+// ---------------------------------------------------------------------
+
+const nonBackupUnreliableState = createControllerState();
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES + 1; index += 1) {
+  const nonBackupUnreliable = decide({
+    currentHour: 8,
+    plannedHours: [9],
+    reading: freshReading(121),
+    state: nonBackupUnreliableState,
+  });
+  assert.strictEqual(nonBackupUnreliable.finalTargetOn, false);
+  assert.strictEqual(nonBackupUnreliable.reason, "hour-not-planned");
+  assert.strictEqual(nonBackupUnreliable.consecutiveUnreliableCycles, 0);
+}
+
+const staleOutsideBackupHour = decide({
+  currentHour: 8,
+  plannedHours: [9],
+  reading: freshReading(121),
+});
 assert.strictEqual(
-  decide({ currentHour: 8, plannedHours: [8], reading: null }).reason,
-  "missing-reading",
-  "puuttuva lukema tunnilla joka ei ole varatunti ei saa ohittaa",
+  staleOutsideBackupHour.reason,
+  "hour-not-planned",
+  "vanha lukema tunnilla joka ei ole varatunti eika suunnitelmassa ei saa lammittaa",
 );
+assert.strictEqual(staleOutsideBackupHour.finalTargetOn, false);
+
+const missingReadingOutsideBackupHour = decide({
+  currentHour: 8,
+  plannedHours: [9],
+  reading: null,
+});
 assert.strictEqual(
-  decide({ currentHour: 8, plannedHours: [8], reading: null }).finalTargetOn,
-  false,
-  "puuttuva lukema tunnilla joka ei ole varatunti ei saa lammittaa",
+  missingReadingOutsideBackupHour.reason,
+  "hour-not-planned",
+  "puuttuva lukema tunnilla joka ei ole varatunti eika suunnitelmassa ei saa lammittaa",
 );
+assert.strictEqual(missingReadingOutsideBackupHour.finalTargetOn, false);
+
+// Varatila ei saa jaada paalle: kun seuraavan tarkistuksen lukema on taas
+// tuore, paatos tehdaan normaalisti suunnitelman perusteella. Tassa
+// plannedHours EI sisalla nykyista varatuntia (backendin oikea suunnitelma
+// valitsi tunnin 10 sen sijaan) - eri skenaario kuin planSource "backup".
+const recoveredAfterStale = decide({
+  currentHour: 15,
+  plannedHours: [10],
+  reading: freshReading(),
+  state: staleState,
+});
+assert.strictEqual(recoveredAfterStale.reason, "hour-not-planned");
+assert.strictEqual(recoveredAfterStale.finalTargetOn, false);
+
+// Regressiotesti Codexin P1-loydokselle: kelvollinen paivittainen
+// optimointisuunnitelma EI sisalla nykyista varatuntia (talla paivalla
+// valittiin joku muu, halvempi tunti) - tama on normaali tilanne, ei
+// itsessaan vika. Jos anturidata on samaan aikaan vanhentunut, ohituksen
+// pitaa silti laueta, koska "hour-not-planned" ei saa peittaa alleen
+// oikeaa datavikaa varatunnilla. plannedHours=[10] tarkoittaa etta
+// backendin AITO suunnitelma ei valinnut tata varatuntia (planned=false
+// planSourcesta riippumatta).
+const staleBackupHourNotInTodaysPlanState = createControllerState();
+let staleBackupHourNotInTodaysPlan;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  staleBackupHourNotInTodaysPlan = decide({
+    currentHour: 15,
+    plannedHours: [10],
+    reading: freshReading(121),
+    state: staleBackupHourNotInTodaysPlanState,
+  });
+}
 assert.strictEqual(
-  decide({ reading: null }).reason,
+  staleBackupHourNotInTodaysPlan.reason,
   "backup-fault-override",
-  "puuttuva lukema varatunnilla lammittaa ehdoitta",
+  "anturivika varatunnilla ohittaa vaikka tunti ei ole mukana taman paivan optimoidussa suunnitelmassa, kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(decide({ reading: null }).finalTargetOn, true);
+assert.strictEqual(staleBackupHourNotInTodaysPlan.finalTargetOn, true);
 
+const missingReadingBackupHourNotInTodaysPlanState = createControllerState();
+let missingReadingBackupHourNotInTodaysPlan;
+for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
+  missingReadingBackupHourNotInTodaysPlan = decide({
+    currentHour: 15,
+    plannedHours: [10],
+    reading: null,
+    state: missingReadingBackupHourNotInTodaysPlanState,
+  });
+}
 assert.strictEqual(
-  decide({
-    testSettings: { ...settings, fullTankShowers: null },
-  }).reason,
-  "invalid-calibration",
-  "invalid calibration must fail safe OFF - kalibrointi puuttuu, varatuntejakaan ei voi luottaa",
+  missingReadingBackupHourNotInTodaysPlan.reason,
+  "backup-fault-override",
+  "puuttuva lukema varatunnilla ohittaa myos vaikka tunti ei ole mukana suunnitelmassa, kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
+assert.strictEqual(missingReadingBackupHourNotInTodaysPlan.finalTargetOn, true);
 
-const failSafeState = createControllerState();
-decide({ reading: readingForShowers(6), state: failSafeState });
+// Sama tilanne mutta data ONKIN kelvollista - talloin "hour-not-planned"
+// pitaa silti raportoitua lopulta oikein, eika varatuntistatus yksinaan
+// saa laukaista lammitysta ilman oikeaa datavikaa.
+const healthyBackupHourNotInTodaysPlan = decide({
+  currentHour: 15,
+  plannedHours: [10],
+  reading: freshReading(),
+});
+assert.strictEqual(
+  healthyBackupHourNotInTodaysPlan.reason,
+  "hour-not-planned",
+  "terve data varatunnilla joka ei ole suunnitelmassa ei saa lammittaa pelkan varatuntistatuksen perusteella",
+);
+assert.strictEqual(healthyBackupHourNotInTodaysPlan.finalTargetOn, false);
+
 const failSafe = decide({
   failSafeReason: "plan-fetch-error",
-  state: failSafeState,
+  planSource: "fail-safe",
 });
 assert.strictEqual(
   failSafe.finalTargetOn,
   false,
   "tuntematon failSafeReason ei kuulu DATA_FAULT_REASONS-listaan eika ohita",
 );
-assert.strictEqual(failSafe.consecutiveHighFillReadings, 0);
 
-const readingFetchErrorOnBackupHour = decide({
-  failSafeReason: "reading-fetch-error",
+// backup hour + reading fetch error -> 1./2. kierros OFF, 3. kierros
+// backup-fault-override ON. readingFetchError:true + planSource:"backup"
+// mallintaa fetchLatestReading:n tank_readings-REST-haun epaonnistumisen
+// off-plan-varatuntipolulla (ei "energyzen") - eri kuin
+// plannedHourReadingFetchError yllä, joka on planSource:"energyzen".
+const readingFetchErrorOnBackupHourState = createControllerState();
+const readingFetchErrorFirst = decide({
+  planSource: "backup",
   reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
+});
+assert.strictEqual(readingFetchErrorFirst.reason, "reading-fetch-error");
+assert.strictEqual(readingFetchErrorFirst.finalTargetOn, false, "1) lukeman hakuvirhe varatunnilla ei viela lammita");
+
+const readingFetchErrorSecond = decide({
+  planSource: "backup",
+  reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
+});
+assert.strictEqual(readingFetchErrorSecond.finalTargetOn, false, "2) lukeman hakuvirhe varatunnilla ei viela lammita");
+
+const readingFetchErrorThird = decide({
+  planSource: "backup",
+  reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
 });
 assert.strictEqual(
-  readingFetchErrorOnBackupHour.reason,
+  readingFetchErrorThird.reason,
   "backup-fault-override",
-  "lukeman hakuvirhe varatunnilla lammittaa ehdoitta",
+  "3) lukeman hakuvirhe varatunnilla lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(readingFetchErrorOnBackupHour.finalTargetOn, true);
+assert.strictEqual(readingFetchErrorThird.finalTargetOn, true);
 
-const isolatedStateA = createControllerState();
-const isolatedStateB = createControllerState();
-decide({ reading: readingForShowers(6), state: isolatedStateA });
-assert.strictEqual(isolatedStateA.consecutiveHighFillReadings, 1);
-assert.strictEqual(isolatedStateB.consecutiveHighFillReadings, 0);
+// ---------------------------------------------------------------------
+// resolvePlanControl's "backup" resolution, fed through decideHeating
+// exactly the way executeDecision would (planSource: control.source).
+// ---------------------------------------------------------------------
 
 const fallbackControl = resolvePlanControl(
   null,
@@ -314,43 +500,50 @@ const fallbackControl = resolvePlanControl(
 );
 
 assert.strictEqual(fallbackControl.source, "backup");
-assert.strictEqual(fallbackControl.resetHighFillReadings, true);
-const fallbackHighState = createControllerState();
-decide({
+assert.strictEqual(
+  decide({
+    planSource: fallbackControl.source,
+    plannedHours: fallbackControl.plannedHours,
+    reading: freshReading(),
+  }).finalTargetOn,
+  true,
+  "Supabase error fallback heats a backup hour with a valid reading",
+);
+
+const fallbackStaleState = createControllerState();
+const fallbackStaleFirst = decide({
+  planSource: fallbackControl.source,
   plannedHours: fallbackControl.plannedHours,
-  reading: readingForShowers(6),
-  state: fallbackHighState,
+  reading: freshReading(121),
+  state: fallbackStaleState,
+});
+assert.strictEqual(fallbackStaleFirst.finalTargetOn, false, "adopted backup_hours must still require the tank-reading debounce on the 1st stale cycle");
+const fallbackStaleSecond = decide({
+  planSource: fallbackControl.source,
+  plannedHours: fallbackControl.plannedHours,
+  reading: freshReading(121),
+  state: fallbackStaleState,
+});
+assert.strictEqual(fallbackStaleSecond.finalTargetOn, false, "...nor on the 2nd");
+const fallbackStaleThird = decide({
+  planSource: fallbackControl.source,
+  plannedHours: fallbackControl.plannedHours,
+  reading: freshReading(121),
+  state: fallbackStaleState,
 });
 assert.strictEqual(
-  decide({
-    plannedHours: fallbackControl.plannedHours,
-    reading: readingForShowers(6),
-    state: fallbackHighState,
-  }).finalTargetOn,
-  false,
-  "fallback must use the same two-reading start block",
-);
-assert.strictEqual(
-  decide({
-    plannedHours: fallbackControl.plannedHours,
-    reading: readingForShowers(3),
-  }).finalTargetOn,
+  fallbackStaleThird.finalTargetOn,
   true,
-  "Supabase error fallback may start below 92 percent",
+  "Supabase error fallback on a backup hour now heats through a stale reading too (after three consecutive unreliable cycles) - the tank's own thermostat is the real safety net",
 );
-assert.strictEqual(
-  decide({
-    plannedHours: fallbackControl.plannedHours,
-    reading: readingForShowers(3, 121),
-  }).finalTargetOn,
-  true,
-  "Supabase error fallback on a backup hour now heats through a stale reading too - the tank's own thermostat is the real safety net",
-);
+assert.strictEqual(fallbackStaleThird.reason, "backup-fault-override");
+
 assert.strictEqual(
   decide({
     currentHour: 8,
+    planSource: fallbackControl.source,
     plannedHours: fallbackControl.plannedHours,
-    reading: readingForShowers(3, 121),
+    reading: freshReading(121),
   }).finalTargetOn,
   false,
   "the stale-reading override only applies to hours actually listed in backupHours, not every hour once fallback mode is active",
@@ -479,6 +672,211 @@ assert.strictEqual(trustedControl([{ health_status: "healthy", last_validated_pl
 const disabledHeartbeatControl = trustedControl([], { ...settings, enabled: false });
 assert.strictEqual(disabledHeartbeatControl.source, "fail-safe", "fallback disabled fails closed");
 assert.deepStrictEqual(disabledHeartbeatControl.plannedHours, []);
+
+// applyControlPlaneDebounce: a transient plan-/heartbeat-fetch problem that
+// resolvePlanControl/resolveTrustedPlanControl would resolve to
+// source:"backup" must not immediately let backup_hours drive the relay -
+// only the third CONSECUTIVE such cycle may. Every decide() call below
+// passes planSource: <control>.source, exactly as executeDecision does in
+// production, so this exercises the real end-to-end wiring rather than
+// just the raw plannedHours array.
+const transientPlanErrorControl = () =>
+  resolvePlanControl(null, createRequestError("transient network blip", true), settings, "2026-07-26");
+assert.strictEqual(transientPlanErrorControl().source, "backup", "sanity check: this raw resolution is exactly the 'backup' source being debounced");
+
+const planDebounceState = createControllerState();
+
+const planPending1 = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planPending1.source, "backup-pending", "1st consecutive transient plan-fetch backup resolution is still pending");
+assert.deepStrictEqual(planPending1.plannedHours, [], "pending cycle must not let backup_hours drive the relay yet");
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, 1);
+const planPending1Decision = decide({
+  currentHour: 15,
+  planSource: planPending1.source,
+  plannedHours: planPending1.plannedHours,
+  failSafeReason: planPending1.failSafeReason,
+  reading: freshReading(),
+  state: planDebounceState,
+});
+assert.strictEqual(planPending1Decision.finalTargetOn, false, "1) transient plan-fetch error on a backup hour must not heat yet");
+assert.strictEqual(planPending1Decision.reason, "hour-not-planned");
+
+const planPending2 = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planPending2.source, "backup-pending", "2nd consecutive transient plan-fetch backup resolution is still pending");
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, 2);
+const planPending2Decision = decide({
+  currentHour: 15,
+  planSource: planPending2.source,
+  plannedHours: planPending2.plannedHours,
+  failSafeReason: planPending2.failSafeReason,
+  reading: freshReading(),
+  state: planDebounceState,
+});
+assert.strictEqual(planPending2Decision.finalTargetOn, false, "2) transient plan-fetch error on a backup hour must still not heat");
+
+const planAdopted = applyControlPlaneDebounce(transientPlanErrorControl(), planDebounceState);
+assert.strictEqual(planAdopted.source, "backup", "3rd consecutive transient plan-fetch backup resolution is finally adopted");
+assert.deepStrictEqual(planAdopted.plannedHours, settings.backupHours);
+assert.strictEqual(planDebounceState.consecutiveControlPlaneUnreliableCycles, REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES);
+const planAdoptedDecision = decide({
+  currentHour: 15,
+  planSource: planAdopted.source,
+  plannedHours: planAdopted.plannedHours,
+  failSafeReason: planAdopted.failSafeReason,
+  reading: freshReading(),
+  state: planDebounceState,
+});
+assert.strictEqual(planAdoptedDecision.finalTargetOn, true, "3) after three consecutive transient plan-fetch errors backup_hours may finally start heating (with a valid reading)");
+assert.strictEqual(planAdoptedDecision.reason, "planned-heating");
+
+// A transient heartbeat-fetch failure/untrusted heartbeat is debounced
+// exactly the same way, since resolveTrustedPlanControl also resolves it to
+// source:"backup".
+const transientHeartbeatControl = () =>
+  resolveTrustedPlanControl(todayPlan, null, null, createRequestError("heartbeat unavailable", true), settings, "2026-08-13", heartbeatNow);
+assert.strictEqual(transientHeartbeatControl().source, "backup", "sanity check: heartbeat fetch failure resolves to the same 'backup' source being debounced");
+
+const heartbeatDebounceState = createControllerState();
+const heartbeatPending1 = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatPending1.source, "backup-pending");
+const heartbeatPending1Decision = decide({
+  currentHour: 15,
+  planSource: heartbeatPending1.source,
+  plannedHours: heartbeatPending1.plannedHours,
+  failSafeReason: heartbeatPending1.failSafeReason,
+  reading: freshReading(),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatPending1Decision.finalTargetOn, false, "transient heartbeat-fetch failure on a backup hour must not heat on the 1st cycle");
+
+const heartbeatPending2 = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatPending2.source, "backup-pending");
+const heartbeatPending2Decision = decide({
+  currentHour: 15,
+  planSource: heartbeatPending2.source,
+  plannedHours: heartbeatPending2.plannedHours,
+  failSafeReason: heartbeatPending2.failSafeReason,
+  reading: freshReading(),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatPending2Decision.finalTargetOn, false, "transient heartbeat-fetch failure on a backup hour must not heat on the 2nd cycle either");
+
+const heartbeatAdopted = applyControlPlaneDebounce(transientHeartbeatControl(), heartbeatDebounceState);
+assert.strictEqual(heartbeatAdopted.source, "backup", "3rd consecutive transient heartbeat failure is finally adopted");
+const heartbeatAdoptedDecision = decide({
+  currentHour: 15,
+  planSource: heartbeatAdopted.source,
+  plannedHours: heartbeatAdopted.plannedHours,
+  failSafeReason: heartbeatAdopted.failSafeReason,
+  reading: freshReading(),
+  state: heartbeatDebounceState,
+});
+assert.strictEqual(heartbeatAdoptedDecision.finalTargetOn, true, "after three consecutive transient heartbeat failures backup_hours may finally start heating (with a valid reading)");
+
+// A single successful/trusted "energyzen" cycle in between resets the
+// control-plane counter immediately, exactly like decideHeating's own
+// tank-reading counter resets on a reliable cycle.
+const resetState = createControllerState();
+applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 2);
+const trustedInBetween = applyControlPlaneDebounce(
+  resolvePlanControl([{ plan_date: "2026-07-26", planned_hours: [15] }], null, settings, "2026-07-26"),
+  resetState,
+);
+assert.strictEqual(trustedInBetween.source, "energyzen");
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 0, "a trusted energyzen cycle in between resets the control-plane counter immediately");
+const afterResetPending = applyControlPlaneDebounce(transientPlanErrorControl(), resetState);
+assert.strictEqual(afterResetPending.source, "backup-pending", "the next transient cycle after a reset starts counting from zero again, not from where it left off");
+assert.strictEqual(resetState.consecutiveControlPlaneUnreliableCycles, 1);
+
+// A transient control-plane cycle on an hour that is not a backup hour must
+// never start heating, even once backup_hours has been fully adopted (3rd
+// consecutive cycle) - matches the existing rule that backup_hours only
+// ever applies to hours actually listed in it.
+const nonBackupHourDebounceState = createControllerState();
+for (let index = 0; index < REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES; index += 1) {
+  applyControlPlaneDebounce(transientPlanErrorControl(), nonBackupHourDebounceState);
+}
+assert.strictEqual(nonBackupHourDebounceState.consecutiveControlPlaneUnreliableCycles, REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES);
+const adoptedButNotBackupHour = applyControlPlaneDebounce(transientPlanErrorControl(), nonBackupHourDebounceState);
+assert.strictEqual(adoptedButNotBackupHour.source, "backup");
+const nonBackupHourDecision = decide({
+  currentHour: 8,
+  planSource: adoptedButNotBackupHour.source,
+  plannedHours: adoptedButNotBackupHour.plannedHours,
+  failSafeReason: adoptedButNotBackupHour.failSafeReason,
+  reading: freshReading(121),
+  state: nonBackupHourDebounceState,
+});
+assert.strictEqual(nonBackupHourDecision.finalTargetOn, false, "backup_hours never drives the relay on an hour that is not itself a backup hour");
+
+// The control-plane debounce and the pre-existing tank-reading debounce are
+// fully independent: adopting backup_hours (3 consecutive control-plane
+// cycles) must not itself grant the tank-reading backup-fault-override -
+// that still separately needs its own 3 consecutive unreliable readings.
+// planSource: combinedControl.source ("backup") is essential here - it is
+// exactly what stops the adopted backup hour from being (wrongly) treated
+// as a trusted planned hour that would bypass tank-reading checks entirely.
+const combinedState = createControllerState();
+let combinedControl;
+for (let index = 0; index < REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES; index += 1) {
+  combinedControl = applyControlPlaneDebounce(transientPlanErrorControl(), combinedState);
+}
+assert.strictEqual(combinedControl.source, "backup", "control-plane debounce has fully adopted backup_hours");
+const combinedFirstStale = decide({
+  currentHour: 15,
+  planSource: combinedControl.source,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: freshReading(121),
+  state: combinedState,
+});
+assert.strictEqual(combinedFirstStale.reason, "stale-reading", "even with backup_hours adopted, a single stale reading must not yet trigger backup-fault-override");
+assert.strictEqual(combinedFirstStale.finalTargetOn, false);
+assert.strictEqual(combinedFirstStale.consecutiveUnreliableCycles, 1);
+const combinedSecondStale = decide({
+  currentHour: 15,
+  planSource: combinedControl.source,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: freshReading(121),
+  state: combinedState,
+});
+assert.strictEqual(combinedSecondStale.finalTargetOn, false);
+assert.strictEqual(combinedSecondStale.consecutiveUnreliableCycles, 2);
+const combinedThirdStale = decide({
+  currentHour: 15,
+  planSource: combinedControl.source,
+  plannedHours: combinedControl.plannedHours,
+  failSafeReason: combinedControl.failSafeReason,
+  reading: freshReading(121),
+  state: combinedState,
+});
+assert.strictEqual(combinedThirdStale.reason, "backup-fault-override", "the tank-reading 3-cycle debounce still fires on its own after being independently satisfied");
+assert.strictEqual(combinedThirdStale.finalTargetOn, true);
+
+// A normal, trusted EnergyZen plan cycle must never be delayed by this
+// debounce - it applies immediately on the very first cycle, and heats
+// even through a stale reading (planSource "energyzen").
+const normalEnergyzenState = createControllerState();
+const normalEnergyzenControl = applyControlPlaneDebounce(
+  resolvePlanControl([{ plan_date: "2026-07-26", planned_hours: [15] }], null, settings, "2026-07-26"),
+  normalEnergyzenState,
+);
+assert.strictEqual(normalEnergyzenControl.source, "energyzen");
+assert.strictEqual(normalEnergyzenState.consecutiveControlPlaneUnreliableCycles, 0);
+const normalEnergyzenDecision = decide({
+  currentHour: 15,
+  planSource: normalEnergyzenControl.source,
+  plannedHours: normalEnergyzenControl.plannedHours,
+  failSafeReason: normalEnergyzenControl.failSafeReason,
+  reading: freshReading(9999),
+  state: normalEnergyzenState,
+});
+assert.strictEqual(normalEnergyzenDecision.finalTargetOn, true, "a normal trusted EnergyZen plan heats immediately, on the very first cycle, even through a stale reading");
+assert.strictEqual(normalEnergyzenDecision.reason, "planned-heating");
+
 // resolveHelsinkiFromSysStatus trusts the device's own Sys status (sys.time
 // for local wall-clock hour, sys.unixtime as a UTC epoch used only to
 // detect a local midnight rollover) instead of computing DST itself - the

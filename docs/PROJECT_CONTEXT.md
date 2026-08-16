@@ -138,42 +138,115 @@ migraatio).
   repossa – aiempi versio tästä dokumentista väitti virheellisesti, ettei
   Shellyn puoleista logiikkaa löydy repositoriosta.
   - Ajastimella kerran minuutissa (`CHECK_INTERVAL_MS`): hakee
-    `heating_control_settings`-rivin (kalibrointi, `backup_hours`,
-    `fallback_enabled`) ja `heating_plans`-taulusta kuluvan päivän
+    `heating_control_settings`-rivin (`backup_hours`, `fallback_enabled`,
+    `heating_need_mode`) ja `heating_plans`-taulusta kuluvan päivän
     `planned_hours`-listan suoraan Supabasen REST-rajapinnasta, sekä
-    tuoreimman `tank_readings`-rivin täyttöasteen laskemiseksi.
-    Kalibrointiasetukset välimuistoidaan laitteen omaan
-    `Script.storage`:en, jotta ohjaus toimii myös hetkellisen
+    tuoreimman `tank_readings`-rivin anturidatan tuoreuden/kelvollisuuden
+    tarkistamiseksi (ks. alla). `backup_hours`/`fallback_enabled`
+    välimuistoidaan laitteen omaan `Script.storage`:en
+    (`hasStoredFallback`-lippu erottaa aidon aiemman synkan pelkistä
+    oletusarvoista), jotta ohjaus toimii myös hetkellisen
     verkko-/Supabase-katkon yli.
+    **Backend on ainoa lämmityspäätöksen tekijä normaalilla, luotetulla
+    suunnitellulla tunnilla** – Shelly ei enää laske paikallisesti
+    täyttöastetta/suihkumäärää eikä kalibrointia (poistettu, ks. alla),
+    eikä vaadi edes tuoretta/validia `tank_readings`-lukemaa: kun
+    `resolveTrustedPlanControl`/`applyControlPlaneDebounce` on jo
+    varmistanut tunnin olevan backendin oman, heartbeat-vahvistetun
+    suunnitelman mukainen (`control.source === "energyzen"`, kulkee
+    `decideHeating`:lle `planSource`-kenttänä), rele kytketään päälle
+    ehdoitta (`reason: "planned-heating"`) riippumatta siitä onko
+    tuorein lukema puuttuva, vanhentunut vai virheellinen. Tank-readingin
+    tuoreus/kelvollisuus tarkistetaan enää `backup_hours`-varapolulla
+    (ks. alla) – ei enää normaalin, luotetun suunnitelman hyväksyntään.
+    Mikä tahansa AITO ylävirran vikatila (rele/laiteaika/asetukset/
+    suunnitelman haku/heartbeat – `failSafeReason`) pysäyttää lämmityksen
+    edelleen, vaikka tunti sattuisi olemaan suunniteltu – luottamus koskee
+    vain `decideHeating`:n itse laskemia lukemakohtaisia tarkistuksia, ei
+    ylävirran infrastruktuurivikoja. Poikkeus: itse `tank_readings`-REST-
+    haun epäonnistuminen (`fetchLatestReading`) kulkee `decideHeating`:lle
+    omana `readingFetchError`-kenttänään, EI `failSafeReason`ina – tämä on
+    tarkoituksellista, koska muuten pelkkä Shellyn oma hetkellinen
+    Supabase-katko olisi voinut estää muuten heartbeat-vahvistetun
+    suunnitelman lämmityksen. Luotetulla suunnitellulla tunnilla
+    `readingFetchError` siis ohitetaan aivan kuten puuttuva/vanhentunut/
+    virheellinen lukemakin; `backup_hours`-varapolulla se sen sijaan
+    lasketaan yhä samaan `"reading-fetch-error"`-datavikasyyhyn ja
+    kolmen kierroksen debounssiin kuin ennenkin (ks. alla).
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
-    väärä `plan_date`) **ja** fallback on käytössä, käytetään
-    Supabasesta/välimuistista luettua `backup_hours`-tuntilistaa – tämä ei
-    ole sovelluksen koodiin kovakoodattu lista, vaan konfiguroitava,
-    tietokannassa asuva arvo.
-  - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois lasketun
-    suihkuvarausarvion ja suunniteltujen tuntien perusteella, sisältäen
-    värähtelyn eston (`REQUIRED_BLOCKING_READINGS`) ja lukeman
-    vanhenemistarkistuksen (`MAX_READING_AGE_SECONDS = 120`). **Tämä kahden
-    minuutin ohjausraja on tarkoituksella eri asia kuin appin ja
-    monitorointifunktion 30 minuutin käyttäjähälytysraja:** Shelly tarkistaa
-    tilanteen kerran minuutissa ja lakkaa luottamasta reaaliaikaiseen
-    ohjausdataan nopeasti, jotta yhden tunnin varatunti ei ehdi kulua
-    suurelta osin ennen fallbackia. Lyhyt katko voi siis käynnistää paikallisen
-    varatoiminnan ilman käyttäjähälytystä. Arvoa 120 ei pidä synkronoida 30
-    minuutin hälytysrajan kanssa.
-  - **Anturi-/datavika varatunnilla ohittaa lukeman validoinnin kokonaan.**
-    Jos mittausdataa ei voi luottaa (vanha/puuttuva/virheellinen
-    `tank_readings`-lukema, tai sen haku epäonnistuu) mutta kuluva tunti on
-    silti `backup_hours`-listalla eikä fallback ole pois päältä, rele
-    kytketään päälle ehdoitta (`reason: "backup-fault-override"`) - ei
-    lasketa täyttöastetta, koska sitä ei voi luottavasti laskea ilman
-    lukemaa. Tämä on tietoinen valinta: varaajan oma mekaaninen
-    ylikuumenemissuoja (termostaatti) on todellinen turvaraja, joten
-    ohjelmisto suosii "lämmitä varmuuden vuoksi" -oletusta "älä lämmitä
-    epävarmuuden vuoksi" -oletuksen sijaan silloin kun dataan ei voi
-    luottaa. Muut vikatilat (esim. `hour-not-planned`,
-    `invalid-calibration`, releen oman tilan kysely epäonnistuu) eivät
-    kuulu tähän ohitukseen.
+    väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
+    fallback on käytössä, käytetään Supabasesta/välimuistista luettua
+    `backup_hours`-tuntilistaa – tämä ei ole sovelluksen koodiin
+    kovakoodattu lista, vaan konfiguroitava, tietokannassa asuva arvo.
+    Myös tämä control-plane-fallback (`resolvePlanControl`/
+    `resolveTrustedPlanControl`, tulos `source: "backup"`) on debounssattu
+    `applyControlPlaneDebounce`-funktiolla samalla periaatteella kuin
+    alla kuvattu anturi-/datavikaohitus: yksittäinen transientti plan- tai
+    heartbeat-haun häiriö (esim. hetkellinen Wi-Fi-katko) ei enää yksinään
+    saa ottaa `backup_hours`-listaa käyttöön ohjaukseen (`source:
+    "backup-pending"`, `plannedHours: []` sillä kierroksella) - vasta
+    kolmas PERÄKKÄINEN tällainen kierros sallii sen
+    (`REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES`). Yksikin sitä ennen
+    onnistunut, luotettu `source: "energyzen"`-kierros nollaa laskurin
+    heti, eikä normaalia EnergyZen-suunnitelman mukaista lämmitystä
+    koskaan viivytetä tällä. Tämä on eri, itsenäinen laskuri kuin alla
+    kuvattu tank-reading-datavikalaskuri - molemmat näkyvät erikseen
+    Shellyn lokissa (`consecutiveControlPlaneUnreliableCycles` vs.
+    `consecutiveUnreliableCycles`).
+  - Kytkee releen (`Switch.Set`, `id = 0`) päälle/pois suunniteltujen
+    tuntien perusteella, sisältäen lukeman vanhenemistarkistuksen
+    (`MAX_READING_AGE_SECONDS = 120`). **Tämä kahden minuutin ohjausraja on
+    tarkoituksella eri asia kuin appin ja monitorointifunktion 30 minuutin
+    käyttäjähälytysraja:** Shelly tarkistaa tilanteen kerran minuutissa ja
+    lakkaa luottamasta reaaliaikaiseen ohjausdataan nopeasti, jotta yhden
+    tunnin varatunti ei ehdi kulua suurelta osin ennen fallbackia. Lyhyt
+    katko voi siis käynnistää paikallisen varatoiminnan ilman
+    käyttäjähälytystä. Arvoa 120 ei pidä synkronoida 30 minuutin
+    hälytysrajan kanssa.
+  - **Poistettu (backend-primary-arkkitehtuurin myötä tarpeettomaksi
+    jäänyt paikallinen heuristiikka):** aiemmin Shelly laski itse
+    suihkuvarausarvion (`fullTankShowers`/`fullTankAverageTemperature`/
+    `minTankTemperature`/`maxTankTemperature`/`targetShowerReserve`-
+    kalibroinnista ja tuoreimmasta lukemasta) ja käytti sitä 92 %
+    täyttöasterajana (`START_HEATING_FILL_RATIO`) päättämään KESKEN
+    suunnitellun tunnin pitäisikö lämmitys jo lopettaa/olla aloittamatta
+    (`REQUIRED_BLOCKING_READINGS`-värähtelyn esto). Tämä oli suora
+    duplikaatti backendin `heatingOptimizer`-laskennasta, joka jo ottaa
+    kalibroinnin huomioon `planned_hours`-listaa muodostaessaan, ja saattoi
+    jopa estää backendin suunnitteleman lämmityksen paikallisen laskennan
+    perusteella. Poistettu kokonaan yhdessä siihen liittyvän
+    kalibrointivalidoinnin (`isValidCalibration`, `"invalid-calibration"`-
+    syy) ja kalibrointikenttien Shelly-puoleisen haun/välimuistituksen
+    kanssa – nämä samat `heating_control_settings`-sarakkeet pysyvät
+    edelleen käytössä backendissä, vain Shellyn paikallinen kopio/
+    uudelleenlasku poistui.
+  - **`backup_hours`-varapolulla anturi-/datavika ohittaa lukeman
+    validoinnin kokonaan, mutta vasta kolmannen PERÄKKÄISEN
+    epäluotettavan kierroksen jälkeen.** Tämä koskee vain tuntia, joka EI
+    ole backendin oma luotettu suunnitelma (`planSource !== "energyzen"` -
+    esim. `control-plane`-fallbackin adoptoima `backup_hours`-lista, ks.
+    yllä; luotettu suunniteltu tunti ohittaa koko tämän tarkistuksen jo
+    yllä kuvatulla tavalla). Jos mittausdataa ei voi luottaa (vanha/
+    puuttuva/virheellinen `tank_readings`-lukema, tai sen haku
+    epäonnistuu) mutta kuluva tunti on silti `backup_hours`-listalla eikä
+    fallback ole pois päältä, ohjain kasvattaa laitteen omassa tilassa
+    asuvaa `consecutiveUnreliableCycles`-laskuria. Vasta kun laskuri
+    saavuttaa
+    kynnyksen (`REQUIRED_UNRELIABLE_CYCLES = 3`), rele kytketään päälle
+    ehdoitta (`reason: "backup-fault-override"`) - ei lasketa täyttöastetta,
+    koska sitä ei voi luottavasti laskea ilman lukemaa. Yksi hetkellinen
+    epäluotettava kierros (esim. lyhyt Wi-Fi-katko) ei siis enää yksinään
+    käynnistä varatuntilämmitystä sokeasti; yksikin sitä ennen tuleva
+    luotettava kierros nollaa laskurin heti. Laskuri kasvaa vain silloin kun
+    ollaan varatunnilla eikä fallback ole pois päältä - muilla tunneilla
+    epäluotettava kierros ei koskaan käynnistä lämmitystä eikä kartuta
+    laskuria. Kolmannen kierroksen jälkeen tämä on tietoinen valinta:
+    varaajan oma mekaaninen ylikuumenemissuoja (termostaatti) on todellinen
+    turvaraja, joten ohjelmisto suosii "lämmitä varmuuden vuoksi"
+    -oletusta "älä lämmitä epävarmuuden vuoksi" -oletuksen sijaan silloin
+    kun katko on aidosti pitkittynyt. Muut vikatilat (esim.
+    `hour-not-planned`, releen oman tilan kysely epäonnistuu) eivät kuulu
+    tähän ohitukseen eivätkä kartuta laskuria.
   - **Mitä jää silti versionhallinnan ulkopuolelle:** Shellyn WiFi-
     verkkoasetukset (laitteen oma ensiasennus), sekä itse
     käyttöönotto/päivitys – `energyzen-controller.min.js`:n vieminen
