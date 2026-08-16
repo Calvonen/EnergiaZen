@@ -564,9 +564,9 @@ export function runRunHeatingOptimizerLogicUnitTests() {
           "with zero tomorrow price hours, tomorrow's plan must have zero planned hours, not a fabricated one",
         );
         assertEqual(
-          decision.tomorrowHasPriceData,
+          decision.tomorrowHasCompletePriceData,
           false,
-          "zero tomorrow-dated hours in the optimizer's input must report tomorrowHasPriceData: false",
+          "zero tomorrow-dated hours in the optimizer's input must report tomorrowHasCompletePriceData: false",
         );
         assertEqual(
           decision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
@@ -632,9 +632,9 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     assertEqual(decision.status, "ready", "full today+tomorrow coverage must produce a ready decision");
     if (decision.status === "ready") {
       assertEqual(
-        decision.tomorrowHasPriceData,
+        decision.tomorrowHasCompletePriceData,
         true,
-        "real tomorrow price hours in the optimizer's input must report tomorrowHasPriceData: true even when none were selected",
+        "a full, gapless tomorrow day in the optimizer's input must report tomorrowHasCompletePriceData: true even when none were selected",
       );
       assertEqual(
         decision.tomorrow.planned_hours,
@@ -645,6 +645,66 @@ export function runRunHeatingOptimizerLogicUnitTests() {
         decision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
         true,
         "a genuine zero-heating-hours tomorrow decision (real price data, optimizer chose none) must publish normally (regression test 2)",
+      );
+    }
+  }
+
+  // 2c2. Tomorrow's prices arrived through electricity_prices but only
+  // partially - a midnight-anchored, gapless prefix (e.g. ingest is
+  // mid-flight). Built from the same real price-row fixtures/pipeline
+  // (priceRowsForDay + buildOptimizerHours) as the "full tomorrow" case
+  // above, not synthetic hours - only the trailing rows are dropped.
+  {
+    const hours = buildOptimizerHours(
+      [...todayPrices, ...tomorrowPrices],
+      now,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
+    const todayHours = hours.filter(
+      (hour) => getFinnishDateKey(hour.startDate) === todayPlanDate,
+    );
+    const fullTomorrowHours = hours.filter(
+      (hour) => getFinnishDateKey(hour.startDate) === tomorrowPlanDate,
+    );
+    assert(fullTomorrowHours.length > 10, "fixture must have more than 10 tomorrow hours to truncate meaningfully");
+    const partialSelectedHours = [...todayHours, ...fullTomorrowHours.slice(0, 10)];
+
+    const decision = buildHeatingPlanPublicationDecision({
+      currentHourNumber: getHelsinkiHourNumber(now),
+      dateKeyOf: getFinnishDateKey,
+      hasAttemptedTankReadingFetch: true,
+      heating: false,
+      isTodayPlanLoaded: true,
+      now,
+      optimizerResult: {
+        selectedHeatingHourIds: todayHours.slice(0, 1).map((hour) => hour.id),
+      } as HeatingOptimizationResult,
+      optimizerSettings: { automaticMaxHeatingHours: 5 },
+      selectedHours: partialSelectedHours,
+      storedPlans: {
+        [tomorrowPlanDate]: {
+          mode: "automatic",
+          plan_date: tomorrowPlanDate,
+          planned_hours: [3, 4, 5],
+          target_hours: 3,
+        } as ComparableHeatingPlan,
+      },
+      todayPlanDate,
+      tomorrowPlanDate,
+      unknownHeatingAnchor: null,
+    });
+    assertEqual(decision.status, "ready", "a partial tomorrow window built from real price rows must still be ready for today");
+    if (decision.status === "ready") {
+      assertEqual(
+        decision.tomorrowHasCompletePriceData,
+        false,
+        "10 of tomorrow's real, midnight-anchored price rows is not the whole day, so this must report tomorrowHasCompletePriceData: false (regression test 2)",
+      );
+      assertEqual(
+        decision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
+        false,
+        "a plan computed from a partial tomorrow window must never overwrite the stored tomorrow plan, even though the available rows are real and gapless from midnight",
       );
     }
   }

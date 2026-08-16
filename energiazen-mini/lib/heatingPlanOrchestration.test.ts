@@ -1,6 +1,7 @@
 import { buildHeatingPlanPublicationDecision } from "./heatingPlanOrchestration";
 import type { HeatingOptimizationHour, HeatingOptimizationResult } from "./heatingOptimizer";
 import type { ComparableHeatingPlan } from "./heatingPlanPublication";
+import { getDateKeyOffset, getHelsinkiDateStart } from "./heatingLogic";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -45,6 +46,39 @@ export function runHeatingPlanOrchestrationUnitTests() {
       segmentHours: 1,
       startDate,
     };
+  }
+
+  // Every contiguous 60-minute hour of dateKey's actual Helsinki-local day
+  // (23/24/25 hours depending on DST - never a hardcoded 24), registered in
+  // the same byId map trackDateKeyOf reads from.
+  function buildFullDayHours(
+    dateKey: string,
+    priceCentsPerKwh: number,
+  ): HeatingOptimizationHour[] {
+    const dayStart = getHelsinkiDateStart(dateKey);
+    const dayEnd = getHelsinkiDateStart(getDateKeyOffset(1, dayStart));
+    const hours: HeatingOptimizationHour[] = [];
+
+    for (
+      let cursor = dayStart.getTime();
+      cursor < dayEnd.getTime();
+      cursor += 60 * 60 * 1000
+    ) {
+      const date = new Date(cursor);
+      const startDate = date.toISOString();
+      byId.set(startDate, { dateKey, helsinkiHour: hours.length });
+      hours.push({
+        date,
+        endDate: new Date(cursor + 60 * 60 * 1000),
+        id: startDate,
+        isCurrentHour: false,
+        price: priceCentsPerKwh,
+        segmentHours: 1,
+        startDate,
+      });
+    }
+
+    return hours;
   }
 
   // 1. Deferred: today's stored plan hasn't loaded yet.
@@ -110,15 +144,13 @@ export function runHeatingPlanOrchestrationUnitTests() {
     "must defer (never publish stale/missing data) when the optimizer produced no result",
   );
 
-  // 4. Ready: builds today/tomorrow plans from the optimizer's selected hours.
+  // 4. Ready: builds today/tomorrow plans from the optimizer's selected
+  // hours. Tomorrow uses a FULL day of hours here (not a single one) so
+  // tomorrowHasCompletePriceData is true and both plans are treated as
+  // publishable changes, matching this test's original intent.
   const todayHourA = testHour("today-14", "2026-08-12T11:00:00.000Z", todayPlanDate, 14);
   const todayHourB = testHour("today-15", "2026-08-12T12:00:00.000Z", todayPlanDate, 15);
-  const tomorrowHourA = testHour(
-    "tomorrow-3",
-    "2026-08-13T00:00:00.000Z",
-    tomorrowPlanDate,
-    3,
-  );
+  const tomorrowFullDay = buildFullDayHours(tomorrowPlanDate, 5);
   const readyDecision = buildHeatingPlanPublicationDecision({
     currentHourNumber: 14,
     dateKeyOf: trackDateKeyOf,
@@ -126,9 +158,9 @@ export function runHeatingPlanOrchestrationUnitTests() {
     heating: false,
     isTodayPlanLoaded: true,
     now,
-    optimizerResult: optimizerResult(["today-14", "today-15", "tomorrow-3"]),
+    optimizerResult: optimizerResult(["today-14", "today-15", tomorrowFullDay[3].id]),
     optimizerSettings: { automaticMaxHeatingHours: 3 },
-    selectedHours: [todayHourA, todayHourB, tomorrowHourA],
+    selectedHours: [todayHourA, todayHourB, ...tomorrowFullDay],
     storedPlans: {},
     todayPlanDate,
     tomorrowPlanDate,
@@ -140,6 +172,7 @@ export function runHeatingPlanOrchestrationUnitTests() {
     assertEqual(readyDecision.today.planned_hours, [14, 15], "today plan hours must come from selected optimizer hours");
     assertEqual(readyDecision.tomorrow.planned_hours, [3], "tomorrow plan hours must come from selected optimizer hours");
     assertEqual(readyDecision.today.target_hours, 3, "target_hours must equal the total selected hour count, matching index.tsx");
+    assertEqual(readyDecision.tomorrowHasCompletePriceData, true, "a full tomorrow day of hours must report complete coverage");
     assertEqual(readyDecision.changedPlans.length, 2, "both plans are new (no storedPlans yet) so both are changed");
   }
 
@@ -177,8 +210,14 @@ export function runHeatingPlanOrchestrationUnitTests() {
   // must be diagnostically computed (planned_hours: []) but must NOT enter
   // changedPlans - an existing, previously-published real tomorrow plan
   // must not be silently replaced by a fabricated "0 h" one just because
-  // this run's input never had tomorrow's prices.
-  const missingTomorrowDataDecision = buildHeatingPlanPublicationDecision({
+  // this run's input never had tomorrow's prices. (Regression test 1.)
+  const tomorrowStoredPlan: ComparableHeatingPlan = {
+    mode: "automatic",
+    plan_date: tomorrowPlanDate,
+    planned_hours: [3, 4],
+    target_hours: 2,
+  };
+  const zeroTomorrowHoursDecision = buildHeatingPlanPublicationDecision({
     currentHourNumber: 14,
     dateKeyOf: trackDateKeyOf,
     hasAttemptedTankReadingFetch: true,
@@ -197,42 +236,37 @@ export function runHeatingPlanOrchestrationUnitTests() {
         planned_hours: [15],
         target_hours: 1,
       } as ComparableHeatingPlan,
-      [tomorrowPlanDate]: {
-        mode: "automatic",
-        plan_date: tomorrowPlanDate,
-        planned_hours: [3, 4],
-        target_hours: 2,
-      } as ComparableHeatingPlan,
+      [tomorrowPlanDate]: tomorrowStoredPlan,
     },
     todayPlanDate,
     tomorrowPlanDate,
     unknownHeatingAnchor: null,
   });
   assertEqual(
-    missingTomorrowDataDecision.status,
+    zeroTomorrowHoursDecision.status,
     "ready",
     "zero tomorrow-dated input hours must still produce a ready decision for today",
   );
-  if (missingTomorrowDataDecision.status === "ready") {
+  if (zeroTomorrowHoursDecision.status === "ready") {
     assertEqual(
-      missingTomorrowDataDecision.tomorrowHasPriceData,
+      zeroTomorrowHoursDecision.tomorrowHasCompletePriceData,
       false,
-      "no tomorrow-dated hour anywhere in selectedHours must report tomorrowHasPriceData: false",
+      "no tomorrow-dated hour anywhere in selectedHours must report tomorrowHasCompletePriceData: false",
     );
     assertEqual(
-      missingTomorrowDataDecision.tomorrow.planned_hours,
+      zeroTomorrowHoursDecision.tomorrow.planned_hours,
       [],
       "the diagnostic tomorrow draft itself stays [] when there is nothing to select from",
     );
     assertEqual(
-      missingTomorrowDataDecision.changedPlans.some(
+      zeroTomorrowHoursDecision.changedPlans.some(
         (plan) => plan.plan_date === tomorrowPlanDate,
       ),
       false,
       "a tomorrow draft built from zero input hours must never be published/overwrite the stored tomorrow plan",
     );
     assertEqual(
-      missingTomorrowDataDecision.changedPlans.some(
+      zeroTomorrowHoursDecision.changedPlans.some(
         (plan) => plan.plan_date === todayPlanDate,
       ),
       true,
@@ -240,11 +274,76 @@ export function runHeatingPlanOrchestrationUnitTests() {
     );
   }
 
-  // 6b. Genuine zero-heating-hours-tomorrow: tomorrow's prices ARE in the
-  // optimizer's input (tomorrowHourA), but the optimizer's own result simply
-  // selected none of them. This must publish exactly as before - an empty
-  // tomorrow plan computed from real data is a real decision, not a missing
-  // one.
+  // R2. Partial-but-gapless tomorrow coverage: only the first few hours
+  // after Helsinki midnight are present (e.g. electricity_prices still
+  // mid-ingest) - this must NOT count as complete, even though it is a
+  // real, contiguous, midnight-anchored subset and not merely "zero hours".
+  const partialTomorrowHours = buildFullDayHours(tomorrowPlanDate, 5).slice(0, 10);
+  const partialTomorrowDecision = buildHeatingPlanPublicationDecision({
+    currentHourNumber: 14,
+    dateKeyOf: trackDateKeyOf,
+    hasAttemptedTankReadingFetch: true,
+    heating: false,
+    isTodayPlanLoaded: true,
+    now,
+    optimizerResult: optimizerResult(["today-14"]),
+    optimizerSettings: { automaticMaxHeatingHours: 3 },
+    selectedHours: [todayHourA, ...partialTomorrowHours],
+    storedPlans: { [tomorrowPlanDate]: tomorrowStoredPlan },
+    todayPlanDate,
+    tomorrowPlanDate,
+    unknownHeatingAnchor: null,
+  });
+  assertEqual(partialTomorrowDecision.status, "ready", "a partial tomorrow window must still produce a ready decision for today");
+  if (partialTomorrowDecision.status === "ready") {
+    assertEqual(
+      partialTomorrowDecision.tomorrowHasCompletePriceData,
+      false,
+      "a midnight-anchored but truncated (10 of tomorrow's hours) window must report tomorrowHasCompletePriceData: false",
+    );
+    assertEqual(
+      partialTomorrowDecision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
+      false,
+      "a plan computed from a truncated tomorrow window must never overwrite the stored tomorrow plan - it could miss real candidate hours later in the day",
+    );
+  }
+
+  // R3. Tomorrow fully covered (real data): the optimizer's own selection
+  // for tomorrow must publish normally.
+  const completeTomorrowHours = buildFullDayHours(tomorrowPlanDate, 5);
+  const completeTomorrowDecision = buildHeatingPlanPublicationDecision({
+    currentHourNumber: 14,
+    dateKeyOf: trackDateKeyOf,
+    hasAttemptedTankReadingFetch: true,
+    heating: false,
+    isTodayPlanLoaded: true,
+    now,
+    optimizerResult: optimizerResult(["today-14", completeTomorrowHours[3].id]),
+    optimizerSettings: { automaticMaxHeatingHours: 3 },
+    selectedHours: [todayHourA, ...completeTomorrowHours],
+    storedPlans: { [tomorrowPlanDate]: tomorrowStoredPlan },
+    todayPlanDate,
+    tomorrowPlanDate,
+    unknownHeatingAnchor: null,
+  });
+  assertEqual(completeTomorrowDecision.status, "ready", "a fully covered tomorrow day must produce a ready decision");
+  if (completeTomorrowDecision.status === "ready") {
+    assertEqual(
+      completeTomorrowDecision.tomorrowHasCompletePriceData,
+      true,
+      "a gapless, midnight-to-midnight tomorrow window must report tomorrowHasCompletePriceData: true",
+    );
+    assertEqual(completeTomorrowDecision.tomorrow.planned_hours, [3], "tomorrow's selected hour must come through unchanged");
+    assertEqual(
+      completeTomorrowDecision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
+      true,
+      "a plan computed from a complete tomorrow window must publish normally, replacing the old stored tomorrow plan",
+    );
+  }
+
+  // R4. Tomorrow fully covered but the optimizer genuinely selects 0 h for
+  // it - this must publish exactly as before, since it is a real decision
+  // made from real, complete data, not a missing one.
   const genuineZeroTomorrowDecision = buildHeatingPlanPublicationDecision({
     currentHourNumber: 14,
     dateKeyOf: trackDateKeyOf,
@@ -252,18 +351,12 @@ export function runHeatingPlanOrchestrationUnitTests() {
     heating: false,
     isTodayPlanLoaded: true,
     now,
-    // Only today-14 selected - tomorrowHourA was offered but not chosen.
+    // Only today-14 selected - every one of tomorrow's hours was offered
+    // but none was chosen.
     optimizerResult: optimizerResult(["today-14"]),
     optimizerSettings: { automaticMaxHeatingHours: 3 },
-    selectedHours: [todayHourA, tomorrowHourA],
-    storedPlans: {
-      [tomorrowPlanDate]: {
-        mode: "automatic",
-        plan_date: tomorrowPlanDate,
-        planned_hours: [3, 4],
-        target_hours: 2,
-      } as ComparableHeatingPlan,
-    },
+    selectedHours: [todayHourA, ...buildFullDayHours(tomorrowPlanDate, 5)],
+    storedPlans: { [tomorrowPlanDate]: tomorrowStoredPlan },
     todayPlanDate,
     tomorrowPlanDate,
     unknownHeatingAnchor: null,
@@ -271,13 +364,13 @@ export function runHeatingPlanOrchestrationUnitTests() {
   assertEqual(
     genuineZeroTomorrowDecision.status,
     "ready",
-    "a real tomorrow price hour that the optimizer simply didn't select must still be ready",
+    "a complete tomorrow day where the optimizer chose nothing must still be ready",
   );
   if (genuineZeroTomorrowDecision.status === "ready") {
     assertEqual(
-      genuineZeroTomorrowDecision.tomorrowHasPriceData,
+      genuineZeroTomorrowDecision.tomorrowHasCompletePriceData,
       true,
-      "tomorrow-dated hours present in selectedHours must report tomorrowHasPriceData: true even when none were selected",
+      "a complete tomorrow window must report tomorrowHasCompletePriceData: true even when zero hours were selected",
     );
     assertEqual(
       genuineZeroTomorrowDecision.tomorrow.planned_hours,
@@ -289,7 +382,77 @@ export function runHeatingPlanOrchestrationUnitTests() {
         (plan) => plan.plan_date === tomorrowPlanDate,
       ),
       true,
-      "a genuine zero-heating-hours decision for tomorrow (real price data, optimizer chose none) must publish normally, replacing the old stored tomorrow plan",
+      "a genuine zero-heating-hours decision for tomorrow (real, complete price data, optimizer chose none) must publish normally, replacing the old stored tomorrow plan",
+    );
+  }
+
+  // R5. DST: a tomorrowPlanDate whose real Helsinki-local day is not 24
+  // hours must still be recognized as complete from full coverage (and as
+  // incomplete once truncated) - no hardcoded 24-hour/24-row assumption.
+  for (
+    const dstFixture of [
+      { dateKey: "2026-03-29", expectedHourCount: 23 }, // spring-forward
+      { dateKey: "2026-10-25", expectedHourCount: 25 }, // fall-back
+    ]
+  ) {
+    const dstTodayPlanDate = getDateKeyOffset(-1, getHelsinkiDateStart(dstFixture.dateKey));
+    const dstNow = new Date(getHelsinkiDateStart(dstTodayPlanDate).getTime() + 60 * 60 * 1000);
+    const dstTodayHour = testHour(
+      "dst-today-0",
+      getHelsinkiDateStart(dstTodayPlanDate).toISOString(),
+      dstTodayPlanDate,
+      0,
+    );
+    const dstFullDay = buildFullDayHours(dstFixture.dateKey, 5);
+    assertEqual(
+      dstFullDay.length,
+      dstFixture.expectedHourCount,
+      `DST fixture ${dstFixture.dateKey} must have its real Helsinki day length, not a hardcoded 24`,
+    );
+
+    const dstCompleteDecision = buildHeatingPlanPublicationDecision({
+      currentHourNumber: 0,
+      dateKeyOf: trackDateKeyOf,
+      hasAttemptedTankReadingFetch: true,
+      heating: false,
+      isTodayPlanLoaded: true,
+      now: dstNow,
+      optimizerResult: optimizerResult([]),
+      optimizerSettings: { automaticMaxHeatingHours: 3 },
+      selectedHours: [dstTodayHour, ...dstFullDay],
+      storedPlans: { [dstFixture.dateKey]: tomorrowStoredPlan },
+      todayPlanDate: dstTodayPlanDate,
+      tomorrowPlanDate: dstFixture.dateKey,
+      unknownHeatingAnchor: null,
+    });
+    assertEqual(dstCompleteDecision.status, "ready", `DST fixture ${dstFixture.dateKey}: full coverage must be ready`);
+    if (dstCompleteDecision.status === "ready") {
+      assertEqual(
+        dstCompleteDecision.tomorrowHasCompletePriceData,
+        true,
+        `DST fixture ${dstFixture.dateKey}: a full real-length day must report complete coverage`,
+      );
+    }
+
+    const dstTruncatedDecision = buildHeatingPlanPublicationDecision({
+      currentHourNumber: 0,
+      dateKeyOf: trackDateKeyOf,
+      hasAttemptedTankReadingFetch: true,
+      heating: false,
+      isTodayPlanLoaded: true,
+      now: dstNow,
+      optimizerResult: optimizerResult([]),
+      optimizerSettings: { automaticMaxHeatingHours: 3 },
+      selectedHours: [dstTodayHour, ...dstFullDay.slice(0, -1)],
+      storedPlans: { [dstFixture.dateKey]: tomorrowStoredPlan },
+      todayPlanDate: dstTodayPlanDate,
+      tomorrowPlanDate: dstFixture.dateKey,
+      unknownHeatingAnchor: null,
+    });
+    assertEqual(
+      dstTruncatedDecision.status === "ready" && dstTruncatedDecision.tomorrowHasCompletePriceData,
+      false,
+      `DST fixture ${dstFixture.dateKey}: missing the final real-length hour must not be reported as complete`,
     );
   }
 
