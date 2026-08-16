@@ -349,50 +349,68 @@ function decideHeating(input, state) {
   let isBackupHour = containsHour(backupHours, input.currentHour);
   let reason = input.failSafeReason || null;
 
-  // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
-  // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
-  // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
-  // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
-  // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
-  // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
-  // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
-  // tank_readings vanhenee.
-  if (!reason && !planned && !isBackupHour) {
-    reason = "hour-not-planned";
-  }
+  // Trusted/control-plane-approved planned hour: input.planSource is
+  // control.source from resolveTrustedPlanControl/applyControlPlaneDebounce
+  // (set by executeDecision below) - "energyzen" means this plannedHours
+  // list IS the backend's own heartbeat-verified heating_plans.planned_hours,
+  // not a backup_hours substitution. Only THAT case (plus no other upstream
+  // fail-safe condition - relay/device-time/settings/plan-fetch/heartbeat/
+  // reading-fetch problems all still block below, exactly as before) heats
+  // unconditionally regardless of Shelly's own tank_readings visibility.
+  // Once control-plane fallback adopts backup_hours as plannedHours
+  // (source "backup", after its own 3-cycle debounce), every backup hour
+  // trivially becomes "planned" too - but planSource stays "backup" there,
+  // so this stays false and tank-reading freshness/validity below is still
+  // required, preserving the separate tank-reading 3-cycle debounce for an
+  // hour that is NOT actually on the backend's real plan.
+  let trustedPlannedHour = !reason && planned && input.planSource === "energyzen";
 
-  if (!reason && !reading) {
-    reason = "missing-reading";
-  }
+  if (!trustedPlannedHour) {
+    // Jos tunti on varatunti, mittausdatan kelvollisuus pitaa arvioida ennen
+    // kuin annetaan periksi "hour-not-planned"-syyhyn - muuten anturivika
+    // (vanha/puuttuva lukema) varatunnilla joka ei sattunut olemaan mukana
+    // TAMAN PAIVAN optimoidussa suunnitelmassa nayttaisi virheellisesti
+    // pelkalta "suunnittelematon tunti" -tilalta eika koskaan laukaisisi
+    // alla olevaa backup-fault-overridea. Tama on juuri normaali ESP-/
+    // anturikatkon polku, koska Supabase itse pysyy tavoitettavissa vaikka
+    // tank_readings vanhenee.
+    if (!reason && !planned && !isBackupHour) {
+      reason = "hour-not-planned";
+    }
 
-  if (!reason) {
-    let timestamp = reading.created_at || reading.measured_at || null;
-    let readingTime = timestamp ? new Date(timestamp).getTime() : NaN;
+    if (!reason && !reading) {
+      reason = "missing-reading";
+    }
 
-    if (!isFinite(readingTime)) {
-      reason = "missing-reading-time";
-    } else {
-      readingAgeSeconds = (input.nowMs - readingTime) / 1000;
+    if (!reason) {
+      let timestamp = reading.created_at || reading.measured_at || null;
+      let readingTime = timestamp ? new Date(timestamp).getTime() : NaN;
 
-      if (
-        readingAgeSeconds < 0 ||
-        readingAgeSeconds > MAX_READING_AGE_SECONDS
-      ) {
-        reason = "stale-reading";
+      if (!isFinite(readingTime)) {
+        reason = "missing-reading-time";
+      } else {
+        readingAgeSeconds = (input.nowMs - readingTime) / 1000;
+
+        if (
+          readingAgeSeconds < 0 ||
+          readingAgeSeconds > MAX_READING_AGE_SECONDS
+        ) {
+          reason = "stale-reading";
+        }
       }
     }
-  }
 
-  if (!reason && !isValidReading(reading)) {
-    reason = "invalid-reading";
-  }
+    if (!reason && !isValidReading(reading)) {
+      reason = "invalid-reading";
+    }
 
-  // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
-  // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
-  // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
-  // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
-  if (!reason && !planned) {
-    reason = "hour-not-planned";
+    // Mittausdata oli lopulta kelvollista, mutta tunti ei silti ollut
+    // mukana taman paivan suunnitelmassa - pelkka varatuntistatus ei
+    // yksinaan riita perusteeksi lammittaa (backup-fault-override alla
+    // vaatii oikean datavian, ei pelkkaa poissaoloa suunnitelmasta).
+    if (!reason && !planned) {
+      reason = "hour-not-planned";
+    }
   }
 
   // Mittausdata ei kelpaa, mutta ollaan silti varatunnilla eika
@@ -423,10 +441,11 @@ function decideHeating(input, state) {
     unreliableCycleEligible &&
     decisionState.consecutiveUnreliableCycles >= REQUIRED_UNRELIABLE_CYCLES;
 
-  // Ilman datavikaa ja ilman muuta failSafeReasonia jaljelle jaa vain kaksi
-  // vaihtoehtoa: tunti on suunniteltu (planned=true, reason viela null) tai
-  // ei ole (reason="hour-not-planned" ylla). Backend on jo paattanyt MITKA
-  // tunnit lammitetaan (heating_plans.planned_hours) - Shelly ei enaa laske
+  // reason on viela null tassa vaiheessa juuri silloin kun trustedPlannedHour
+  // oli tosi (ohitettiin ylla) tai kun mittausdata paatyi lopulta kelvolliseksi
+  // suunnitellulla tunnilla ilman muuta failSafeReasonia - molemmissa
+  // tapauksissa lammitetaan. Backend on jo paattanyt MITKA tunnit
+  // lammitetaan (heating_plans.planned_hours) - Shelly ei enaa laske
   // paikallisesti tayttoastetta paattaakseen KESKEN suunnitellun tunnin
   // pitaisiko lammitys jo lopettaa, vaan luottaa suunnitelmaan sellaisenaan
   // koko tunnin ajan.
@@ -642,6 +661,7 @@ function executeDecision(control, settings, reading) {
             currentHour: helsinkiNow ? helsinkiNow.hour : -1,
             failSafeReason: "relay-status-error",
             nowMs: new Date().getTime(),
+            planSource: control.source,
             plannedHours: control.plannedHours,
             reading: reading,
             relayCurrentlyOn: false,
@@ -662,6 +682,7 @@ function executeDecision(control, settings, reading) {
           currentHour: helsinkiNow ? helsinkiNow.hour : -1,
           failSafeReason: control.failSafeReason || (helsinkiNow ? null : "device-time-unavailable"),
           nowMs: new Date().getTime(),
+          planSource: control.source,
           plannedHours: control.plannedHours,
           reading: reading,
           relayCurrentlyOn: status.output === true,

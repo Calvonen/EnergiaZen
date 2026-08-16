@@ -147,12 +147,23 @@ migraatio).
     (`hasStoredFallback`-lippu erottaa aidon aiemman synkan pelkistä
     oletusarvoista), jotta ohjaus toimii myös hetkellisen
     verkko-/Supabase-katkon yli.
-    **Backend on ainoa lämmityspäätöksen tekijä normaalilla
+    **Backend on ainoa lämmityspäätöksen tekijä normaalilla, luotetulla
     suunnitellulla tunnilla** – Shelly ei enää laske paikallisesti
     täyttöastetta/suihkumäärää eikä kalibrointia (poistettu, ks. alla),
-    vaan luottaa `heating_plans.planned_hours`-listaan sellaisenaan koko
-    suunnitellun tunnin ajan, kunhan tuorein `tank_readings`-lukema on
-    validi.
+    eikä vaadi edes tuoretta/validia `tank_readings`-lukemaa: kun
+    `resolveTrustedPlanControl`/`applyControlPlaneDebounce` on jo
+    varmistanut tunnin olevan backendin oman, heartbeat-vahvistetun
+    suunnitelman mukainen (`control.source === "energyzen"`, kulkee
+    `decideHeating`:lle `planSource`-kenttänä), rele kytketään päälle
+    ehdoitta (`reason: "planned-heating"`) riippumatta siitä onko
+    tuorein lukema puuttuva, vanhentunut vai virheellinen. Tank-readingin
+    tuoreus/kelvollisuus tarkistetaan enää `backup_hours`-varapolulla
+    (ks. alla) – ei enää normaalin, luotetun suunnitelman hyväksyntään.
+    Mikä tahansa AITO ylävirran vikatila (rele/laiteaika/asetukset/
+    suunnitelman haku/heartbeat/lukeman haku – `failSafeReason`) pysäyttää
+    lämmityksen edelleen, vaikka tunti sattuisi olemaan suunniteltu –
+    luottamus koskee vain `decideHeating`:n itse laskemia
+    lukemakohtaisia tarkistuksia, ei ylävirran infrastruktuurivikoja.
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua
@@ -200,13 +211,18 @@ migraatio).
     kanssa – nämä samat `heating_control_settings`-sarakkeet pysyvät
     edelleen käytössä backendissä, vain Shellyn paikallinen kopio/
     uudelleenlasku poistui.
-  - **Anturi-/datavika varatunnilla ohittaa lukeman validoinnin kokonaan,
-    mutta vasta kolmannen PERÄKKÄISEN epäluotettavan kierroksen jälkeen.**
-    Jos mittausdataa ei voi luottaa (vanha/puuttuva/virheellinen
-    `tank_readings`-lukema, tai sen haku epäonnistuu) mutta kuluva tunti on
-    silti `backup_hours`-listalla eikä fallback ole pois päältä, ohjain
-    kasvattaa laitteen omassa tilassa asuvaa
-    `consecutiveUnreliableCycles`-laskuria. Vasta kun laskuri saavuttaa
+  - **`backup_hours`-varapolulla anturi-/datavika ohittaa lukeman
+    validoinnin kokonaan, mutta vasta kolmannen PERÄKKÄISEN
+    epäluotettavan kierroksen jälkeen.** Tämä koskee vain tuntia, joka EI
+    ole backendin oma luotettu suunnitelma (`planSource !== "energyzen"` -
+    esim. `control-plane`-fallbackin adoptoima `backup_hours`-lista, ks.
+    yllä; luotettu suunniteltu tunti ohittaa koko tämän tarkistuksen jo
+    yllä kuvatulla tavalla). Jos mittausdataa ei voi luottaa (vanha/
+    puuttuva/virheellinen `tank_readings`-lukema, tai sen haku
+    epäonnistuu) mutta kuluva tunti on silti `backup_hours`-listalla eikä
+    fallback ole pois päältä, ohjain kasvattaa laitteen omassa tilassa
+    asuvaa `consecutiveUnreliableCycles`-laskuria. Vasta kun laskuri
+    saavuttaa
     kynnyksen (`REQUIRED_UNRELIABLE_CYCLES = 3`), rele kytketään päälle
     ehdoitta (`reason: "backup-fault-override"`) - ei lasketa täyttöastetta,
     koska sitä ei voi luottavasti laskea ilman lukemaa. Yksi hetkellinen
