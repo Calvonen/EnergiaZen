@@ -44,8 +44,29 @@ export type HeatingPlanPublicationDecision =
       status: "ready";
       today: HeatingPlanDraft;
       tomorrow: HeatingPlanDraft;
-      /** Subset of [today, tomorrow] that actually differ from storedPlans - the rest are duplicate no-ops. */
+      /**
+       * Subset of [today, tomorrow] that actually differ from storedPlans -
+       * the rest are duplicate no-ops. Never contains a tomorrow entry when
+       * tomorrowHasPriceData is false - see its own comment below.
+       */
       changedPlans: HeatingPlanDraft[];
+      /**
+       * Whether `selectedHours` (the full optimizer input, not just the
+       * chosen heating hours) contained at least one hour dated
+       * tomorrowPlanDate. False means tomorrow.planned_hours is [] only
+       * because electricity_prices had no rows for tomorrow yet when this
+       * decision was built - NOT because the optimizer looked at tomorrow's
+       * real prices and picked zero heating hours. Callers must not publish
+       * a `tomorrow` draft built with this false as if it were a genuine
+       * zero-heating decision (see run-heating-optimizer/index.ts and its
+       * report for why: an empty-but-"healthy" tomorrow row is
+       * indistinguishable from a real one to Shelly, which only checks
+       * health_status + fingerprint, not how the row was derived).
+       * Optional only so pre-existing test fixtures that hand-build a
+       * "ready" decision without this field keep type-checking - every
+       * decision actually produced by this function always sets it.
+       */
+      tomorrowHasPriceData?: boolean;
     };
 
 function getHourNumbersForDate(
@@ -171,11 +192,39 @@ export function buildHeatingPlanPublicationDecision({
     updated_at: updatedAt,
   };
 
+  // Signal, not a heuristic on tomorrowHours.length: derived from whether
+  // `selectedHours` (the optimizer's full candidate input, e.g.
+  // buildOptimizerHours' output - NOT the optimizer's chosen subset) had
+  // any tomorrow-dated hour at all. A day with real tomorrow prices where
+  // the optimizer legitimately chose zero heating hours also has
+  // tomorrowHours.length === 0, but tomorrowHasPriceData is true for it -
+  // that case must keep publishing exactly as before.
+  const tomorrowHasPriceData = selectedHours.some(
+    (hour) => dateKeyOf(hour.startDate) === tomorrowPlanDate,
+  );
+  const allChangedPlans = getChangedHeatingPlans(storedPlans, [today, tomorrow]);
+  // A tomorrow draft built from zero optimizer-input hours is not a real
+  // "0 h needed tomorrow" decision - it only means tomorrow's prices were
+  // not yet in electricity_prices when this run's buildOptimizerHours ran.
+  // Publishing/overwriting the stored tomorrow row with planned_hours: []
+  // in that case would look identical to a genuine zero-heating decision
+  // to every downstream reader (Shelly's heartbeat/fingerprint check, this
+  // repo's own app UI), so such a draft must never be treated as a
+  // publishable change. Today is never affected by this filter - only
+  // tomorrowPlanDate can be removed from changedPlans - and
+  // canMarkHeatingPlanValidated/heartbeat validation in
+  // run-heating-optimizer/index.ts keys exclusively on todayPlanDate, so
+  // today's publication/validation behavior is unchanged either way.
+  const changedPlans = tomorrowHasPriceData
+    ? allChangedPlans
+    : allChangedPlans.filter((plan) => plan.plan_date !== tomorrowPlanDate);
+
   return {
-    changedPlans: getChangedHeatingPlans(storedPlans, [today, tomorrow]),
+    changedPlans,
     status: "ready",
     today,
     tomorrow,
+    tomorrowHasPriceData,
   };
 }
 

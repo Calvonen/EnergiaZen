@@ -32,8 +32,9 @@ import {
   type RawHeatingPlanRow,
   type RawTankReading,
 } from "./logic";
-import { optimizeHeatingPlan } from "../../../lib/heatingOptimizer";
+import { optimizeHeatingPlan, type HeatingOptimizationResult } from "../../../lib/heatingOptimizer";
 import { getFinnishDateKey, getHelsinkiHourNumber } from "../../../lib/heatingLogic";
+import type { ComparableHeatingPlan } from "../_shared/heatingPlanPublication";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -531,6 +532,15 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     });
 
     if (run.result) {
+      // storedPlans is empty (no prior tomorrow row) AND a prior, real
+      // tomorrow row case, so both "nothing published yet" and "would
+      // overwrite an existing real plan" are covered.
+      const priorTomorrowPlan: ComparableHeatingPlan = {
+        mode: "automatic",
+        plan_date: tomorrowPlanDate,
+        planned_hours: [3, 4, 5],
+        target_hours: 3,
+      };
       const decision = buildHeatingPlanPublicationDecision({
         currentHourNumber: getHelsinkiHourNumber(now),
         dateKeyOf: getFinnishDateKey,
@@ -541,7 +551,7 @@ export function runRunHeatingOptimizerLogicUnitTests() {
         optimizerResult: run.result,
         optimizerSettings: { automaticMaxHeatingHours: optimizationSettings.maxHeatingHours },
         selectedHours: hours,
-        storedPlans: {},
+        storedPlans: { [tomorrowPlanDate]: priorTomorrowPlan },
         todayPlanDate,
         tomorrowPlanDate,
         unknownHeatingAnchor: null,
@@ -553,8 +563,108 @@ export function runRunHeatingOptimizerLogicUnitTests() {
           [],
           "with zero tomorrow price hours, tomorrow's plan must have zero planned hours, not a fabricated one",
         );
+        assertEqual(
+          decision.tomorrowHasPriceData,
+          false,
+          "zero tomorrow-dated hours in the optimizer's input must report tomorrowHasPriceData: false",
+        );
+        assertEqual(
+          decision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
+          false,
+          "a fabricated empty tomorrow draft must never be published/overwrite the previously stored real tomorrow plan (regression test 1)",
+        );
+        assertEqual(
+          decision.changedPlans.some((plan) => plan.plan_date === todayPlanDate),
+          true,
+          "today's own publication must be entirely unaffected by tomorrow's missing price data (regression test 3)",
+        );
       }
     }
+  }
+
+  // 2b. Both today's and tomorrow's prices are available and the optimizer
+  // genuinely selects zero heating hours for tomorrow (e.g. every tomorrow
+  // hour fails a safety/price check) - this must publish exactly like
+  // before, since real price data was actually used to reach that decision.
+  {
+    const hours = buildOptimizerHours(
+      [...todayPrices, ...tomorrowPrices],
+      now,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
+    const tomorrowHours = hours.filter(
+      (hour) => getFinnishDateKey(hour.startDate) === tomorrowPlanDate,
+    );
+    assert(tomorrowHours.length > 0, "fixture must have real tomorrow price hours for this case");
+
+    const decision = buildHeatingPlanPublicationDecision({
+      currentHourNumber: getHelsinkiHourNumber(now),
+      dateKeyOf: getFinnishDateKey,
+      hasAttemptedTankReadingFetch: true,
+      heating: false,
+      isTodayPlanLoaded: true,
+      now,
+      // Optimizer result that only ever selects today's hours, even though
+      // tomorrow's hours were fully present in `hours` - simulates a
+      // genuine "optimizer looked at tomorrow and chose nothing" outcome
+      // without depending on optimizeHeatingPlan's own selection heuristics.
+      optimizerResult: {
+        selectedHeatingHourIds: hours
+          .filter((hour) => getFinnishDateKey(hour.startDate) === todayPlanDate)
+          .slice(0, 1)
+          .map((hour) => hour.id),
+      } as HeatingOptimizationResult,
+      optimizerSettings: { automaticMaxHeatingHours: 5 },
+      selectedHours: hours,
+      storedPlans: {
+        [tomorrowPlanDate]: {
+          mode: "automatic",
+          plan_date: tomorrowPlanDate,
+          planned_hours: [3, 4, 5],
+          target_hours: 3,
+        } as ComparableHeatingPlan,
+      },
+      todayPlanDate,
+      tomorrowPlanDate,
+      unknownHeatingAnchor: null,
+    });
+    assertEqual(decision.status, "ready", "full today+tomorrow coverage must produce a ready decision");
+    if (decision.status === "ready") {
+      assertEqual(
+        decision.tomorrowHasPriceData,
+        true,
+        "real tomorrow price hours in the optimizer's input must report tomorrowHasPriceData: true even when none were selected",
+      );
+      assertEqual(
+        decision.tomorrow.planned_hours,
+        [],
+        "the optimizer's own genuine zero-hour choice for tomorrow stays []",
+      );
+      assertEqual(
+        decision.changedPlans.some((plan) => plan.plan_date === tomorrowPlanDate),
+        true,
+        "a genuine zero-heating-hours tomorrow decision (real price data, optimizer chose none) must publish normally (regression test 2)",
+      );
+    }
+  }
+
+  // 2c. Day rollover with literally zero price rows for the new "today" -
+  // checkOptimizerReadiness (unmodified by this change) must keep failing
+  // closed exactly as before, so the existing unhealthy/deferred heartbeat
+  // path (and, downstream, Shelly's unmodified 3-cycle control-plane
+  // debounce into backup_hours) still engages (regression test 4).
+  {
+    const readinessWithNoPricesAtAll = checkOptimizerReadiness({
+      latestReading: freshReading,
+      now,
+      priceHours: [],
+    });
+    assertEqual(
+      readinessWithNoPricesAtAll,
+      { ok: false, reason: "no_price_hours_available" },
+      "zero price rows for the current day (e.g. a rollover with no new-day data yet) must still fail readiness, unchanged by this PR",
+    );
   }
 
   // 3. Stale tank reading -> not treated as a reliable input, readiness

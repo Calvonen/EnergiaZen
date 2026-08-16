@@ -172,6 +172,127 @@ export function runHeatingPlanOrchestrationUnitTests() {
     );
   }
 
+  // 6a. Missing tomorrow price data: selectedHours (the optimizer's full
+  // candidate input) has zero tomorrow-dated hours, so tomorrow's draft
+  // must be diagnostically computed (planned_hours: []) but must NOT enter
+  // changedPlans - an existing, previously-published real tomorrow plan
+  // must not be silently replaced by a fabricated "0 h" one just because
+  // this run's input never had tomorrow's prices.
+  const missingTomorrowDataDecision = buildHeatingPlanPublicationDecision({
+    currentHourNumber: 14,
+    dateKeyOf: trackDateKeyOf,
+    hasAttemptedTankReadingFetch: true,
+    heating: false,
+    isTodayPlanLoaded: true,
+    now,
+    optimizerResult: optimizerResult(["today-14"]),
+    optimizerSettings: { automaticMaxHeatingHours: 3 },
+    // Only today-dated hours in the optimizer's input - tomorrow's prices
+    // were never fetched, matching electricity_prices having no rows yet.
+    selectedHours: [todayHourA],
+    storedPlans: {
+      [todayPlanDate]: {
+        mode: "automatic",
+        plan_date: todayPlanDate,
+        planned_hours: [15],
+        target_hours: 1,
+      } as ComparableHeatingPlan,
+      [tomorrowPlanDate]: {
+        mode: "automatic",
+        plan_date: tomorrowPlanDate,
+        planned_hours: [3, 4],
+        target_hours: 2,
+      } as ComparableHeatingPlan,
+    },
+    todayPlanDate,
+    tomorrowPlanDate,
+    unknownHeatingAnchor: null,
+  });
+  assertEqual(
+    missingTomorrowDataDecision.status,
+    "ready",
+    "zero tomorrow-dated input hours must still produce a ready decision for today",
+  );
+  if (missingTomorrowDataDecision.status === "ready") {
+    assertEqual(
+      missingTomorrowDataDecision.tomorrowHasPriceData,
+      false,
+      "no tomorrow-dated hour anywhere in selectedHours must report tomorrowHasPriceData: false",
+    );
+    assertEqual(
+      missingTomorrowDataDecision.tomorrow.planned_hours,
+      [],
+      "the diagnostic tomorrow draft itself stays [] when there is nothing to select from",
+    );
+    assertEqual(
+      missingTomorrowDataDecision.changedPlans.some(
+        (plan) => plan.plan_date === tomorrowPlanDate,
+      ),
+      false,
+      "a tomorrow draft built from zero input hours must never be published/overwrite the stored tomorrow plan",
+    );
+    assertEqual(
+      missingTomorrowDataDecision.changedPlans.some(
+        (plan) => plan.plan_date === todayPlanDate,
+      ),
+      true,
+      "today's own genuinely changed plan must still publish normally alongside the suppressed tomorrow draft",
+    );
+  }
+
+  // 6b. Genuine zero-heating-hours-tomorrow: tomorrow's prices ARE in the
+  // optimizer's input (tomorrowHourA), but the optimizer's own result simply
+  // selected none of them. This must publish exactly as before - an empty
+  // tomorrow plan computed from real data is a real decision, not a missing
+  // one.
+  const genuineZeroTomorrowDecision = buildHeatingPlanPublicationDecision({
+    currentHourNumber: 14,
+    dateKeyOf: trackDateKeyOf,
+    hasAttemptedTankReadingFetch: true,
+    heating: false,
+    isTodayPlanLoaded: true,
+    now,
+    // Only today-14 selected - tomorrowHourA was offered but not chosen.
+    optimizerResult: optimizerResult(["today-14"]),
+    optimizerSettings: { automaticMaxHeatingHours: 3 },
+    selectedHours: [todayHourA, tomorrowHourA],
+    storedPlans: {
+      [tomorrowPlanDate]: {
+        mode: "automatic",
+        plan_date: tomorrowPlanDate,
+        planned_hours: [3, 4],
+        target_hours: 2,
+      } as ComparableHeatingPlan,
+    },
+    todayPlanDate,
+    tomorrowPlanDate,
+    unknownHeatingAnchor: null,
+  });
+  assertEqual(
+    genuineZeroTomorrowDecision.status,
+    "ready",
+    "a real tomorrow price hour that the optimizer simply didn't select must still be ready",
+  );
+  if (genuineZeroTomorrowDecision.status === "ready") {
+    assertEqual(
+      genuineZeroTomorrowDecision.tomorrowHasPriceData,
+      true,
+      "tomorrow-dated hours present in selectedHours must report tomorrowHasPriceData: true even when none were selected",
+    );
+    assertEqual(
+      genuineZeroTomorrowDecision.tomorrow.planned_hours,
+      [],
+      "the optimizer's own genuine zero-hour choice for tomorrow stays []",
+    );
+    assertEqual(
+      genuineZeroTomorrowDecision.changedPlans.some(
+        (plan) => plan.plan_date === tomorrowPlanDate,
+      ),
+      true,
+      "a genuine zero-heating-hours decision for tomorrow (real price data, optimizer chose none) must publish normally, replacing the old stored tomorrow plan",
+    );
+  }
+
   // 6. Duplicate suppression: identical plan vs. storedPlans yields no changed entries.
   const unchangedDecision = buildHeatingPlanPublicationDecision({
     currentHourNumber: 14,
