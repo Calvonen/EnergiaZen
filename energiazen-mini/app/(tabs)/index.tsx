@@ -35,10 +35,10 @@ import {
   normalizePriceToCents,
 } from "@/lib/priceUtils";
 import {
+  configuredElectricityPriceResolutionMinutes,
   electricityPriceRegion,
-  getHelsinkiElectricityDateKey,
-  getResolutionMinutes,
   getTotalPriceCentsPerKwh,
+  type ElectricityPriceRecord,
 } from "@/lib/electricityPrices";
 import {
   calculatePlannedHeatingHourCostEuros,
@@ -76,6 +76,7 @@ import {
   selectActiveHeatingPlanPresentation,
   simulateStoredHeatingPlanForecast,
 } from "@/lib/heatingPlanPresentation";
+import { hasCompleteHelsinkiDayCoverage } from "@/lib/heatingPlanOrchestration";
 import { estimateRecoveryDropPerHour } from "@/lib/heatingRecoveryDrop";
 import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
 import {
@@ -174,14 +175,15 @@ function logHomeDayTabPerformance(
   });
 }
 
-const priceApiUrl =
-  "https://api.spot-hinta.fi/TodayAndDayForward?region=FI&priceResolution=60";
 const chartPriceStep = 5;
 const chartPlotHeight = 96;
 const chartGridMaxPosition = chartPlotHeight - 1;
 const chartMinimumBarHeight = 8;
 const temperatureBarSegmentCount = 8;
-const storedElectricityPriceColumns = "start_date,end_date,price";
+// Same column list/shape as electricity-history.tsx's own electricity_prices
+// query - one canonical Supabase price-read pattern, not a second one.
+const storedElectricityPriceColumns =
+  "starts_at,ends_at,spot_price_cents_kwh,resolution_minutes,region,fetched_at";
 const storedHeatingPlanColumns =
   "plan_date,planned_hours,target_hours,reason,mode,updated_at";
 // Fallback only: the Realtime subscription in the effect below is the
@@ -216,20 +218,6 @@ type TankReading = TankTemperatureReading & {
   showers?: number | null;
 };
 
-type SpotPriceResponse = {
-  DateTime?: string | null;
-  StartDate?: string | null;
-  startDate?: string | null;
-  PriceNoTax?: number | null;
-  PriceWithTax?: number | null;
-};
-
-type StoredElectricityPrice = {
-  start_date?: string | null;
-  end_date?: string | null;
-  price?: number | null;
-};
-
 type StoredHeatingPlan = {
   mode?: string | null;
   plan_date?: string | null;
@@ -237,19 +225,6 @@ type StoredHeatingPlan = {
   reason?: string | null;
   target_hours?: number | null;
   updated_at?: string | null;
-};
-
-type ElectricityPriceInsert = {
-  start_date: string;
-  end_date: string;
-  ends_at: string;
-  fetched_at: string;
-  price: number;
-  price_date: string;
-  region: string;
-  resolution_minutes: number;
-  spot_price_cents_kwh: number;
-  starts_at: string;
 };
 
 // Rinnakkainen kerrostumismalli testausta varten.
@@ -610,82 +585,24 @@ function toHourlyPrice(
   } satisfies HourlyPrice;
 }
 
-function normalizeSpotPrices(data: SpotPriceResponse[]) {
+// Single source of truth for today/tomorrow (and yesterday) prices: the
+// backend's own fetch-electricity-prices cron (20,50 * * * *) is the only
+// writer of electricity_prices now - the Home screen used to also fetch
+// spot-hinta.fi directly and upsert its own copy, which meant it could show
+// tomorrow's prices/forecast before the backend had ingested them at all.
+// Reads the same starts_at/ends_at/spot_price_cents_kwh columns and
+// resolution_minutes/region filter as electricity-history.tsx's own query -
+// one canonical read shape, not a second one.
+function normalizeStoredElectricityPrices(data: ElectricityPriceRecord[]) {
   return data
     .map((item) => {
-      const price = item.PriceWithTax ?? item.PriceNoTax;
-      const startDate = item.startDate ?? item.StartDate ?? item.DateTime;
-      const date = startDate ? new Date(startDate) : null;
+      const price = item.spot_price_cents_kwh;
 
-      if (
-        !date ||
-        Number.isNaN(date.getTime()) ||
-        typeof price !== "number" ||
-        Number.isNaN(price)
-      ) {
+      if (!item.starts_at || typeof price !== "number") {
         return null;
       }
 
-      return toHourlyPrice(startDate ?? date.toISOString(), price);
-    })
-    .filter((item): item is HourlyPrice => item !== null)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-}
-
-async function saveElectricityPrices(prices: HourlyPrice[]) {
-  try {
-    const fetchedAt = new Date().toISOString();
-    const electricityPrices = prices.map((item) => {
-      const endsAt = item.endDate.toISOString();
-
-      return {
-        start_date: item.startDate,
-        end_date: endsAt,
-        ends_at: endsAt,
-        fetched_at: fetchedAt,
-        price: item.price,
-        price_date: getHelsinkiElectricityDateKey(item.startDate),
-        region: electricityPriceRegion,
-        resolution_minutes: getResolutionMinutes(item.startDate, endsAt),
-        spot_price_cents_kwh: item.price,
-        starts_at: item.startDate,
-      };
-    }) satisfies ElectricityPriceInsert[];
-
-    if (electricityPrices.length === 0) {
-      debugLog("Saved electricity prices: 0 rows");
-      return;
-    }
-
-    // Historia karttuu tässä vaiheessa vain sovelluksen hakiessa hinnat.
-    // Ajastettua taustahakua tai Edge Functionia ei vielä ole.
-    const { error } = await supabase
-      .from("electricity_prices")
-      .upsert(electricityPrices, {
-        onConflict: "region,starts_at,resolution_minutes",
-      });
-
-    if (error) {
-      console.warn("Electricity price save failed", error);
-      return;
-    }
-
-    debugLog(`Upserted electricity prices: ${electricityPrices.length} rows`);
-  } catch (error) {
-    console.warn("Electricity price save failed", error);
-  }
-}
-
-function normalizeStoredElectricityPrices(data: StoredElectricityPrice[]) {
-  return data
-    .map((item) => {
-      const price = item.price;
-
-      if (!item.start_date || typeof price !== "number") {
-        return null;
-      }
-
-      return toHourlyPrice(item.start_date, price, item.end_date, false);
+      return toHourlyPrice(item.starts_at, price, item.ends_at, false);
     })
     .filter((item): item is HourlyPrice => item !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -1376,6 +1293,23 @@ export default function HomeScreen() {
       startDate: item.startDate,
     }));
   }, [currentHourStart, hourlyPrices]);
+  // Whether electricity_prices actually covers tomorrow's entire Helsinki
+  // day, not just "at least one row" - reuses the exact same rule
+  // run-heating-optimizer already applies before it will publish a tomorrow
+  // plan (hasCompleteHelsinkiDayCoverage, PR #209), so the app never treats
+  // a partial/mid-ingest tomorrow window as available when the backend
+  // itself would not have. Checked against optimizerHours (the full
+  // candidate set, not just chosen heating hours) so a genuine "optimizer
+  // picked 0 h" tomorrow still reports complete.
+  const isTomorrowPriceDataComplete = useMemo(
+    () =>
+      hasCompleteHelsinkiDayCoverage(
+        optimizerHours,
+        tomorrowPlanDate,
+        getFinnishDateKey,
+      ),
+    [optimizerHours, tomorrowPlanDate],
+  );
   // Only an explicitly confirmed heating=true locks the current hour into
   // the plan (see heatingOptimizer.ts's lockedHours) - an unreadable Shelly
   // status (heating: null) must not lock the hour, but it must also not be
@@ -1521,14 +1455,31 @@ export default function HomeScreen() {
       return null;
     }
 
+    // Today's own backend plan is required - without it there is genuinely
+    // nothing authoritative to show yet, matching
+    // selectActiveHeatingPlanPresentation's documented "fall back to the
+    // local preview" contract for that case (see its own tests). Tomorrow's
+    // plan is deliberately NOT required here: when it is missing (backend
+    // hasn't published one yet - e.g. tomorrow's prices are not fully in
+    // electricity_prices, see run-heating-optimizer's
+    // tomorrowHasCompletePriceData gate), this must still return today's
+    // real, authoritative plan rather than returning null and letting
+    // selectActiveHeatingPlanPresentation's authoritative-fallback branch
+    // substitute the LOCAL optimizer's own tomorrow guess in its place -
+    // that guess is never published/trusted by the backend or Shelly, so
+    // showing it here as if it were today's real plan would be misleading.
+    // The chart's separate "Huomisen hinnat eivät ole vielä saatavilla"
+    // state (isTomorrowPriceDataComplete) is what tells the user tomorrow
+    // specifically isn't ready; this presentation simply omits tomorrow's
+    // hours when there is nothing authoritative for it yet.
+    if (!storedHeatingPlans[todayPlanDate]) {
+      return null;
+    }
+
     const storedPlans = [
       storedHeatingPlans[todayPlanDate],
       storedHeatingPlans[tomorrowPlanDate],
     ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
-
-    if (storedPlans.length !== 2) {
-      return null;
-    }
 
     if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
       return null;
@@ -2957,79 +2908,62 @@ export default function HomeScreen() {
     }, [router]),
   );
 
+  // Reads yesterday/today/tomorrow from electricity_prices in one query -
+  // the same table, columns and region/resolution filter the backend
+  // optimizer and electricity-history.tsx already use, so the Home screen
+  // can never show a different price set than what run-heating-optimizer
+  // actually saw. No external spot-hinta.fi fetch and no app-side upsert
+  // here anymore - fetch-electricity-prices' own cron (20,50 * * * *) is
+  // the only writer.
   const fetchHourlyPrices = useCallback(async (signal?: AbortSignal) => {
     try {
       const yesterdayKey = getDateKeyOffset(-1);
       const todayKey = getDateKeyOffset(0);
       const tomorrowKey = getDateKeyOffset(1);
 
-      const [
-        { data: storedYesterdayData, error: storedYesterdayError },
-        response,
-      ] = await Promise.all([
-        supabase
-          .from("electricity_prices")
-          .select(storedElectricityPriceColumns)
-          .eq("region", electricityPriceRegion)
-          .eq("price_date", yesterdayKey)
-          .order("start_date", { ascending: true }),
-        fetch(priceApiUrl, {
-          signal,
-        }),
-      ]);
+      let query = supabase
+        .from("electricity_prices")
+        .select(storedElectricityPriceColumns)
+        .eq("region", electricityPriceRegion)
+        .eq("resolution_minutes", configuredElectricityPriceResolutionMinutes)
+        .in("price_date", [yesterdayKey, todayKey, tomorrowKey])
+        .order("starts_at", { ascending: true });
 
-      if (!response.ok) {
-        throw new Error("Price fetch failed");
+      if (signal) {
+        query = query.abortSignal(signal);
       }
 
-      const storedYesterdayFetchSucceeded = !storedYesterdayError;
+      const { data, error } = await query;
 
-      if (storedYesterdayError) {
-        console.warn("Stored yesterday prices unavailable", {
-          columns: storedElectricityPriceColumns,
-          error: storedYesterdayError,
-          storedYesterdayFetchSucceeded,
-        });
+      if (error) {
+        throw error;
       }
 
-      const data = (await response.json()) as SpotPriceResponse[];
-      const apiPrices = normalizeSpotPrices(data);
-      const apiPriceDateKeys = Array.from(
-        new Set(apiPrices.map((item) => getFinnishDateKey(item.startDate))),
-      ).sort();
-      const currentApiPrices = apiPrices.filter((item) => {
-        const helsinkiDateKey = getFinnishDateKey(item.startDate);
-
-        return helsinkiDateKey === todayKey || helsinkiDateKey === tomorrowKey;
-      });
-      await saveElectricityPrices(currentApiPrices);
-      const storedYesterdayPrices = normalizeStoredElectricityPrices(
-        (storedYesterdayData ?? []) as StoredElectricityPrice[],
-      ).filter((item) => getFinnishDateKey(item.startDate) === yesterdayKey);
-      const prices = [...storedYesterdayPrices, ...currentApiPrices].sort(
-        (a, b) => a.date.getTime() - b.date.getTime(),
+      const prices = normalizeStoredElectricityPrices(
+        (data ?? []) as ElectricityPriceRecord[],
       );
-      const todayCount = currentApiPrices.filter(
+      const todayCount = prices.filter(
         (item) => getFinnishDateKey(item.startDate) === todayKey,
       ).length;
-      const tomorrowCount = currentApiPrices.filter(
+      const tomorrowCount = prices.filter(
         (item) => getFinnishDateKey(item.startDate) === tomorrowKey,
       ).length;
 
-      debugLog("Spot prices debug", {
-        totalPricesCount: apiPrices.length,
+      debugLog("electricity_prices debug", {
+        columns: storedElectricityPriceColumns,
+        firstStartDate: prices[0]?.startDate ?? null,
+        lastStartDate: prices[prices.length - 1]?.startDate ?? null,
         todayCount,
         tomorrowCount,
-        firstStartDate: apiPrices[0]?.startDate ?? null,
-        lastStartDate: apiPrices[apiPrices.length - 1]?.startDate ?? null,
-        dateKeys: apiPriceDateKeys,
-        storedYesterdayCount: storedYesterdayPrices.length,
-        storedYesterdayColumns: storedElectricityPriceColumns,
-        storedYesterdayFetchSucceeded,
+        totalPricesCount: prices.length,
       });
 
-      if (currentApiPrices.length === 0) {
-        throw new Error("Current hourly prices missing from response");
+      // Only today's absence counts as a fetch failure here - tomorrow
+      // being missing or incomplete is a normal, expected daily state
+      // (handled separately via isTomorrowPriceDataComplete below), not an
+      // error to surface as "hintojen päivitys epäonnistui".
+      if (todayCount === 0) {
+        throw new Error("Current hourly prices missing from electricity_prices");
       }
 
       setHourlyPrices(prices);
@@ -3039,8 +2973,9 @@ export default function HomeScreen() {
           : null,
       );
       setPriceError(null);
-    } catch {
+    } catch (fetchError) {
       if (!signal?.aborted) {
+        console.warn("Electricity price fetch failed", fetchError);
         setPriceError(
           "Hintojen päivitys epäonnistui. Näytetään aiemmat tiedot.",
         );
@@ -3060,6 +2995,19 @@ export default function HomeScreen() {
 
     return () => controller.abort();
   }, [fetchHourlyPrices]);
+
+  // Small, isolated focus refresh for prices only - deliberately NOT merged
+  // into the tank-reading focus/resume effect above, which has its own
+  // AppState/generation-counter machinery for a much more frequently
+  // changing, safety-relevant input. Prices only change twice an hour via
+  // the backend cron, so a plain refetch on focus (plus the existing mount
+  // fetch and pull-to-refresh) is enough - no polling interval, no Realtime
+  // channel needed for this.
+  useFocusEffect(
+    useCallback(() => {
+      void fetchHourlyPrices();
+    }, [fetchHourlyPrices]),
+  );
 
   useEffect(() => {
     const currentTimeInterval = setInterval(() => {
@@ -3387,14 +3335,23 @@ export default function HomeScreen() {
                   Haetaan päivän hintoja...
                 </Text>
               </View>
+            ) : selectedDay === "tomorrow" && !isTomorrowPriceDataComplete ? (
+              // Covers both "zero tomorrow rows yet" and "a partial,
+              // mid-ingest tomorrow window" - either way electricity_prices
+              // does not yet have what run-heating-optimizer itself would
+              // require to publish a tomorrow plan, so the chart must not
+              // show a partial/misleading picture either.
+              <View style={styles.chartEmptyState}>
+                <Text style={styles.chartMessage}>
+                  Huomisen hinnat eivät ole vielä saatavilla
+                </Text>
+              </View>
             ) : chartHourlyPrices.length === 0 ? (
               <View style={styles.chartEmptyState}>
                 <Text style={styles.chartMessage}>
-                  {selectedDay === "tomorrow"
-                    ? "Huomisen hinnat eivät ole vielä saatavilla"
-                    : selectedDay === "yesterday"
-                      ? "Ei tallennettua hintadataa eiliselle"
-                      : "Hintakaaviota ei saatavilla"}
+                  {selectedDay === "yesterday"
+                    ? "Ei tallennettua hintadataa eiliselle"
+                    : "Hintakaaviota ei saatavilla"}
                 </Text>
               </View>
             ) : (

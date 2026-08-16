@@ -161,7 +161,39 @@ export function runHistoryUiSourceTests() {
   );
   assertSource(
     homeSource.includes('.eq("region", electricityPriceRegion)') &&
-      homeSource.includes('.eq("price_date", yesterdayKey)'),
-    "etusivun eilisen hintahaku rajataan alueeseen ja paivaan ennen Supabasen rivirajaa",
+      homeSource.includes(
+        '.in("price_date", [yesterdayKey, todayKey, tomorrowKey])',
+      ) &&
+      !homeSource.includes("api.spot-hinta.fi"),
+    "etusivun hintahaku lukee eilisen/tanaan/huomisen electricity_prices-taulusta alueeseen rajattuna, ei enaa suoraan Spot-API:sta",
+  );
+  assertSource(
+    !homeSource.includes("saveElectricityPrices") &&
+      !homeSource.includes("normalizeSpotPrices") &&
+      !homeSource.includes("SpotPriceResponse") &&
+      !homeSource.includes("ElectricityPriceInsert") &&
+      !homeSource.includes("fetch(priceApiUrl"),
+    "etusivun app-side Spot-API-upsert ja sen normalisointi/tyypit on poistettu kokonaan - fetch-electricity-prices on ainoa kirjoittaja",
+  );
+  assertSource(
+    homeSource.includes(
+      "hasCompleteHelsinkiDayCoverage(\n        optimizerHours,\n        tomorrowPlanDate,\n        getFinnishDateKey,\n      )",
+    ) &&
+      homeSource.includes(
+        'import { hasCompleteHelsinkiDayCoverage } from "@/lib/heatingPlanOrchestration";',
+      ),
+    "etusivu paattelee huomisen hintadatan taydellisyyden samalla, jo backendin kayttamalla saannolla (PR #209) - ei omaa rinnakkaista algoritmia",
+  );
+  assertSource(
+    homeSource.includes(
+      'selectedDay === "tomorrow" && !isTomorrowPriceDataComplete',
+    ) &&
+      homeSource.includes("Huomisen hinnat eivät ole vielä saatavilla"),
+    "huomisen kaavio nayttaa saatavuustilan taydellisyyden perusteella, ei pelkan rivimaaran perusteella",
+  );
+  assertSource(
+    homeSource.includes("if (!storedHeatingPlans[todayPlanDate]) {") &&
+      !homeSource.includes("storedPlans.length !== 2"),
+    "tallennetun suunnitelman esitys vaatii vain tanaan julkaistun backend-rivin - huomisen puuttuminen ei enaa pudota paikalliseen optimoijaan backend-primary-tilassa",
   );
 }
