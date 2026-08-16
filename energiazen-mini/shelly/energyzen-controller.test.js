@@ -56,6 +56,7 @@ function decide({
   planSource = "energyzen",
   plannedHours = [15],
   reading = freshReading(),
+  readingFetchError = false,
   relayCurrentlyOn = false,
   state = createControllerState(),
   testSettings = settings,
@@ -68,6 +69,7 @@ function decide({
       planSource,
       plannedHours,
       reading,
+      readingFetchError,
       relayCurrentlyOn,
       settings: testSettings,
     },
@@ -168,12 +170,12 @@ assert.strictEqual(plannedHourInvalidReading.reason, "planned-heating");
 assert.strictEqual(plannedHourInvalidReadingState.consecutiveUnreliableCycles, 0);
 
 // A REAL upstream fail-safe reason (relay/device-time/settings/plan-fetch/
-// heartbeat/reading-fetch problems, arriving via failSafeReason) must still
-// block even an otherwise-planned hour - trusting the plan only exempts the
-// tank-reading checks computed inside decideHeating itself, never an
-// upstream infrastructure failure.
+// heartbeat problems, arriving via failSafeReason) must still block even an
+// otherwise-planned hour - trusting the plan only exempts the tank-reading
+// checks computed inside decideHeating itself, never an upstream
+// infrastructure failure.
 const plannedHourWithFailSafeReason = decide({
-  failSafeReason: "reading-fetch-error",
+  failSafeReason: "device-time-unavailable",
   reading: null,
 });
 assert.strictEqual(
@@ -182,6 +184,22 @@ assert.strictEqual(
   "an upstream fail-safe reason must not become permissive just because the hour happens to be planned",
 );
 assert.notStrictEqual(plannedHourWithFailSafeReason.reason, "planned-heating");
+
+// A tank_readings REST fetch failure is deliberately NOT plumbed through as
+// failSafeReason (see fetchLatestReading/executeDecision) - it must not by
+// itself defeat an otherwise heartbeat-verified trusted plan. This is
+// distinct from the missing/stale/invalid-reading cases above: here Shelly
+// could not even ask Supabase for a reading, yet a genuinely trusted
+// planned hour still heats.
+const plannedHourReadingFetchErrorState = createControllerState();
+const plannedHourReadingFetchError = decide({
+  reading: null,
+  readingFetchError: true,
+  state: plannedHourReadingFetchErrorState,
+});
+assert.strictEqual(plannedHourReadingFetchError.finalTargetOn, true, "trusted energyzen planned hour + reading fetch error -> ON");
+assert.strictEqual(plannedHourReadingFetchError.reason, "planned-heating");
+assert.strictEqual(plannedHourReadingFetchErrorState.consecutiveUnreliableCycles, 0);
 
 // ---------------------------------------------------------------------
 // The pre-existing tank-reading 3-cycle debounce is preserved, but only
@@ -433,22 +451,41 @@ assert.strictEqual(
   "tuntematon failSafeReason ei kuulu DATA_FAULT_REASONS-listaan eika ohita",
 );
 
+// backup hour + reading fetch error -> 1./2. kierros OFF, 3. kierros
+// backup-fault-override ON. readingFetchError:true + planSource:"backup"
+// mallintaa fetchLatestReading:n tank_readings-REST-haun epaonnistumisen
+// off-plan-varatuntipolulla (ei "energyzen") - eri kuin
+// plannedHourReadingFetchError yllä, joka on planSource:"energyzen".
 const readingFetchErrorOnBackupHourState = createControllerState();
-let readingFetchErrorOnBackupHour;
-for (let index = 0; index < REQUIRED_UNRELIABLE_CYCLES; index += 1) {
-  readingFetchErrorOnBackupHour = decide({
-    failSafeReason: "reading-fetch-error",
-    planSource: "fail-safe",
-    reading: null,
-    state: readingFetchErrorOnBackupHourState,
-  });
-}
+const readingFetchErrorFirst = decide({
+  planSource: "backup",
+  reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
+});
+assert.strictEqual(readingFetchErrorFirst.reason, "reading-fetch-error");
+assert.strictEqual(readingFetchErrorFirst.finalTargetOn, false, "1) lukeman hakuvirhe varatunnilla ei viela lammita");
+
+const readingFetchErrorSecond = decide({
+  planSource: "backup",
+  reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
+});
+assert.strictEqual(readingFetchErrorSecond.finalTargetOn, false, "2) lukeman hakuvirhe varatunnilla ei viela lammita");
+
+const readingFetchErrorThird = decide({
+  planSource: "backup",
+  reading: null,
+  readingFetchError: true,
+  state: readingFetchErrorOnBackupHourState,
+});
 assert.strictEqual(
-  readingFetchErrorOnBackupHour.reason,
+  readingFetchErrorThird.reason,
   "backup-fault-override",
-  "lukeman hakuvirhe varatunnilla lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
+  "3) lukeman hakuvirhe varatunnilla lammittaa ehdoitta kolmannen perakkaisen epaluotettavan kierroksen jalkeen",
 );
-assert.strictEqual(readingFetchErrorOnBackupHour.finalTargetOn, true);
+assert.strictEqual(readingFetchErrorThird.finalTargetOn, true);
 
 // ---------------------------------------------------------------------
 // resolvePlanControl's "backup" resolution, fed through decideHeating

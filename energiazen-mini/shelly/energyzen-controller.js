@@ -378,7 +378,20 @@ function decideHeating(input, state) {
       reason = "hour-not-planned";
     }
 
-    if (!reason && !reading) {
+    // input.readingFetchError (set by fetchLatestReading when the
+    // tank_readings REST request itself failed, as opposed to succeeding
+    // with an empty/stale/invalid row) is deliberately NOT passed as
+    // failSafeReason - a failSafeReason would short-circuit reason before
+    // trustedPlannedHour is even computed above, blocking a trusted
+    // energyzen-planned hour purely because Shelly's own tank_readings
+    // fetch hiccuped. Evaluating it here instead means a trusted planned
+    // hour skips it entirely (like every other tank-reading check in this
+    // block), while the backup/fallback path below still treats it as the
+    // same "reading-fetch-error" DATA_FAULT_REASON it always has, subject
+    // to the same 3-cycle debounce.
+    if (!reason && input.readingFetchError === true) {
+      reason = "reading-fetch-error";
+    } else if (!reason && !reading) {
       reason = "missing-reading";
     }
 
@@ -664,6 +677,7 @@ function executeDecision(control, settings, reading) {
             planSource: control.source,
             plannedHours: control.plannedHours,
             reading: reading,
+            readingFetchError: control.readingFetchError === true,
             relayCurrentlyOn: false,
             settings: settings,
           },
@@ -685,6 +699,7 @@ function executeDecision(control, settings, reading) {
           planSource: control.source,
           plannedHours: control.plannedHours,
           reading: reading,
+          readingFetchError: control.readingFetchError === true,
           relayCurrentlyOn: status.output === true,
           settings: settings,
         },
@@ -706,11 +721,20 @@ function fetchLatestReading(control, settings) {
 
   supabaseRequest(readingPath, function (rows, error) {
     if (error !== null) {
+      // Preserve the ORIGINAL control (source/plannedHours) instead of
+      // forcing source:"fail-safe" here - a tank_readings fetch hiccup
+      // must not by itself defeat an otherwise heartbeat-verified
+      // energyzen plan. readingFetchError (not failSafeReason) lets
+      // decideHeating exempt a trusted planned hour from it while still
+      // treating it as the usual "reading-fetch-error" DATA_FAULT_REASON
+      // - and thus still subject to the 3-cycle debounce - on the
+      // backup/fallback path.
       executeDecision(
         {
-          failSafeReason: "reading-fetch-error",
+          failSafeReason: null,
           plannedHours: control.plannedHours,
-          source: "fail-safe",
+          readingFetchError: true,
+          source: control.source,
         },
         settings,
         null,

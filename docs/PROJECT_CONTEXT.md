@@ -160,10 +160,19 @@ migraatio).
     tuoreus/kelvollisuus tarkistetaan enää `backup_hours`-varapolulla
     (ks. alla) – ei enää normaalin, luotetun suunnitelman hyväksyntään.
     Mikä tahansa AITO ylävirran vikatila (rele/laiteaika/asetukset/
-    suunnitelman haku/heartbeat/lukeman haku – `failSafeReason`) pysäyttää
-    lämmityksen edelleen, vaikka tunti sattuisi olemaan suunniteltu –
-    luottamus koskee vain `decideHeating`:n itse laskemia
-    lukemakohtaisia tarkistuksia, ei ylävirran infrastruktuurivikoja.
+    suunnitelman haku/heartbeat – `failSafeReason`) pysäyttää lämmityksen
+    edelleen, vaikka tunti sattuisi olemaan suunniteltu – luottamus koskee
+    vain `decideHeating`:n itse laskemia lukemakohtaisia tarkistuksia, ei
+    ylävirran infrastruktuurivikoja. Poikkeus: itse `tank_readings`-REST-
+    haun epäonnistuminen (`fetchLatestReading`) kulkee `decideHeating`:lle
+    omana `readingFetchError`-kenttänään, EI `failSafeReason`ina – tämä on
+    tarkoituksellista, koska muuten pelkkä Shellyn oma hetkellinen
+    Supabase-katko olisi voinut estää muuten heartbeat-vahvistetun
+    suunnitelman lämmityksen. Luotetulla suunnitellulla tunnilla
+    `readingFetchError` siis ohitetaan aivan kuten puuttuva/vanhentunut/
+    virheellinen lukemakin; `backup_hours`-varapolulla se sen sijaan
+    lasketaan yhä samaan `"reading-fetch-error"`-datavikasyyhyn ja
+    kolmen kierroksen debounssiin kuin ennenkin (ks. alla).
   - Jos päivän suunnitelmaa ei saada haettua (verkkovirhe, puuttuva rivi tai
     väärä `plan_date`) tai backendin heartbeat ei ole luotettava **ja**
     fallback on käytössä, käytetään Supabasesta/välimuistista luettua
