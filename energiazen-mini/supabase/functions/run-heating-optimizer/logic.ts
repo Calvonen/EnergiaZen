@@ -34,6 +34,7 @@ import {
 import {
   buildHeatingPlanPublicationDecision,
   computeNextUnknownHeatingAnchor,
+  getDailyMinimumPrices,
   type HeatingPlanPublicationDecision,
 } from "../_shared/heatingPlanOrchestration.ts";
 import type { ComparableHeatingPlan } from "../_shared/heatingPlanPublication.ts";
@@ -400,6 +401,39 @@ export function buildOptimizerHours(
     .map(({ dateKey: _dateKey, ...hour }) => hour);
 }
 
+// Per-day reference price for optimizeHeatingPlan's price tolerance ranking
+// (see heatingOptimizer.ts's dailyMinimumPrices and
+// heatingPlanOrchestration.ts's getDailyMinimumPrices). Deliberately built
+// from the SAME raw `prices` rows as buildOptimizerHours above but WITHOUT
+// its "today's remaining hours only" filter - today's real cheapest hour
+// may already be behind `now`, and the tolerance band must still be
+// measured against it, not against whatever's left in the candidate
+// window.
+export function buildOptimizerDailyMinimumPrices(
+  prices: RawElectricityPriceRow[],
+  todayPlanDate: string,
+  tomorrowPlanDate: string,
+): Record<string, number> {
+  const dayHours = prices
+    .filter((price) => price.resolution_minutes === 60)
+    .map((price) => ({
+      date: new Date(price.starts_at),
+      endDate: new Date(price.ends_at),
+      price: price.spot_price_cents_kwh,
+      startDate: price.starts_at,
+    }))
+    .filter((hour) => {
+      const dateKey = getFinnishDateKey(hour.startDate);
+      return dateKey === todayPlanDate || dateKey === tomorrowPlanDate;
+    });
+
+  return getDailyMinimumPrices(
+    dayHours,
+    [todayPlanDate, tomorrowPlanDate],
+    getFinnishDateKey,
+  );
+}
+
 export type ExpectedElectricityPriceSnapshotRow = {
   ends_at: string;
   region: string;
@@ -547,6 +581,7 @@ export type BackendOptimizationRun = {
 // concept server-side, so this hardcodes the production behavior rather
 // than inventing one).
 export function runBackendHeatingOptimization({
+  dailyMinimumPrices,
   heatingGainHistory,
   hourlyDrops,
   hours,
@@ -556,6 +591,8 @@ export function runBackendHeatingOptimization({
   now,
   settings,
 }: {
+  /** See buildOptimizerDailyMinimumPrices / heatingOptimizer.ts's optimizeHeatingPlan. */
+  dailyMinimumPrices?: Record<string, number>;
   heatingGainHistory: TankTemperatureReading[];
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
@@ -604,6 +641,7 @@ export function runBackendHeatingOptimization({
     currentBottomTemperature,
     currentTopTemperature,
     currentWeightedTemperature,
+    dailyMinimumPrices,
     hourlyDrops,
     hours: materializedHours,
     heatingGainPerHour:

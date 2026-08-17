@@ -203,6 +203,25 @@ function getHelsinkiHourNumber(date: Date) {
   return hour === 24 ? 0 : hour;
 }
 
+// Same YYYY-MM-DD Helsinki calendar-day key as heatingLogic.ts's
+// getFinnishDateKey (same locale/options, so the two always agree) -
+// duplicated locally rather than imported, mirroring how
+// helsinkiHourFormatter/getHelsinkiHourNumber above already keep their own
+// self-contained Helsinki-time formatter instead of reaching into
+// heatingLogic.ts. Only used to look a hour's own calendar day up in a
+// caller-supplied dailyMinimumPrices map (see getEffectivePrice) - never to
+// decide which hours are candidates.
+const helsinkiDateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
+function getHelsinkiDateKeyFromIso(startDate: string) {
+  return helsinkiDateKeyFormatter.format(new Date(startDate));
+}
+
 function getWeightedTemperatureFromSensors(
   topTemperature: number,
   bottomTemperature: number,
@@ -272,32 +291,26 @@ function getSelectedHoursCost(
   );
 }
 
-function getMinimumPrice(hours: HeatingOptimizationHour[]) {
-  return hours.reduce(
-    (minimum, hour) => Math.min(minimum, hour.price),
-    Number.POSITIVE_INFINITY,
-  );
-}
-
 // price tolerance / hintojen tasoitus: hours priced within `priceToleranceCents`
-// of the window's cheapest hour are treated as equally cheap for the purpose
-// of RANKING optionalHours combinations against each other. This never
-// changes hour.price itself (real electricity_prices values, and everything
-// reported to the UI/DB, stay untouched) - it only changes which combination
-// optimizeHeatingPlan considers "the cheapest" when several are tied under
-// tolerance.
+// of their day's REFERENCE price (see referencePrice below - a per-Helsinki-
+// calendar-day cheapest 60-min price, not the candidate window's cheapest)
+// are treated as equally cheap for the purpose of RANKING optionalHours
+// combinations against each other. This never changes hour.price itself
+// (real electricity_prices values, and everything reported to the UI/DB,
+// stay untouched) - it only changes which combination optimizeHeatingPlan
+// considers "the cheapest" when several are tied under tolerance.
 function getEffectivePrice(
   price: number,
-  minimumPrice: number,
+  referencePrice: number,
   priceToleranceCents: number,
 ) {
-  return price <= minimumPrice + priceToleranceCents ? minimumPrice : price;
+  return price <= referencePrice + priceToleranceCents ? referencePrice : price;
 }
 
 function getSelectedHoursEffectiveCost(
   hours: HeatingOptimizationHour[],
   selectedHeatingHourIds: string[],
-  minimumPrice: number,
+  getReferencePriceForHour: (hour: HeatingOptimizationHour) => number,
   priceToleranceCents: number,
 ) {
   const selectedIds = new Set(selectedHeatingHourIds);
@@ -305,7 +318,12 @@ function getSelectedHoursEffectiveCost(
   return hours.reduce(
     (sum, hour) =>
       selectedIds.has(hour.id)
-        ? sum + getEffectivePrice(hour.price, minimumPrice, priceToleranceCents)
+        ? sum +
+          getEffectivePrice(
+            hour.price,
+            getReferencePriceForHour(hour),
+            priceToleranceCents,
+          )
         : sum,
     0,
   );
@@ -830,6 +848,7 @@ export function optimizeHeatingPlan({
   currentBottomTemperature,
   currentTopTemperature,
   currentWeightedTemperature,
+  dailyMinimumPrices,
   heatingGainPerHour,
   hourlyDrops,
   hours,
@@ -842,6 +861,20 @@ export function optimizeHeatingPlan({
   currentBottomTemperature: number;
   currentTopTemperature: number;
   currentWeightedTemperature?: number;
+  /**
+   * Per-Helsinki-calendar-day reference price for price tolerance ranking
+   * only (see getEffectivePrice) - Helsinki dateKey ("YYYY-MM-DD") -> that
+   * day's cheapest 60-min price, covering the WHOLE day including hours
+   * that already passed (unlike `hours` below, which only ever carries
+   * today's REMAINING hours + tomorrow's). Callers should build this with
+   * getDailyMinimumPrices (heatingPlanOrchestration.ts), which only
+   * includes a dateKey once that day's price coverage is complete. A
+   * missing dateKey (no map at all, or that day judged incomplete) means
+   * tolerance is NOT applied to that day's hours at all - see
+   * getReferencePriceForHour below. This deliberately never derives a
+   * reference price from the (possibly partial) candidate window itself.
+   */
+  dailyMinimumPrices?: Record<string, number>;
   heatingGainPerHour?: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
@@ -922,11 +955,26 @@ export function optimizeHeatingPlan({
   let bestInvalidResult: HeatingSimulationResult | null = null;
   let firstValidSelectionCount: number | null = null;
   const validCombinationCountsBySelectionCount: Record<number, number> = {};
-  // See getEffectivePrice's comment: this is the "tarkasteluikkunan alin
-  // hinta" the price tolerance band is measured from, computed once over the
-  // whole candidate window (same hours the optimizer already considers).
-  const minimumPrice = getMinimumPrice(sortedHours);
   const priceToleranceCents = settings.priceToleranceCents ?? 0;
+  // See getEffectivePrice's comment. When a hour's own Helsinki calendar
+  // day has no COMPLETE minimum in dailyMinimumPrices (no map at all, or
+  // that day judged incomplete - see getDailyMinimumPrices), its own price
+  // is used as its own reference: price <= price + priceToleranceCents is
+  // always true, so getEffectivePrice always returns that hour's own
+  // price unchanged - i.e. tolerance is simply NOT applied to that hour.
+  // Deliberately never falls back to a minimum derived from the candidate
+  // window (today's remaining hours + tomorrow) - that window can be a
+  // partial slice of the day and would silently reintroduce the same kind
+  // of wrong/incomplete reference price this dailyMinimumPrices param
+  // exists to avoid.
+  const getReferencePriceForHour = (hour: HeatingOptimizationHour) => {
+    const dayMinimum =
+      dailyMinimumPrices?.[getHelsinkiDateKeyFromIso(hour.startDate)];
+
+    return typeof dayMinimum === "number" && Number.isFinite(dayMinimum)
+      ? dayMinimum
+      : hour.price;
+  };
 
   for (
     let selectionCount = 0;
@@ -992,7 +1040,7 @@ export function optimizeHeatingPlan({
       const effectiveCost = getSelectedHoursEffectiveCost(
         sortedHours,
         selectedHeatingHourIds,
-        minimumPrice,
+        getReferencePriceForHour,
         priceToleranceCents,
       );
       validCombinationCount += 1;

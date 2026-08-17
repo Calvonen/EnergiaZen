@@ -99,8 +99,18 @@ export type HeatingPlanPublicationDecision =
 // re-export and app/(tabs)/index.tsx. One canonical implementation, not a
 // second parallel one - purely additive, no behavior change to this
 // module's own callers (run-heating-optimizer).
+// Only the time-boundary fields are needed here (and by getDailyMinimumPrices
+// below) - narrower than HeatingOptimizationHour so callers that only have a
+// day's raw price rows (no id/isCurrentHour/segmentHours yet, e.g. a day's
+// already-passed hours pulled straight from electricity_prices) can reuse
+// this without first materializing full optimizer hour objects.
+export type HelsinkiDayCoverageHour = Pick<
+  HeatingOptimizationHour,
+  "date" | "endDate" | "startDate"
+>;
+
 export function hasCompleteHelsinkiDayCoverage(
-  hours: HeatingOptimizationHour[],
+  hours: HelsinkiDayCoverageHour[],
   dateKey: string,
   dateKeyOf: (startDate: string) => string,
 ): boolean {
@@ -132,6 +142,51 @@ export function hasCompleteHelsinkiDayCoverage(
   }
 
   return dayHours[dayHours.length - 1].endDate.getTime() === dayEnd.getTime();
+}
+
+// Needs price on top of HelsinkiDayCoverageHour's time boundaries.
+export type PricedHelsinkiHour = HelsinkiDayCoverageHour & { price: number };
+
+// Per-Helsinki-calendar-day reference price for optimizeHeatingPlan's price
+// tolerance ranking (see heatingOptimizer.ts's dailyMinimumPrices param):
+// the cheapest 60-min price across dateKey's WHOLE Helsinki day, including
+// hours that have already passed - deliberately NOT optimizeHeatingPlan's
+// own candidate window, which only ever holds today's REMAINING hours plus
+// tomorrow's, so it can never see today's own cheapest hour once that hour
+// is behind `now`. Callers therefore pass hoursForDay built from the raw,
+// unfiltered price rows for the day(s) in dateKeys - not the optimizer's
+// `hours` input.
+//
+// A dateKey is only included in the result when hoursForDay has complete,
+// gapless coverage of that entire day (same hasCompleteHelsinkiDayCoverage
+// rule PR #209 already uses to gate tomorrow's plan publication above) -
+// an incomplete day (most commonly a not-yet-fully-ingested tomorrow) is
+// omitted rather than computing a minimum from a partial set, which could
+// understate the day's real cheapest price. optimizeHeatingPlan falls back
+// to its own pre-existing window-minimum behaviour for any dateKey missing
+// here.
+export function getDailyMinimumPrices(
+  hoursForDay: PricedHelsinkiHour[],
+  dateKeys: string[],
+  dateKeyOf: (startDate: string) => string,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+
+  for (const dateKey of dateKeys) {
+    if (!hasCompleteHelsinkiDayCoverage(hoursForDay, dateKey, dateKeyOf)) {
+      continue;
+    }
+
+    const minimum = hoursForDay
+      .filter((hour) => dateKeyOf(hour.startDate) === dateKey)
+      .reduce((min, hour) => Math.min(min, hour.price), Number.POSITIVE_INFINITY);
+
+    if (Number.isFinite(minimum)) {
+      result[dateKey] = minimum;
+    }
+  }
+
+  return result;
 }
 
 function getHourNumbersForDate(

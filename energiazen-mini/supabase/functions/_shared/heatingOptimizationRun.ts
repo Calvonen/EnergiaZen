@@ -13,6 +13,8 @@ export type HeatingOptimizationInputSnapshot = {
   currentBottomTemperature: number | null;
   currentTopTemperature: number | null;
   currentWeightedTemperature: number | null;
+  /** See getDailyMinimumPrices (heatingPlanOrchestration.ts) / optimizeHeatingPlan's dailyMinimumPrices param. */
+  dailyMinimumPrices?: Record<string, number>;
   heatingGainSource: HeatingGainSource;
   heatingHistory: TankTemperatureReading[];
   hourlyDrops: Record<number, number>;
@@ -52,6 +54,7 @@ export function createHeatingOptimizationInputKey(
     currentBottomTemperature: snapshot.currentBottomTemperature,
     currentTopTemperature: snapshot.currentTopTemperature,
     currentWeightedTemperature: snapshot.currentWeightedTemperature,
+    dailyMinimumPrices: snapshot.dailyMinimumPrices ?? null,
     // heatingGainSource itself isn't part of snapshot.settings (the
     // "fixed" override is applied separately - see
     // useHeatingOptimizationRun.ts) so it must be listed explicitly here,
