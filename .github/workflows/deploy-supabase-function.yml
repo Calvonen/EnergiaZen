@@ -1,0 +1,65 @@
+name: Supabase Function Deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-run-heating-optimizer-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deployaa run-heating-optimizer (production)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tarkista että SUPABASE_ACCESS_TOKEN ja SUPABASE_PROJECT_REF on asetettu
+        run: |
+          MISSING=0
+
+          if [ -z "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ]; then
+            echo "SUPABASE_ACCESS_TOKEN-secret puuttuu tästä repositoriosta."
+            MISSING=1
+          fi
+
+          if [ -z "${{ secrets.SUPABASE_PROJECT_REF }}" ]; then
+            echo "SUPABASE_PROJECT_REF-secret puuttuu tästä repositoriosta."
+            MISSING=1
+          fi
+
+          if [ "$MISSING" -eq 1 ]; then
+            echo "Lisää puuttuvat secretit kohdasta Settings -> Secrets and variables -> Actions -> New repository secret."
+            exit 1
+          fi
+
+      - name: Hae koodi
+        uses: actions/checkout@v4
+
+      - name: Asenna Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deployaa run-heating-optimizer (production)
+        working-directory: energiazen-mini
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase functions deploy run-heating-optimizer --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Kirjoita yhteenveto
+        if: success()
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          {
+            echo "## Supabase Edge Function deploy"
+            echo ""
+            echo "- **Function:** \`run-heating-optimizer\`"
+            echo "- **Project ref:** \`$SUPABASE_PROJECT_REF\`"
+            echo "- **Git commit:** \`${{ github.sha }}\`"
+            echo "- **Tila:** Deploy onnistui."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
