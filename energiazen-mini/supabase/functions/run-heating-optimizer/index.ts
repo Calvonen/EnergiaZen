@@ -22,6 +22,7 @@ import {
   buildExpectedHeatingPlanVersions,
   buildExpectedOptimizerSettingsSnapshot,
   buildExpectedTankSnapshot,
+  buildOptimizerDailyMinimumPrices,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -421,8 +422,14 @@ Deno.serve(async (request) => {
       todayPlanDate,
       tomorrowPlanDate,
     );
+    const dailyMinimumPrices = buildOptimizerDailyMinimumPrices(
+      prices,
+      todayPlanDate,
+      tomorrowPlanDate,
+    );
     const heating = latestReading?.heating ?? null;
     const run = runBackendHeatingOptimization({
+      dailyMinimumPrices,
       heatingGainHistory: gainHistory,
       hourlyDrops: dropProfile.hourlyDrops,
       heatingGainSource,

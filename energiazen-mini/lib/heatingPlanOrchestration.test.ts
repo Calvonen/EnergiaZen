@@ -1,4 +1,7 @@
-import { buildHeatingPlanPublicationDecision } from "./heatingPlanOrchestration";
+import {
+  buildHeatingPlanPublicationDecision,
+  getDailyMinimumPrices,
+} from "./heatingPlanOrchestration";
 import type { HeatingOptimizationHour, HeatingOptimizationResult } from "./heatingOptimizer";
 import type { ComparableHeatingPlan } from "./heatingPlanPublication";
 import { getDateKeyOffset, getHelsinkiDateStart } from "./heatingLogic";
@@ -491,6 +494,48 @@ export function runHeatingPlanOrchestrationUnitTests() {
       unchangedDecision.changedPlans.length,
       0,
       "identical plans vs. storedPlans must be suppressed as duplicates, matching getChangedHeatingPlans",
+    );
+  }
+
+  // getDailyMinimumPrices - the per-day reference price optimizeHeatingPlan
+  // uses for price tolerance ranking (see heatingOptimizer.ts's
+  // dailyMinimumPrices param). Reuses the exact same hasCompleteHelsinkiDay-
+  // Coverage rule tomorrowHasCompletePriceData above already applies.
+  {
+    // 7. Two complete days with genuinely different cheapest prices must
+    // produce two independent minima, not a shared/blended one.
+    const todayFullDay = buildFullDayHours(todayPlanDate, 5).map((hour, index) =>
+      index === 3 ? { ...hour, price: 0.4 } : hour,
+    );
+    const tomorrowFullDayDistinct = buildFullDayHours(tomorrowPlanDate, 5).map(
+      (hour, index) => (index === 8 ? { ...hour, price: 1.1 } : hour),
+    );
+    const twoDayMinimums = getDailyMinimumPrices(
+      [...todayFullDay, ...tomorrowFullDayDistinct],
+      [todayPlanDate, tomorrowPlanDate],
+      trackDateKeyOf,
+    );
+
+    assertEqual(
+      twoDayMinimums,
+      { [todayPlanDate]: 0.4, [tomorrowPlanDate]: 1.1 },
+      "two complete days with different cheapest hours must form separate, independent minima - not one shared minimum",
+    );
+
+    // 8. Tomorrow's price data is INCOMPLETE (one hour missing) - its
+    // minimum must not be invented from the partial set. Today stays
+    // complete and keeps reporting its own minimum unaffected.
+    const tomorrowPartialDay = tomorrowFullDayDistinct.slice(1);
+    const partialDayMinimums = getDailyMinimumPrices(
+      [...todayFullDay, ...tomorrowPartialDay],
+      [todayPlanDate, tomorrowPlanDate],
+      trackDateKeyOf,
+    );
+
+    assertEqual(
+      partialDayMinimums,
+      { [todayPlanDate]: 0.4 },
+      "incomplete tomorrow coverage must not produce a tomorrow minimum at all - never invent one from a partial day",
     );
   }
 }

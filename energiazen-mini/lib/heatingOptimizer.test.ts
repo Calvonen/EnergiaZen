@@ -2142,4 +2142,189 @@ export function runHeatingOptimizerUnitTests() {
       "lukitun tunnin todellinen hinta pysyy samana toleranssista riippumatta",
     );
   }
+
+  // dailyMinimumPrices - paivakohtainen price tolerance -vertailupiste.
+  // Bugi ennen tata: priceToleranceCents vertasi VAIN optimizerin
+  // kaytettavissa olevan (jaljella olevan) aikaikkunan halvimpaan tuntiin -
+  // jos paivan oikea halvin tunti oli jo mennyt eika enaa ollut hours-
+  // joukossa, ikkunan minimi nousi paivan edetessa ja toleranssiraja
+  // siirtyi vaarin ylospain. dailyMinimumPrices (Helsinki dateKey -> koko
+  // sen paivan halvin hinta, myos menneilta tunneilta) on nyt getEffective-
+  // Pricen referenssi silloin kun tunnin oma dateKey loytyy kartasta -
+  // todellinen hour.price ja diagnostics.selectedPlanCost eivat koskaan
+  // muutu, eika mennytta tuntia (ei koskaan hours-joukossa) voi koskaan
+  // valita lammitykseen pelkastaan taman kartan takia.
+  {
+    const today = "2026-08-10";
+    const tomorrow = "2026-08-11";
+    const runArgs = {
+      currentBottomTemperature: 45,
+      currentTopTemperature: 45,
+      currentWeightedTemperature: 45,
+      heatingGainPerHour: 20,
+      hourlyDrops: createHourlyDrops(0),
+    };
+
+    // Testit 1+3: paivan todellinen halvin tunti (klo 03, 0,4) on jo
+    // mennyt eika ole ollenkaan hours-joukossa - vain klo 09 (1,2) ja
+    // myohemmat ovat mukana. Silti se maarittaa paivan toleranssirajan
+    // dailyMinimumPrices:n kautta: 0,4 + 2,0 = 2,4, EI (vanha bugi)
+    // jaljella olevan ikkunan halvimman (1,2) + 2,0 = 3,2.
+    const hour09 = optimizationHour(today, 9, 1.2);
+    const hourAtCorrectBoundary = optimizationHour(today, 12, 2.4);
+    const hourBetweenCorrectAndBuggyBoundary = optimizationHour(today, 15, 3.1);
+    const tolerance2Settings = defaultSettings({
+      maxHeatingHours: 2,
+      priceToleranceCents: 2,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 3,
+    });
+
+    const atBoundary = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hour09, hourAtCorrectBoundary],
+      dailyMinimumPrices: { [today]: 0.4 },
+      settings: tolerance2Settings,
+    });
+
+    assertEqual(
+      atBoundary.selectedHeatingHourIds,
+      [hourAtCorrectBoundary.id],
+      "2,4 = paivan oikea minimi (0,4, mennyt klo 03) + toleranssi (2,0): tasatilanne 09:n kanssa, myohempi (12) voittaa",
+    );
+    assertEqual(
+      atBoundary.selectedHeatingHourIds.includes("2026-08-10:03"),
+      false,
+      "mennyt halvin tunti (03) ei ole edes hours-joukossa, joten sita ei voi valita, vaikka se maaraa toleranssirajan",
+    );
+
+    const aboveBoundary = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hour09, hourBetweenCorrectAndBuggyBoundary],
+      dailyMinimumPrices: { [today]: 0.4 },
+      settings: tolerance2Settings,
+    });
+
+    assertEqual(
+      aboveBoundary.selectedHeatingHourIds,
+      [hour09.id],
+      "3,1 ylittaa oikean toleranssirajan (2,4) - todellinen halvin (09, 1,2) voittaa. " +
+        "Vanhalla bugilla jaljella olevan ikkunan minimi olisi ollut 1,2 ja raja 3,2, jolloin " +
+        "3,1 olisi virheellisesti sulautunut tasatilanteeseen ja myohempi (15) olisi voittanut",
+    );
+
+    // Testi 2: sama tilanne, mutta priceToleranceCents 0 - dailyMinimum-
+    // Pricesin antaminen ei saa muuttaa mitaan, kayttaytymisen pitaa olla
+    // tasan sama kuin ilman karttaa (= nykyinen pre-tolerance-kaytos).
+    const zeroToleranceSettings = defaultSettings({
+      maxHeatingHours: 2,
+      priceToleranceCents: 0,
+      safetyShowerReserve: 0,
+      targetShowerReserve: 3,
+    });
+    const zeroToleranceWithMap = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hour09, hourBetweenCorrectAndBuggyBoundary],
+      dailyMinimumPrices: { [today]: 0.4 },
+      settings: zeroToleranceSettings,
+    });
+    const zeroToleranceNoMap = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hour09, hourBetweenCorrectAndBuggyBoundary],
+      settings: zeroToleranceSettings,
+    });
+
+    assertEqual(
+      zeroToleranceWithMap.selectedHeatingHourIds,
+      zeroToleranceNoMap.selectedHeatingHourIds,
+      "tolerance 0: dailyMinimumPrices-kartan antaminen ei muuta kayttaytymista - tasan sama kuin ilman karttaa",
+    );
+    assertEqual(
+      zeroToleranceWithMap.selectedHeatingHourIds,
+      [hour09.id],
+      "tolerance 0: todellinen halvin tunti (09) voittaa aina, karttaa ei kayteta",
+    );
+
+    // Testi 4: huomisen tunnit kayttavat huomisen OMAA minimihintaa (1,1),
+    // eivat tamanpaivan minimihintaa (0,4). Jos vaarin kaytettaisiin
+    // tamanpaivan minimia, raja olisi 0,4+1,5=1,9 eika 2,5 tasoittuisi -
+    // silloin aikaisempi (08) voittaisi todellisella hinnallaan.
+    const tomorrowEarly = optimizationHour(tomorrow, 8, 1.1);
+    const tomorrowLate = optimizationHour(tomorrow, 14, 2.5);
+    const tomorrowResult = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [tomorrowEarly, tomorrowLate],
+      dailyMinimumPrices: { [today]: 0.4, [tomorrow]: 1.1 },
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1.5,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      tomorrowResult.selectedHeatingHourIds,
+      [tomorrowLate.id],
+      "2,5 <= huomisen oma minimi (1,1) + toleranssi (1,5) = 2,6: tasatilanne, myohempi (14) voittaa - " +
+        "huomisen tunnit eivat kayta tamanpaivan minimia (0,4)",
+    );
+
+    // Testi 7: myohempi tie-break toimii edelleen dailyMinimumPrices-
+    // referenssin kanssa, myos useamman kuin kahden tunnin tasatilanteessa.
+    const hourA = optimizationHour(today, 9, 1.2);
+    const hourB = optimizationHour(today, 12, 2.0);
+    const hourC = optimizationHour(today, 15, 2.4);
+    const multiTieResult = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [hourA, hourB, hourC],
+      dailyMinimumPrices: { [today]: 0.4 },
+      settings: defaultSettings({
+        maxHeatingHours: 3,
+        priceToleranceCents: 2,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      multiTieResult.selectedHeatingHourIds,
+      [hourC.id],
+      "kaikki kolme tuntia (1,2 / 2,0 / 2,4) tasoittuvat paivan minimin (0,4) + toleranssin (2,0) " +
+        "sisalla saman paivan referenssia vasten - myohaisin (15) voittaa",
+    );
+
+    // Testi 6 (osittain, ks. myos heatingPlanOrchestration.test.ts): jos
+    // dailyMinimumPrices ei sisalla paivan avainta lainkaan (esim. koska
+    // kutsuja jatti sen pois vajaan kattavuuden vuoksi), optimizeHeatingPlan
+    // ei keksi minimihintaa - se palaa vanhaan ikkunan-minimi-kaytokseen
+    // taman paivan tunneille, tasan kuin ilman karttaa ollenkaan.
+    const missingDayKeyResult = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [tomorrowEarly, tomorrowLate],
+      dailyMinimumPrices: { [today]: 0.4 },
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1.5,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+    const noMapResult = optimizeHeatingPlan({
+      ...runArgs,
+      hours: [tomorrowEarly, tomorrowLate],
+      settings: defaultSettings({
+        maxHeatingHours: 2,
+        priceToleranceCents: 1.5,
+        safetyShowerReserve: 0,
+        targetShowerReserve: 3,
+      }),
+    });
+
+    assertEqual(
+      missingDayKeyResult.selectedHeatingHourIds,
+      noMapResult.selectedHeatingHourIds,
+      "huomisen avain puuttuu dailyMinimumPrices-kartasta (vajaa kattavuus) - palaa ikkunan-minimi-kaytokseen, ei keksi minimia vajaasta joukosta",
+    );
+  }
 }

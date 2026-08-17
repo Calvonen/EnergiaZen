@@ -60,6 +60,7 @@ export function useHeatingOptimizationRun({
   currentBottomTemperature,
   currentTopTemperature,
   currentWeightedTemperature,
+  dailyMinimumPrices,
   fallbackHeatingGainPerHour,
   heatingHistory,
   hourlyDrops,
@@ -86,6 +87,7 @@ export function useHeatingOptimizationRun({
       currentBottomTemperature,
       currentTopTemperature,
       currentWeightedTemperature,
+      dailyMinimumPrices,
       heatingGainSource: appSettings.heatingGainSource,
       heatingHistory,
       hourlyDrops,
@@ -102,6 +104,7 @@ export function useHeatingOptimizationRun({
       currentBottomTemperature,
       currentTopTemperature,
       currentWeightedTemperature,
+      dailyMinimumPrices,
       heatingHistory,
       hourlyDrops,
       hours,
@@ -168,6 +171,7 @@ export function useHeatingOptimizationRun({
             currentTopTemperature: snapshot.currentTopTemperature as number,
             currentWeightedTemperature:
               snapshot.currentWeightedTemperature as number,
+            dailyMinimumPrices: snapshot.dailyMinimumPrices,
             // Explicit value bypasses estimateHeatingGainPerHour entirely
             // (see optimizeHeatingPlan) - only set it when the user has
             // chosen to distrust the learned estimate; otherwise leave it

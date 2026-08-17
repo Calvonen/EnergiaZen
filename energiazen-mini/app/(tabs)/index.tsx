@@ -76,6 +76,7 @@ import {
   selectActiveHeatingPlanPresentation,
   simulateStoredHeatingPlanForecast,
 } from "@/lib/heatingPlanPresentation";
+import { getDailyMinimumPrices } from "@/lib/heatingPlanOrchestration";
 import { hasCompleteHelsinkiDayCoverage } from "@/lib/heatingPlanOrchestration";
 import { estimateRecoveryDropPerHour } from "@/lib/heatingRecoveryDrop";
 import { isRecoveryDropEnabledForChannel } from "@/lib/recoveryDropEnvironment";
@@ -1310,6 +1311,24 @@ export default function HomeScreen() {
       ),
     [optimizerHours, tomorrowPlanDate],
   );
+  // Per-day reference price for optimizeHeatingPlan's price tolerance
+  // ranking (see heatingOptimizer.ts's dailyMinimumPrices param) - built
+  // from the FULL hourlyPrices (today's already-passed hours included, not
+  // just optimizerHours' remaining-hours-only candidate window), so
+  // today's real cheapest hour keeps anchoring today's tolerance band even
+  // after it's gone by. getDailyMinimumPrices only fills in a day whose
+  // coverage is complete (same PR #209 rule isTomorrowPriceDataComplete
+  // above already applies), so a partial tomorrow simply has no entry here
+  // and optimizeHeatingPlan falls back to its own pre-existing behaviour.
+  const dailyMinimumPrices = useMemo(
+    () =>
+      getDailyMinimumPrices(
+        hourlyPrices,
+        [todayPlanDate, tomorrowPlanDate],
+        getFinnishDateKey,
+      ),
+    [hourlyPrices, todayPlanDate, tomorrowPlanDate],
+  );
   // Only an explicitly confirmed heating=true locks the current hour into
   // the plan (see heatingOptimizer.ts's lockedHours) - an unreadable Shelly
   // status (heating: null) must not lock the hour, but it must also not be
@@ -1324,6 +1343,7 @@ export default function HomeScreen() {
     currentBottomTemperature: bottomTemp,
     currentTopTemperature: topTemp,
     currentWeightedTemperature,
+    dailyMinimumPrices,
     fallbackHeatingGainPerHour,
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,
@@ -1343,6 +1363,7 @@ export default function HomeScreen() {
     currentBottomTemperature: bottomTemp,
     currentTopTemperature: topTemp,
     currentWeightedTemperature,
+    dailyMinimumPrices,
     fallbackHeatingGainPerHour,
     heatingHistory: heatingGainHistory,
     hourlyDrops: hourlyTemperatureDropProfile,

@@ -5,6 +5,7 @@ import {
   buildExpectedOptimizerSettingsSnapshot,
   buildExpectedTankSnapshot,
   buildHeatingPlanPublicationDecision,
+  buildOptimizerDailyMinimumPrices,
   buildOptimizerHours,
   buildShadowRunRow,
   buildStoredPlansMap,
@@ -1345,5 +1346,147 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     assertEqual(fixedRow.app_planned_hours_today, [14, 15], "app_planned_hours_today must stay visible for diagnostics regardless of mode");
     assertEqual(fixedRow.app_plan_mode, "fixed", "app_plan_mode must record the app plan's actual mode");
     assertEqual(shadowRowFor(null, [14, 15]).app_plan_mode, null, "app_plan_mode must be null when there is no app plan");
+  }
+
+  // buildOptimizerDailyMinimumPrices - unlike buildOptimizerHours (which
+  // drops today's already-passed hours), this must see the WHOLE day so a
+  // day's real cheapest hour still anchors its price-tolerance reference
+  // even after that hour is behind `now` - see heatingOptimizer.ts's
+  // dailyMinimumPrices param.
+  {
+    const dayKey = "2026-08-12";
+    const nextDayKey = "2026-08-13";
+    // Full Helsinki day for dayKey: previous UTC day's 21-23 (= 00-02
+    // Helsinki, +3h in August) plus dayKey's own UTC 0-20 (= 03-23
+    // Helsinki) - same pattern the existing todayPrices/tomorrowPrices
+    // fixture above already uses to cross the UTC/Helsinki boundary.
+    const fullDayPrices = [
+      ...priceRowsForDay("2026-08-11", 21, 23, 5),
+      ...priceRowsForDay(dayKey, 0, 20, 5),
+    ];
+    // The day's real cheapest hour (0.4) is early - Helsinki 03:00, i.e.
+    // the first row of dayKey's own UTC block (hour 0). Two more overrides
+    // (1.2 at Helsinki 14:00, 3.1 at Helsinki 16:00 - both still in the
+    // future relative to `now` below) exist purely to give test 4's
+    // wiring check something to distinguish a day-minimum-aware selection
+    // from a window-minimum one; they don't affect tests 1-3, where 0.4
+    // stays the overall day minimum regardless.
+    const priceOverrides: Record<string, number> = {
+      [`${dayKey}T00:00:00.000Z`]: 0.4,
+      [`${dayKey}T11:00:00.000Z`]: 1.2,
+      [`${dayKey}T13:00:00.000Z`]: 3.1,
+    };
+    const withCheapEarlyHour = fullDayPrices.map((row) =>
+      row.starts_at in priceOverrides
+        ? { ...row, spot_price_cents_kwh: priceOverrides[row.starts_at] }
+        : row,
+    );
+
+    // 1. A genuinely complete day reports its own minimum, including a
+    // price that sits on an hour well before `now` (14:00 Helsinki that
+    // same day, i.e. UTC 11:00) - buildOptimizerHours would have already
+    // dropped that hour from its own output, but the minimum must still
+    // see it.
+    const now = new Date(`${dayKey}T11:00:00.000Z`);
+    const nowHours = buildOptimizerHours(withCheapEarlyHour, now, dayKey, nextDayKey);
+    assertEqual(
+      nowHours.some((hour) => getFinnishDateKey(hour.startDate) === dayKey && getHelsinkiHourNumber(hour.date) === 3),
+      false,
+      "fixture sanity check: buildOptimizerHours must have already dropped the passed 03:00 hour",
+    );
+    assertEqual(
+      buildOptimizerDailyMinimumPrices(withCheapEarlyHour, dayKey, nextDayKey),
+      { [dayKey]: 0.4 },
+      "a complete day's minimum must include its own already-passed cheapest hour, even though buildOptimizerHours no longer carries it",
+    );
+
+    // 2. Tomorrow (nextDayKey) has no rows at all - must not appear in the
+    // result rather than reporting a fabricated/undefined minimum.
+    assertEqual(
+      Object.prototype.hasOwnProperty.call(
+        buildOptimizerDailyMinimumPrices(withCheapEarlyHour, dayKey, nextDayKey),
+        nextDayKey,
+      ),
+      false,
+      "a day with zero price rows must never get an invented minimum",
+    );
+
+    // 3. Tomorrow has SOME rows but not a complete day - still must not
+    // appear, matching hasCompleteHelsinkiDayCoverage's gating.
+    const partialTomorrow = priceRowsForDay(nextDayKey, 3, 10, 2);
+    assertEqual(
+      Object.prototype.hasOwnProperty.call(
+        buildOptimizerDailyMinimumPrices(
+          [...withCheapEarlyHour, ...partialTomorrow],
+          dayKey,
+          nextDayKey,
+        ),
+        nextDayKey,
+      ),
+      false,
+      "an incomplete tomorrow must never get a minimum computed from its partial rows",
+    );
+
+    // 4. runBackendHeatingOptimization actually forwards dailyMinimumPrices
+    // through to optimizeHeatingPlan - a wiring check, not a re-test of
+    // optimizeHeatingPlan's own tolerance math (covered exhaustively in
+    // heatingOptimizer.test.ts).
+    const { settings } = resolveOptimizerSettings({
+      automatic_max_heating_hours: 1,
+      full_tank_average_temperature: 70,
+      full_tank_showers: 6,
+      heating_gain_source: "learned",
+      heating_need_mode: "automatic",
+      max_tank_temperature: 70,
+      min_tank_temperature: 10,
+      price_tolerance_cents: 2,
+      safety_shower_reserve: 0,
+      target_shower_reserve: 3,
+      updated_at: "2026-08-12T09:00:00.000Z",
+    });
+    const optimizationSettings = createHeatingOptimizationSettings(settings, 20);
+    const dailyMinimumPrices = buildOptimizerDailyMinimumPrices(withCheapEarlyHour, dayKey, nextDayKey);
+    const withMap = runBackendHeatingOptimization({
+      dailyMinimumPrices,
+      heatingGainHistory: [],
+      hourlyDrops: {},
+      heatingGainSource: "learned",
+      hours: nowHours,
+      isCurrentlyHeating: false,
+      latestReading: { bottom_temp: 45, created_at: now.toISOString(), heating: false, top_temp: 45 },
+      now,
+      settings: optimizationSettings,
+    });
+    const withoutMap = runBackendHeatingOptimization({
+      heatingGainHistory: [],
+      hourlyDrops: {},
+      heatingGainSource: "learned",
+      hours: nowHours,
+      isCurrentlyHeating: false,
+      latestReading: { bottom_temp: 45, created_at: now.toISOString(), heating: false, top_temp: 45 },
+      now,
+      settings: optimizationSettings,
+    });
+
+    assert(withMap.result !== null, "a ready run with dailyMinimumPrices must still produce an optimizer result");
+    assert(withoutMap.result !== null, "a ready run without dailyMinimumPrices must still produce an optimizer result");
+    // 1.2 (11:00Z) is the only candidate hour within the day's real
+    // minimum (0.4) + tolerance (2) = 2.4, so it wins outright. Without the
+    // map, the fallback window-minimum is 1.2 itself (the cheapest hour
+    // still in nowHours), so its boundary is 1.2 + 2 = 3.2 - wide enough to
+    // wrongly pull 3.1 (13:00Z) into the tie group, where the later-wins
+    // tie-break then picks it over 1.2. Same underlying `hours`/settings/
+    // drop profile in both runs - only dailyMinimumPrices differs - so any
+    // difference here is solely runBackendHeatingOptimization's wiring.
+    assertEqual(
+      withMap.result?.selectedHeatingHourIds,
+      ["2026-08-12T11:00:00.000Z"],
+      "with dailyMinimumPrices: the day's real minimum (0.4) keeps 3.1 out of the tolerance band, so the actually cheapest hour (1.2) wins",
+    );
+    assertEqual(
+      withoutMap.result?.selectedHeatingHourIds,
+      ["2026-08-12T13:00:00.000Z"],
+      "without dailyMinimumPrices: falls back to the old window-minimum (1.2) behaviour, whose wider boundary (3.2) pulls 3.1 into a tie that the later-wins tie-break then hands to it - proving the map is what fixes this, not some unrelated change",
+    );
   }
 }
