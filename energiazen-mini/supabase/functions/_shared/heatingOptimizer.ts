@@ -291,20 +291,6 @@ function getSelectedHoursCost(
   );
 }
 
-// Fallback reference price when a hour's own Helsinki calendar day has no
-// entry in the caller-supplied dailyMinimumPrices map (no map given at all,
-// or that day's coverage was incomplete when the caller built it - see
-// getDailyMinimumPrices in heatingPlanOrchestration.ts). Kept as the exact
-// pre-existing "cheapest hour anywhere in the candidate window" calculation
-// so every caller that doesn't opt into per-day pricing yet (and any day
-// the map can't vouch for) keeps today's behaviour unchanged.
-function getMinimumPrice(hours: HeatingOptimizationHour[]) {
-  return hours.reduce(
-    (minimum, hour) => Math.min(minimum, hour.price),
-    Number.POSITIVE_INFINITY,
-  );
-}
-
 // price tolerance / hintojen tasoitus: hours priced within `priceToleranceCents`
 // of their day's REFERENCE price (see referencePrice below - a per-Helsinki-
 // calendar-day cheapest 60-min price, not the candidate window's cheapest)
@@ -883,9 +869,10 @@ export function optimizeHeatingPlan({
    * today's REMAINING hours + tomorrow's). Callers should build this with
    * getDailyMinimumPrices (heatingPlanOrchestration.ts), which only
    * includes a dateKey once that day's price coverage is complete. A
-   * missing dateKey (no map at all, or that day judged incomplete) falls
-   * back to the previous "cheapest hour anywhere in the candidate window"
-   * behaviour for that day's hours - see getMinimumPrice.
+   * missing dateKey (no map at all, or that day judged incomplete) means
+   * tolerance is NOT applied to that day's hours at all - see
+   * getReferencePriceForHour below. This deliberately never derives a
+   * reference price from the (possibly partial) candidate window itself.
    */
   dailyMinimumPrices?: Record<string, number>;
   heatingGainPerHour?: number;
@@ -968,20 +955,25 @@ export function optimizeHeatingPlan({
   let bestInvalidResult: HeatingSimulationResult | null = null;
   let firstValidSelectionCount: number | null = null;
   const validCombinationCountsBySelectionCount: Record<number, number> = {};
-  // See getEffectivePrice's comment: the fallback reference price for any
-  // hour whose own Helsinki calendar day isn't in dailyMinimumPrices - the
-  // exact pre-existing "tarkasteluikkunan alin hinta" computed once over
-  // the whole candidate window (same hours the optimizer already
-  // considers).
-  const windowMinimumPrice = getMinimumPrice(sortedHours);
   const priceToleranceCents = settings.priceToleranceCents ?? 0;
+  // See getEffectivePrice's comment. When a hour's own Helsinki calendar
+  // day has no COMPLETE minimum in dailyMinimumPrices (no map at all, or
+  // that day judged incomplete - see getDailyMinimumPrices), its own price
+  // is used as its own reference: price <= price + priceToleranceCents is
+  // always true, so getEffectivePrice always returns that hour's own
+  // price unchanged - i.e. tolerance is simply NOT applied to that hour.
+  // Deliberately never falls back to a minimum derived from the candidate
+  // window (today's remaining hours + tomorrow) - that window can be a
+  // partial slice of the day and would silently reintroduce the same kind
+  // of wrong/incomplete reference price this dailyMinimumPrices param
+  // exists to avoid.
   const getReferencePriceForHour = (hour: HeatingOptimizationHour) => {
     const dayMinimum =
       dailyMinimumPrices?.[getHelsinkiDateKeyFromIso(hour.startDate)];
 
     return typeof dayMinimum === "number" && Number.isFinite(dayMinimum)
       ? dayMinimum
-      : windowMinimumPrice;
+      : hour.price;
   };
 
   for (

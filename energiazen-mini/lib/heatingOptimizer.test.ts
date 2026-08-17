@@ -2047,7 +2047,10 @@ export function runHeatingOptimizerUnitTests() {
   // voittaa saman effectiveCostin sisalla. Kolme tuntia (10, 12, 14) tasoittuvat
   // kaikki samaksi effective-hinnaksi (1,0 + 5,0 toleranssi kattaa 2,0 ja 6,0),
   // joten kaikki kolme 2-tunnin yhdistelmaa {10,12}, {10,14}, {12,14} ovat
-  // effectiveCostiltaan tasan - myohaisin pari {12,14} voittaa.
+  // effectiveCostiltaan tasan - myohaisin pari {12,14} voittaa. dailyMinimum-
+  // Prices annetaan eksplisiittisesti (paivan oikea minimi, 1,0, sama kuin
+  // hours-joukon oma minimi) - ilman sita priceToleranceCents > 0 ei enaa
+  // tasoita mitaan taman paivan tunneille (ks. getReferencePriceForHour).
   {
     const hourA = optimizationHour("2026-07-22", 10, 1.0);
     const hourB = optimizationHour("2026-07-22", 12, 2.0);
@@ -2059,6 +2062,7 @@ export function runHeatingOptimizerUnitTests() {
       heatingGainPerHour: 20,
       hourlyDrops: createHourlyDrops(0),
       hours: [hourA, hourB, hourC],
+      dailyMinimumPrices: { "2026-07-22": 1.0 },
       settings: defaultSettings({
         maxHeatingHours: 3,
         priceToleranceCents: 5,
@@ -2086,8 +2090,8 @@ export function runHeatingOptimizerUnitTests() {
 
   // Testi 6: lukittu/kaynnissa oleva nykyinen tunti ei muutu toleranssin
   // takia. lockedHours/lockedHourIds rakennetaan optimizeHeatingPlan:ssa
-  // ehdoitta ennen getMinimumPrice/getSelectedHoursEffectiveCost-laskentaa,
-  // joten toleranssi ei koskaan paase kasiksi lukittuun tuntiin.
+  // ehdoitta ennen getSelectedHoursEffectiveCost-laskentaa, joten toleranssi
+  // ei koskaan paase kasiksi lukittuun tuntiin.
   {
     const currentHour = {
       ...optimizationHour("2026-07-22", 20, 6),
@@ -2294,11 +2298,14 @@ export function runHeatingOptimizerUnitTests() {
         "sisalla saman paivan referenssia vasten - myohaisin (15) voittaa",
     );
 
-    // Testi 6 (osittain, ks. myos heatingPlanOrchestration.test.ts): jos
+    // Testi 6 (ks. myos heatingPlanOrchestration.test.ts): jos
     // dailyMinimumPrices ei sisalla paivan avainta lainkaan (esim. koska
     // kutsuja jatti sen pois vajaan kattavuuden vuoksi), optimizeHeatingPlan
-    // ei keksi minimihintaa - se palaa vanhaan ikkunan-minimi-kaytokseen
-    // taman paivan tunneille, tasan kuin ilman karttaa ollenkaan.
+    // ei keksi minimihintaa MISTAAN lahteesta - se EI tasoita kyseisen
+    // paivan tunteja toleranssilla lainkaan (ei ikkunan-minimi-fallbackia),
+    // vaan todellinen halvin candidate voittaa normaalilla hinnallaan, ihan
+    // kuin priceToleranceCents olisi 0 juuri niille tunneille. Tama on tasan
+    // sama lopputulos silla ilman karttaa jokainen paiva on "puuttuva".
     const missingDayKeyResult = optimizeHeatingPlan({
       ...runArgs,
       hours: [tomorrowEarly, tomorrowLate],
@@ -2323,8 +2330,15 @@ export function runHeatingOptimizerUnitTests() {
 
     assertEqual(
       missingDayKeyResult.selectedHeatingHourIds,
+      [tomorrowEarly.id],
+      "huomisen avain puuttuu dailyMinimumPrices-kartasta (vajaa kattavuus) - toleranssia ei kayteta " +
+        "naihin tunteihin lainkaan, joten todellinen halvin (08, 1,1) voittaa normaalilla hinnallaan, " +
+        "vaikka 2,5 olisi ollut ikkunan-minimin (1,1) + toleranssin (1,5) = 2,6 sisalla",
+    );
+    assertEqual(
+      missingDayKeyResult.selectedHeatingHourIds,
       noMapResult.selectedHeatingHourIds,
-      "huomisen avain puuttuu dailyMinimumPrices-kartasta (vajaa kattavuus) - palaa ikkunan-minimi-kaytokseen, ei keksi minimia vajaasta joukosta",
+      "puuttuva avain kaytettyneen kartan sisalla kayttaytyy tasan kuin karttaa ei olisi ollenkaan",
     );
   }
 }

@@ -1366,15 +1366,15 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     ];
     // The day's real cheapest hour (0.4) is early - Helsinki 03:00, i.e.
     // the first row of dayKey's own UTC block (hour 0). Two more overrides
-    // (1.2 at Helsinki 14:00, 3.1 at Helsinki 16:00 - both still in the
+    // (1.2 at Helsinki 14:00, 2.4 at Helsinki 16:00 - both still in the
     // future relative to `now` below) exist purely to give test 4's
     // wiring check something to distinguish a day-minimum-aware selection
-    // from a window-minimum one; they don't affect tests 1-3, where 0.4
-    // stays the overall day minimum regardless.
+    // from having no per-day reference at all; they don't affect tests
+    // 1-3, where 0.4 stays the overall day minimum regardless.
     const priceOverrides: Record<string, number> = {
       [`${dayKey}T00:00:00.000Z`]: 0.4,
       [`${dayKey}T11:00:00.000Z`]: 1.2,
-      [`${dayKey}T13:00:00.000Z`]: 3.1,
+      [`${dayKey}T13:00:00.000Z`]: 2.4,
     };
     const withCheapEarlyHour = fullDayPrices.map((row) =>
       row.starts_at in priceOverrides
@@ -1470,23 +1470,24 @@ export function runRunHeatingOptimizerLogicUnitTests() {
 
     assert(withMap.result !== null, "a ready run with dailyMinimumPrices must still produce an optimizer result");
     assert(withoutMap.result !== null, "a ready run without dailyMinimumPrices must still produce an optimizer result");
-    // 1.2 (11:00Z) is the only candidate hour within the day's real
-    // minimum (0.4) + tolerance (2) = 2.4, so it wins outright. Without the
-    // map, the fallback window-minimum is 1.2 itself (the cheapest hour
-    // still in nowHours), so its boundary is 1.2 + 2 = 3.2 - wide enough to
-    // wrongly pull 3.1 (13:00Z) into the tie group, where the later-wins
-    // tie-break then picks it over 1.2. Same underlying `hours`/settings/
-    // drop profile in both runs - only dailyMinimumPrices differs - so any
-    // difference here is solely runBackendHeatingOptimization's wiring.
+    // With the map: both 1.2 (11:00Z) and 2.4 (13:00Z) fall within the
+    // day's real minimum (0.4) + tolerance (2) = 2.4 (inclusive boundary),
+    // so they tie at the flattened price - the later-wins tie-break then
+    // hands it to 2.4 (13:00Z). Without the map, this day has no complete
+    // minimum at all, so NO tolerance is applied to it and the actually
+    // cheapest hour (1.2, 11:00Z) wins directly instead. Same underlying
+    // `hours`/settings/drop profile in both runs - only dailyMinimumPrices
+    // differs - so any difference here is solely runBackendHeatingOptimization's
+    // wiring.
     assertEqual(
       withMap.result?.selectedHeatingHourIds,
-      ["2026-08-12T11:00:00.000Z"],
-      "with dailyMinimumPrices: the day's real minimum (0.4) keeps 3.1 out of the tolerance band, so the actually cheapest hour (1.2) wins",
+      ["2026-08-12T13:00:00.000Z"],
+      "with dailyMinimumPrices: 1.2 and 2.4 both tie within the day's real minimum (0.4) + tolerance (2) - the later hour (13:00Z) wins the tie-break",
     );
     assertEqual(
       withoutMap.result?.selectedHeatingHourIds,
-      ["2026-08-12T13:00:00.000Z"],
-      "without dailyMinimumPrices: falls back to the old window-minimum (1.2) behaviour, whose wider boundary (3.2) pulls 3.1 into a tie that the later-wins tie-break then hands to it - proving the map is what fixes this, not some unrelated change",
+      ["2026-08-12T11:00:00.000Z"],
+      "without dailyMinimumPrices: this day has no complete minimum, so tolerance is not applied at all - the actually cheapest hour (1.2, 11:00Z) wins on its own real price, proving the map (not some unrelated change) is what produces the tie above",
     );
   }
 }
