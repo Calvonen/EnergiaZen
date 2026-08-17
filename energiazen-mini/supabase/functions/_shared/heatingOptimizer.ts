@@ -279,18 +279,6 @@ function getQuantile(sortedValues: number[], ratio: number) {
   return sortedValues[index];
 }
 
-function getSelectedHoursCost(
-  hours: HeatingOptimizationHour[],
-  selectedHeatingHourIds: string[],
-) {
-  const selectedIds = new Set(selectedHeatingHourIds);
-
-  return hours.reduce(
-    (sum, hour) => (selectedIds.has(hour.id) ? sum + hour.price : sum),
-    0,
-  );
-}
-
 // price tolerance / hintojen tasoitus: hours priced within `priceToleranceCents`
 // of their day's REFERENCE price (see referencePrice below - a per-Helsinki-
 // calendar-day cheapest 60-min price, not the candidate window's cheapest)
@@ -309,12 +297,10 @@ function getEffectivePrice(
 
 function getSelectedHoursEffectiveCost(
   hours: HeatingOptimizationHour[],
-  selectedHeatingHourIds: string[],
+  selectedIds: Set<string>,
   getReferencePriceForHour: (hour: HeatingOptimizationHour) => number,
   priceToleranceCents: number,
 ) {
-  const selectedIds = new Set(selectedHeatingHourIds);
-
   return hours.reduce(
     (sum, hour) =>
       selectedIds.has(hour.id)
@@ -550,35 +536,142 @@ export function getEffectiveDrop({
   return recoveryDropPerHour;
 }
 
-export function simulateHeatingPlan({
+// Per-hour data that never depends on WHICH hours end up selected for
+// heating - only on the hour itself, hourlyDrops and the consumption-spike
+// list built once from them (see detectConsumptionSpikes). optimizeHeatingPlan's
+// combinatorial search runs the simulation once per CANDIDATE COMBINATION -
+// up to tens of thousands of times for a full today+tomorrow horizon, see
+// this PR's report - and every one of those runs used to redo this same
+// per-hour work from scratch: an Intl.DateTimeFormat format() call for the
+// Helsinki hour number, a fresh spikesByHour Map, the hourlyDrop lookup, the
+// segmentHours clamp. Precomputing it once per simulateHeatingPlan()/
+// optimizeHeatingPlan() call and reusing it across every combination is a
+// pure performance change - every value here is identical to what the
+// per-hour loop computed inline before, just computed once instead of once
+// per combination.
+type PrecomputedHourInfo = {
+  helsinkiHour: number;
+  hour: HeatingOptimizationHour;
+  hourlyDrop: number;
+  segmentHours: number;
+  spike: ConsumptionSpike | null;
+};
+
+// Test-only instrumentation, never read by any production code path: counts
+// how many times a hour's static info above is actually derived from
+// scratch. See heatingOptimizer.test.ts's production-horizon regression
+// test, which uses this counter to prove - without a wall clock - that the
+// optimizer's combinatorial search no longer redoes this per candidate
+// combination.
+let hourInfoComputationCount = 0;
+export function resetHourInfoComputationCounterForTests() {
+  hourInfoComputationCount = 0;
+}
+export function getHourInfoComputationCounterForTests() {
+  return hourInfoComputationCount;
+}
+
+function precomputeHourInfo(
+  hours: HeatingOptimizationHour[],
+  hourlyDrops: HourlyTemperatureDropProfile,
+  spikesByHour: Map<number, ConsumptionSpike>,
+): PrecomputedHourInfo[] {
+  return hours.map((hour) => {
+    hourInfoComputationCount += 1;
+    const helsinkiHour = getHelsinkiHourNumber(hour.date);
+
+    return {
+      helsinkiHour,
+      hour,
+      hourlyDrop: hourlyDrops[helsinkiHour] ?? fallbackHourlyTemperatureDrop,
+      segmentHours: Number.isFinite(hour.segmentHours)
+        ? clamp(hour.segmentHours, 0, 1)
+        : 1,
+      spike: spikesByHour.get(helsinkiHour) ?? null,
+    };
+  });
+}
+
+// Same formula as calculateStratifiedShowersLeft's showersLeft field, minus
+// the other 8 diagnostic fields that field's hot-loop callers below never
+// read - avoids allocating that whole object 3x per hour per simulated
+// combination. calculateStratifiedShowersLeft() itself stays exactly as-is
+// (and exported) for its other callers - the settings UI's estimate
+// breakdown, tests - that DO want the full breakdown.
+function calculateStratifiedShowersLeftValue({
+  bottomTemperature,
+  fullTankAverageTemperature,
+  fullTankShowers,
+  maxTankTemperature,
+  minTankTemperature,
+  topTemperature,
+}: {
+  bottomTemperature: number;
+  fullTankAverageTemperature?: number | null;
+  fullTankShowers: number;
+  maxTankTemperature: number;
+  minTankTemperature: number;
+  topTemperature: number;
+}): number {
+  const weightedTemperature = getWeightedTemperatureFromSensors(
+    topTemperature,
+    bottomTemperature,
+  );
+  const fullTankTemp = fullTankAverageTemperature ?? maxTankTemperature;
+  const energyTemperatureRange = Math.max(fullTankTemp - minTankTemperature, 1);
+  const energyRatio = clamp(
+    (weightedTemperature - minTankTemperature) / energyTemperatureRange,
+    0,
+    1,
+  );
+  const minimumUsableTopTemperature = 42;
+  const topUsabilityTemperatureRange = Math.max(
+    fullTankTemp - minimumUsableTopTemperature,
+    1,
+  );
+  const topUsability = clamp(
+    (topTemperature - minimumUsableTopTemperature) / topUsabilityTemperatureRange,
+    0,
+    1,
+  );
+
+  return energyRatio * topUsability * fullTankShowers;
+}
+
+// Core simulation loop, factored out of simulateHeatingPlan so
+// optimizeHeatingPlan's combinatorial search can call it directly with
+// precomputed per-hour info and an already-built selectedHourIds Set shared
+// across a single combination's cost/effective-cost/simulation work,
+// instead of simulateHeatingPlan rebuilding both from scratch on every one
+// of the (up to tens of thousands of) combinations it evaluates. Same
+// per-hour logic as before, unchanged - see simulateHeatingPlan below for
+// the public entry point that still does its own precompute for standalone
+// callers.
+function runHeatingSimulation({
   currentBottomTemperature,
   currentTopTemperature,
   currentWeightedTemperature,
   heatingGainPerHour,
-  hourlyDrops,
-  hours,
-  isCurrentlyHeating = false,
-  recoveryDropEnabled = false,
+  isCurrentlyHeating,
+  precomputedHours,
+  recoveryDropEnabled,
   recoveryDropPerHour,
   selectedHeatingHourIds,
+  selectedHourIds,
   settings,
-  spikes = detectConsumptionSpikes(hourlyDrops, settings),
 }: {
   currentBottomTemperature: number;
   currentTopTemperature: number;
   currentWeightedTemperature?: number;
   heatingGainPerHour: number;
-  hourlyDrops: HourlyTemperatureDropProfile;
-  hours: HeatingOptimizationHour[];
-  isCurrentlyHeating?: boolean;
-  recoveryDropEnabled?: boolean;
+  isCurrentlyHeating: boolean;
+  precomputedHours: PrecomputedHourInfo[];
+  recoveryDropEnabled: boolean;
   recoveryDropPerHour?: number;
   selectedHeatingHourIds: string[];
+  selectedHourIds: Set<string>;
   settings: HeatingOptimizationSettings;
-  spikes?: ConsumptionSpike[];
 }): HeatingSimulationResult {
-  const selectedHourIds = new Set(selectedHeatingHourIds);
-  const spikesByHour = new Map(spikes.map((spike) => [spike.hour, spike]));
   const forecast: HourlyHeatingForecast[] = [];
   const heatingStartFillRatioDiagnostics: HeatingStartFillRatioDiagnostic[] = [];
   const violations = new Set<string>();
@@ -587,14 +680,14 @@ export function simulateHeatingPlan({
     currentWeightedTemperature ??
     getWeightedTemperatureFromSensors(currentTopTemperature, currentBottomTemperature);
   let minimumPredictedTemperature = temperature;
-  const currentShowers = calculateStratifiedShowersLeft({
+  const currentShowers = calculateStratifiedShowersLeftValue({
     bottomTemperature: currentBottomTemperature,
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
     fullTankShowers: settings.fullTankShowers,
     maxTankTemperature: settings.maxTankTemperature,
     minTankTemperature: settings.absoluteMinimumTemperature,
     topTemperature: currentTopTemperature,
-  }).showersLeft;
+  });
   let minimumPredictedShowersLeft = currentShowers;
   let largestSpike: HeatingSimulationResult["largestSpike"] = null;
   let totalCost = 0;
@@ -603,13 +696,7 @@ export function simulateHeatingPlan({
   let lastSelectedShowersLeftAfter: number | null = null;
   let lastSelectedHourEndTime: string | null = null;
 
-  for (const hour of hours) {
-    const helsinkiHour = getHelsinkiHourNumber(hour.date);
-    const hourlyDrop =
-      hourlyDrops[helsinkiHour] ?? fallbackHourlyTemperatureDrop;
-    const segmentHours = Number.isFinite(hour.segmentHours)
-      ? clamp(hour.segmentHours, 0, 1)
-      : 1;
+  for (const { helsinkiHour, hour, hourlyDrop, segmentHours, spike } of precomputedHours) {
     const isHeatingSelected = selectedHourIds.has(hour.id);
     const temperatureBefore = temperature;
     const {
@@ -619,14 +706,14 @@ export function simulateHeatingPlan({
       temperatureDifference,
       weightedTemperature: temperatureBefore,
     });
-    const projectedShowersBeforeHeating = calculateStratifiedShowersLeft({
+    const projectedShowersBeforeHeating = calculateStratifiedShowersLeftValue({
       bottomTemperature: bottomTemperatureAtSegmentStart,
       fullTankAverageTemperature: settings.fullTankAverageTemperature,
       fullTankShowers: settings.fullTankShowers,
       maxTankTemperature: settings.maxTankTemperature,
       minTankTemperature: settings.absoluteMinimumTemperature,
       topTemperature: topTemperatureAtSegmentStart,
-    }).showersLeft;
+    });
     const projectedFillRatioBeforeHeating =
       settings.fullTankShowers > 0
         ? projectedShowersBeforeHeating / settings.fullTankShowers
@@ -679,15 +766,14 @@ export function simulateHeatingPlan({
       temperatureDifference,
       weightedTemperature: temperatureBeforeHeating,
     });
-    const showersLeftBefore = calculateStratifiedShowersLeft({
+    const showersLeftBefore = calculateStratifiedShowersLeftValue({
       bottomTemperature: bottomTemperatureBeforeHeating,
       fullTankAverageTemperature: settings.fullTankAverageTemperature,
       fullTankShowers: settings.fullTankShowers,
       maxTankTemperature: settings.maxTankTemperature,
       minTankTemperature: settings.absoluteMinimumTemperature,
       topTemperature: topTemperatureBeforeHeating,
-    }).showersLeft;
-    const spike = spikesByHour.get(helsinkiHour) ?? null;
+    });
     const violatedSpikeReserve = false;
 
     // Clamp a HEATED hour's result to the same "full tank" reference
@@ -728,14 +814,14 @@ export function simulateHeatingPlan({
       totalCost += hour.price;
     }
 
-    const showersLeftAfter = calculateStratifiedShowersLeft({
+    const showersLeftAfter = calculateStratifiedShowersLeftValue({
       bottomTemperature: bottomTemperatureAfter,
       fullTankAverageTemperature: settings.fullTankAverageTemperature,
       fullTankShowers: settings.fullTankShowers,
       maxTankTemperature: settings.maxTankTemperature,
       minTankTemperature: settings.absoluteMinimumTemperature,
       topTemperature: topTemperatureAfter,
-    }).showersLeft;
+    });
     if (isHeatingSelected) {
       lastSelectedShowersLeftAfter = showersLeftAfter;
       lastSelectedHourEndTime = hour.endDate.toISOString();
@@ -844,6 +930,51 @@ export function simulateHeatingPlan({
   };
 }
 
+export function simulateHeatingPlan({
+  currentBottomTemperature,
+  currentTopTemperature,
+  currentWeightedTemperature,
+  heatingGainPerHour,
+  hourlyDrops,
+  hours,
+  isCurrentlyHeating = false,
+  recoveryDropEnabled = false,
+  recoveryDropPerHour,
+  selectedHeatingHourIds,
+  settings,
+  spikes = detectConsumptionSpikes(hourlyDrops, settings),
+}: {
+  currentBottomTemperature: number;
+  currentTopTemperature: number;
+  currentWeightedTemperature?: number;
+  heatingGainPerHour: number;
+  hourlyDrops: HourlyTemperatureDropProfile;
+  hours: HeatingOptimizationHour[];
+  isCurrentlyHeating?: boolean;
+  recoveryDropEnabled?: boolean;
+  recoveryDropPerHour?: number;
+  selectedHeatingHourIds: string[];
+  settings: HeatingOptimizationSettings;
+  spikes?: ConsumptionSpike[];
+}): HeatingSimulationResult {
+  const spikesByHour = new Map(spikes.map((spike) => [spike.hour, spike]));
+  const precomputedHours = precomputeHourInfo(hours, hourlyDrops, spikesByHour);
+
+  return runHeatingSimulation({
+    currentBottomTemperature,
+    currentTopTemperature,
+    currentWeightedTemperature,
+    heatingGainPerHour,
+    isCurrentlyHeating,
+    precomputedHours,
+    recoveryDropEnabled,
+    recoveryDropPerHour,
+    selectedHeatingHourIds,
+    selectedHourIds: new Set(selectedHeatingHourIds),
+    settings,
+  });
+}
+
 export function optimizeHeatingPlan({
   currentBottomTemperature,
   currentTopTemperature,
@@ -915,6 +1046,13 @@ export function optimizeHeatingPlan({
           settings.fallbackHeatingGainPerHour,
         );
   const spikes = detectConsumptionSpikes(hourlyDrops, settings);
+  // Computed once for the whole combinatorial search below, instead of once
+  // per simulated combination - see precomputeHourInfo's comment. sortedHours,
+  // hourlyDrops and spikes are all fixed for the duration of this
+  // optimizeHeatingPlan() call, so every combination can safely share the
+  // same precomputed per-hour info.
+  const spikesByHour = new Map(spikes.map((spike) => [spike.hour, spike]));
+  const precomputedHours = precomputeHourInfo(sortedHours, hourlyDrops, spikesByHour);
   const currentShowers = calculateStratifiedShowersLeft({
     bottomTemperature: currentBottomTemperature,
     fullTankAverageTemperature: settings.fullTankAverageTemperature,
@@ -990,19 +1128,23 @@ export function optimizeHeatingPlan({
         ...lockedHourIds,
         ...selectedIndexes.map((index) => optionalHours[index].id),
       ];
-      const result = simulateHeatingPlan({
+      // Built once per combination and reused for both the simulation and
+      // (when valid) the effective-cost ranking below, instead of each of
+      // those two rebuilding its own Set from the same id array - see
+      // runHeatingSimulation/getSelectedHoursEffectiveCost's comments.
+      const selectedHourIds = new Set(selectedHeatingHourIds);
+      const result = runHeatingSimulation({
         currentBottomTemperature,
         currentTopTemperature,
         currentWeightedTemperature,
         heatingGainPerHour: heatingGainEstimate.gainPerHour,
-        hourlyDrops,
-        hours: sortedHours,
         isCurrentlyHeating,
+        precomputedHours,
         recoveryDropEnabled,
         recoveryDropPerHour,
         selectedHeatingHourIds,
+        selectedHourIds,
         settings,
-        spikes,
       });
 
       if (!result.valid) {
@@ -1033,13 +1175,22 @@ export function optimizeHeatingPlan({
         return;
       }
 
-      const resultCost = getSelectedHoursCost(sortedHours, selectedHeatingHourIds);
-      // Ranking only - never replaces resultCost (the real price, kept in
-      // totalCost below for diagnostics/UI/publication) or hour.price
+      // result.totalCost already equals the sum of hour.price over
+      // selectedHeatingHourIds: a VALID result (checked above) never has a
+      // selected hour blocked by the start fill ratio (that's itself a
+      // violation - see "heating start fill ratio would be exceeded"
+      // above), so heatingApplied === isHeatingSelected for every selected
+      // hour and runHeatingSimulation's totalCost accumulation already sums
+      // exactly the selected hours' real prices. Recomputing that same sum
+      // via a second pass over sortedHours here would be redundant work
+      // with an identical result, not a different (still-correct) value.
+      //
+      // Ranking only - effectiveCost never replaces result.totalCost (the
+      // real price, kept for diagnostics/UI/publication) or hour.price
       // anywhere else.
       const effectiveCost = getSelectedHoursEffectiveCost(
         sortedHours,
-        selectedHeatingHourIds,
+        selectedHourIds,
         getReferencePriceForHour,
         priceToleranceCents,
       );
@@ -1056,10 +1207,7 @@ export function optimizeHeatingPlan({
             bestResultForSelectionCount.selectedHeatingHourIds,
           ))
       ) {
-        bestResultForSelectionCount = {
-          ...result,
-          totalCost: resultCost,
-        };
+        bestResultForSelectionCount = result;
         bestEffectiveCostForSelectionCount = effectiveCost;
       }
     });

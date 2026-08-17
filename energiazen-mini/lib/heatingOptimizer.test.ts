@@ -4,10 +4,12 @@ import {
   estimateHeatingGainPerHour,
   getEffectiveDrop,
   getHeatingOptimizationSegmentHours,
+  getHourInfoComputationCounterForTests,
   getStratifiedShowerLimitingFactor,
   HeatingOptimizationHour,
   HeatingOptimizationSettings,
   optimizeHeatingPlan,
+  resetHourInfoComputationCounterForTests,
   simulateHeatingPlan,
 } from "./heatingOptimizer";
 import { HourlyTemperatureDropProfile, TankTemperatureReading } from "./tankTemperatureForecast";
@@ -2339,6 +2341,181 @@ export function runHeatingOptimizerUnitTests() {
       missingDayKeyResult.selectedHeatingHourIds,
       noMapResult.selectedHeatingHourIds,
       "puuttuva avain kaytettyneen kartan sisalla kayttaytyy tasan kuin karttaa ei olisi ollenkaan",
+    );
+  }
+
+  // Regressiotesti run-heating-optimizer-Edge-Functionin resurssirajan
+  // ylitykselle (HTTP 546), joka alkoi tuotannossa heti kun huomisen taydet
+  // hinnat tulivat mukaan candidate-ikkunaan (ks. PR:n raportti). Rakentaa
+  // tuotannon kaltaisen taman paivan jaljella olevat tunnit + koko huomisen
+  // horisontin (34 tuntia) ja tarkistaa, etta optimizeHeatingPlan() antaa
+  // TASAN saman lopputuloksen kuin alkuperainen (ei-optimoitu) toteutus
+  // antoi - odotusarvot alla on talletettu suoraan alkuperaisen
+  // toteutuksen ajosta ennen suorituskykykorjausta, ei johdettu uudesta
+  // koodista. maxHeatingHours=4 ja hourlyDrops on viritetty niin, etta 0-3
+  // valittua tuntia EIVAT riita (kaikki C(34,0..3) = 6580 yhdistelmaa ovat
+  // invalideja) mutta jokin 4 tunnin yhdistelma riittaa - tama pakottaa
+  // haun kayttamaan koko pahimman tapauksen kombinaatiomaaran
+  // (yhteensa C(34,0)+...+C(34,4) = 52956 simuloitua yhdistelmaa,
+  // validCombinationCountsBySelectionCount[4] = 1438 niista valideja).
+  {
+    function binomialCoefficient(n: number, k: number): number {
+      if (k < 0 || k > n) return 0;
+      let result = 1;
+      for (let index = 0; index < k; index += 1) {
+        result = (result * (n - index)) / (index + 1);
+      }
+      return Math.round(result);
+    }
+
+    function productionHourlyDrops(defaultDrop: number): HourlyTemperatureDropProfile {
+      return Object.fromEntries(
+        Array.from({ length: 24 }, (_, hour) => [hour, defaultDrop]),
+      ) as HourlyTemperatureDropProfile;
+    }
+
+    // 2026-08-17 14:00 Helsinki "nyt" -> taman paivan jaljella olevat 10
+    // tuntia (14..23) + koko huomisen (2026-08-18) 24 tuntia = 34 tuntia,
+    // samaa muotoa kuin tuotannon buildOptimizerHours tuottaa heti kun
+    // molempien paivien hinnat ovat saatavilla.
+    const productionHours: HeatingOptimizationHour[] = [];
+    for (let helsinkiHour = 14; helsinkiHour <= 23; helsinkiHour += 1) {
+      productionHours.push(
+        optimizationHour("2026-08-17", helsinkiHour, 8 + (helsinkiHour % 3)),
+      );
+    }
+    for (let helsinkiHour = 0; helsinkiHour <= 23; helsinkiHour += 1) {
+      const price =
+        helsinkiHour === 20
+          ? 0.1
+          : helsinkiHour === 21
+            ? 0.11
+            : helsinkiHour === 22
+              ? 0.12
+              : helsinkiHour === 23
+                ? 0.13
+                : 6 + (helsinkiHour % 5);
+      productionHours.push(optimizationHour("2026-08-18", helsinkiHour, price));
+    }
+    productionHours[0] = { ...productionHours[0], isCurrentHour: true };
+
+    assertEqual(
+      productionHours.length,
+      34,
+      "tuotannon tyyppinen today+tomorrow-horisontti kattaa 34 tuntia (10 jaljella + 24 huomenna)",
+    );
+
+    const productionSettings: HeatingOptimizationSettings = {
+      absoluteMinimumTemperature: 10,
+      fallbackHeatingGainPerHour: 12,
+      fullTankAverageTemperature: 70,
+      fullTankShowers: 6,
+      maxHeatingHours: 4,
+      maxTankTemperature: 80,
+      safetyShowerReserve: 2,
+      targetShowerReserve: 4,
+    };
+
+    resetHourInfoComputationCounterForTests();
+    const result = optimizeHeatingPlan({
+      currentBottomTemperature: 60,
+      currentTopTemperature: 60,
+      currentWeightedTemperature: 60,
+      heatingGainPerHour: 12,
+      hourlyDrops: productionHourlyDrops(1.3),
+      hours: productionHours,
+      isCurrentlyHeating: false,
+      settings: productionSettings,
+    });
+    const hourInfoComputationsForOneRun = getHourInfoComputationCounterForTests();
+
+    assertEqual(
+      result.selectedHeatingHourIds,
+      [
+        "2026-08-17:15",
+        "2026-08-18:00",
+        "2026-08-18:10",
+        "2026-08-18:20",
+      ],
+      "tuotanto-horisontin valittu suunnitelma sailyy tasan samana",
+    );
+    assertEqual(result.valid, true, "tuotanto-horisontin suunnitelma on edelleen valid");
+    assertEqual(result.violations, [], "tuotanto-horisontilla ei ole violationeja");
+    assertClose(result.totalCost, 20.1, "totalCost sailyy tasan samana");
+    assertClose(
+      result.targetCheckShowersLeft,
+      5.296035714285741,
+      "targetCheckShowersLeft sailyy tasan samana",
+    );
+    assertEqual(
+      result.targetCheckTime,
+      "2026-08-18T18:00:00.000Z",
+      "targetCheckTime sailyy tasan samana",
+    );
+    assertClose(result.finalShowersLeft, 4.188714285714312, "finalShowersLeft sailyy tasan samana");
+    assertClose(
+      result.minimumPredictedShowersLeft,
+      2.236035714285733,
+      "minimumPredictedShowersLeft sailyy tasan samana",
+    );
+    assertClose(
+      result.minimumPredictedTemperature,
+      55.70000000000009,
+      "minimumPredictedTemperature sailyy tasan samana",
+    );
+    assertEqual(
+      result.diagnostics.firstValidSelectionCount,
+      4,
+      "ensimmainen validi tuntimaara on edelleen 4 - pahin tapaus, koko C(34,0..4) tutkittu",
+    );
+    assertClose(
+      result.diagnostics.currentFillRatio,
+      0.5357142857142858,
+      "diagnostics.currentFillRatio sailyy tasan samana",
+    );
+    assertClose(
+      result.diagnostics.currentShowers,
+      3.214285714285715,
+      "diagnostics.currentShowers sailyy tasan samana",
+    );
+    assertEqual(
+      result.diagnostics.currentHourStartBlockedByFillRatio,
+      false,
+      "diagnostics.currentHourStartBlockedByFillRatio sailyy tasan samana",
+    );
+    assertEqual(
+      result.diagnostics.validCombinationCountsBySelectionCount,
+      { 0: 0, 1: 0, 2: 0, 3: 0, 4: 1438 },
+      "validCombinationCountsBySelectionCount sailyy tasan samana selectionCount-tasoittain",
+    );
+    assertClose(
+      result.diagnostics.selectedPlanCost,
+      20.1,
+      "diagnostics.selectedPlanCost sailyy tasan samana",
+    );
+
+    // Todistaa tyomaaran vahenemisen ilman seinakelloa: haku kaviikin
+    // TASAN yhta monta yhdistelmaa lapi kuin ennen optimointia (taydellisyys
+    // sailyy - mitaan validia yhdistelmaa ei karsittu), mutta tunnin
+    // staattinen tieto (Helsinki-tunti, hourlyDrop, segmentHours, spike)
+    // laskettiin vain kerran per tunti koko haun ajalta, ei enaa kerran per
+    // simuloitu yhdistelma.
+    const totalCombinationsEvaluated =
+      binomialCoefficient(34, 0) +
+      binomialCoefficient(34, 1) +
+      binomialCoefficient(34, 2) +
+      binomialCoefficient(34, 3) +
+      binomialCoefficient(34, 4);
+    assertEqual(
+      totalCombinationsEvaluated,
+      52956,
+      "pahimman tapauksen kombinaatiomaara C(34,0)+...+C(34,4) tuotanto-horisontille",
+    );
+    assertEqual(
+      hourInfoComputationsForOneRun,
+      34,
+      "tunnin staattinen tieto lasketaan enaa kerran per tunti (34) koko optimizeHeatingPlan-kutsun " +
+        "ajalta - ei kerran per simuloitu yhdistelma (52956), kuten ennen suorituskykykorjausta",
     );
   }
 }
