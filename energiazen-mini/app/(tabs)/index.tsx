@@ -1901,7 +1901,7 @@ export default function HomeScreen() {
       const { data: backendStateData, error: backendStateError } = await supabase
         .from("backend_heating_optimizer_state")
         .select(
-          "health_status,last_validated_plan_at,validated_plan_date,validated_planned_hours,validated_plan_fingerprint,validated_tank_reading_at",
+          "health_status,last_validated_plan_at,validated_plan_date,validated_planned_hours,validated_plan_fingerprint,validated_tank_reading_at,validated_price_snapshot",
         )
         .eq("id", 1)
         .maybeSingle();
