@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 
-import { getCooldownBlockedHeatingHourId } from "./heatingCooldownMarker";
+import {
+  buildCooldownPriceSnapshot,
+  getCooldownBlockedHeatingHourId,
+} from "./heatingCooldownMarker";
 import type { HeatingOptimizationHour } from "./heatingOptimizer";
 
-function createHour(id: string, start: string): HeatingOptimizationHour {
+function createHour(
+  id: string,
+  start: string,
+  price = 1,
+): HeatingOptimizationHour {
   const date = new Date(start);
 
   return {
@@ -11,7 +18,7 @@ function createHour(id: string, start: string): HeatingOptimizationHour {
     endDate: new Date(date.getTime() + 60 * 60 * 1000),
     id,
     isCurrentHour: id === "current" || id === "first-03",
-    price: 1,
+    price,
     segmentHours: 1,
     startDate: start,
   };
@@ -20,11 +27,13 @@ function createHour(id: string, start: string): HeatingOptimizationHour {
 export function runHeatingCooldownMarkerUnitTests() {
   const currentHour = createHour("current", "2025-01-15T10:00:00+02:00");
   const nextHour = createHour("next", "2025-01-15T11:00:00+02:00");
+  const baseOptimizerHours = [currentHour, nextHour];
   const baseBackendValidation = {
     health_status: "healthy",
     last_validated_plan_at: "2025-01-15T08:29:30.000Z",
     validated_plan_date: "2025-01-15",
     validated_tank_reading_at: "2025-01-15T08:29:00.000Z",
+    validated_price_snapshot: buildCooldownPriceSnapshot(baseOptimizerHours),
     validated_plan_fingerprint: "2025-01-15|10",
     validated_planned_hours: [10],
   };
@@ -32,7 +41,7 @@ export function runHeatingCooldownMarkerUnitTests() {
     backendValidation: baseBackendValidation,
     isCurrentlyHeating: true,
     now: new Date("2025-01-15T10:30:00+02:00"),
-    optimizerHours: [currentHour, nextHour],
+    optimizerHours: baseOptimizerHours,
     optimizerReadingCreatedAt: "2025-01-15T08:29:00.000Z",
     optimizerSelectedHourIds: [currentHour.id, nextHour.id],
     storedTodayHours: [10],
@@ -90,6 +99,29 @@ export function runHeatingCooldownMarkerUnitTests() {
     null,
     "a newer backend tank snapshot than the app optimizer input must suppress the marker",
   );
+  const appPriceChangedHours = [
+    currentHour,
+    createHour("next", "2025-01-15T11:00:00+02:00", 2),
+  ];
+  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      optimizerHours: appPriceChangedHours,
+    }),
+    null,
+    "a price snapshot different from the backend validated optimizer input must suppress the marker",
+  );
+  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      backendValidation: {
+        ...baseBackendValidation,
+        validated_price_snapshot: null,
+      },
+    }),
+    null,
+    "missing backend price identity must fail closed",
+  );
 
   const firstRepeatedHour = createHour(
     "first-03",
@@ -99,6 +131,7 @@ export function runHeatingCooldownMarkerUnitTests() {
     "second-03",
     "2025-10-26T03:00:00+02:00",
   );
+  const repeatedHours = [firstRepeatedHour, secondRepeatedHour];
   assert.equal(
     getCooldownBlockedHeatingHourId({
       ...baseInput,
@@ -107,11 +140,12 @@ export function runHeatingCooldownMarkerUnitTests() {
         last_validated_plan_at: "2025-10-26T00:29:30.000Z",
         validated_plan_date: "2025-10-26",
         validated_tank_reading_at: "2025-10-26T00:29:00.000Z",
+        validated_price_snapshot: buildCooldownPriceSnapshot(repeatedHours),
         validated_plan_fingerprint: "2025-10-26|3",
         validated_planned_hours: [3],
       },
       now: new Date("2025-10-26T03:30:00+03:00"),
-      optimizerHours: [firstRepeatedHour, secondRepeatedHour],
+      optimizerHours: repeatedHours,
       optimizerReadingCreatedAt: "2025-10-26T00:29:00.000Z",
       optimizerSelectedHourIds: [firstRepeatedHour.id, secondRepeatedHour.id],
       storedTodayHours: [3],
