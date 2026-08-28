@@ -59,6 +59,7 @@ import {
   heatingMarkers,
   normalizeStoredHeatingPlanHours,
 } from "@/lib/heatingPlanMarkers";
+import { getCooldownBlockedHeatingHourId } from "@/lib/heatingCooldownMarker";
 import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
@@ -258,6 +259,10 @@ function getStratifiedWarmWaterEstimate(
 }
 
 function getHeatingMarkerLabel(marker: string | null) {
+  if (marker === "!") {
+    return "Optimointi olisi valinnut tunnin, mutta lämmityksen jälkeinen jatkoesto esti sen";
+  }
+
   if (marker === heatingMarkers.planned) {
     return "Valittu lämmitykseen";
   }
@@ -2399,6 +2404,34 @@ export default function HomeScreen() {
       plannedHours.map((hour) => getDateHourKey(chartDayKey, hour)),
     );
   }, [chartDayKey, currentSavedPlan?.planned_hours]);
+  const cooldownBlockedHeatingHourId = useMemo(() => {
+    if (!storedHeatingPlanIsAuthoritative || !isTankReadingFresh) {
+      return null;
+    }
+
+    return getCooldownBlockedHeatingHourId({
+      isCurrentlyHeating: isCurrentlyHeatingConfirmed,
+      now: currentTime,
+      optimizerHours: publishedOptimizerHours,
+      optimizerSelectedHourIds:
+        heatingOptimization?.selectedHeatingHourIds ?? [],
+      storedTodayHours: normalizeStoredHeatingPlanHours(
+        storedHeatingPlans[publishedTodayPlanDate]?.planned_hours,
+      ),
+      todayPlanDate: publishedTodayPlanDate,
+      topTemperature: topTemp,
+    });
+  }, [
+    currentTime,
+    heatingOptimization?.selectedHeatingHourIds,
+    isCurrentlyHeatingConfirmed,
+    isTankReadingFresh,
+    publishedOptimizerHours,
+    publishedTodayPlanDate,
+    storedHeatingPlanIsAuthoritative,
+    storedHeatingPlans,
+    topTemp,
+  ]);
   const heatedHourIds = useMemo(
     () =>
       new Set(
@@ -3145,12 +3178,15 @@ export default function HomeScreen() {
         const isSelected = selectedHourlyPrice?.id === item.id;
         const dateHourKey = getHourlyPriceDateHourKey(item);
         const isHeatedHour = heatedHourIds.has(dateHourKey);
-        const heatingMarker = getHeatingHourMarker({
+        const normalHeatingMarker = getHeatingHourMarker({
           endsAt: item.endDate,
           isActual: isHeatedHour,
           isPlanned: plannedHeatingHourIds.has(dateHourKey),
           now: currentHourStart,
         });
+        const heatingMarker =
+          normalHeatingMarker ??
+          (item.id === cooldownBlockedHeatingHourId ? "!" : null);
         const heatingMarkerLabel = getHeatingMarkerLabel(heatingMarker);
         const zeroBottom =
           ((0 - chartScale.min) / chartScale.range) * chartPlotHeight;
@@ -3204,6 +3240,7 @@ export default function HomeScreen() {
       selectedHourlyPrice,
       heatedHourIds,
       plannedHeatingHourIds,
+      cooldownBlockedHeatingHourId,
       chartScale.min,
       chartScale.range,
     ],
