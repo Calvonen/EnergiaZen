@@ -1,0 +1,65 @@
+name: Apply cooldown marker wiring
+
+on:
+  push:
+    branches:
+      - feature/heating-cooldown-blocked-marker
+    paths:
+      - .github/workflows/apply-cooldown-marker.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/heating-cooldown-blocked-marker
+          fetch-depth: 0
+      - name: Wire cooldown marker into Home chart
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("energiazen-mini/app/(tabs)/index.tsx")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''import {\n  getHeatingHourMarker,\n  heatingMarkers,\n  normalizeStoredHeatingPlanHours,\n} from "@/lib/heatingPlanMarkers";''',
+                  '''import {\n  getHeatingHourMarker,\n  heatingMarkers,\n  normalizeStoredHeatingPlanHours,\n} from "@/lib/heatingPlanMarkers";\nimport { getCooldownBlockedHeatingHourId } from "@/lib/heatingCooldownMarker";''',
+              ),
+              (
+                  '''function getHeatingMarkerLabel(marker: string | null) {\n  if (marker === heatingMarkers.planned) {''',
+                  '''function getHeatingMarkerLabel(marker: string | null) {\n  if (marker === "!") {\n    return "Optimointi olisi valinnut tunnin, mutta lämmityksen jälkeinen jatkoesto esti sen";\n  }\n\n  if (marker === heatingMarkers.planned) {''',
+              ),
+              (
+                  '''  const heatedHourIds = useMemo(\n    () =>''',
+                  '''  const cooldownBlockedHeatingHourId = useMemo(() => {\n    if (!storedHeatingPlanIsAuthoritative || !isTankReadingFresh) {\n      return null;\n    }\n\n    return getCooldownBlockedHeatingHourId({\n      isCurrentlyHeating: isCurrentlyHeatingConfirmed,\n      now: currentTime,\n      optimizerHours: publishedOptimizerHours,\n      optimizerSelectedHourIds:\n        heatingOptimization?.selectedHeatingHourIds ?? [],\n      storedTodayHours: normalizeStoredHeatingPlanHours(\n        storedHeatingPlans[publishedTodayPlanDate]?.planned_hours,\n      ),\n      todayPlanDate: publishedTodayPlanDate,\n      topTemperature: topTemp,\n    });\n  }, [\n    currentTime,\n    heatingOptimization?.selectedHeatingHourIds,\n    isCurrentlyHeatingConfirmed,\n    isTankReadingFresh,\n    publishedOptimizerHours,\n    publishedTodayPlanDate,\n    storedHeatingPlanIsAuthoritative,\n    storedHeatingPlans,\n    topTemp,\n  ]);\n  const heatedHourIds = useMemo(\n    () =>''',
+              ),
+              (
+                  '''        const heatingMarker = getHeatingHourMarker({\n          endsAt: item.endDate,\n          isActual: isHeatedHour,\n          isPlanned: plannedHeatingHourIds.has(dateHourKey),\n          now: currentHourStart,\n        });\n        const heatingMarkerLabel = getHeatingMarkerLabel(heatingMarker);''',
+                  '''        const normalHeatingMarker = getHeatingHourMarker({\n          endsAt: item.endDate,\n          isActual: isHeatedHour,\n          isPlanned: plannedHeatingHourIds.has(dateHourKey),\n          now: currentHourStart,\n        });\n        const heatingMarker =\n          normalHeatingMarker ??\n          (item.id === cooldownBlockedHeatingHourId ? "!" : null);\n        const heatingMarkerLabel = getHeatingMarkerLabel(heatingMarker);''',
+              ),
+              (
+                  '''      heatedHourIds,\n      plannedHeatingHourIds,\n      chartScale.min,''',
+                  '''      heatedHourIds,\n      plannedHeatingHourIds,\n      cooldownBlockedHeatingHourId,\n      chartScale.min,''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match, found {count}: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+      - name: Commit wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'energiazen-mini/app/(tabs)/index.tsx'
+          git commit -m 'feat(heating): wire cooldown blocked chart marker'
+          git push origin HEAD:feature/heating-cooldown-blocked-marker
