@@ -2,19 +2,101 @@ import type { HeatingOptimizationHour } from "./heatingOptimizer";
 import { getFinnishDateKey, getHelsinkiHourNumber } from "./heatingLogic";
 
 export const postHeatingCooldownSafetyTopTemperature = 50;
+export const backendOptimizerValidationMaxAgeMs = 90 * 60 * 1000;
+
+export type BackendHeatingOptimizerValidation = {
+  health_status: string | null;
+  last_validated_plan_at: string | null;
+  validated_plan_date: string | null;
+  validated_plan_fingerprint: string | null;
+  validated_planned_hours: unknown;
+};
+
+function normalizePlanHours(value: unknown): number[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return [...new Set(value.filter((hour) => Number.isInteger(hour)))]
+    .map(Number)
+    .sort((first, second) => first - second);
+}
+
+function buildPlanFingerprint(planDate: string, plannedHours: unknown) {
+  const hours = normalizePlanHours(plannedHours);
+  return /^\d{4}-\d{2}-\d{2}$/.test(planDate) && hours
+    ? `${planDate}|${hours.join(",")}`
+    : null;
+}
+
+export function isBackendValidationCurrentForCooldown({
+  backendValidation,
+  now,
+  optimizerReadingCreatedAt,
+  storedTodayHours,
+  todayPlanDate,
+}: {
+  backendValidation: BackendHeatingOptimizerValidation | null;
+  now: Date;
+  optimizerReadingCreatedAt: string | null;
+  storedTodayHours: number[];
+  todayPlanDate: string;
+}): boolean {
+  if (!backendValidation || backendValidation.health_status !== "healthy") {
+    return false;
+  }
+
+  const validationAt = Date.parse(
+    backendValidation.last_validated_plan_at ?? "",
+  );
+  const readingAt = Date.parse(optimizerReadingCreatedAt ?? "");
+  const nowMs = now.getTime();
+  if (
+    !Number.isFinite(validationAt) ||
+    !Number.isFinite(readingAt) ||
+    validationAt > nowMs ||
+    nowMs - validationAt > backendOptimizerValidationMaxAgeMs ||
+    validationAt < readingAt ||
+    backendValidation.validated_plan_date !== todayPlanDate
+  ) {
+    return false;
+  }
+
+  const normalizedStoredHours = normalizePlanHours(storedTodayHours);
+  const normalizedValidatedHours = normalizePlanHours(
+    backendValidation.validated_planned_hours,
+  );
+  if (
+    !normalizedStoredHours ||
+    !normalizedValidatedHours ||
+    JSON.stringify(normalizedStoredHours) !==
+      JSON.stringify(normalizedValidatedHours)
+  ) {
+    return false;
+  }
+
+  return (
+    backendValidation.validated_plan_fingerprint ===
+    buildPlanFingerprint(todayPlanDate, normalizedStoredHours)
+  );
+}
 
 export function getCooldownBlockedHeatingHourId({
+  backendValidation,
   isCurrentlyHeating,
   now,
   optimizerHours,
+  optimizerReadingCreatedAt,
   optimizerSelectedHourIds,
   storedTodayHours,
   todayPlanDate,
   topTemperature,
 }: {
+  backendValidation: BackendHeatingOptimizerValidation | null;
   isCurrentlyHeating: boolean;
   now: Date;
   optimizerHours: HeatingOptimizationHour[];
+  optimizerReadingCreatedAt: string | null;
   optimizerSelectedHourIds: string[];
   storedTodayHours: number[];
   todayPlanDate: string;
@@ -23,7 +105,14 @@ export function getCooldownBlockedHeatingHourId({
   if (
     !isCurrentlyHeating ||
     topTemperature === null ||
-    topTemperature < postHeatingCooldownSafetyTopTemperature
+    topTemperature < postHeatingCooldownSafetyTopTemperature ||
+    !isBackendValidationCurrentForCooldown({
+      backendValidation,
+      now,
+      optimizerReadingCreatedAt,
+      storedTodayHours,
+      todayPlanDate,
+    })
   ) {
     return null;
   }
