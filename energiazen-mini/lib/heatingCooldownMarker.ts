@@ -9,8 +9,17 @@ export type BackendHeatingOptimizerValidation = {
   last_validated_plan_at: string | null;
   validated_plan_date: string | null;
   validated_tank_reading_at: string | null;
+  validated_price_snapshot: unknown;
   validated_plan_fingerprint: string | null;
   validated_planned_hours: unknown;
+};
+
+type ComparablePriceSnapshotRow = {
+  ends_at: string;
+  region: string;
+  resolution_minutes: number;
+  spot_price_cents_kwh: number;
+  starts_at: string;
 };
 
 function normalizePlanHours(value: unknown): number[] | null {
@@ -30,15 +39,67 @@ function buildPlanFingerprint(planDate: string, plannedHours: unknown) {
     : null;
 }
 
+function normalizePriceSnapshot(value: unknown): ComparablePriceSnapshotRow[] | null {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+
+  const normalized: ComparablePriceSnapshotRow[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") {
+      return null;
+    }
+    const candidate = row as Record<string, unknown>;
+    if (
+      typeof candidate.ends_at !== "string" ||
+      typeof candidate.region !== "string" ||
+      typeof candidate.resolution_minutes !== "number" ||
+      typeof candidate.spot_price_cents_kwh !== "number" ||
+      typeof candidate.starts_at !== "string" ||
+      !Number.isFinite(candidate.resolution_minutes) ||
+      !Number.isFinite(candidate.spot_price_cents_kwh)
+    ) {
+      return null;
+    }
+    normalized.push({
+      ends_at: candidate.ends_at,
+      region: candidate.region,
+      resolution_minutes: candidate.resolution_minutes,
+      spot_price_cents_kwh: candidate.spot_price_cents_kwh,
+      starts_at: candidate.starts_at,
+    });
+  }
+
+  return normalized.sort((first, second) =>
+    first.starts_at.localeCompare(second.starts_at),
+  );
+}
+
+export function buildCooldownPriceSnapshot(
+  optimizerHours: HeatingOptimizationHour[],
+): ComparablePriceSnapshotRow[] {
+  return optimizerHours
+    .map((hour) => ({
+      ends_at: hour.endDate.toISOString(),
+      region: "FI",
+      resolution_minutes: 60,
+      spot_price_cents_kwh: hour.price,
+      starts_at: hour.startDate,
+    }))
+    .sort((first, second) => first.starts_at.localeCompare(second.starts_at));
+}
+
 export function isBackendValidationCurrentForCooldown({
   backendValidation,
   now,
+  optimizerHours,
   optimizerReadingCreatedAt,
   storedTodayHours,
   todayPlanDate,
 }: {
   backendValidation: BackendHeatingOptimizerValidation | null;
   now: Date;
+  optimizerHours: HeatingOptimizationHour[];
   optimizerReadingCreatedAt: string | null;
   storedTodayHours: number[];
   todayPlanDate: string;
@@ -80,9 +141,20 @@ export function isBackendValidationCurrentForCooldown({
     return false;
   }
 
-  return (
-    backendValidation.validated_plan_fingerprint ===
+  if (
+    backendValidation.validated_plan_fingerprint !==
     buildPlanFingerprint(todayPlanDate, normalizedStoredHours)
+  ) {
+    return false;
+  }
+
+  const validatedPriceSnapshot = normalizePriceSnapshot(
+    backendValidation.validated_price_snapshot,
+  );
+  const appPriceSnapshot = buildCooldownPriceSnapshot(optimizerHours);
+  return (
+    validatedPriceSnapshot !== null &&
+    JSON.stringify(validatedPriceSnapshot) === JSON.stringify(appPriceSnapshot)
   );
 }
 
@@ -114,6 +186,7 @@ export function getCooldownBlockedHeatingHourId({
     !isBackendValidationCurrentForCooldown({
       backendValidation,
       now,
+      optimizerHours,
       optimizerReadingCreatedAt,
       storedTodayHours,
       todayPlanDate,
