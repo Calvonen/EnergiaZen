@@ -59,6 +59,8 @@ const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
 const electricityPriceRegion = "FI";
 const heatingGainHistoryDays = 30;
 const recoveryReadingsWindowDays = 7;
+const postHeatingCooldownSafetyTopTemperature = 50;
+const postHeatingCooldownPenaltyCents = 1_000_000;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { headers: jsonHeaders, status });
@@ -428,12 +430,56 @@ Deno.serve(async (request) => {
       tomorrowPlanDate,
     );
     const heating = latestReading?.heating ?? null;
+    const currentHourNumber = getHelsinkiHourNumber(attemptNow);
+    const storedTodayHours =
+      appTodayPlan?.mode === "automatic" && Array.isArray(appTodayPlan.planned_hours)
+        ? appTodayPlan.planned_hours
+            .filter((hour): hour is number => Number.isInteger(hour))
+            .map(Number)
+        : [];
+    const currentTopTemperature = latestReading?.top_temp;
+    const currentHour = hours.find(
+      (hour) =>
+        getFinnishDateKey(hour.startDate) === todayPlanDate &&
+        hour.date.getTime() <= attemptNow.getTime() &&
+        hour.endDate.getTime() > attemptNow.getTime(),
+    );
+    const nextHour = currentHour
+      ? hours.find((hour) => hour.date.getTime() === currentHour.endDate.getTime())
+      : undefined;
+    const nextHourNumber = nextHour ? getHelsinkiHourNumber(nextHour.date) : null;
+    const shouldApplyPostHeatingCooldown =
+      heating === true &&
+      typeof currentTopTemperature === "number" &&
+      currentTopTemperature >= postHeatingCooldownSafetyTopTemperature &&
+      storedTodayHours.includes(currentHourNumber) &&
+      nextHour !== undefined &&
+      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
+      nextHourNumber !== null &&
+      !storedTodayHours.includes(nextHourNumber);
+    const cooldownHourStart = shouldApplyPostHeatingCooldown
+      ? nextHour!.date.getTime()
+      : null;
+    // Keep normal optimization running, but make the actual chronologically
+    // adjacent price interval after the already-started stored block a
+    // last-resort safety choice instead of letting repeated 5-minute
+    // recalculations extend the active block one hour at a time. Checking
+    // the next interval's Helsinki-local hour rather than currentHour + 1
+    // keeps both occurrences of the repeated DST hour covered by the same
+    // stored planned-hour number. Measured top temperature below 50 C also
+    // disables the cooldown penalty so the existing safety logic can react
+    // immediately.
+    const optimizerHours = hours.map((hour) =>
+      cooldownHourStart !== null && hour.date.getTime() === cooldownHourStart
+        ? { ...hour, price: hour.price + postHeatingCooldownPenaltyCents }
+        : hour,
+    );
     const run = runBackendHeatingOptimization({
       dailyMinimumPrices,
       heatingGainHistory: gainHistory,
       hourlyDrops: dropProfile.hourlyDrops,
       heatingGainSource,
-      hours,
+      hours: optimizerHours,
       isCurrentlyHeating: heating === true,
       latestReading,
       now: attemptNow,
@@ -507,7 +553,6 @@ Deno.serve(async (request) => {
       );
     }
     shadowRunSaved = true;
-
     const isValidReadyDecision = decision.status === "ready" && run.result?.valid === true;
     const todayChanged =
       decision.status === "ready" &&
