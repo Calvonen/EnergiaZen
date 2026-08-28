@@ -79,6 +79,8 @@
     "tests/heatingBackendFailSafeSimulation.test.ts",
     "lib/heatingPlanMarkers.ts",
     "lib/heatingPlanMarkers.test.ts",
+    "lib/heatingCooldownMarker.ts",
+    "lib/heatingCooldownMarker.test.ts",
     "lib/heatingControlSettingsPayload.ts",
     "lib/heatingControlSettingsSupabase.ts",
     "lib/settingsDraft.ts",
