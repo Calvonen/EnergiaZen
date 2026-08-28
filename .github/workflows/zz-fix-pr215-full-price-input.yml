@@ -1,0 +1,358 @@
+name: Apply PR215 full price input fix
+on: push
+permissions:
+  contents: write
+jobs:
+  apply-fix:
+    if: github.ref == 'refs/heads/feature/heating-cooldown-blocked-marker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/heating-cooldown-blocked-marker
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+      - name: Apply full price input correlation fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          logic = Path('energiazen-mini/supabase/functions/run-heating-optimizer/logic.ts')
+          text = logic.read_text()
+          anchor = '''export type ExpectedElectricityPriceSnapshotRow = {
+            ends_at: string;
+            region: string;
+            resolution_minutes: 60;
+            spot_price_cents_kwh: number;
+            starts_at: string;
+          };
+          '''
+          insert = '''export type ExpectedElectricityPriceSnapshotRow = {
+            ends_at: string;
+            region: string;
+            resolution_minutes: 60;
+            spot_price_cents_kwh: number;
+            starts_at: string;
+          };
+
+          // Full price input used by optimizeHeatingPlan, including already-ended
+          // hours from today because dailyMinimumPrices is derived from the whole
+          // Helsinki day. This is intentionally broader than buildOptimizerHours.
+          export function buildExpectedOptimizerPriceInputSnapshot(
+            prices: RawElectricityPriceRow[],
+            todayPlanDate: string,
+            tomorrowPlanDate: string,
+            region = "FI",
+          ): ExpectedElectricityPriceSnapshotRow[] {
+            return prices
+              .filter((price) => {
+                if (price.resolution_minutes !== 60) {
+                  return false;
+                }
+                const dateKey = getFinnishDateKey(price.starts_at);
+                return dateKey === todayPlanDate || dateKey === tomorrowPlanDate;
+              })
+              .map((price) => ({
+                ends_at: new Date(price.ends_at).toISOString(),
+                region,
+                resolution_minutes: 60 as const,
+                spot_price_cents_kwh: price.spot_price_cents_kwh,
+                starts_at: new Date(price.starts_at).toISOString(),
+              }))
+              .sort((first, second) => first.starts_at.localeCompare(second.starts_at));
+          }
+          '''
+          if anchor not in text:
+            raise SystemExit('logic anchor not found')
+          text = text.replace(anchor, insert, 1)
+          logic.write_text(text)
+
+          edge = Path('energiazen-mini/supabase/functions/run-heating-optimizer/index.ts')
+          text = edge.read_text()
+          old_import = '  buildExpectedElectricityPriceSnapshot,\n'
+          new_import = '  buildExpectedElectricityPriceSnapshot,\n  buildExpectedOptimizerPriceInputSnapshot,\n'
+          if old_import not in text:
+            raise SystemExit('edge import anchor not found')
+          text = text.replace(old_import, new_import, 1)
+          old = '''      const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
+                hours,
+                electricityPriceRegion,
+              );
+          '''
+          new = '''      // The optimizer's price input is broader than the candidate-hour window:
+              // dailyMinimumPrices includes already-ended hours from today. Persist and
+              // CAS-check that full input so the app can prove price equivalence before
+              // attributing a missing adjacent hour specifically to cooldown.
+              const expectedPriceSnapshot = buildExpectedOptimizerPriceInputSnapshot(
+                prices,
+                todayPlanDate,
+                tomorrowPlanDate,
+                electricityPriceRegion,
+              );
+          '''
+          if old not in text:
+            raise SystemExit('edge expectedPriceSnapshot anchor not found')
+          text = text.replace(old, new, 1)
+          edge.write_text(text)
+
+          helper = Path('energiazen-mini/lib/heatingCooldownMarker.ts')
+          text = helper.read_text()
+          text = text.replace(
+            'export function buildCooldownPriceSnapshot(\n  optimizerHours: HeatingOptimizationHour[],\n): ComparablePriceSnapshotRow[] {\n  return optimizerHours\n',
+            'export function buildCooldownPriceSnapshot(\n  priceInputHours: Array<Pick<HeatingOptimizationHour, "endDate" | "price" | "startDate">>,\n): ComparablePriceSnapshotRow[] {\n  return priceInputHours\n',
+            1,
+          )
+          text = text.replace(
+            '      ends_at: hour.endDate.toISOString(),\n      region: "FI",\n      resolution_minutes: 60,\n      spot_price_cents_kwh: hour.price,\n      starts_at: hour.startDate,',
+            '      ends_at: hour.endDate.toISOString(),\n      region: "FI",\n      resolution_minutes: 60,\n      spot_price_cents_kwh: hour.price,\n      starts_at: new Date(hour.startDate).toISOString(),',
+            1,
+          )
+          text = text.replace(
+            '  optimizerHours,\n  optimizerReadingCreatedAt,',
+            '  priceInputHours,\n  optimizerReadingCreatedAt,',
+            1,
+          )
+          text = text.replace(
+            '  optimizerHours: HeatingOptimizationHour[];\n  optimizerReadingCreatedAt:',
+            '  priceInputHours: Array<Pick<HeatingOptimizationHour, "endDate" | "price" | "startDate">>;\n  optimizerReadingCreatedAt:',
+            1,
+          )
+          text = text.replace(
+            '  const appPriceSnapshot = buildCooldownPriceSnapshot(optimizerHours);',
+            '  const appPriceSnapshot = buildCooldownPriceSnapshot(priceInputHours);',
+            1,
+          )
+          # getCooldown signature/call keeps optimizerHours for adjacency and adds separate priceInputHours.
+          old_sig = '''  backendValidation,
+  isCurrentlyHeating,
+  now,
+  optimizerHours,
+  optimizerReadingCreatedAt,
+          '''
+          new_sig = '''  backendValidation,
+  isCurrentlyHeating,
+  now,
+  optimizerHours,
+  priceInputHours,
+  optimizerReadingCreatedAt,
+          '''
+          if old_sig not in text:
+            raise SystemExit('helper getCooldown destructure anchor not found')
+          text = text.replace(old_sig, new_sig, 1)
+          old_type = '''  optimizerHours: HeatingOptimizationHour[];
+  optimizerReadingCreatedAt: string | null;
+          '''
+          new_type = '''  optimizerHours: HeatingOptimizationHour[];
+  priceInputHours: Array<Pick<HeatingOptimizationHour, "endDate" | "price" | "startDate">>;
+  optimizerReadingCreatedAt: string | null;
+          '''
+          # replace second occurrence only: first was already changed above
+          idx = text.find(old_type)
+          if idx == -1:
+            raise SystemExit('helper getCooldown type anchor not found')
+          text = text[:idx] + text[idx:].replace(old_type, new_type, 1)
+          old_call = '''      backendValidation,
+      now,
+      optimizerHours,
+      optimizerReadingCreatedAt,
+          '''
+          new_call = '''      backendValidation,
+      now,
+      priceInputHours,
+      optimizerReadingCreatedAt,
+          '''
+          if old_call not in text:
+            raise SystemExit('helper validation call anchor not found')
+          text = text.replace(old_call, new_call, 1)
+          helper.write_text(text)
+
+          tests = Path('energiazen-mini/lib/heatingCooldownMarker.test.ts')
+          text = tests.read_text()
+          old = '''  const currentHour = createHour("current", "2025-01-15T10:00:00+02:00");
+  const nextHour = createHour("next", "2025-01-15T11:00:00+02:00");
+          '''
+          new = '''  const pastHour = createHour("past", "2025-01-15T09:00:00+02:00");
+  const currentHour = createHour("current", "2025-01-15T10:00:00+02:00");
+  const nextHour = createHour("next", "2025-01-15T11:00:00+02:00");
+          '''
+          if old not in text:
+            raise SystemExit('test hour anchor not found')
+          text = text.replace(old, new, 1)
+          old = '''    validated_price_snapshot: [
+      {
+        ends_at: "2025-01-15T09:00:00.000Z",
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: 1,
+        starts_at: "2025-01-15T08:00:00+02:00",
+      },
+      {
+        ends_at: "2025-01-15T10:00:00.000Z",
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: 1,
+        starts_at: "2025-01-15T09:00:00+02:00",
+      },
+    ],
+          '''
+          # The exact current fixture may differ; generate persisted snapshot from known three hours instead.
+          if old in text:
+            replacement = '''    validated_price_snapshot: [pastHour, currentHour, nextHour]
+      .map((hour) => ({
+        ends_at: hour.endDate.toISOString(),
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: hour.price,
+        starts_at: new Date(hour.startDate).toISOString(),
+      })),
+          '''
+            text = text.replace(old, replacement, 1)
+          else:
+            # More robust: replace the existing base snapshot assignment as a bracketed block.
+            start = text.find('    validated_price_snapshot: [')
+            end = text.find('    validated_plan_fingerprint:', start)
+            if start == -1 or end == -1:
+              raise SystemExit('test price snapshot block not found')
+            replacement = '''    validated_price_snapshot: [pastHour, currentHour, nextHour]
+      .map((hour) => ({
+        ends_at: hour.endDate.toISOString(),
+        region: "FI",
+        resolution_minutes: 60,
+        spot_price_cents_kwh: hour.price,
+        starts_at: new Date(hour.startDate).toISOString(),
+      })),
+'''
+            text = text[:start] + replacement + text[end:]
+          old = '''    optimizerHours: [currentHour, nextHour],
+    optimizerReadingCreatedAt:'''
+          new = '''    optimizerHours: [currentHour, nextHour],
+    priceInputHours: [pastHour, currentHour, nextHour],
+    optimizerReadingCreatedAt:'''
+          if old not in text:
+            raise SystemExit('test baseInput anchor not found')
+          text = text.replace(old, new, 1)
+          marker = '''  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      backendValidation: {
+        ...baseBackendValidation,
+        validated_tank_reading_at: "2025-01-15T08:29:31.000Z",
+      },
+    }),
+    null,
+    "a newer backend tank snapshot than the app optimizer input must suppress the marker",
+  );
+          '''
+          addition = marker + '''  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      priceInputHours: [
+        { ...pastHour, price: 0.25 },
+        currentHour,
+        nextHour,
+      ],
+    }),
+    null,
+    "a changed already-ended price that can alter the daily minimum must suppress the marker",
+  );
+'''
+          if marker not in text:
+            raise SystemExit('test regression insertion anchor not found')
+          text = text.replace(marker, addition, 1)
+          # DST test needs a full priceInputHours matching its persisted snapshot. Simplest: override both.
+          dst_anchor = '''      optimizerHours: [firstRepeatedHour, secondRepeatedHour],
+      optimizerReadingCreatedAt:'''
+          dst_new = '''      optimizerHours: [firstRepeatedHour, secondRepeatedHour],
+      priceInputHours: [firstRepeatedHour, secondRepeatedHour],
+      optimizerReadingCreatedAt:'''
+          if dst_anchor not in text:
+            raise SystemExit('DST price input anchor not found')
+          text = text.replace(dst_anchor, dst_new, 1)
+          # Replace DST validated price snapshot if inherited old January fixture by explicit matching rows.
+          dst_block_anchor = '''        validated_plan_date: "2025-10-26",
+        validated_tank_reading_at: "2025-10-26T00:29:00.000Z",
+        validated_plan_fingerprint:'''
+          dst_block_new = '''        validated_plan_date: "2025-10-26",
+        validated_tank_reading_at: "2025-10-26T00:29:00.000Z",
+        validated_price_snapshot: [firstRepeatedHour, secondRepeatedHour].map((hour) => ({
+          ends_at: hour.endDate.toISOString(),
+          region: "FI",
+          resolution_minutes: 60,
+          spot_price_cents_kwh: hour.price,
+          starts_at: new Date(hour.startDate).toISOString(),
+        })),
+        validated_plan_fingerprint:'''
+          if dst_block_anchor not in text:
+            raise SystemExit('DST validation anchor not found')
+          text = text.replace(dst_block_anchor, dst_block_new, 1)
+          tests.write_text(text)
+
+          app = Path('energiazen-mini/app/(tabs)/index.tsx')
+          text = app.read_text()
+          old = '''      optimizerHours: publishedOptimizerHours,
+      optimizerReadingCreatedAt: activeOptimizationRun.readingCreatedAt,
+          '''
+          new = '''      optimizerHours: publishedOptimizerHours,
+      priceInputHours: hourlyPrices.filter((item) => {
+        const dateKey = getFinnishDateKey(item.startDate);
+        return (
+          dateKey === publishedTodayPlanDate ||
+          dateKey === publishedTomorrowPlanDate
+        );
+      }),
+      optimizerReadingCreatedAt: activeOptimizationRun.readingCreatedAt,
+          '''
+          if old not in text:
+            raise SystemExit('app cooldown call anchor not found')
+          text = text.replace(old, new, 1)
+          deps_old = '''    heatingOptimization?.selectedHeatingHourIds,
+    isCurrentlyHeatingConfirmed,
+          '''
+          deps_new = '''    heatingOptimization?.selectedHeatingHourIds,
+    hourlyPrices,
+    isCurrentlyHeatingConfirmed,
+          '''
+          # use first occurrence after cooldown useMemo
+          pos = text.find('const cooldownBlockedHeatingHourId = useMemo')
+          dep_pos = text.find(deps_old, pos)
+          if dep_pos == -1:
+            raise SystemExit('app dependency anchor not found')
+          text = text[:dep_pos] + text[dep_pos:].replace(deps_old, deps_new, 1)
+          # publishedTomorrowPlanDate is now used by diagnostic and must be dependency.
+          dep2_old = '''    publishedOptimizerHours,
+    publishedTodayPlanDate,
+          '''
+          dep2_new = '''    publishedOptimizerHours,
+    publishedTodayPlanDate,
+    publishedTomorrowPlanDate,
+          '''
+          dep2_pos = text.find(dep2_old, pos)
+          if dep2_pos == -1:
+            raise SystemExit('app tomorrow dependency anchor not found')
+          text = text[:dep2_pos] + text[dep2_pos:].replace(dep2_old, dep2_new, 1)
+          app.write_text(text)
+          PY
+      - name: Install dependencies
+        working-directory: energiazen-mini
+        run: npm ci
+      - name: Test
+        working-directory: energiazen-mini
+        run: npm test
+      - name: Lint
+        working-directory: energiazen-mini
+        run: npm run lint
+      - name: Typecheck
+        working-directory: energiazen-mini
+        run: npx tsc --noEmit
+      - name: Commit and clean up one-shot workflow
+        run: |
+          rm .github/workflows/zz-fix-pr215-full-price-input.yml
+          git config user.name "Calvonen"
+          git config user.email "marko.raitanen@gmail.com"
+          git add energiazen-mini .github/workflows/zz-fix-pr215-full-price-input.yml
+          git commit -m "fix(heating): correlate full optimizer price input"
+          git push origin HEAD:feature/heating-cooldown-blocked-marker
