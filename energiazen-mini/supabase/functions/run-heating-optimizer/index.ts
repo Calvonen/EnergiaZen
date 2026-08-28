@@ -441,26 +441,34 @@ Deno.serve(async (request) => {
     const currentHour = hours.find(
       (hour) =>
         getFinnishDateKey(hour.startDate) === todayPlanDate &&
-        getHelsinkiHourNumber(hour.date) === currentHourNumber,
+        hour.date.getTime() <= attemptNow.getTime() &&
+        hour.endDate.getTime() > attemptNow.getTime(),
     );
+    const nextHour = currentHour
+      ? hours.find((hour) => hour.date.getTime() === currentHour.endDate.getTime())
+      : undefined;
+    const nextHourNumber = nextHour ? getHelsinkiHourNumber(nextHour.date) : null;
     const shouldApplyPostHeatingCooldown =
       heating === true &&
       typeof currentTopTemperature === "number" &&
       currentTopTemperature >= postHeatingCooldownSafetyTopTemperature &&
-      currentHourNumber < 23 &&
       storedTodayHours.includes(currentHourNumber) &&
-      !storedTodayHours.includes(currentHourNumber + 1) &&
-      currentHour !== undefined;
+      nextHour !== undefined &&
+      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
+      nextHourNumber !== null &&
+      !storedTodayHours.includes(nextHourNumber);
     const cooldownHourStart = shouldApplyPostHeatingCooldown
-      ? currentHour.endDate.getTime()
+      ? nextHour!.date.getTime()
       : null;
-    // Keep normal optimization running, but make the hour immediately after
-    // the already-started stored block a last-resort safety choice instead
-    // of letting repeated 5-minute recalculations extend the active block
-    // one hour at a time. If that next hour was already part of the stored
-    // scenario ([5,6,...]), it is untouched. Measured top temperature below
-    // 50 C also disables the cooldown penalty so the existing safety logic
-    // can react immediately.
+    // Keep normal optimization running, but make the actual chronologically
+    // adjacent price interval after the already-started stored block a
+    // last-resort safety choice instead of letting repeated 5-minute
+    // recalculations extend the active block one hour at a time. Checking
+    // the next interval's Helsinki-local hour rather than currentHour + 1
+    // keeps both occurrences of the repeated DST hour covered by the same
+    // stored planned-hour number. Measured top temperature below 50 C also
+    // disables the cooldown penalty so the existing safety logic can react
+    // immediately.
     const optimizerHours = hours.map((hour) =>
       cooldownHourStart !== null && hour.date.getTime() === cooldownHourStart
         ? { ...hour, price: hour.price + postHeatingCooldownPenaltyCents }
