@@ -24,6 +24,7 @@ export function runHeatingCooldownMarkerUnitTests() {
     health_status: "healthy",
     last_validated_plan_at: "2025-01-15T08:29:30.000Z",
     validated_plan_date: "2025-01-15",
+    validated_tank_reading_at: "2025-01-15T08:29:00.000Z",
     validated_plan_fingerprint: "2025-01-15|10",
     validated_planned_hours: [10],
   };
@@ -76,7 +77,18 @@ export function runHeatingCooldownMarkerUnitTests() {
       optimizerReadingCreatedAt: "2025-01-15T08:29:31.000Z",
     }),
     null,
-    "a tank reading newer than backend validation must suppress the marker",
+    "an app reading different from the backend validated tank snapshot must suppress the marker",
+  );
+  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      backendValidation: {
+        ...baseBackendValidation,
+        validated_tank_reading_at: "2025-01-15T08:29:31.000Z",
+      },
+    }),
+    null,
+    "a newer backend tank snapshot than the app optimizer input must suppress the marker",
   );
 
   const firstRepeatedHour = createHour(
@@ -94,6 +106,7 @@ export function runHeatingCooldownMarkerUnitTests() {
         health_status: "healthy",
         last_validated_plan_at: "2025-10-26T00:29:30.000Z",
         validated_plan_date: "2025-10-26",
+        validated_tank_reading_at: "2025-10-26T00:29:00.000Z",
         validated_plan_fingerprint: "2025-10-26|3",
         validated_planned_hours: [3],
       },

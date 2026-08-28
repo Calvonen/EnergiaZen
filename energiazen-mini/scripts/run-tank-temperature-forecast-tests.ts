@@ -27,6 +27,7 @@ import { runHeatingGainHistorySourceTests } from "../tests/heatingGainHistorySou
 import { runHeatingGainSourceSyncSourceTests } from "../tests/heatingGainSourceSyncSource.test";
 import { runHeatingPlanMarkerUnitTests } from "../lib/heatingPlanMarkers.test";
 import { runHeatingCooldownMarkerUnitTests } from "../lib/heatingCooldownMarker.test";
+import { runHeatingCooldownTankIdentityMigrationTests } from "../tests/heatingCooldownTankIdentityMigration.test";
 import { runElectricityPriceTrendUnitTests } from "../lib/electricityPriceTrend.test";
 import { runElectricityPriceFunctionUnitTests } from "../supabase/functions/fetch-electricity-prices/normalize.test";
 import { runTemperatureHistoryDayUnitTests } from "../lib/temperatureHistoryDay.test";
@@ -85,6 +86,7 @@ async function runTests() {
   runHeatingGainSourceSyncSourceTests();
   runHeatingPlanMarkerUnitTests();
   runHeatingCooldownMarkerUnitTests();
+  runHeatingCooldownTankIdentityMigrationTests();
   runElectricityPriceTrendUnitTests();
   runElectricityPriceFunctionUnitTests();
   runTemperatureHistoryDayUnitTests();

@@ -8,6 +8,7 @@ export type BackendHeatingOptimizerValidation = {
   health_status: string | null;
   last_validated_plan_at: string | null;
   validated_plan_date: string | null;
+  validated_tank_reading_at: string | null;
   validated_plan_fingerprint: string | null;
   validated_planned_hours: unknown;
 };
@@ -50,13 +51,17 @@ export function isBackendValidationCurrentForCooldown({
     backendValidation.last_validated_plan_at ?? "",
   );
   const readingAt = Date.parse(optimizerReadingCreatedAt ?? "");
+  const validatedTankReadingAt = Date.parse(
+    backendValidation.validated_tank_reading_at ?? "",
+  );
   const nowMs = now.getTime();
   if (
     !Number.isFinite(validationAt) ||
     !Number.isFinite(readingAt) ||
+    !Number.isFinite(validatedTankReadingAt) ||
     validationAt > nowMs ||
     nowMs - validationAt > backendOptimizerValidationMaxAgeMs ||
-    validationAt < readingAt ||
+    validatedTankReadingAt !== readingAt ||
     backendValidation.validated_plan_date !== todayPlanDate
   ) {
     return false;
