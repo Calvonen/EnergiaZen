@@ -60,6 +60,10 @@ import {
   normalizeStoredHeatingPlanHours,
 } from "@/lib/heatingPlanMarkers";
 import {
+  getCooldownBlockedHeatingHourId,
+  type BackendHeatingOptimizerValidation,
+} from "@/lib/heatingCooldownMarker";
+import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
   HeatingOptimizationHour,
@@ -228,6 +232,8 @@ type StoredHeatingPlan = {
   updated_at?: string | null;
 };
 
+type BackendHeatingOptimizerState = BackendHeatingOptimizerValidation;
+
 // Rinnakkainen kerrostumismalli testausta varten.
 function getStratifiedWarmWaterEstimate(
   topTemperature: number | null,
@@ -258,6 +264,10 @@ function getStratifiedWarmWaterEstimate(
 }
 
 function getHeatingMarkerLabel(marker: string | null) {
+  if (marker === "!") {
+    return "Optimointi olisi valinnut tunnin, mutta lämmityksen jälkeinen jatkoesto esti sen";
+  }
+
   if (marker === heatingMarkers.planned) {
     return "Valittu lämmitykseen";
   }
@@ -868,6 +878,8 @@ export default function HomeScreen() {
   const [storedHeatingPlans, setStoredHeatingPlans] = useState<
     Record<string, StoredHeatingPlan>
   >({});
+  const [backendHeatingOptimizerState, setBackendHeatingOptimizerState] =
+    useState<BackendHeatingOptimizerState | null>(null);
   const storedHeatingPlansRef = useRef(storedHeatingPlans);
   // Which plan_dates loadHeatingPlans has actually finished fetching at
   // least once - storedHeatingPlansRef being empty for a date is ambiguous
@@ -1877,7 +1889,28 @@ export default function HomeScreen() {
 
       if (error) {
         console.warn("Failed to load heating plans", error);
+        if (
+          isHomeScreenMountedRef.current &&
+          generation === loadHeatingPlansGenerationRef.current
+        ) {
+          setBackendHeatingOptimizerState(null);
+        }
         return;
+      }
+
+      const { data: backendStateData, error: backendStateError } = await supabase
+        .from("backend_heating_optimizer_state")
+        .select(
+          "health_status,last_validated_plan_at,validated_plan_date,validated_planned_hours,validated_plan_fingerprint,validated_tank_reading_at,validated_price_snapshot",
+        )
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (backendStateError) {
+        console.warn(
+          "Failed to load backend heating optimizer state",
+          backendStateError,
+        );
       }
 
       if (
@@ -1886,6 +1919,12 @@ export default function HomeScreen() {
       ) {
         return;
       }
+
+      setBackendHeatingOptimizerState(
+        backendStateError
+          ? null
+          : ((backendStateData ?? null) as BackendHeatingOptimizerState | null),
+      );
 
       setStoredHeatingPlans((currentPlans) => {
         const nextPlans = { ...currentPlans };
@@ -2399,6 +2438,42 @@ export default function HomeScreen() {
       plannedHours.map((hour) => getDateHourKey(chartDayKey, hour)),
     );
   }, [chartDayKey, currentSavedPlan?.planned_hours]);
+  const cooldownBlockedHeatingHourId = useMemo(() => {
+    if (!storedHeatingPlanIsAuthoritative || !isTankReadingFresh) {
+      return null;
+    }
+
+    return getCooldownBlockedHeatingHourId({
+      backendValidation: backendHeatingOptimizerState,
+      isCurrentlyHeating: isCurrentlyHeatingConfirmed,
+      now: currentTime,
+      optimizerHours: publishedOptimizerHours,
+      priceHours: hourlyPrices,
+      optimizerReadingCreatedAt: activeOptimizationRun.readingCreatedAt,
+      optimizerSelectedHourIds:
+        heatingOptimization?.selectedHeatingHourIds ?? [],
+      storedTodayHours: normalizeStoredHeatingPlanHours(
+        storedHeatingPlans[publishedTodayPlanDate]?.planned_hours,
+      ),
+      todayPlanDate: publishedTodayPlanDate,
+      tomorrowPlanDate: publishedTomorrowPlanDate,
+      topTemperature: topTemp,
+    });
+  }, [
+    activeOptimizationRun.readingCreatedAt,
+    backendHeatingOptimizerState,
+    currentTime,
+    heatingOptimization?.selectedHeatingHourIds,
+    hourlyPrices,
+    isCurrentlyHeatingConfirmed,
+    isTankReadingFresh,
+    publishedOptimizerHours,
+    publishedTodayPlanDate,
+    publishedTomorrowPlanDate,
+    storedHeatingPlanIsAuthoritative,
+    storedHeatingPlans,
+    topTemp,
+  ]);
   const heatedHourIds = useMemo(
     () =>
       new Set(
@@ -3145,12 +3220,15 @@ export default function HomeScreen() {
         const isSelected = selectedHourlyPrice?.id === item.id;
         const dateHourKey = getHourlyPriceDateHourKey(item);
         const isHeatedHour = heatedHourIds.has(dateHourKey);
-        const heatingMarker = getHeatingHourMarker({
+        const normalHeatingMarker = getHeatingHourMarker({
           endsAt: item.endDate,
           isActual: isHeatedHour,
           isPlanned: plannedHeatingHourIds.has(dateHourKey),
           now: currentHourStart,
         });
+        const heatingMarker =
+          normalHeatingMarker ??
+          (item.id === cooldownBlockedHeatingHourId ? "!" : null);
         const heatingMarkerLabel = getHeatingMarkerLabel(heatingMarker);
         const zeroBottom =
           ((0 - chartScale.min) / chartScale.range) * chartPlotHeight;
@@ -3204,6 +3282,7 @@ export default function HomeScreen() {
       selectedHourlyPrice,
       heatedHourIds,
       plannedHeatingHourIds,
+      cooldownBlockedHeatingHourId,
       chartScale.min,
       chartScale.range,
     ],

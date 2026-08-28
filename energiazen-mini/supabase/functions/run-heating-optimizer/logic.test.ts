@@ -796,23 +796,25 @@ export function runRunHeatingOptimizerLogicUnitTests() {
       "15-minute-only prices must leave the hourly optimizer not ready",
     );
     const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
-      completeTodayHours,
+      todayPrices,
+      todayPlanDate,
+      tomorrowPlanDate,
     );
     assertEqual(
       expectedPriceSnapshot.length,
-      completeTodayHours.length,
-      "price snapshot must contain exactly the rows passed to the optimizer",
+      todayPrices.length,
+      "price snapshot must include past today rows used by daily minimum pricing",
     );
     assertEqual(
       expectedPriceSnapshot[0],
       {
-        ends_at: completeTodayHours[0].endDate.toISOString(),
+        ends_at: new Date(todayPrices[0].ends_at).toISOString(),
         region: "FI",
         resolution_minutes: 60,
-        spot_price_cents_kwh: completeTodayHours[0].price,
-        starts_at: completeTodayHours[0].startDate,
+        spot_price_cents_kwh: todayPrices[0].spot_price_cents_kwh,
+        starts_at: todayPrices[0].starts_at,
       },
-      "price snapshot must preserve each used interval and price canonically",
+      "price snapshot must preserve each full-day price input canonically",
     );
     assert(
       expectedPriceSnapshot.every((price) => price.resolution_minutes === 60),

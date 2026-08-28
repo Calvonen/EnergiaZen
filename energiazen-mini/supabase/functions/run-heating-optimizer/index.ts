@@ -601,7 +601,9 @@ Deno.serve(async (request) => {
       const expectedSettings = buildExpectedOptimizerSettingsSnapshot(settingsRow);
       const expectedTankSnapshot = buildExpectedTankSnapshot(latestReading);
       const expectedPriceSnapshot = buildExpectedElectricityPriceSnapshot(
-        hours,
+        prices,
+        todayPlanDate,
+        tomorrowPlanDate,
         electricityPriceRegion,
       );
       const successfulOutcome = hasChangedPlans ? "published" : "no_changes";
