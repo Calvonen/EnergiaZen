@@ -2448,6 +2448,7 @@ export default function HomeScreen() {
       isCurrentlyHeating: isCurrentlyHeatingConfirmed,
       now: currentTime,
       optimizerHours: publishedOptimizerHours,
+      priceHours: hourlyPrices,
       optimizerReadingCreatedAt: activeOptimizationRun.readingCreatedAt,
       optimizerSelectedHourIds:
         heatingOptimization?.selectedHeatingHourIds ?? [],
@@ -2455,6 +2456,7 @@ export default function HomeScreen() {
         storedHeatingPlans[publishedTodayPlanDate]?.planned_hours,
       ),
       todayPlanDate: publishedTodayPlanDate,
+      tomorrowPlanDate: publishedTomorrowPlanDate,
       topTemperature: topTemp,
     });
   }, [
@@ -2462,10 +2464,12 @@ export default function HomeScreen() {
     backendHeatingOptimizerState,
     currentTime,
     heatingOptimization?.selectedHeatingHourIds,
+    hourlyPrices,
     isCurrentlyHeatingConfirmed,
     isTankReadingFresh,
     publishedOptimizerHours,
     publishedTodayPlanDate,
+    publishedTomorrowPlanDate,
     storedHeatingPlanIsAuthoritative,
     storedHeatingPlans,
     topTemp,

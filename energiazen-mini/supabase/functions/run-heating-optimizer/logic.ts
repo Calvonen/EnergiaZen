@@ -443,16 +443,25 @@ export type ExpectedElectricityPriceSnapshotRow = {
 };
 
 export function buildExpectedElectricityPriceSnapshot(
-  hours: HeatingOptimizationHour[],
+  prices: RawElectricityPriceRow[],
+  todayPlanDate: string,
+  tomorrowPlanDate: string,
   region = "FI",
 ): ExpectedElectricityPriceSnapshotRow[] {
-  return hours
-    .map((hour) => ({
-      ends_at: hour.endDate.toISOString(),
+  return prices
+    .filter((price) => {
+      if (price.resolution_minutes !== 60) {
+        return false;
+      }
+      const dateKey = getFinnishDateKey(price.starts_at);
+      return dateKey === todayPlanDate || dateKey === tomorrowPlanDate;
+    })
+    .map((price) => ({
+      ends_at: new Date(price.ends_at).toISOString(),
       region,
       resolution_minutes: 60 as const,
-      spot_price_cents_kwh: hour.price,
-      starts_at: hour.startDate,
+      spot_price_cents_kwh: price.spot_price_cents_kwh,
+      starts_at: price.starts_at,
     }))
     .sort((first, second) => first.starts_at.localeCompare(second.starts_at));
 }

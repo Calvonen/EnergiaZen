@@ -14,6 +14,8 @@ export type BackendHeatingOptimizerValidation = {
   validated_planned_hours: unknown;
 };
 
+type CooldownPriceHour = Pick<HeatingOptimizationHour, "date" | "endDate" | "price" | "startDate">;
+
 type ComparablePriceSnapshotRow = {
   ends_at: string;
   region: string;
@@ -76,9 +78,15 @@ function normalizePriceSnapshot(value: unknown): ComparablePriceSnapshotRow[] | 
 }
 
 export function buildCooldownPriceSnapshot(
-  optimizerHours: HeatingOptimizationHour[],
+  priceHours: CooldownPriceHour[],
+  todayPlanDate: string,
+  tomorrowPlanDate: string,
 ): ComparablePriceSnapshotRow[] {
-  return optimizerHours
+  return priceHours
+    .filter((hour) => {
+      const dateKey = getFinnishDateKey(hour.startDate);
+      return dateKey === todayPlanDate || dateKey === tomorrowPlanDate;
+    })
     .map((hour) => ({
       ends_at: hour.endDate.toISOString(),
       region: "FI",
@@ -93,16 +101,20 @@ export function isBackendValidationCurrentForCooldown({
   backendValidation,
   now,
   optimizerHours,
+  priceHours,
   optimizerReadingCreatedAt,
   storedTodayHours,
   todayPlanDate,
+  tomorrowPlanDate,
 }: {
   backendValidation: BackendHeatingOptimizerValidation | null;
   now: Date;
   optimizerHours: HeatingOptimizationHour[];
+  priceHours: CooldownPriceHour[];
   optimizerReadingCreatedAt: string | null;
   storedTodayHours: number[];
   todayPlanDate: string;
+  tomorrowPlanDate: string;
 }): boolean {
   if (!backendValidation || backendValidation.health_status !== "healthy") {
     return false;
@@ -151,7 +163,11 @@ export function isBackendValidationCurrentForCooldown({
   const validatedPriceSnapshot = normalizePriceSnapshot(
     backendValidation.validated_price_snapshot,
   );
-  const appPriceSnapshot = buildCooldownPriceSnapshot(optimizerHours);
+  const appPriceSnapshot = buildCooldownPriceSnapshot(
+    priceHours,
+    todayPlanDate,
+    tomorrowPlanDate,
+  );
   return (
     validatedPriceSnapshot !== null &&
     JSON.stringify(validatedPriceSnapshot) === JSON.stringify(appPriceSnapshot)
@@ -163,20 +179,24 @@ export function getCooldownBlockedHeatingHourId({
   isCurrentlyHeating,
   now,
   optimizerHours,
+  priceHours,
   optimizerReadingCreatedAt,
   optimizerSelectedHourIds,
   storedTodayHours,
   todayPlanDate,
+  tomorrowPlanDate,
   topTemperature,
 }: {
   backendValidation: BackendHeatingOptimizerValidation | null;
   isCurrentlyHeating: boolean;
   now: Date;
   optimizerHours: HeatingOptimizationHour[];
+  priceHours: CooldownPriceHour[];
   optimizerReadingCreatedAt: string | null;
   optimizerSelectedHourIds: string[];
   storedTodayHours: number[];
   todayPlanDate: string;
+  tomorrowPlanDate: string;
   topTemperature: number | null;
 }): string | null {
   if (
@@ -187,9 +207,11 @@ export function getCooldownBlockedHeatingHourId({
       backendValidation,
       now,
       optimizerHours,
+      priceHours,
       optimizerReadingCreatedAt,
       storedTodayHours,
       todayPlanDate,
+      tomorrowPlanDate,
     })
   ) {
     return null;
