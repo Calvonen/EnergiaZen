@@ -33,6 +33,7 @@ export type HeatingOptimizationRunState = PublishedHeatingPlanState<
   HeatingOptimizationHour
 > & {
   appSettings: EnergiaZenSettings;
+  readingCreatedAt: string | null;
   todayPlanDate: string | null;
   tomorrowPlanDate: string | null;
 };
@@ -125,6 +126,7 @@ export function useHeatingOptimizationRun({
     appSettings,
     hours: [],
     inputKey: "",
+    readingCreatedAt: null,
     result: null,
     runId: 0,
     todayPlanDate: null,
@@ -202,6 +204,7 @@ export function useHeatingOptimizationRun({
             appSettings,
             hours: runHours,
             inputKey,
+            readingCreatedAt: snapshot.readingCreatedAt,
             result,
             runId: acceptedRunId,
             todayPlanDate,

@@ -59,7 +59,10 @@ import {
   heatingMarkers,
   normalizeStoredHeatingPlanHours,
 } from "@/lib/heatingPlanMarkers";
-import { getCooldownBlockedHeatingHourId } from "@/lib/heatingCooldownMarker";
+import {
+  getCooldownBlockedHeatingHourId,
+  type BackendHeatingOptimizerValidation,
+} from "@/lib/heatingCooldownMarker";
 import {
   calculateStratifiedShowersLeft,
   createHeatingOptimizationSettings,
@@ -228,6 +231,8 @@ type StoredHeatingPlan = {
   target_hours?: number | null;
   updated_at?: string | null;
 };
+
+type BackendHeatingOptimizerState = BackendHeatingOptimizerValidation;
 
 // Rinnakkainen kerrostumismalli testausta varten.
 function getStratifiedWarmWaterEstimate(
@@ -873,6 +878,8 @@ export default function HomeScreen() {
   const [storedHeatingPlans, setStoredHeatingPlans] = useState<
     Record<string, StoredHeatingPlan>
   >({});
+  const [backendHeatingOptimizerState, setBackendHeatingOptimizerState] =
+    useState<BackendHeatingOptimizerState | null>(null);
   const storedHeatingPlansRef = useRef(storedHeatingPlans);
   // Which plan_dates loadHeatingPlans has actually finished fetching at
   // least once - storedHeatingPlansRef being empty for a date is ambiguous
@@ -1882,7 +1889,28 @@ export default function HomeScreen() {
 
       if (error) {
         console.warn("Failed to load heating plans", error);
+        if (
+          isHomeScreenMountedRef.current &&
+          generation === loadHeatingPlansGenerationRef.current
+        ) {
+          setBackendHeatingOptimizerState(null);
+        }
         return;
+      }
+
+      const { data: backendStateData, error: backendStateError } = await supabase
+        .from("backend_heating_optimizer_state")
+        .select(
+          "health_status,last_validated_plan_at,validated_plan_date,validated_planned_hours,validated_plan_fingerprint",
+        )
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (backendStateError) {
+        console.warn(
+          "Failed to load backend heating optimizer state",
+          backendStateError,
+        );
       }
 
       if (
@@ -1891,6 +1919,12 @@ export default function HomeScreen() {
       ) {
         return;
       }
+
+      setBackendHeatingOptimizerState(
+        backendStateError
+          ? null
+          : ((backendStateData ?? null) as BackendHeatingOptimizerState | null),
+      );
 
       setStoredHeatingPlans((currentPlans) => {
         const nextPlans = { ...currentPlans };
@@ -2410,9 +2444,11 @@ export default function HomeScreen() {
     }
 
     return getCooldownBlockedHeatingHourId({
+      backendValidation: backendHeatingOptimizerState,
       isCurrentlyHeating: isCurrentlyHeatingConfirmed,
       now: currentTime,
       optimizerHours: publishedOptimizerHours,
+      optimizerReadingCreatedAt: activeOptimizationRun.readingCreatedAt,
       optimizerSelectedHourIds:
         heatingOptimization?.selectedHeatingHourIds ?? [],
       storedTodayHours: normalizeStoredHeatingPlanHours(
@@ -2422,6 +2458,8 @@ export default function HomeScreen() {
       topTemperature: topTemp,
     });
   }, [
+    activeOptimizationRun.readingCreatedAt,
+    backendHeatingOptimizerState,
     currentTime,
     heatingOptimization?.selectedHeatingHourIds,
     isCurrentlyHeatingConfirmed,
