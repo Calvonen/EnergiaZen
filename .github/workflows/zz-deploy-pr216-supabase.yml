@@ -1,0 +1,29 @@
+name: Deploy PR216 Supabase backend
+on:
+  push:
+    branches: [ops/deploy-pr216-supabase]
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/deploy-pr216-supabase
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy run-heating-optimizer
+        working-directory: energiazen-mini
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: npx supabase@latest functions deploy run-heating-optimizer --project-ref amyvzelzbvjvrevikvrp --use-api
+      - name: Remove temporary workflow
+        run: |
+          rm .github/workflows/zz-deploy-pr216-supabase.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/zz-deploy-pr216-supabase.yml
+          git commit -m "chore: remove temporary PR216 deploy workflow"
+          git push origin HEAD:ops/deploy-pr216-supabase
