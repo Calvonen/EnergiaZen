@@ -1,0 +1,86 @@
+name: Fix PR216 midnight active cooldown
+on:
+  push:
+    branches: [fix/heating-post-block-boundary-cooldown]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/heating-post-block-boundary-cooldown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          logic = Path('energiazen-mini/supabase/functions/run-heating-optimizer/logic.ts')
+          text = logic.read_text()
+          text = text.replace(
+          '''  storedTodayHours,\n  todayPlanDate,\n  topTemperature,''',
+          '''  storedTodayHours,\n  storedTomorrowHours,\n  todayPlanDate,\n  tomorrowPlanDate,\n  topTemperature,''', 1)
+          text = text.replace(
+          '''  storedTodayHours: number[];\n  todayPlanDate: string;\n  topTemperature: number | null | undefined;''',
+          '''  storedTodayHours: number[];\n  storedTomorrowHours: number[];\n  todayPlanDate: string;\n  tomorrowPlanDate: string;\n  topTemperature: number | null | undefined;''', 1)
+          old = '''    if (\n      nextHour &&\n      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&\n      !storedTodayHours.includes(getHelsinkiHourNumber(nextHour.date))\n    ) {\n      return nextHour.date.getTime();\n    }'''
+          new = '''    if (nextHour) {\n      const nextDate = getFinnishDateKey(nextHour.startDate);\n      const nextHourNumber = getHelsinkiHourNumber(nextHour.date);\n      const nextHourAlreadyPlanned =\n        (nextDate === todayPlanDate && storedTodayHours.includes(nextHourNumber)) ||\n        (nextDate === tomorrowPlanDate && storedTomorrowHours.includes(nextHourNumber));\n\n      if (\n        (nextDate === todayPlanDate || nextDate === tomorrowPlanDate) &&\n        !nextHourAlreadyPlanned\n      ) {\n        return nextHour.date.getTime();\n      }\n    }'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          logic.write_text(text)
+
+          index = Path('energiazen-mini/supabase/functions/run-heating-optimizer/index.ts')
+          text = index.read_text()
+          old = '''    const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;'''
+          new = '''    const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;\n    const appTomorrowPlan = heatingPlanRows.find((row) => row.plan_date === tomorrowPlanDate) ?? null;'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          old = '''    const currentTopTemperature = latestReading?.top_temp;\n    const cooldownHourStart = resolvePostHeatingCooldownHourStart({'''
+          new = '''    const storedTomorrowHours =\n      appTomorrowPlan?.mode === "automatic" && Array.isArray(appTomorrowPlan.planned_hours)\n        ? appTomorrowPlan.planned_hours\n            .filter((hour): hour is number => Number.isInteger(hour))\n            .map(Number)\n        : [];\n    const currentTopTemperature = latestReading?.top_temp;\n    const cooldownHourStart = resolvePostHeatingCooldownHourStart({'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          text = text.replace(
+          '''      storedTodayHours,\n      todayPlanDate,\n      topTemperature: currentTopTemperature,''',
+          '''      storedTodayHours,\n      storedTomorrowHours,\n      todayPlanDate,\n      tomorrowPlanDate,\n      topTemperature: currentTopTemperature,''', 1)
+          index.write_text(text)
+
+          test = Path('energiazen-mini/supabase/functions/run-heating-optimizer/logic.test.ts')
+          text = test.read_text()
+          # Extend every existing helper call with empty tomorrow state unless a test overrides it later.
+          text = text.replace(
+          '''      storedTodayHours: [7],\n      todayPlanDate: "2026-09-01",''',
+          '''      storedTodayHours: [7],\n      storedTomorrowHours: [],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",''')
+          text = text.replace(
+          '''      storedTodayHours: [7, 15],\n      todayPlanDate: "2026-09-01",''',
+          '''      storedTodayHours: [7, 15],\n      storedTomorrowHours: [],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",''')
+          text = text.replace(
+          '''      storedTodayHours: [7, 8, 15],\n      todayPlanDate: "2026-09-01",''',
+          '''      storedTodayHours: [7, 8, 15],\n      storedTomorrowHours: [],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",''')
+          text = text.replace(
+          '''      storedTodayHours: [],\n      todayPlanDate: "2026-09-01",''',
+          '''      storedTodayHours: [],\n      storedTomorrowHours: [],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",''')
+          anchor = '''  assertEqual(\n    isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),'''
+          extra = '''  const preMidnightHours = buildOptimizerHours(\n    priceRowsBetween(\n      new Date("2026-09-01T20:00:00.000Z"),\n      new Date("2026-09-01T23:00:00.000Z"),\n    ),\n    new Date("2026-09-01T20:30:00.000Z"),\n    "2026-09-01",\n    "2026-09-02",\n  );\n  assertEqual(\n    resolvePostHeatingCooldownHourStart({\n      hours: preMidnightHours,\n      latestHeating: true,\n      now: new Date("2026-09-01T20:30:00.000Z"),\n      recentReadings: [],\n      safetyTopTemperature: 50,\n      storedTodayHours: [23],\n      storedTomorrowHours: [],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",\n      topTemperature: 57.2,\n    }),\n    new Date("2026-09-01T21:00:00.000Z").getTime(),\n    "active 23-00 heating must penalize an unplanned 00-01 hour in tomorrow's plan",\n  );\n  assertEqual(\n    resolvePostHeatingCooldownHourStart({\n      hours: preMidnightHours,\n      latestHeating: true,\n      now: new Date("2026-09-01T20:30:00.000Z"),\n      recentReadings: [],\n      safetyTopTemperature: 50,\n      storedTodayHours: [23],\n      storedTomorrowHours: [0],\n      todayPlanDate: "2026-09-01",\n      tomorrowPlanDate: "2026-09-02",\n      topTemperature: 57.2,\n    }),\n    null,\n    "an already-planned tomorrow 00-01 hour must remain valid",\n  );\n\n'''
+          assert anchor in text
+          text = text.replace(anchor, extra + anchor, 1)
+          test.write_text(text)
+          PY
+      - name: Verify
+        working-directory: energiazen-mini
+        run: |
+          npm ci
+          npm test
+          npm run lint
+          npx tsc --noEmit
+      - name: Commit and remove temporary workflow
+        run: |
+          rm .github/workflows/zz-fix-pr216-midnight-active.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add energiazen-mini/supabase/functions/run-heating-optimizer/index.ts energiazen-mini/supabase/functions/run-heating-optimizer/logic.ts energiazen-mini/supabase/functions/run-heating-optimizer/logic.test.ts .github/workflows/zz-fix-pr216-midnight-active.yml
+          git commit -m "fix(heating): carry active cooldown into tomorrow"
+          git push origin HEAD:fix/heating-post-block-boundary-cooldown
