@@ -168,6 +168,31 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     "top temperature below the safety threshold must bypass cooldown",
   );
   assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: buildOptimizerHours(
+        priceRowsBetween(
+          new Date("2026-08-31T21:00:00.000Z"),
+          new Date("2026-09-01T02:00:00.000Z"),
+        ),
+        new Date("2026-08-31T21:03:00.000Z"),
+        "2026-09-01",
+        "2026-09-02",
+      ),
+      latestHeating: false,
+      now: new Date("2026-08-31T21:03:00.000Z"),
+      recentReadings: [
+        { created_at: "2026-08-31T20:59:50.000Z", top_temp: 57.2, bottom_temp: 41.2, inlet_temp: 25, heating: true },
+      ],
+      safetyTopTemperature: 50,
+      storedTodayHours: [],
+      todayPlanDate: "2026-09-01",
+      topTemperature: 57.2,
+    }),
+    new Date("2026-08-31T21:00:00.000Z").getTime(),
+    "cooldown must carry across Helsinki midnight after actual 23-00 heating",
+  );
+
+  assertEqual(
     isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),
     true,
     "matching private cron secret authorizes the optimizer request",

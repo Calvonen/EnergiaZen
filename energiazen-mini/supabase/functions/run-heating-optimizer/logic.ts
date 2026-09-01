@@ -113,12 +113,11 @@ export function resolvePostHeatingCooldownHourStart({
 
   const previousIntervalEnd = currentHour.date.getTime();
   const previousIntervalStart = previousIntervalEnd - 60 * 60 * 1000;
-  if (
-    getFinnishDateKey(new Date(previousIntervalEnd - 1).toISOString()) !== todayPlanDate
-  ) {
-    return null;
-  }
 
+  // Cooldown follows the chronologically adjacent interval even across a
+  // Helsinki calendar-date boundary. A planned 00:00 hour was already
+  // exempted above, so midnight itself must not erase actual 23:00-00:00
+  // heating evidence.
   const previousIntervalActuallyHeated = recentReadings.some((reading) => {
     if (reading.heating !== true || !reading.created_at) {
       return false;

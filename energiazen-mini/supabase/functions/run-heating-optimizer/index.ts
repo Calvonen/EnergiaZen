@@ -398,17 +398,14 @@ Deno.serve(async (request) => {
     // "learned", so a fixed-mode install stays publishable on an input it
     // doesn't use.
     //
-    // Codex P2 follow-up: the local 7-day recovery history is likewise only
-    // actually consumed when resolveHourlyDropProfile ends up selecting it
-    // (dropProfile.source === "local-7-day") - when a fresh stored Supabase
-    // profile was selected instead, recovery-history fetch failure must not
-    // by itself block publication. dropProfileResult (the fetch of the
-    // stored profile itself) stays unconditionally required either way: a
-    // failure there already forces selection down to local-7-day (no
-    // stored profile to select), which in turn requires recoveryReadingsFetch.
+    // Recovery history is now also an authoritative input to post-heating
+    // cooldown detection at hour boundaries. Therefore it must be available
+    // regardless of which temperature-drop profile source is selected; if
+    // this fetch fails, publication fails closed instead of silently losing
+    // the evidence that the previous interval actually heated.
     const inputFetchReadiness = resolveOptimizerInputFetchReadiness([
       ...(heatingGainSource === "learned" ? [gainHistoryFetch] : []),
-      ...(dropProfile.source === "local-7-day" ? [recoveryReadingsFetch] : []),
+      recoveryReadingsFetch,
       dropProfileResult,
     ]);
     const publicationReadiness = combineBackendPublicationReadiness(
