@@ -44,6 +44,7 @@ import {
   resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
+  resolvePostHeatingCooldownHourStart,
   resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
   successfulOptimizerInputFetch,
@@ -430,7 +431,6 @@ Deno.serve(async (request) => {
       tomorrowPlanDate,
     );
     const heating = latestReading?.heating ?? null;
-    const currentHourNumber = getHelsinkiHourNumber(attemptNow);
     const storedTodayHours =
       appTodayPlan?.mode === "automatic" && Array.isArray(appTodayPlan.planned_hours)
         ? appTodayPlan.planned_hours
@@ -438,28 +438,16 @@ Deno.serve(async (request) => {
             .map(Number)
         : [];
     const currentTopTemperature = latestReading?.top_temp;
-    const currentHour = hours.find(
-      (hour) =>
-        getFinnishDateKey(hour.startDate) === todayPlanDate &&
-        hour.date.getTime() <= attemptNow.getTime() &&
-        hour.endDate.getTime() > attemptNow.getTime(),
-    );
-    const nextHour = currentHour
-      ? hours.find((hour) => hour.date.getTime() === currentHour.endDate.getTime())
-      : undefined;
-    const nextHourNumber = nextHour ? getHelsinkiHourNumber(nextHour.date) : null;
-    const shouldApplyPostHeatingCooldown =
-      heating === true &&
-      typeof currentTopTemperature === "number" &&
-      currentTopTemperature >= postHeatingCooldownSafetyTopTemperature &&
-      storedTodayHours.includes(currentHourNumber) &&
-      nextHour !== undefined &&
-      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
-      nextHourNumber !== null &&
-      !storedTodayHours.includes(nextHourNumber);
-    const cooldownHourStart = shouldApplyPostHeatingCooldown
-      ? nextHour!.date.getTime()
-      : null;
+    const cooldownHourStart = resolvePostHeatingCooldownHourStart({
+      hours,
+      latestHeating: heating,
+      now: attemptNow,
+      recentReadings: recoveryReadings,
+      safetyTopTemperature: postHeatingCooldownSafetyTopTemperature,
+      storedTodayHours,
+      todayPlanDate,
+      topTemperature: currentTopTemperature,
+    });
     // Keep normal optimization running, but make the actual chronologically
     // adjacent price interval after the already-started stored block a
     // last-resort safety choice instead of letting repeated 5-minute

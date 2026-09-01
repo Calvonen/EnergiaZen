@@ -59,6 +59,81 @@ import {
 } from "../_shared/heatingLogic.ts";
 import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain.ts";
 
+export function resolvePostHeatingCooldownHourStart({
+  hours,
+  latestHeating,
+  now,
+  recentReadings,
+  safetyTopTemperature,
+  storedTodayHours,
+  todayPlanDate,
+  topTemperature,
+}: {
+  hours: HeatingOptimizationHour[];
+  latestHeating: boolean | null;
+  now: Date;
+  recentReadings: TankTemperatureReading[];
+  safetyTopTemperature: number;
+  storedTodayHours: number[];
+  todayPlanDate: string;
+  topTemperature: number | null | undefined;
+}): number | null {
+  if (typeof topTemperature !== "number" || topTemperature < safetyTopTemperature) {
+    return null;
+  }
+
+  const currentHour = hours.find(
+    (hour) =>
+      getFinnishDateKey(hour.startDate) === todayPlanDate &&
+      hour.date.getTime() <= now.getTime() &&
+      hour.endDate.getTime() > now.getTime(),
+  );
+  if (!currentHour) {
+    return null;
+  }
+
+  const currentHourNumber = getHelsinkiHourNumber(currentHour.date);
+
+  if (latestHeating === true && storedTodayHours.includes(currentHourNumber)) {
+    const nextHour = hours.find(
+      (hour) => hour.date.getTime() === currentHour.endDate.getTime(),
+    );
+    if (
+      nextHour &&
+      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
+      !storedTodayHours.includes(getHelsinkiHourNumber(nextHour.date))
+    ) {
+      return nextHour.date.getTime();
+    }
+  }
+
+  if (storedTodayHours.includes(currentHourNumber)) {
+    return null;
+  }
+
+  const previousIntervalEnd = currentHour.date.getTime();
+  const previousIntervalStart = previousIntervalEnd - 60 * 60 * 1000;
+  if (
+    getFinnishDateKey(new Date(previousIntervalEnd - 1).toISOString()) !== todayPlanDate
+  ) {
+    return null;
+  }
+
+  const previousIntervalActuallyHeated = recentReadings.some((reading) => {
+    if (reading.heating !== true || !reading.created_at) {
+      return false;
+    }
+    const readingAt = new Date(reading.created_at).getTime();
+    return (
+      Number.isFinite(readingAt) &&
+      readingAt >= previousIntervalStart &&
+      readingAt < previousIntervalEnd
+    );
+  });
+
+  return previousIntervalActuallyHeated ? currentHour.date.getTime() : null;
+}
+
 export type RawTankReading = {
   bottom_temp: number | null;
   created_at: string | null;
