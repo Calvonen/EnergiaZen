@@ -1,0 +1,57 @@
+name: Fix PR216 P2s
+on:
+  push:
+    branches: [fix/heating-post-block-boundary-cooldown]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/heating-post-block-boundary-cooldown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply P2 fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          index = Path('energiazen-mini/supabase/functions/run-heating-optimizer/index.ts')
+          text = index.read_text()
+          old_comment = '''    // Codex P2 follow-up: the local 7-day recovery history is likewise only\n    // actually consumed when resolveHourlyDropProfile ends up selecting it\n    // (dropProfile.source === "local-7-day") - when a fresh stored Supabase\n    // profile was selected instead, recovery-history fetch failure must not\n    // by itself block publication. dropProfileResult (the fetch of the\n    // stored profile itself) stays unconditionally required either way: a\n    // failure there already forces selection down to local-7-day (no\n    // stored profile to select), which in turn requires recoveryReadingsFetch.\n    const inputFetchReadiness = resolveOptimizerInputFetchReadiness([\n      ...(heatingGainSource === "learned" ? [gainHistoryFetch] : []),\n      ...(dropProfile.source === "local-7-day" ? [recoveryReadingsFetch] : []),\n      dropProfileResult,\n    ]);'''
+          new_comment = '''    // Recovery history is now also an authoritative input to post-heating\n    // cooldown detection at hour boundaries. Therefore it must be available\n    // regardless of which temperature-drop profile source is selected; if\n    // this fetch fails, publication fails closed instead of silently losing\n    // the evidence that the previous interval actually heated.\n    const inputFetchReadiness = resolveOptimizerInputFetchReadiness([\n      ...(heatingGainSource === "learned" ? [gainHistoryFetch] : []),\n      recoveryReadingsFetch,\n      dropProfileResult,\n    ]);'''
+          assert old_comment in text
+          index.write_text(text.replace(old_comment, new_comment, 1))
+
+          logic = Path('energiazen-mini/supabase/functions/run-heating-optimizer/logic.ts')
+          text = logic.read_text()
+          old_midnight = '''  const previousIntervalEnd = currentHour.date.getTime();\n  const previousIntervalStart = previousIntervalEnd - 60 * 60 * 1000;\n  if (\n    getFinnishDateKey(new Date(previousIntervalEnd - 1).toISOString()) !== todayPlanDate\n  ) {\n    return null;\n  }\n\n  const previousIntervalActuallyHeated = recentReadings.some((reading) => {'''
+          new_midnight = '''  const previousIntervalEnd = currentHour.date.getTime();\n  const previousIntervalStart = previousIntervalEnd - 60 * 60 * 1000;\n\n  // Cooldown follows the chronologically adjacent interval even across a\n  // Helsinki calendar-date boundary. A planned 00:00 hour was already\n  // exempted above, so midnight itself must not erase actual 23:00-00:00\n  // heating evidence.\n  const previousIntervalActuallyHeated = recentReadings.some((reading) => {'''
+          assert old_midnight in text
+          logic.write_text(text.replace(old_midnight, new_midnight, 1))
+
+          test = Path('energiazen-mini/supabase/functions/run-heating-optimizer/logic.test.ts')
+          text = test.read_text()
+          anchor = '''  assertEqual(\n    isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),'''
+          addition = '''  assertEqual(\n    resolvePostHeatingCooldownHourStart({\n      hours: buildOptimizerHours(\n        priceRowsBetween(\n          new Date("2026-08-31T21:00:00.000Z"),\n          new Date("2026-09-01T02:00:00.000Z"),\n        ),\n        new Date("2026-08-31T21:03:00.000Z"),\n        "2026-09-01",\n        "2026-09-02",\n      ),\n      latestHeating: false,\n      now: new Date("2026-08-31T21:03:00.000Z"),\n      recentReadings: [\n        { created_at: "2026-08-31T20:59:50.000Z", top_temp: 57.2, bottom_temp: 41.2, inlet_temp: 25, heating: true },\n      ],\n      safetyTopTemperature: 50,\n      storedTodayHours: [],\n      todayPlanDate: "2026-09-01",\n      topTemperature: 57.2,\n    }),\n    new Date("2026-08-31T21:00:00.000Z").getTime(),\n    "cooldown must carry across Helsinki midnight after actual 23-00 heating",\n  );\n\n'''
+          assert anchor in text
+          test.write_text(text.replace(anchor, addition + anchor, 1))
+          PY
+      - name: Verify
+        working-directory: energiazen-mini
+        run: |
+          npm ci
+          npm test
+          npm run lint
+          npx tsc --noEmit
+      - name: Commit and remove temporary workflow
+        run: |
+          rm .github/workflows/zz-fix-pr216-p2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add energiazen-mini/supabase/functions/run-heating-optimizer/index.ts energiazen-mini/supabase/functions/run-heating-optimizer/logic.ts energiazen-mini/supabase/functions/run-heating-optimizer/logic.test.ts .github/workflows/zz-fix-pr216-p2.yml
+          git commit -m "fix(heating): fail closed and preserve midnight cooldown"
+          git push origin HEAD:fix/heating-post-block-boundary-cooldown
