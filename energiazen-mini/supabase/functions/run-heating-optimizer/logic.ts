@@ -66,7 +66,9 @@ export function resolvePostHeatingCooldownHourStart({
   recentReadings,
   safetyTopTemperature,
   storedTodayHours,
+  storedTomorrowHours,
   todayPlanDate,
+  tomorrowPlanDate,
   topTemperature,
 }: {
   hours: HeatingOptimizationHour[];
@@ -75,7 +77,9 @@ export function resolvePostHeatingCooldownHourStart({
   recentReadings: TankTemperatureReading[];
   safetyTopTemperature: number;
   storedTodayHours: number[];
+  storedTomorrowHours: number[];
   todayPlanDate: string;
+  tomorrowPlanDate: string;
   topTemperature: number | null | undefined;
 }): number | null {
   if (typeof topTemperature !== "number" || topTemperature < safetyTopTemperature) {
@@ -98,12 +102,19 @@ export function resolvePostHeatingCooldownHourStart({
     const nextHour = hours.find(
       (hour) => hour.date.getTime() === currentHour.endDate.getTime(),
     );
-    if (
-      nextHour &&
-      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
-      !storedTodayHours.includes(getHelsinkiHourNumber(nextHour.date))
-    ) {
-      return nextHour.date.getTime();
+    if (nextHour) {
+      const nextDate = getFinnishDateKey(nextHour.startDate);
+      const nextHourNumber = getHelsinkiHourNumber(nextHour.date);
+      const nextHourAlreadyPlanned =
+        (nextDate === todayPlanDate && storedTodayHours.includes(nextHourNumber)) ||
+        (nextDate === tomorrowPlanDate && storedTomorrowHours.includes(nextHourNumber));
+
+      if (
+        (nextDate === todayPlanDate || nextDate === tomorrowPlanDate) &&
+        !nextHourAlreadyPlanned
+      ) {
+        return nextHour.date.getTime();
+      }
     }
   }
 

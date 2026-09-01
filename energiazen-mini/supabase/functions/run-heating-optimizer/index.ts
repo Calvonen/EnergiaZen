@@ -373,6 +373,7 @@ Deno.serve(async (request) => {
     const prices = (priceResult.data ?? []) as RawElectricityPriceRow[];
     const heatingPlanRows = (heatingPlansResult.data ?? []) as RawHeatingPlanRow[];
     const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;
+    const appTomorrowPlan = heatingPlanRows.find((row) => row.plan_date === tomorrowPlanDate) ?? null;
 
     const {
       heatingGainSource,
@@ -434,6 +435,12 @@ Deno.serve(async (request) => {
             .filter((hour): hour is number => Number.isInteger(hour))
             .map(Number)
         : [];
+    const storedTomorrowHours =
+      appTomorrowPlan?.mode === "automatic" && Array.isArray(appTomorrowPlan.planned_hours)
+        ? appTomorrowPlan.planned_hours
+            .filter((hour): hour is number => Number.isInteger(hour))
+            .map(Number)
+        : [];
     const currentTopTemperature = latestReading?.top_temp;
     const cooldownHourStart = resolvePostHeatingCooldownHourStart({
       hours,
@@ -442,7 +449,9 @@ Deno.serve(async (request) => {
       recentReadings: recoveryReadings,
       safetyTopTemperature: postHeatingCooldownSafetyTopTemperature,
       storedTodayHours,
+      storedTomorrowHours,
       todayPlanDate,
+      tomorrowPlanDate,
       topTemperature: currentTopTemperature,
     });
     // Keep normal optimization running, but make the actual chronologically
