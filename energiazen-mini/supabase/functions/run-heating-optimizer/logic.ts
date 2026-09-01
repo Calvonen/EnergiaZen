@@ -59,6 +59,91 @@ import {
 } from "../_shared/heatingLogic.ts";
 import { fallbackHeatingGainPerHour, fetchHeatingGainHistory } from "../_shared/heatingGain.ts";
 
+export function resolvePostHeatingCooldownHourStart({
+  hours,
+  latestHeating,
+  now,
+  recentReadings,
+  safetyTopTemperature,
+  storedTodayHours,
+  storedTomorrowHours,
+  todayPlanDate,
+  tomorrowPlanDate,
+  topTemperature,
+}: {
+  hours: HeatingOptimizationHour[];
+  latestHeating: boolean | null;
+  now: Date;
+  recentReadings: TankTemperatureReading[];
+  safetyTopTemperature: number;
+  storedTodayHours: number[];
+  storedTomorrowHours: number[];
+  todayPlanDate: string;
+  tomorrowPlanDate: string;
+  topTemperature: number | null | undefined;
+}): number | null {
+  if (typeof topTemperature !== "number" || topTemperature < safetyTopTemperature) {
+    return null;
+  }
+
+  const currentHour = hours.find(
+    (hour) =>
+      getFinnishDateKey(hour.startDate) === todayPlanDate &&
+      hour.date.getTime() <= now.getTime() &&
+      hour.endDate.getTime() > now.getTime(),
+  );
+  if (!currentHour) {
+    return null;
+  }
+
+  const currentHourNumber = getHelsinkiHourNumber(currentHour.date);
+
+  if (latestHeating === true && storedTodayHours.includes(currentHourNumber)) {
+    const nextHour = hours.find(
+      (hour) => hour.date.getTime() === currentHour.endDate.getTime(),
+    );
+    if (nextHour) {
+      const nextDate = getFinnishDateKey(nextHour.startDate);
+      const nextHourNumber = getHelsinkiHourNumber(nextHour.date);
+      const nextHourAlreadyPlanned =
+        (nextDate === todayPlanDate && storedTodayHours.includes(nextHourNumber)) ||
+        (nextDate === tomorrowPlanDate && storedTomorrowHours.includes(nextHourNumber));
+
+      if (
+        (nextDate === todayPlanDate || nextDate === tomorrowPlanDate) &&
+        !nextHourAlreadyPlanned
+      ) {
+        return nextHour.date.getTime();
+      }
+    }
+  }
+
+  if (storedTodayHours.includes(currentHourNumber)) {
+    return null;
+  }
+
+  const previousIntervalEnd = currentHour.date.getTime();
+  const previousIntervalStart = previousIntervalEnd - 60 * 60 * 1000;
+
+  // Cooldown follows the chronologically adjacent interval even across a
+  // Helsinki calendar-date boundary. A planned 00:00 hour was already
+  // exempted above, so midnight itself must not erase actual 23:00-00:00
+  // heating evidence.
+  const previousIntervalActuallyHeated = recentReadings.some((reading) => {
+    if (reading.heating !== true || !reading.created_at) {
+      return false;
+    }
+    const readingAt = new Date(reading.created_at).getTime();
+    return (
+      Number.isFinite(readingAt) &&
+      readingAt >= previousIntervalStart &&
+      readingAt < previousIntervalEnd
+    );
+  });
+
+  return previousIntervalActuallyHeated ? currentHour.date.getTime() : null;
+}
+
 export type RawTankReading = {
   bottom_temp: number | null;
   created_at: string | null;

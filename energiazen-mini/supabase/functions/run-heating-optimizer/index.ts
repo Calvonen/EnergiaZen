@@ -44,6 +44,7 @@ import {
   resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
+  resolvePostHeatingCooldownHourStart,
   resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
   successfulOptimizerInputFetch,
@@ -372,6 +373,7 @@ Deno.serve(async (request) => {
     const prices = (priceResult.data ?? []) as RawElectricityPriceRow[];
     const heatingPlanRows = (heatingPlansResult.data ?? []) as RawHeatingPlanRow[];
     const appTodayPlan = heatingPlanRows.find((row) => row.plan_date === todayPlanDate) ?? null;
+    const appTomorrowPlan = heatingPlanRows.find((row) => row.plan_date === tomorrowPlanDate) ?? null;
 
     const {
       heatingGainSource,
@@ -397,17 +399,14 @@ Deno.serve(async (request) => {
     // "learned", so a fixed-mode install stays publishable on an input it
     // doesn't use.
     //
-    // Codex P2 follow-up: the local 7-day recovery history is likewise only
-    // actually consumed when resolveHourlyDropProfile ends up selecting it
-    // (dropProfile.source === "local-7-day") - when a fresh stored Supabase
-    // profile was selected instead, recovery-history fetch failure must not
-    // by itself block publication. dropProfileResult (the fetch of the
-    // stored profile itself) stays unconditionally required either way: a
-    // failure there already forces selection down to local-7-day (no
-    // stored profile to select), which in turn requires recoveryReadingsFetch.
+    // Recovery history is now also an authoritative input to post-heating
+    // cooldown detection at hour boundaries. Therefore it must be available
+    // regardless of which temperature-drop profile source is selected; if
+    // this fetch fails, publication fails closed instead of silently losing
+    // the evidence that the previous interval actually heated.
     const inputFetchReadiness = resolveOptimizerInputFetchReadiness([
       ...(heatingGainSource === "learned" ? [gainHistoryFetch] : []),
-      ...(dropProfile.source === "local-7-day" ? [recoveryReadingsFetch] : []),
+      recoveryReadingsFetch,
       dropProfileResult,
     ]);
     const publicationReadiness = combineBackendPublicationReadiness(
@@ -430,36 +429,31 @@ Deno.serve(async (request) => {
       tomorrowPlanDate,
     );
     const heating = latestReading?.heating ?? null;
-    const currentHourNumber = getHelsinkiHourNumber(attemptNow);
     const storedTodayHours =
       appTodayPlan?.mode === "automatic" && Array.isArray(appTodayPlan.planned_hours)
         ? appTodayPlan.planned_hours
             .filter((hour): hour is number => Number.isInteger(hour))
             .map(Number)
         : [];
+    const storedTomorrowHours =
+      appTomorrowPlan?.mode === "automatic" && Array.isArray(appTomorrowPlan.planned_hours)
+        ? appTomorrowPlan.planned_hours
+            .filter((hour): hour is number => Number.isInteger(hour))
+            .map(Number)
+        : [];
     const currentTopTemperature = latestReading?.top_temp;
-    const currentHour = hours.find(
-      (hour) =>
-        getFinnishDateKey(hour.startDate) === todayPlanDate &&
-        hour.date.getTime() <= attemptNow.getTime() &&
-        hour.endDate.getTime() > attemptNow.getTime(),
-    );
-    const nextHour = currentHour
-      ? hours.find((hour) => hour.date.getTime() === currentHour.endDate.getTime())
-      : undefined;
-    const nextHourNumber = nextHour ? getHelsinkiHourNumber(nextHour.date) : null;
-    const shouldApplyPostHeatingCooldown =
-      heating === true &&
-      typeof currentTopTemperature === "number" &&
-      currentTopTemperature >= postHeatingCooldownSafetyTopTemperature &&
-      storedTodayHours.includes(currentHourNumber) &&
-      nextHour !== undefined &&
-      getFinnishDateKey(nextHour.startDate) === todayPlanDate &&
-      nextHourNumber !== null &&
-      !storedTodayHours.includes(nextHourNumber);
-    const cooldownHourStart = shouldApplyPostHeatingCooldown
-      ? nextHour!.date.getTime()
-      : null;
+    const cooldownHourStart = resolvePostHeatingCooldownHourStart({
+      hours,
+      latestHeating: heating,
+      now: attemptNow,
+      recentReadings: recoveryReadings,
+      safetyTopTemperature: postHeatingCooldownSafetyTopTemperature,
+      storedTodayHours,
+      storedTomorrowHours,
+      todayPlanDate,
+      tomorrowPlanDate,
+      topTemperature: currentTopTemperature,
+    });
     // Keep normal optimization running, but make the actual chronologically
     // adjacent price interval after the already-started stored block a
     // last-resort safety choice instead of letting repeated 5-minute

@@ -23,6 +23,7 @@ import {
   resolveHourlyDropProfile,
   resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
+  resolvePostHeatingCooldownHourStart,
   resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
   successfulOptimizerInputFetch,
@@ -88,6 +89,161 @@ function priceRowsBetween(start: Date, end: Date): RawElectricityPriceRow[] {
 }
 
 export function runRunHeatingOptimizerLogicUnitTests() {
+  const cooldownHours = buildOptimizerHours(
+    priceRowsBetween(
+      new Date("2026-09-01T04:00:00.000Z"),
+      new Date("2026-09-01T07:00:00.000Z"),
+    ),
+    new Date("2026-09-01T04:30:00.000Z"),
+    "2026-09-01",
+    "2026-09-02",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: cooldownHours,
+      latestHeating: true,
+      now: new Date("2026-09-01T04:30:00.000Z"),
+      recentReadings: [],
+      safetyTopTemperature: 50,
+      storedTodayHours: [7],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.4,
+    }),
+    new Date("2026-09-01T05:00:00.000Z").getTime(),
+    "active planned heating must penalize the immediately following unplanned hour",
+  );
+  const boundaryHours = buildOptimizerHours(
+    priceRowsBetween(
+      new Date("2026-09-01T05:00:00.000Z"),
+      new Date("2026-09-01T08:00:00.000Z"),
+    ),
+    new Date("2026-09-01T05:03:00.000Z"),
+    "2026-09-01",
+    "2026-09-02",
+  );
+  const boundaryReadings = [
+    { created_at: "2026-09-01T04:59:50.000Z", top_temp: 57.2, bottom_temp: 41.2, inlet_temp: 25, heating: true },
+    { created_at: "2026-09-01T05:02:50.000Z", top_temp: 57.2, bottom_temp: 41.9, inlet_temp: 25.3, heating: false },
+  ];
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: boundaryHours,
+      latestHeating: false,
+      now: new Date("2026-09-01T05:03:00.000Z"),
+      recentReadings: boundaryReadings,
+      safetyTopTemperature: 50,
+      storedTodayHours: [7, 15],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.2,
+    }),
+    new Date("2026-09-01T05:00:00.000Z").getTime(),
+    "relay-off at the boundary must not let a just-finished block restart in the adjacent hour",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: boundaryHours,
+      latestHeating: false,
+      now: new Date("2026-09-01T05:03:00.000Z"),
+      recentReadings: boundaryReadings,
+      safetyTopTemperature: 50,
+      storedTodayHours: [7, 8, 15],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.2,
+    }),
+    null,
+    "an adjacent hour already in the authoritative plan must remain valid",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: boundaryHours,
+      latestHeating: false,
+      now: new Date("2026-09-01T05:03:00.000Z"),
+      recentReadings: boundaryReadings,
+      safetyTopTemperature: 50,
+      storedTodayHours: [7],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 49.9,
+    }),
+    null,
+    "top temperature below the safety threshold must bypass cooldown",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: buildOptimizerHours(
+        priceRowsBetween(
+          new Date("2026-08-31T21:00:00.000Z"),
+          new Date("2026-09-01T02:00:00.000Z"),
+        ),
+        new Date("2026-08-31T21:03:00.000Z"),
+        "2026-09-01",
+        "2026-09-02",
+      ),
+      latestHeating: false,
+      now: new Date("2026-08-31T21:03:00.000Z"),
+      recentReadings: [
+        { created_at: "2026-08-31T20:59:50.000Z", top_temp: 57.2, bottom_temp: 41.2, inlet_temp: 25, heating: true },
+      ],
+      safetyTopTemperature: 50,
+      storedTodayHours: [],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.2,
+    }),
+    new Date("2026-08-31T21:00:00.000Z").getTime(),
+    "cooldown must carry across Helsinki midnight after actual 23-00 heating",
+  );
+
+  const preMidnightHours = buildOptimizerHours(
+    priceRowsBetween(
+      new Date("2026-09-01T20:00:00.000Z"),
+      new Date("2026-09-01T23:00:00.000Z"),
+    ),
+    new Date("2026-09-01T20:30:00.000Z"),
+    "2026-09-01",
+    "2026-09-02",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: preMidnightHours,
+      latestHeating: true,
+      now: new Date("2026-09-01T20:30:00.000Z"),
+      recentReadings: [],
+      safetyTopTemperature: 50,
+      storedTodayHours: [23],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.2,
+    }),
+    new Date("2026-09-01T21:00:00.000Z").getTime(),
+    "active 23-00 heating must penalize an unplanned 00-01 hour in tomorrow's plan",
+  );
+  assertEqual(
+    resolvePostHeatingCooldownHourStart({
+      hours: preMidnightHours,
+      latestHeating: true,
+      now: new Date("2026-09-01T20:30:00.000Z"),
+      recentReadings: [],
+      safetyTopTemperature: 50,
+      storedTodayHours: [23],
+      storedTomorrowHours: [0],
+      todayPlanDate: "2026-09-01",
+      tomorrowPlanDate: "2026-09-02",
+      topTemperature: 57.2,
+    }),
+    null,
+    "an already-planned tomorrow 00-01 hour must remain valid",
+  );
+
   assertEqual(
     isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),
     true,
