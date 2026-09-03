@@ -1,0 +1,29 @@
+name: Deploy PR217 Supabase backend
+on:
+  push:
+    branches: [ops/deploy-pr217-supabase]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy run-heating-optimizer
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: amyvzelzbvjvrevikvrp
+        run: |
+          npx --yes supabase@latest functions deploy run-heating-optimizer \
+            --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Remove temporary workflow
+        run: |
+          rm .github/workflows/zz-deploy-pr217-supabase.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/zz-deploy-pr217-supabase.yml
+          git commit -m "chore: remove temporary PR217 deploy workflow"
+          git push
