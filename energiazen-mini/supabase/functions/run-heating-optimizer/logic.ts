@@ -144,6 +144,161 @@ export function resolvePostHeatingCooldownHourStart({
   return previousIntervalActuallyHeated ? currentHour.date.getTime() : null;
 }
 
+
+export type ActiveHeatingBlockGuard = {
+  blockedHourId: string | null;
+  lockedHourIds: string[];
+};
+
+function isStoredAutomaticPlanHour({
+  hour,
+  storedTodayHours,
+  storedTomorrowHours,
+  todayPlanDate,
+  tomorrowPlanDate,
+}: {
+  hour: HeatingOptimizationHour;
+  storedTodayHours: number[];
+  storedTomorrowHours: number[];
+  todayPlanDate: string;
+  tomorrowPlanDate: string;
+}) {
+  const dateKey = getFinnishDateKey(hour.startDate);
+  const hourNumber = getHelsinkiHourNumber(hour.date);
+  return (
+    (dateKey === todayPlanDate && storedTodayHours.includes(hourNumber)) ||
+    (dateKey === tomorrowPlanDate && storedTomorrowHours.includes(hourNumber))
+  );
+}
+
+export function resolveActiveHeatingBlockGuard({
+  hours,
+  latestHeating,
+  now,
+  safetyTopTemperature,
+  storedTodayHours,
+  storedTomorrowHours,
+  todayPlanDate,
+  tomorrowPlanDate,
+  topTemperature,
+}: {
+  hours: HeatingOptimizationHour[];
+  latestHeating: boolean | null;
+  now: Date;
+  safetyTopTemperature: number;
+  storedTodayHours: number[];
+  storedTomorrowHours: number[];
+  todayPlanDate: string;
+  tomorrowPlanDate: string;
+  topTemperature: number | null | undefined;
+}): ActiveHeatingBlockGuard {
+  if (
+    latestHeating !== true ||
+    typeof topTemperature !== "number" ||
+    topTemperature < safetyTopTemperature
+  ) {
+    return { blockedHourId: null, lockedHourIds: [] };
+  }
+
+  const ordered = [...hours].sort(
+    (first, second) => first.date.getTime() - second.date.getTime(),
+  );
+  const currentIndex = ordered.findIndex(
+    (hour) =>
+      getFinnishDateKey(hour.startDate) === todayPlanDate &&
+      hour.date.getTime() <= now.getTime() &&
+      hour.endDate.getTime() > now.getTime(),
+  );
+  if (currentIndex < 0) {
+    return { blockedHourId: null, lockedHourIds: [] };
+  }
+
+  const currentHour = ordered[currentIndex];
+  if (
+    !isStoredAutomaticPlanHour({
+      hour: currentHour,
+      storedTodayHours,
+      storedTomorrowHours,
+      todayPlanDate,
+      tomorrowPlanDate,
+    })
+  ) {
+    return { blockedHourId: null, lockedHourIds: [] };
+  }
+
+  const lockedHourIds: string[] = [];
+  let expectedStart = currentHour.date.getTime();
+  let index = currentIndex;
+  for (; index < ordered.length; index += 1) {
+    const hour = ordered[index];
+    if (
+      hour.date.getTime() !== expectedStart ||
+      !isStoredAutomaticPlanHour({
+        hour,
+        storedTodayHours,
+        storedTomorrowHours,
+        todayPlanDate,
+        tomorrowPlanDate,
+      })
+    ) {
+      break;
+    }
+    lockedHourIds.push(hour.id);
+    expectedStart = hour.endDate.getTime();
+  }
+
+  const blockedHour = ordered[index];
+  return {
+    blockedHourId:
+      blockedHour && blockedHour.date.getTime() === expectedStart
+        ? blockedHour.id
+        : null,
+    lockedHourIds,
+  };
+}
+
+export function applyHardHeatingBlockGuard({
+  blockedHourId,
+  hours,
+  lockedHourIds,
+  maxHeatingHours,
+  result,
+}: {
+  blockedHourId: string | null;
+  hours: HeatingOptimizationHour[];
+  lockedHourIds: string[];
+  maxHeatingHours: number;
+  result: HeatingOptimizationResult | null;
+}): HeatingOptimizationResult | null {
+  if (!result || (blockedHourId === null && lockedHourIds.length === 0)) {
+    return result;
+  }
+
+  const locked = new Set(lockedHourIds);
+  const rawSelected = new Set(result.selectedHeatingHourIds);
+  if (blockedHourId) rawSelected.delete(blockedHourId);
+  for (const id of locked) rawSelected.add(id);
+
+  const orderedIds = [...hours]
+    .sort((first, second) => first.date.getTime() - second.date.getTime())
+    .map((hour) => hour.id);
+  const lockedOrdered = orderedIds.filter((id) => locked.has(id));
+  const extras = orderedIds.filter(
+    (id) => rawSelected.has(id) && !locked.has(id) && id !== blockedHourId,
+  );
+  const capacity = Math.max(maxHeatingHours, lockedOrdered.length);
+  const selectedHeatingHourIds = [
+    ...lockedOrdered,
+    ...extras.slice(0, Math.max(0, capacity - lockedOrdered.length)),
+  ].sort((first, second) => orderedIds.indexOf(first) - orderedIds.indexOf(second));
+
+  return {
+    ...result,
+    selectedHeatingHourIds,
+    diagnostics: { ...result.diagnostics, selectedHeatingHourIds },
+  };
+}
+
 export type RawTankReading = {
   bottom_temp: number | null;
   created_at: string | null;
@@ -679,22 +834,26 @@ export function runBackendHeatingOptimization({
   heatingGainHistory,
   hourlyDrops,
   hours,
+  forbiddenHeatingHourIds,
   heatingGainSource,
   isCurrentlyHeating,
   latestReading,
   now,
   settings,
+  requiredHeatingHourIds,
 }: {
   /** See buildOptimizerDailyMinimumPrices / heatingOptimizer.ts's optimizeHeatingPlan. */
   dailyMinimumPrices?: Record<string, number>;
   heatingGainHistory: TankTemperatureReading[];
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  forbiddenHeatingHourIds?: string[];
   heatingGainSource: "learned" | "fixed";
   isCurrentlyHeating: boolean;
   latestReading: RawTankReading | null;
   now: Date;
   settings: HeatingOptimizationSettings;
+  requiredHeatingHourIds?: string[];
 }): BackendOptimizationRun {
   const readiness = checkOptimizerReadiness({
     latestReading,
@@ -738,10 +897,12 @@ export function runBackendHeatingOptimization({
     dailyMinimumPrices,
     hourlyDrops,
     hours: materializedHours,
+    forbiddenHeatingHourIds,
     heatingGainPerHour:
       heatingGainSource === "fixed" ? settings.fallbackHeatingGainPerHour : undefined,
     isCurrentlyHeating,
     recoveryDropEnabled: false,
+    requiredHeatingHourIds,
     settings,
     tankReadings: heatingGainHistory,
   });

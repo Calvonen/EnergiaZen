@@ -983,10 +983,12 @@ export function optimizeHeatingPlan({
   heatingGainPerHour,
   hourlyDrops,
   hours,
+  forbiddenHeatingHourIds = [],
   isCurrentlyHeating = false,
   recoveryDropEnabled = false,
   recoveryDropPerHour,
   settings,
+  requiredHeatingHourIds = [],
   tankReadings = [],
 }: {
   currentBottomTemperature: number;
@@ -1009,10 +1011,14 @@ export function optimizeHeatingPlan({
   heatingGainPerHour?: number;
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  /** Hours excluded from every candidate combination. Unknown IDs are ignored. */
+  forbiddenHeatingHourIds?: string[];
   isCurrentlyHeating?: boolean;
   recoveryDropEnabled?: boolean;
   recoveryDropPerHour?: number;
   settings: HeatingOptimizationSettings;
+  /** Hours included in every candidate combination. Unknown IDs are ignored. */
+  requiredHeatingHourIds?: string[];
   tankReadings?: TankTemperatureReading[];
 }): HeatingOptimizationResult {
   const sortedHours = [...hours].sort(
@@ -1075,13 +1081,18 @@ export function optimizeHeatingPlan({
   // A hard requirement: if heating is already running this hour, that hour
   // must survive every re-optimization until it ends, so a fresh run can
   // never drop it and cut the running cycle short mid-hour.
-  const lockedHours = isCurrentlyHeating
-    ? sortedHours.filter((hour) => hour.isCurrentHour)
-    : [];
+  const requiredHourIdSet = new Set(requiredHeatingHourIds);
+  const forbiddenHourIdSet = new Set(forbiddenHeatingHourIds);
+  const lockedHours = sortedHours.filter(
+    (hour) =>
+      !forbiddenHourIdSet.has(hour.id) &&
+      ((isCurrentlyHeating && hour.isCurrentHour) || requiredHourIdSet.has(hour.id)),
+  );
   const lockedHourIds = lockedHours.map((hour) => hour.id);
   const lockedHourIdSet = new Set(lockedHourIds);
   const optionalHours = sortedHours.filter(
-    (hour) => !lockedHourIdSet.has(hour.id),
+    (hour) =>
+      !lockedHourIdSet.has(hour.id) && !forbiddenHourIdSet.has(hour.id),
   );
   const maxOptionalHeatingHours = Math.max(
     0,
