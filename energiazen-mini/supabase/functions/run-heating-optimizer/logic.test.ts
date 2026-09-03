@@ -1,4 +1,5 @@
 import {
+  applyHardHeatingBlockGuard,
   buildHeatingPlanFingerprint,
   buildExpectedElectricityPriceSnapshot,
   buildExpectedHeatingPlanVersions,
@@ -20,6 +21,7 @@ import {
   latestPriceFetchedAt,
   isHeatingOptimizerCronSecretAuthorized,
   maxTankSnapshotPublicationRetries,
+  resolveActiveHeatingBlockGuard,
   resolveHourlyDropProfile,
   resolveOptimizerInputFetchReadiness,
   resolveOptimizerSettings,
@@ -242,6 +244,80 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     }),
     null,
     "an already-planned tomorrow 00-01 hour must remain valid",
+  );
+
+
+  const activeBlockHours = buildOptimizerHours(
+    priceRowsBetween(
+      new Date("2026-09-03T02:00:00.000Z"),
+      new Date("2026-09-03T06:00:00.000Z"),
+    ),
+    new Date("2026-09-03T02:18:00.000Z"),
+    "2026-09-03",
+    "2026-09-04",
+  );
+  const activeBlockGuard = resolveActiveHeatingBlockGuard({
+    hours: activeBlockHours,
+    latestHeating: true,
+    now: new Date("2026-09-03T02:18:00.000Z"),
+    safetyTopTemperature: 50,
+    storedTodayHours: [5, 6],
+    storedTomorrowHours: [],
+    todayPlanDate: "2026-09-03",
+    tomorrowPlanDate: "2026-09-04",
+    topTemperature: 53.9,
+  });
+  assertEqual(
+    activeBlockGuard.lockedHourIds,
+    ["2026-09-03T02:00:00.000Z", "2026-09-03T03:00:00.000Z"],
+    "an active [5,6] plan must hard-lock both contiguous block hours",
+  );
+  assertEqual(
+    activeBlockGuard.blockedHourId,
+    "2026-09-03T04:00:00.000Z",
+    "the first hour after an active [5,6] block must be hard-blocked",
+  );
+  assertEqual(
+    resolveActiveHeatingBlockGuard({
+      hours: activeBlockHours,
+      latestHeating: true,
+      now: new Date("2026-09-03T02:18:00.000Z"),
+      safetyTopTemperature: 50,
+      storedTodayHours: [5, 6],
+      storedTomorrowHours: [],
+      todayPlanDate: "2026-09-03",
+      tomorrowPlanDate: "2026-09-04",
+      topTemperature: 49.9,
+    }),
+    { blockedHourId: null, lockedHourIds: [] },
+    "top below 50 C must remove the hard lock and block",
+  );
+
+  const fakeGuardResult = {
+    selectedHeatingHourIds: [
+      "2026-09-03T02:00:00.000Z",
+      "2026-09-03T03:00:00.000Z",
+      "2026-09-03T04:00:00.000Z",
+    ],
+    diagnostics: {
+      selectedHeatingHourIds: [
+        "2026-09-03T02:00:00.000Z",
+        "2026-09-03T03:00:00.000Z",
+        "2026-09-03T04:00:00.000Z",
+      ],
+    },
+  } as HeatingOptimizationResult;
+  const guardedResult = applyHardHeatingBlockGuard({
+    blockedHourId: activeBlockGuard.blockedHourId,
+    hours: activeBlockHours,
+    lockedHourIds: activeBlockGuard.lockedHourIds,
+    maxHeatingHours: 4,
+    result: fakeGuardResult,
+  });
+  assertEqual(
+    guardedResult?.selectedHeatingHourIds,
+    ["2026-09-03T02:00:00.000Z", "2026-09-03T03:00:00.000Z"],
+    "publication guard must remove 07-08 even when optimizer selected it",
   );
 
   assertEqual(

@@ -145,6 +145,32 @@ export function runHeatingCooldownMarkerUnitTests() {
     "a changed already-ended daily-minimum price must suppress the marker",
   );
 
+  const secondPlannedHour = createHour("second-planned", "2025-01-15T11:00:00+02:00");
+  const afterBlockHour = createHour("after-block", "2025-01-15T12:00:00+02:00");
+  const twoHourBlock = [currentHour, secondPlannedHour, afterBlockHour];
+  const twoHourPriceHours = [pastHour, ...twoHourBlock];
+  assert.equal(
+    getCooldownBlockedHeatingHourId({
+      ...baseInput,
+      backendValidation: {
+        ...baseBackendValidation,
+        validated_plan_fingerprint: "2025-01-15|10,11",
+        validated_planned_hours: [10, 11],
+        validated_price_snapshot: buildCooldownPriceSnapshot(
+          twoHourPriceHours,
+          "2025-01-15",
+          "2025-01-16",
+        ),
+      },
+      optimizerHours: twoHourBlock,
+      priceHours: twoHourPriceHours,
+      optimizerSelectedHourIds: [currentHour.id, secondPlannedHour.id, afterBlockHour.id],
+      storedTodayHours: [10, 11],
+    }),
+    afterBlockHour.id,
+    "a two-hour active block must mark the hour after the block",
+  );
+
   const firstRepeatedHour = createHour(
     "first-03",
     "2025-10-26T03:00:00+03:00",

@@ -232,17 +232,19 @@ export function getCooldownBlockedHeatingHourId({
     return null;
   }
 
-  const nextHour = optimizerHours.find(
-    (hour) => hour.date.getTime() === currentHour.endDate.getTime(),
-  );
-  if (!nextHour || getFinnishDateKey(nextHour.startDate) !== todayPlanDate) {
-    return null;
-  }
+  let blockTail = currentHour;
+  while (true) {
+    const nextHour = optimizerHours.find(
+      (hour) => hour.date.getTime() === blockTail.endDate.getTime(),
+    );
+    if (!nextHour || getFinnishDateKey(nextHour.startDate) !== todayPlanDate) {
+      return null;
+    }
 
-  const nextHourNumber = getHelsinkiHourNumber(nextHour.date);
-  if (storedTodayHours.includes(nextHourNumber)) {
-    return null;
+    const nextHourNumber = getHelsinkiHourNumber(nextHour.date);
+    if (!storedTodayHours.includes(nextHourNumber)) {
+      return optimizerSelectedHourIds.includes(nextHour.id) ? nextHour.id : null;
+    }
+    blockTail = nextHour;
   }
-
-  return optimizerSelectedHourIds.includes(nextHour.id) ? nextHour.id : null;
 }

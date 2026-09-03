@@ -16,6 +16,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
+  applyHardHeatingBlockGuard,
   buildHeatingPlanPublicationDecision,
   buildHeatingPlanFingerprint,
   buildExpectedElectricityPriceSnapshot,
@@ -44,6 +45,7 @@ import {
   resolveOptimizerInputFetchReadiness,
   resolveHourlyDropProfile,
   resolveOptimizerSettings,
+  resolveActiveHeatingBlockGuard,
   resolvePostHeatingCooldownHourStart,
   resolveTankSnapshotRetryAction,
   runBackendHeatingOptimization,
@@ -454,17 +456,25 @@ Deno.serve(async (request) => {
       tomorrowPlanDate,
       topTemperature: currentTopTemperature,
     });
-    // Keep normal optimization running, but make the actual chronologically
-    // adjacent price interval after the already-started stored block a
-    // last-resort safety choice instead of letting repeated 5-minute
-    // recalculations extend the active block one hour at a time. Checking
-    // the next interval's Helsinki-local hour rather than currentHour + 1
-    // keeps both occurrences of the repeated DST hour covered by the same
-    // stored planned-hour number. Measured top temperature below 50 C also
-    // disables the cooldown penalty so the existing safety logic can react
-    // immediately.
+    const activeBlockGuard = resolveActiveHeatingBlockGuard({
+      hours,
+      latestHeating: heating,
+      now: attemptNow,
+      safetyTopTemperature: postHeatingCooldownSafetyTopTemperature,
+      storedTodayHours,
+      storedTomorrowHours,
+      todayPlanDate,
+      tomorrowPlanDate,
+      topTemperature: currentTopTemperature,
+    });
+    const boundaryBlockedHourId =
+      cooldownHourStart === null
+        ? null
+        : hours.find((hour) => hour.date.getTime() === cooldownHourStart)?.id ?? null;
+    const hardBlockedHourId = activeBlockGuard.blockedHourId ?? boundaryBlockedHourId;
+
     const optimizerHours = hours.map((hour) =>
-      cooldownHourStart !== null && hour.date.getTime() === cooldownHourStart
+      hardBlockedHourId !== null && hour.id === hardBlockedHourId
         ? { ...hour, price: hour.price + postHeatingCooldownPenaltyCents }
         : hour,
     );
@@ -478,6 +488,13 @@ Deno.serve(async (request) => {
       latestReading,
       now: attemptNow,
       settings: optimizationSettings,
+    });
+    const guardedOptimizerResult = applyHardHeatingBlockGuard({
+      blockedHourId: hardBlockedHourId,
+      hours,
+      lockedHourIds: activeBlockGuard.lockedHourIds,
+      maxHeatingHours: optimizationSettings.maxHeatingHours,
+      result: run.result,
     });
 
     // Stateless by design (see report): each run treats "unknown just
@@ -498,7 +515,7 @@ Deno.serve(async (request) => {
       heating,
       isTodayPlanLoaded: true,
       now: attemptNow,
-      optimizerResult: run.result,
+      optimizerResult: guardedOptimizerResult,
       optimizerSettings: { automaticMaxHeatingHours: optimizationSettings.maxHeatingHours },
       selectedHours: hours,
       storedPlans: buildStoredPlansMap(heatingPlanRows),
