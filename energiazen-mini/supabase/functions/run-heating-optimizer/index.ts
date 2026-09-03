@@ -16,7 +16,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
-  applyHardHeatingBlockGuard,
   buildHeatingPlanPublicationDecision,
   buildHeatingPlanFingerprint,
   buildExpectedElectricityPriceSnapshot,
@@ -484,17 +483,12 @@ Deno.serve(async (request) => {
       hourlyDrops: dropProfile.hourlyDrops,
       heatingGainSource,
       hours: optimizerHours,
+      forbiddenHeatingHourIds: hardBlockedHourId ? [hardBlockedHourId] : [],
       isCurrentlyHeating: heating === true,
       latestReading,
       now: attemptNow,
       settings: optimizationSettings,
-    });
-    const guardedOptimizerResult = applyHardHeatingBlockGuard({
-      blockedHourId: hardBlockedHourId,
-      hours,
-      lockedHourIds: activeBlockGuard.lockedHourIds,
-      maxHeatingHours: optimizationSettings.maxHeatingHours,
-      result: run.result,
+      requiredHeatingHourIds: activeBlockGuard.lockedHourIds,
     });
 
     // Stateless by design (see report): each run treats "unknown just
@@ -515,7 +509,7 @@ Deno.serve(async (request) => {
       heating,
       isTodayPlanLoaded: true,
       now: attemptNow,
-      optimizerResult: guardedOptimizerResult,
+      optimizerResult: run.result,
       optimizerSettings: { automaticMaxHeatingHours: optimizationSettings.maxHeatingHours },
       selectedHours: hours,
       storedPlans: buildStoredPlansMap(heatingPlanRows),

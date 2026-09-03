@@ -320,6 +320,49 @@ export function runRunHeatingOptimizerLogicUnitTests() {
     "publication guard must remove 07-08 even when optimizer selected it",
   );
 
+  const constraintSettings = {
+    absoluteMinimumTemperature: 10,
+    fallbackHeatingGainPerHour: 10,
+    fullTankAverageTemperature: 70,
+    fullTankShowers: 6,
+    maxHeatingHours: 3,
+    maxTankTemperature: 90,
+    safetyShowerReserve: 2,
+    targetShowerReserve: 5,
+  };
+  const rawBlockDependentPlan = { ...fakeGuardResult, valid: true };
+  const constrainedBlockPlan = optimizeHeatingPlan({
+    currentBottomTemperature: 60,
+    currentTopTemperature: 60,
+    forbiddenHeatingHourIds: [activeBlockGuard.blockedHourId as string],
+    heatingGainPerHour: 15,
+    hourlyDrops: { 8: 40 },
+    hours: activeBlockHours,
+    isCurrentlyHeating: true,
+    requiredHeatingHourIds: activeBlockGuard.lockedHourIds,
+    settings: constraintSettings,
+  });
+  assert(
+    rawBlockDependentPlan.valid &&
+      rawBlockDependentPlan.selectedHeatingHourIds.includes(
+        activeBlockGuard.blockedHourId as string,
+      ),
+    "the regression fixture's raw valid plan must depend on the adjacent blocked hour",
+  );
+  assertEqual(
+    constrainedBlockPlan.valid,
+    false,
+    "a plan that is only valid with the blocked adjacent hour must not be publishable as valid",
+  );
+  assertEqual(
+    constrainedBlockPlan.forecast.some(
+      (hour) =>
+        hour.startDate === activeBlockGuard.blockedHourId && hour.isHeatingSelected,
+    ),
+    false,
+    "the constrained result forecast must describe the exact selection without the blocked hour",
+  );
+
   assertEqual(
     isHeatingOptimizerCronSecretAuthorized("private-cron-secret", "private-cron-secret"),
     true,

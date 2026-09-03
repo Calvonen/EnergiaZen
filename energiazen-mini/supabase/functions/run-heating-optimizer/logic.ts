@@ -834,22 +834,26 @@ export function runBackendHeatingOptimization({
   heatingGainHistory,
   hourlyDrops,
   hours,
+  forbiddenHeatingHourIds,
   heatingGainSource,
   isCurrentlyHeating,
   latestReading,
   now,
   settings,
+  requiredHeatingHourIds,
 }: {
   /** See buildOptimizerDailyMinimumPrices / heatingOptimizer.ts's optimizeHeatingPlan. */
   dailyMinimumPrices?: Record<string, number>;
   heatingGainHistory: TankTemperatureReading[];
   hourlyDrops: HourlyTemperatureDropProfile;
   hours: HeatingOptimizationHour[];
+  forbiddenHeatingHourIds?: string[];
   heatingGainSource: "learned" | "fixed";
   isCurrentlyHeating: boolean;
   latestReading: RawTankReading | null;
   now: Date;
   settings: HeatingOptimizationSettings;
+  requiredHeatingHourIds?: string[];
 }): BackendOptimizationRun {
   const readiness = checkOptimizerReadiness({
     latestReading,
@@ -893,10 +897,12 @@ export function runBackendHeatingOptimization({
     dailyMinimumPrices,
     hourlyDrops,
     hours: materializedHours,
+    forbiddenHeatingHourIds,
     heatingGainPerHour:
       heatingGainSource === "fixed" ? settings.fallbackHeatingGainPerHour : undefined,
     isCurrentlyHeating,
     recoveryDropEnabled: false,
+    requiredHeatingHourIds,
     settings,
     tankReadings: heatingGainHistory,
   });
