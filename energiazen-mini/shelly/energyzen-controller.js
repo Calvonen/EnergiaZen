@@ -765,14 +765,16 @@ function isTrustedBackendHeartbeat(rows, error, planRow, nowSeconds) {
   // plan. That would create the exact unsafe failure mode where the optimizer
   // decides more heat is needed, becomes unhealthy because no valid replacement
   // can be published, and Shelly then refuses the previously approved heating
-  // hour. Preserve the matching plan only for optimizer_invalid, and only while
-  // fresh run attempts prove the backend cron is still alive. Infrastructure
-  // failures (run_error/deferred/etc.) continue to fail over exactly as before.
+  // hour. Preserve the matching plan only for optimizer_invalid, while its
+  // original validation and the latest run attempt are both still fresh.
+  // Infrastructure failures (run_error/deferred/etc.) continue to fail over
+  // exactly as before.
   let runAttemptAtSeconds = parsePostgresTimestampSeconds(row.last_run_attempt_at);
   let runAttemptAgeSeconds = nowSeconds - runAttemptAtSeconds;
   return (
     row.health_status === "unhealthy" &&
     row.last_outcome === "optimizer_invalid" &&
+    validationAgeSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS &&
     isFinite(runAttemptAtSeconds) &&
     runAttemptAgeSeconds >= 0 &&
     runAttemptAgeSeconds <= MAX_BACKEND_RUN_ATTEMPT_AGE_SECONDS

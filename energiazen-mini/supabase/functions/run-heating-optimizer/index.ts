@@ -572,7 +572,11 @@ Deno.serve(async (request) => {
       typeof heating === "boolean" &&
       isValidReadyDecision &&
       publicationReadiness.ok;
-    const invalidOutcome = !inputFetchReadiness.ok
+    // Reserve optimizer_invalid for invalid optimizer results that otherwise
+    // passed every publication-readiness gate. Shelly may preserve an existing
+    // validated plan for that outcome, so configuration/control/input failures
+    // must remain deferred and fail closed there.
+    const invalidOutcome = !publicationReadiness.ok
       ? "deferred"
       : canValidateNoChanges
         ? "no_changes"

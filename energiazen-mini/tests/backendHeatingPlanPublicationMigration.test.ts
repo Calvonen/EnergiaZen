@@ -256,13 +256,13 @@ export function runBackendHeatingPlanPublicationMigrationTests() {
   );
   assertSource(
     edgeFunctionSource.includes("optimizer_input_fetch_failures: inputFetchReadiness.failedReasons") &&
-      edgeFunctionSource.includes("const invalidOutcome = !inputFetchReadiness.ok") &&
+      edgeFunctionSource.includes("const invalidOutcome = !publicationReadiness.ok") &&
       edgeFunctionSource.includes("!publicationReadiness.ok") &&
       edgeFunctionSource.includes("p_health_status: \"unhealthy\"") &&
       edgeFunctionSource.includes("p_validated_plan_at: null") &&
       edgeFunctionSource.includes("p_validated_plan_fingerprint: null") &&
       edgeFunctionSource.includes("p_validated_planned_hours: null"),
-    "fetch failure must remain diagnostic while changed/no_changes completion stays unhealthy and non-validating",
+    "all publication-readiness failures must defer while changed/no_changes completion stays unhealthy and non-validating",
   );
   assertSource(
     edgeFunctionSource.includes("p_last_outcome: \"publication_failed\"") &&

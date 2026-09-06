@@ -708,11 +708,22 @@ assert.strictEqual(
     health_status: "unhealthy",
     last_outcome: "optimizer_invalid",
     last_run_attempt_at: "2026-08-13T11:56:00Z",
-    last_validated_plan_at: "2026-08-13T10:00:00Z",
+    last_validated_plan_at: "2026-08-13T10:30:00Z",
     validated_plan_fingerprint: "2026-08-13|15",
   }]).source,
   "energyzen",
   "optimizer_invalid + fresh backend run + matching previously validated plan remains trusted",
+);
+assert.strictEqual(
+  trustedControl([{
+    health_status: "unhealthy",
+    last_outcome: "optimizer_invalid",
+    last_run_attempt_at: "2026-08-13T11:56:00Z",
+    last_validated_plan_at: "2026-08-13T10:29:59Z",
+    validated_plan_fingerprint: "2026-08-13|15",
+  }]).source,
+  "backup",
+  "fresh optimizer_invalid attempts cannot extend preserved-plan trust beyond validation age",
 );
 assert.strictEqual(
   trustedControl([{
