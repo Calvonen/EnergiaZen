@@ -533,15 +533,25 @@ Deno.serve(async (request) => {
       todayPlanDate,
       tomorrowPlanDate,
     });
+    const firstSafetyViolation =
+      run.result?.forecast.find((forecastHour) => forecastHour.violatedReserve) ?? null;
+    const shadowDiagnostics = {
+      first_safety_violation_at: firstSafetyViolation?.startDate ?? null,
+      first_safety_showers_before: firstSafetyViolation?.showersLeftBefore ?? null,
+      first_safety_showers_after: firstSafetyViolation?.showersLeftAfter ?? null,
+      first_safety_temperature_before: firstSafetyViolation?.temperatureBeforeHeating ?? null,
+      first_safety_temperature_after: firstSafetyViolation?.temperatureAfter ?? null,
+      first_safety_heating_selected: firstSafetyViolation?.isHeatingSelected ?? null,
+    };
 
     const shadowWrite = shadowRunSaved
       ? await supabase
           .from("heating_plan_shadow_runs")
-          .update(shadowRow)
+          .update({ ...shadowRow, ...shadowDiagnostics })
           .eq("id", shadowRunId)
       : await supabase
           .from("heating_plan_shadow_runs")
-          .insert({ id: shadowRunId, ...shadowRow });
+          .insert({ id: shadowRunId, ...shadowRow, ...shadowDiagnostics });
     const insertError = shadowWrite.error;
 
     if (insertError) {
