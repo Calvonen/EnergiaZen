@@ -18,6 +18,11 @@ let REQUIRED_CONTROL_PLANE_UNRELIABLE_CYCLES = 3;
 // Hourly pg_cron cadence plus one half-hour operational grace period.
 // This gates validation time, never heating_plans.updated_at.
 let MAX_BACKEND_VALIDATION_AGE_SECONDS = 90 * 60;
+// If a later optimizer run is invalid, an already validated matching plan may
+// still run only while the backend itself is demonstrably alive. The cron runs
+// every five minutes, so 15 minutes leaves room for transient scheduling delay
+// without allowing a dead backend to keep an old plan trusted indefinitely.
+let MAX_BACKEND_RUN_ATTEMPT_AGE_SECONDS = 15 * 60;
 // Keep disabled while the optimizer is shadow-only. Enable only in the same
 // controlled deployment that provides an approved backend publication path.
 let BACKEND_PLAN_TRUST_ENABLED = true;
@@ -735,9 +740,45 @@ function isTrustedBackendHeartbeat(rows, error, planRow, nowSeconds) {
   if (error !== null || !Array.isArray(rows) || rows.length !== 1 || !planRow) return false;
   let row = rows[0];
   let validatedAtSeconds = parsePostgresTimestampSeconds(row.last_validated_plan_at);
-  let ageSeconds = nowSeconds - validatedAtSeconds;
+  let validationAgeSeconds = nowSeconds - validatedAtSeconds;
   let planFingerprint = buildPlanFingerprint(planRow.plan_date, planRow.planned_hours);
-  return row.health_status === "healthy" && isFinite(validatedAtSeconds) && ageSeconds >= 0 && ageSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS && planFingerprint !== null && row.validated_plan_fingerprint === planFingerprint;
+  let fingerprintMatches =
+    planFingerprint !== null &&
+    row.validated_plan_fingerprint === planFingerprint;
+
+  if (
+    !fingerprintMatches ||
+    !isFinite(validatedAtSeconds) ||
+    validationAgeSeconds < 0
+  ) {
+    return false;
+  }
+
+  if (
+    row.health_status === "healthy" &&
+    validationAgeSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS
+  ) {
+    return true;
+  }
+
+  // A later optimizer_invalid result must not cancel an already validated
+  // plan. That would create the exact unsafe failure mode where the optimizer
+  // decides more heat is needed, becomes unhealthy because no valid replacement
+  // can be published, and Shelly then refuses the previously approved heating
+  // hour. Preserve the matching plan only for optimizer_invalid, while its
+  // original validation and the latest run attempt are both still fresh.
+  // Infrastructure failures (run_error/deferred/etc.) continue to fail over
+  // exactly as before.
+  let runAttemptAtSeconds = parsePostgresTimestampSeconds(row.last_run_attempt_at);
+  let runAttemptAgeSeconds = nowSeconds - runAttemptAtSeconds;
+  return (
+    row.health_status === "unhealthy" &&
+    row.last_outcome === "optimizer_invalid" &&
+    validationAgeSeconds <= MAX_BACKEND_VALIDATION_AGE_SECONDS &&
+    isFinite(runAttemptAtSeconds) &&
+    runAttemptAgeSeconds >= 0 &&
+    runAttemptAgeSeconds <= MAX_BACKEND_RUN_ATTEMPT_AGE_SECONDS
+  );
 }
 
 function resolveTrustedPlanControl(planRows, planError, heartbeatRows, heartbeatError, settings, today, nowSeconds) {
@@ -972,7 +1013,7 @@ function fetchTodayPlan(settings) {
       else fetchLatestReading(shadowControl, settings);
       return;
     }
-    let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
+    let heartbeatPath = "backend_heating_optimizer_state?select=health_status,last_outcome,last_run_attempt_at,last_validated_plan_at,validated_plan_fingerprint&id=eq.1&limit=1";
     supabaseRequest(heartbeatPath, function (heartbeatRows, heartbeatError) {
       let control = applyControlPlaneDebounce(
         resolveTrustedPlanControl(rows, error, heartbeatRows, heartbeatError, settings, today, resolveSysUnixtimeSeconds()),
