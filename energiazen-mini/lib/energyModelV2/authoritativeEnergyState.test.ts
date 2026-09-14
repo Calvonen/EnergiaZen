@@ -58,6 +58,11 @@ export function runAuthoritativeEnergyStateUnitTests() {
     reconciled.quality === "valid",
     "a one-kWh sensor lag does not invalidate the physical state",
   );
+  assertClose(
+    reconciled.uncertaintyKwh,
+    observed.uncertainty.energyKwh,
+    "known heater energy is not reclassified as balance uncertainty",
+  );
 
   const degraded = createAuthoritativeEnergyState({
     ledger: {
@@ -67,13 +72,18 @@ export function runAuthoritativeEnergyStateUnitTests() {
     },
     observedState: observed,
   });
-  assert(degraded.quality === "degraded", "larger model/sensor gap degrades quality");
+  assert(degraded.quality === "degraded", "larger model/sensor gap degrades diagnostics");
   assert(
     degraded.reasons.includes("physical/sensor energy gap exceeds degraded threshold"),
     "degraded state explains the model/sensor disagreement",
   );
+  assertClose(
+    degraded.uncertaintyKwh,
+    observed.uncertainty.energyKwh,
+    "diagnostic sensor gap is separate from physical balance uncertainty",
+  );
 
-  const invalid = createAuthoritativeEnergyState({
+  const largeLag = createAuthoritativeEnergyState({
     ledger: {
       ...baseLedger,
       modeledStoredEnergyKwh: baseLedger.observedStoredEnergyKwh + 4.5,
@@ -81,9 +91,13 @@ export function runAuthoritativeEnergyStateUnitTests() {
     },
     observedState: observed,
   });
-  assert(invalid.quality === "invalid", "extreme model/sensor gap fails closed");
   assert(
-    invalid.uncertaintyKwh >= 4.5,
-    "sensor gap is reflected in energy uncertainty",
+    largeLag.quality === "degraded",
+    "even a large positive sensor lag alone cannot invalidate known remaining energy",
+  );
+  assertClose(
+    largeLag.uncertaintyKwh,
+    observed.uncertainty.energyKwh,
+    "large sensor lag still does not erase known physical energy",
   );
 }
