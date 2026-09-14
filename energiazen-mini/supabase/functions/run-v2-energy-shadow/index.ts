@@ -67,6 +67,7 @@ Deno.serve(async (request) => {
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const result = runLiveReserveShadow({
+      now,
       readings,
       reliableDraws: (drawsResult.data ?? []) as ReliableWaterDraw[],
       v1Shadow,
@@ -88,8 +89,8 @@ Deno.serve(async (request) => {
       sensor_gap_kwh: result.sensorGapKwh,
       balance_uncertainty_kwh: result.balanceUncertaintyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
-      safety_energy_kwh: 3,
-      target_energy_kwh: 6,
+      safety_energy_kwh: result.safetyEnergyKwh,
+      target_energy_kwh: result.targetEnergyKwh,
       v2_band: result.v2Band,
       v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
       v1_shadow_run_id: v1Shadow?.id ?? null,
