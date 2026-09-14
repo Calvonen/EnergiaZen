@@ -80,8 +80,12 @@ export function runPhysicalEnergyLedgerUnitTests() {
 
   assertClose(
     afterValidatedDraw.modeledStoredEnergyKwh,
-    8.05,
-    "validated removal permits a real downward sensor correction",
+    8.19,
+    "validated removal lowers the physical balance only by accepted removal plus modeled loss",
+  );
+  assert(
+    afterValidatedDraw.modeledStoredEnergyKwh > afterValidatedDraw.observedStoredEnergyKwh,
+    "a colder sensor observation cannot erase additional unaccepted energy",
   );
   assertClose(
     afterValidatedDraw.cumulativeAcceptedRemovalKwh,
@@ -100,7 +104,7 @@ export function runPhysicalEnergyLedgerUnitTests() {
 
   assertClose(
     noHeatingRest.modeledStoredEnergyKwh,
-    7.85,
+    7.99,
     "without accepted removal, ordinary cooling follows modeled loss instead of a larger unexplained sensor drop",
   );
   assertClose(
