@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.forecast-tests.json",
+  "compilerOptions": {
+    "outDir": ".tmp-v2-live-shadow-tests",
+    "rootDir": "."
+  },
+  "include": [
+    "supabase/functions/run-v2-energy-shadow/logic.ts",
+    "supabase/functions/run-v2-energy-shadow/logic.test.ts"
+  ]
+}
