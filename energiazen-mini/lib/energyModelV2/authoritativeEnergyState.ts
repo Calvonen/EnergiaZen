@@ -17,6 +17,11 @@ export type AuthoritativeEnergyState = {
   /** Difference between physical ledger and instantaneous sensor estimate. */
   sensorGapKwh: number;
   quality: AuthoritativeEnergyQuality;
+  /**
+   * Uncertainty in the physical energy balance itself. Sensor lag is kept
+   * separate in sensorGapKwh: known electrical heater input must not become
+   * uncertain merely because stratified sensors have not reacted yet.
+   */
   uncertaintyKwh: number;
   reasons: string[];
   timestamp: string;
@@ -24,22 +29,20 @@ export type AuthoritativeEnergyState = {
 
 export type AuthoritativeEnergyStateConfig = {
   degradedSensorGapKwh: number;
-  invalidSensorGapKwh: number;
 };
 
 export const defaultAuthoritativeEnergyStateConfig: AuthoritativeEnergyStateConfig = {
   degradedSensorGapKwh: 1.5,
-  invalidSensorGapKwh: 4,
 };
 
 /**
  * Promotes the reconciled physical ledger to V2's authoritative scalar energy
  * state while keeping sensor-derived usable energy explicitly observational.
  *
- * We do not convert the ledger gap into "usable" energy here because a scalar
- * ledger cannot prove which layer contains that energy. A later forecast layer
- * may distribute known heater input physically, but the primary reserve value
- * is already safe to express as remaining kWh.
+ * A positive ledger/sensor gap is useful evidence about stratification or
+ * sensor lag, but it is not evidence that known heater energy disappeared.
+ * Therefore the gap may degrade diagnostic quality, but it is never copied
+ * into balance uncertainty and never invalidates remaining energy by itself.
  */
 export function createAuthoritativeEnergyState({
   config = defaultAuthoritativeEnergyStateConfig,
@@ -54,10 +57,7 @@ export function createAuthoritativeEnergyState({
   const reasons = [...observedState.uncertainty.reasons];
   let quality: AuthoritativeEnergyQuality = observedState.quality;
 
-  if (sensorGapKwh >= config.invalidSensorGapKwh) {
-    quality = "invalid";
-    reasons.push("physical/sensor energy gap exceeds invalid threshold");
-  } else if (sensorGapKwh >= config.degradedSensorGapKwh && quality === "valid") {
+  if (sensorGapKwh >= config.degradedSensorGapKwh && quality === "valid") {
     quality = "degraded";
     reasons.push("physical/sensor energy gap exceeds degraded threshold");
   }
@@ -70,7 +70,7 @@ export function createAuthoritativeEnergyState({
     remainingEnergyKwh: nonNegative(ledger.modeledStoredEnergyKwh),
     sensorGapKwh,
     timestamp: ledger.timestamp,
-    uncertaintyKwh: Math.max(observedState.uncertainty.energyKwh, sensorGapKwh),
+    uncertaintyKwh: nonNegative(observedState.uncertainty.energyKwh),
   };
 }
 
