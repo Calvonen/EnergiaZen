@@ -1,5 +1,11 @@
 import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
+import {
+  defaultEnergyReserveThresholds,
+  evaluateEnergyReserve,
+} from "../_shared/energyModelV2/energyReservePolicy.ts";
+import { compareEnergyReserveShadow } from "../_shared/energyModelV2/energyReserveShadow.ts";
+import { isTankReadingFreshForCalculation } from "../_shared/tankReadingFreshness.ts";
 
 export type ShadowTankReading = {
   created_at: string;
@@ -34,6 +40,8 @@ export type LiveReserveShadowResult = {
   sensorGapKwh: number | null;
   balanceUncertaintyKwh: number;
   conservativeEnergyKwh: number | null;
+  safetyEnergyKwh: number;
+  targetEnergyKwh: number;
   v2Band: "below_safety" | "recovery" | "target_met" | "invalid";
   v2NeedsEnergyRecovery: boolean | null;
   v1NeedsEnergyRecovery: boolean | null;
@@ -47,8 +55,6 @@ export type LiveReserveShadowResult = {
 
 export const liveReserveShadowConfig = {
   heaterPowerKw: 3,
-  safetyEnergyKwh: 3,
-  targetEnergyKwh: 6,
   ambientTempC: 21,
   topHeatLossTimeConstantHours: 96,
   bottomHeatLossTimeConstantHours: 120,
@@ -58,10 +64,12 @@ export const liveReserveShadowConfig = {
 } as const;
 
 export function runLiveReserveShadow({
+  now,
   readings,
   reliableDraws,
   v1Shadow,
 }: {
+  now: Date;
   readings: ShadowTankReading[];
   reliableDraws: ReliableWaterDraw[];
   v1Shadow: V1ShadowSnapshot | null;
@@ -75,6 +83,17 @@ export function runLiveReserveShadow({
 
   if (ordered.length < 2) {
     return unavailable("insufficient_tank_readings", ordered.length, 0, false, v1NeedsEnergyRecovery);
+  }
+
+  const latest = ordered[ordered.length - 1];
+  if (!isTankReadingFreshForCalculation(latest.created_at, now)) {
+    return unavailable(
+      "latest_tank_reading_stale",
+      ordered.length,
+      0,
+      false,
+      v1NeedsEnergyRecovery,
+    );
   }
 
   const inletBaseline = Math.min(...ordered.map((r) => r.inlet_temp as number));
@@ -91,7 +110,6 @@ export function runLiveReserveShadow({
   }
 
   let remainingEnergyKwh = observedStoredEnergyKwh(ordered[0], inletBaseline);
-  let maxGapMinutes = 0;
 
   for (let index = 1; index < ordered.length; index += 1) {
     const previous = ordered[index - 1];
@@ -100,7 +118,6 @@ export function runLiveReserveShadow({
     const currentMs = Date.parse(current.created_at);
     const deltaHours = Math.max((currentMs - previousMs) / 3_600_000, 0);
     const gapMinutes = deltaHours * 60;
-    maxGapMinutes = Math.max(maxGapMinutes, gapMinutes);
 
     if (gapMinutes > liveReserveShadowConfig.maxReadingGapMinutes) {
       return unavailable(
@@ -136,7 +153,6 @@ export function runLiveReserveShadow({
     remainingEnergyKwh = Math.max(predicted, observed);
   }
 
-  const latest = ordered[ordered.length - 1];
   const observedEnergyKwh = observedStoredEnergyKwh(latest, inletBaseline);
   const sensorGapKwh = Math.max(remainingEnergyKwh - observedEnergyKwh, 0);
 
@@ -144,17 +160,22 @@ export function runLiveReserveShadow({
   // electrical input. Only balance/model uncertainty is subtracted from the
   // total remaining-energy reserve decision.
   const balanceUncertaintyKwh = liveReserveShadowConfig.baselineBalanceUncertaintyKwh;
-  const conservativeEnergyKwh = Math.max(remainingEnergyKwh - balanceUncertaintyKwh, 0);
-  const v2Band = conservativeEnergyKwh < liveReserveShadowConfig.safetyEnergyKwh
-    ? "below_safety"
-    : conservativeEnergyKwh < liveReserveShadowConfig.targetEnergyKwh
-      ? "recovery"
-      : "target_met";
-  const v2NeedsEnergyRecovery = v2Band !== "target_met";
+  const v2Decision = evaluateEnergyReserve({
+    quality: "valid",
+    remainingEnergyKwh,
+    uncertaintyKwh: balanceUncertaintyKwh,
+  });
+  const v2NeedsEnergyRecovery = v2Decision.needsEnergyRecovery;
+  const comparison = v1NeedsEnergyRecovery === null
+    ? "v1_unavailable"
+    : compareEnergyReserveShadow({
+        v1NeedsEnergyRecovery,
+        v2Decision,
+      }).classification;
 
   return {
-    available: true,
-    reason: null,
+    available: v2NeedsEnergyRecovery !== null,
+    reason: v2NeedsEnergyRecovery === null ? "reserve_policy_unavailable" : null,
     readingCount: ordered.length,
     reliableDrawCount: draws.length,
     unresolvedDrawDetected: false,
@@ -162,11 +183,13 @@ export function runLiveReserveShadow({
     observedEnergyKwh: round(observedEnergyKwh),
     sensorGapKwh: round(sensorGapKwh),
     balanceUncertaintyKwh,
-    conservativeEnergyKwh: round(conservativeEnergyKwh),
-    v2Band,
+    conservativeEnergyKwh: round(v2Decision.conservativeEnergyKwh),
+    safetyEnergyKwh: v2Decision.thresholds.safetyEnergyKwh,
+    targetEnergyKwh: v2Decision.thresholds.targetEnergyKwh,
+    v2Band: v2Decision.band,
     v2NeedsEnergyRecovery,
     v1NeedsEnergyRecovery,
-    comparison: compare(v1NeedsEnergyRecovery, v2NeedsEnergyRecovery),
+    comparison,
   };
 }
 
@@ -188,18 +211,13 @@ function unavailable(
     sensorGapKwh: null,
     balanceUncertaintyKwh: liveReserveShadowConfig.baselineBalanceUncertaintyKwh,
     conservativeEnergyKwh: null,
+    safetyEnergyKwh: defaultEnergyReserveThresholds.safetyEnergyKwh,
+    targetEnergyKwh: defaultEnergyReserveThresholds.targetEnergyKwh,
     v2Band: "invalid",
     v2NeedsEnergyRecovery: null,
     v1NeedsEnergyRecovery,
     comparison: v1NeedsEnergyRecovery === null ? "v1_unavailable" : "v2_unavailable",
   };
-}
-
-function compare(v1: boolean | null, v2: boolean | null): LiveReserveShadowResult["comparison"] {
-  if (v1 === null) return "v1_unavailable";
-  if (v2 === null) return "v2_unavailable";
-  if (v1 === v2) return "agree";
-  return v2 ? "v2_more_conservative" : "v2_less_conservative";
 }
 
 function isUsableReading(reading: ShadowTankReading) {
