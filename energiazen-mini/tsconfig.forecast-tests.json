@@ -5,11 +5,7 @@
     "module": "commonjs",
     "outDir": ".tmp-forecast-tests",
     "rewriteRelativeImportExtensions": true,
-    "paths": {
-      "@/*": [
-        "./*"
-      ]
-    },
+    "paths": {"@/*": ["./*"]},
     "strict": true,
     "target": "es2020"
   },
@@ -123,6 +119,10 @@
     "lib/energyModelV2/replayEngine.test.ts",
     "lib/energyModelV2/energyModelCore.ts",
     "lib/energyModelV2/energyModelCore.test.ts",
+    "lib/energyModelV2/physicalEnergyLedger.ts",
+    "lib/energyModelV2/physicalEnergyLedger.test.ts",
+    "lib/energyModelV2/physicalEnergyStateBridge.ts",
+    "lib/energyModelV2/physicalEnergyStateBridge.test.ts",
     "lib/energyModelV2/heatLossModel.ts",
     "lib/energyModelV2/heatLossModel.test.ts",
     "lib/energyModelV2/heatLossChart.ts",
