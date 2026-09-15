@@ -1,6 +1,7 @@
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import { optimizeEnergyPlan } from "../_shared/energyModelV2/energyPlanOptimizer.ts";
 import { liveReserveShadowConfig, type LiveReserveShadowResult } from "./logic.ts";
+import type { V2HeatingConstraints } from "./productionConstraints.ts";
 
 export type ShadowElectricityPrice = {
   ends_at: string;
@@ -37,6 +38,7 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
 
 export function runLiveEnergyPlanShadow({
   automaticMaxHeatingHours,
+  constraints = { forbiddenHeatingHourIds: [], requiredHeatingHourIds: [] },
   energyCapacityKwh,
   inletBaselineC,
   maxTankTemperatureC,
@@ -45,6 +47,7 @@ export function runLiveEnergyPlanShadow({
   reserve,
 }: {
   automaticMaxHeatingHours: number;
+  constraints?: V2HeatingConstraints;
   energyCapacityKwh: number;
   inletBaselineC: number;
   maxTankTemperatureC: number;
@@ -52,11 +55,7 @@ export function runLiveEnergyPlanShadow({
   prices: ShadowElectricityPrice[];
   reserve: LiveReserveShadowResult;
 }): LiveEnergyPlanShadowResult {
-  if (
-    !reserve.available ||
-    reserve.remainingEnergyKwh === null ||
-    !Number.isFinite(reserve.remainingEnergyKwh)
-  ) {
+  if (!reserve.available || reserve.remainingEnergyKwh === null || !Number.isFinite(reserve.remainingEnergyKwh)) {
     return unavailable("reserve_state_unavailable");
   }
   if (!Number.isFinite(automaticMaxHeatingHours) || automaticMaxHeatingHours < 0) {
@@ -65,28 +64,22 @@ export function runLiveEnergyPlanShadow({
   if (automaticMaxHeatingHours > maxShadowHeatingHours) {
     return unavailable("max_heating_hours_above_shadow_limit");
   }
-  if (
-    !Number.isFinite(maxTankTemperatureC) ||
-    !Number.isFinite(inletBaselineC) ||
-    !Number.isFinite(energyCapacityKwh) ||
-    energyCapacityKwh <= 0
-  ) {
+  if (!Number.isFinite(maxTankTemperatureC) || !Number.isFinite(inletBaselineC) || !Number.isFinite(energyCapacityKwh) || energyCapacityKwh <= 0) {
     return unavailable("invalid_thermal_inputs");
   }
 
-  const standingLossKwhPerHour = worstCaseStandingLossKwhPerHour({
-    inletBaselineC,
-    maxTankTemperatureC,
-  });
+  const standingLossKwhPerHour = worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC });
   const horizon = buildPriceHorizon({ now, prices, standingLossKwhPerHour });
   if (!horizon.ok) return unavailable(horizon.reason, standingLossKwhPerHour);
 
   const plan = optimizeEnergyPlan({
     energyCapacityKwh,
+    forbiddenHeatingHourIds: constraints.forbiddenHeatingHourIds,
     heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
     initialRemainingEnergyKwh: reserve.remainingEnergyKwh,
     initialUncertaintyKwh: reserve.balanceUncertaintyKwh,
     maxHeatingHours: automaticMaxHeatingHours,
+    requiredHeatingHourIds: constraints.requiredHeatingHourIds,
     segments: horizon.segments,
     thresholds: {
       safetyEnergyKwh: reserve.safetyEnergyKwh,
@@ -112,22 +105,12 @@ export function runLiveEnergyPlanShadow({
   };
 }
 
-function buildPriceHorizon({
-  now,
-  prices,
-  standingLossKwhPerHour,
-}: {
+function buildPriceHorizon({ now, prices, standingLossKwhPerHour }: {
   now: Date;
   prices: ShadowElectricityPrice[];
   standingLossKwhPerHour: number;
 }):
-  | { ok: true; horizonEndAt: string; segments: Array<{
-      id: string;
-      modeledHeatLossKwh: number;
-      priceCentsPerKwh: number;
-      segmentHours: number;
-      startDate: string;
-    }> }
+  | { ok: true; horizonEndAt: string; segments: Array<{ id: string; modeledHeatLossKwh: number; priceCentsPerKwh: number; segmentHours: number; startDate: string }> }
   | { ok: false; reason: string } {
   const today = helsinkiDateKey(now);
   const tomorrow = helsinkiDateKeyOffset(now, 1);
@@ -139,17 +122,13 @@ function buildPriceHorizon({
       Number.isFinite(Date.parse(price.starts_at)) &&
       Number.isFinite(Date.parse(price.ends_at)) &&
       Date.parse(price.ends_at) > nowMs &&
-      [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at)))
-    )
+      [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at))))
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
   if (!ordered.length) return { ok: false, reason: "no_price_hours_available" };
-
   const firstStart = Date.parse(ordered[0].starts_at);
   const firstEnd = Date.parse(ordered[0].ends_at);
-  if (!(firstStart <= nowMs && firstEnd > nowMs)) {
-    return { ok: false, reason: "current_price_hour_missing" };
-  }
+  if (!(firstStart <= nowMs && firstEnd > nowMs)) return { ok: false, reason: "current_price_hour_missing" };
   for (let index = 1; index < ordered.length; index += 1) {
     if (Date.parse(ordered[index - 1].ends_at) !== Date.parse(ordered[index].starts_at)) {
       return { ok: false, reason: "price_horizon_gap" };
@@ -168,53 +147,28 @@ function buildPriceHorizon({
       startDate: new Date(startMs).toISOString(),
     };
   });
-
-  return {
-    ok: true,
-    horizonEndAt: ordered[ordered.length - 1].ends_at,
-    segments,
-  };
+  return { ok: true, horizonEndAt: ordered[ordered.length - 1].ends_at, segments };
 }
 
-function worstCaseStandingLossKwhPerHour({
-  inletBaselineC,
-  maxTankTemperatureC,
-}: {
-  inletBaselineC: number;
-  maxTankTemperatureC: number;
-}) {
+function worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC }: { inletBaselineC: number; maxTankTemperatureC: number }) {
   const tank = sensorGeometryV2.tank;
   const topHeight = tank.heightCm - sensorGeometryV2.topSensorDistanceFromTopCm;
   const boundary = (topHeight + sensorGeometryV2.bottomSensorHeightFromBottomCm) / 2;
   const bottomMassKg = tank.nominalVolumeLiters * Math.max(0, Math.min(boundary / tank.heightCm, 1));
   const topMassKg = tank.nominalVolumeLiters - bottomMassKg;
-  const topAfter = applyNewtonCooling(
-    maxTankTemperatureC,
-    liveReserveShadowConfig.topHeatLossTimeConstantHours,
-  );
-  const bottomAfter = applyNewtonCooling(
-    maxTankTemperatureC,
-    liveReserveShadowConfig.bottomHeatLossTimeConstantHours,
-  );
-  const before =
-    layerEnergy(topMassKg, maxTankTemperatureC, inletBaselineC) +
-    layerEnergy(bottomMassKg, maxTankTemperatureC, inletBaselineC);
-  const after =
-    layerEnergy(topMassKg, topAfter, inletBaselineC) +
-    layerEnergy(bottomMassKg, bottomAfter, inletBaselineC);
+  const topAfter = applyNewtonCooling(maxTankTemperatureC, liveReserveShadowConfig.topHeatLossTimeConstantHours);
+  const bottomAfter = applyNewtonCooling(maxTankTemperatureC, liveReserveShadowConfig.bottomHeatLossTimeConstantHours);
+  const before = layerEnergy(topMassKg, maxTankTemperatureC, inletBaselineC) + layerEnergy(bottomMassKg, maxTankTemperatureC, inletBaselineC);
+  const after = layerEnergy(topMassKg, topAfter, inletBaselineC) + layerEnergy(bottomMassKg, bottomAfter, inletBaselineC);
   return Math.max(before - after, 0);
 }
 
 function applyNewtonCooling(temperatureC: number, timeConstantHours: number) {
-  return liveReserveShadowConfig.ambientTempC +
-    (temperatureC - liveReserveShadowConfig.ambientTempC) * Math.exp(-1 / timeConstantHours);
+  return liveReserveShadowConfig.ambientTempC + (temperatureC - liveReserveShadowConfig.ambientTempC) * Math.exp(-1 / timeConstantHours);
 }
 
 function layerEnergy(massKg: number, temperatureC: number, inletTempC: number) {
-  return Math.max(
-    massKg * liveReserveShadowConfig.specificHeatKwhPerKgC * (temperatureC - inletTempC),
-    0,
-  );
+  return Math.max(massKg * liveReserveShadowConfig.specificHeatKwhPerKgC * (temperatureC - inletTempC), 0);
 }
 
 function helsinkiDateKey(date: Date) {
@@ -229,9 +183,6 @@ function helsinkiDateKeyOffset(date: Date, dayOffset: number) {
   const key = helsinkiDateKey(date);
   const [year, month, day] = key.split("-").map(Number);
   if (![year, month, day].every(Number.isFinite)) return "";
-  // Noon UTC remains safely inside the intended Helsinki calendar day even
-  // across DST transitions, so shifting calendar components never assumes a
-  // fixed 24-hour local day.
   return helsinkiDateKey(new Date(Date.UTC(year, month - 1, day + dayOffset, 12)));
 }
 
@@ -248,8 +199,7 @@ function unavailable(reason: string, standingLossKwhPerHour: number | null = nul
     reason,
     selectedHeatingEnergyKwh: null,
     selectedHeatingHourIds: [],
-    standingLossKwhPerHour:
-      standingLossKwhPerHour === null ? null : round(standingLossKwhPerHour),
+    standingLossKwhPerHour: standingLossKwhPerHour === null ? null : round(standingLossKwhPerHour),
     totalCostCents: null,
     valid: null,
   };
