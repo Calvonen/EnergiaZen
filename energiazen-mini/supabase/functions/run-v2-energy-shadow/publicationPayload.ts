@@ -60,14 +60,15 @@ export function buildV2TankSnapshot(readings: ShadowTankReading[], anchorAt: str
 export function buildV2PriceSnapshot(prices: ShadowElectricityPrice[]) {
   const seen = new Set<string>();
   return prices.map((price) => {
-    const key = `${price.starts_at}|${price.resolution_minutes}`;
+    const resolutionMinutes = 60;
+    const key = `${price.starts_at}|${resolutionMinutes}`;
     if (seen.has(key)) throw new Error(`Duplicate V2 price snapshot interval: ${key}`);
     seen.add(key);
     return {
       starts_at: price.starts_at,
       ends_at: price.ends_at,
       spot_price_cents_kwh: price.spot_price_cents_kwh,
-      resolution_minutes: price.resolution_minutes,
+      resolution_minutes: resolutionMinutes,
     };
   });
 }
