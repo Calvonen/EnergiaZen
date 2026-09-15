@@ -121,6 +121,8 @@
     "lib/energyModelV2/energyModelCore.test.ts",
     "lib/energyModelV2/physicalEnergyLedger.ts",
     "lib/energyModelV2/physicalEnergyLedger.test.ts",
+    "lib/energyModelV2/physicalEnergyStateBridge.ts",
+    "lib/energyModelV2/physicalEnergyStateBridge.test.ts",
     "lib/energyModelV2/heatLossModel.ts",
     "lib/energyModelV2/heatLossModel.test.ts",
     "lib/energyModelV2/heatLossChart.ts",
