@@ -82,58 +82,12 @@ export async function runSettingsDraftUnitTests() {
       await persistSettingsDraft({
         draftSettings,
         savedSettings,
-        saveLocal: async () => undefined,
+        saveLocal: async () => {
+          throw new Error("AsyncStorage unavailable");
+        },
         saveRemote: async () => {
           remoteCalls += 1;
-          throw new Error("remote failed");
         },
-      });
-    } catch (error) {
-      thrown = error;
-    }
-
-    assertEqual(remoteCalls, 1, "etätallennusta yritetään kerran");
-    assertEqual(
-      thrown instanceof SettingsDraftSaveError,
-      true,
-      "etätallennuksen virhe palauttaa SettingsDraftSaveErrorin",
-    );
-  }
-
-  {
-    const savedSettings = createSettings();
-    let thrown: unknown = null;
-
-    try {
-      await persistSettingsDraft({
-        draftSettings: createSettings({ v2SafetyReservePercent: 80, v2TargetReservePercent: 70 }),
-        savedSettings,
-        saveLocal: async () => undefined,
-        saveRemote: async () => undefined,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-
-    assertEqual(
-      thrown instanceof SettingsDraftValidationError,
-      true,
-      "V2 turvaraja ei saa ylittää tavoitevarausta",
-    );
-  }
-
-  {
-    const savedSettings = createSettings();
-    let thrown: unknown = null;
-
-    try {
-      await persistSettingsDraft({
-        draftSettings: createSettings(),
-        savedSettings,
-        saveLocal: async () => {
-          throw new Error("local failed");
-        },
-        saveRemote: async () => undefined,
       });
     } catch (error) {
       thrown = error;
@@ -142,26 +96,352 @@ export async function runSettingsDraftUnitTests() {
     assertEqual(
       thrown instanceof SettingsDraftLocalSaveError,
       true,
-      "paikallisen tallennuksen virhe palauttaa oman virhetyypin",
+      "paikallinen tallennusvirhe tunnistetaan erikseen",
+    );
+    assertEqual(
+      remoteCalls,
+      0,
+      "Supabasea ei kutsuta jos paikallinen tallennus epaonnistuu",
     );
   }
 
   {
     const savedSettings = createSettings();
-    assertEqual(
-      discardSettingsDraft(savedSettings),
+    let localCalls = 0;
+    let remoteCalls = 0;
+    const draftSettings = updateDraftSetting(
       savedSettings,
-      "luonnoksen hylkays palauttaa tallennetut asetukset",
+      "fullTankShowers",
+      8,
+    );
+    const discarded = discardSettingsDraft(savedSettings);
+
+    assertEqual(
+      discarded,
+      savedSettings,
+      "peruminen palauttaa tallennetut asetukset",
+    );
+    assertEqual(
+      draftSettings.fullTankShowers,
+      8,
+      "peruminen ei tarvitse tallennuskutsua luonnoksen palauttamiseen",
+    );
+    assertEqual(
+      { localCalls, remoteCalls },
+      { localCalls: 0, remoteCalls: 0 },
+      "peruminen ei kutsu AsyncStoragea tai Supabasea",
     );
   }
 
   {
-    const payload = buildHeatingControlSettingsPayload(createSettings(), "2026-09-15T00:00:00.000Z");
-    assertEqual(payload.v2_target_reserve_percent, 75, "remote payload sisältää V2 tavoiteprosentin");
-    assertEqual(payload.v2_safety_reserve_percent, 30, "remote payload sisältää V2 turvaprosentin");
+    const savedSettings = createSettings();
+    const draftSettings = createSettings({ targetShowerReserve: 4.5 });
+    const localWrites: EnergiaZenSettings[] = [];
+    const remotePayloads: unknown[] = [];
+    const persisted = await persistSettingsDraft({
+      draftSettings,
+      savedSettings,
+      saveLocal: async (settings) => {
+        localWrites.push(settings);
+      },
+      saveRemote: async (settings) => {
+        await upsertHeatingControlSettings(
+          {
+            from(table) {
+              assertEqual(
+                table,
+                "heating_control_settings",
+                "Supabase-kohde on heating_control_settings",
+              );
+              return {
+                async upsert(payload, options) {
+                  remotePayloads.push(payload);
+                  assertEqual(
+                    options,
+                    { onConflict: "id" },
+                    "upsert kohdistuu id=1-riviin",
+                  );
+                  return { error: null };
+                },
+              };
+            },
+          },
+          settings,
+        );
+      },
+    });
+
+    assertEqual(localWrites, [draftSettings], "tallennus kirjoittaa AsyncStorageen kerran");
+    assertEqual(remotePayloads.length, 1, "tallennus upsertaa Supabaseen kerran");
+    assertEqual(persisted, draftSettings, "onnistunut tallennus palauttaa uuden savedSettings-arvon");
+
+    const payload = remotePayloads[0] as Record<string, unknown>;
+    assertEqual(
+      {
+        backup_hours: payload.backup_hours,
+        automatic_max_heating_hours: payload.automatic_max_heating_hours,
+        fallback_enabled: payload.fallback_enabled,
+        full_tank_average_temperature: payload.full_tank_average_temperature,
+        full_tank_showers: payload.full_tank_showers,
+        heating_gain_source: payload.heating_gain_source,
+        heating_need_mode: payload.heating_need_mode,
+        id: payload.id,
+        max_tank_temperature: payload.max_tank_temperature,
+        min_tank_temperature: payload.min_tank_temperature,
+        safety_shower_reserve: payload.safety_shower_reserve,
+        target_shower_reserve: payload.target_shower_reserve,
+        v2_safety_reserve_percent: payload.v2_safety_reserve_percent,
+        v2_target_reserve_percent: payload.v2_target_reserve_percent,
+        timezone: payload.timezone,
+        updatedAtIsString: typeof payload.updated_at === "string",
+      },
+      {
+        backup_hours: [2, 3, 4],
+        automatic_max_heating_hours: 3,
+        fallback_enabled: true,
+        full_tank_average_temperature: 65,
+        full_tank_showers: 6,
+        heating_gain_source: "learned",
+        heating_need_mode: "automatic",
+        id: 1,
+        max_tank_temperature: 70,
+        min_tank_temperature: 10,
+        safety_shower_reserve: 2,
+        target_shower_reserve: 4.5,
+        v2_safety_reserve_percent: 30,
+        v2_target_reserve_percent: 75,
+        timezone: "Europe/Helsinki",
+        updatedAtIsString: true,
+      },
+      "upsert-payload sisaltaa kaikki ohjaimen tarvitsemat kentat",
+    );
   }
 
-  // Keep connector type coverage for the remote settings helper.
-  void upsertHeatingControlSettings;
-  void validateSettingsDraft;
+  {
+    const savedSettings = createSettings();
+    const invalidDraft = createSettings({
+      fullTankShowers: 4,
+      targetShowerReserve: 5,
+    });
+    let localCalls = 0;
+    let remoteCalls = 0;
+    let thrown: unknown = null;
+
+    try {
+      await persistSettingsDraft({
+        draftSettings: invalidDraft,
+        savedSettings,
+        saveLocal: async () => {
+          localCalls += 1;
+        },
+        saveRemote: async () => {
+          remoteCalls += 1;
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assertEqual(
+      thrown instanceof SettingsDraftValidationError,
+      true,
+      "invalidi luonnos estaa tallennuksen",
+    );
+    assertEqual(
+      { localCalls, remoteCalls },
+      { localCalls: 0, remoteCalls: 0 },
+      "invalidi luonnos ei kirjoita paikallisesti tai Supabaseen",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const invalidV2Draft = createSettings({
+      v2SafetyReservePercent: 80,
+      v2TargetReservePercent: 70,
+    });
+    const validation = validateSettingsDraft(invalidV2Draft, savedSettings);
+    assertEqual(
+      validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
+      true,
+      "V2 turvaraja ei saa ylittaa tavoitevarausta",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const warningDraft = createSettings({
+      safetyShowerReserve: 1,
+      targetShowerReserve: 1,
+    });
+    const validation = validateSettingsDraft(warningDraft, savedSettings);
+    let localCalls = 0;
+    let remoteCalls = 0;
+
+    await persistSettingsDraft({
+      draftSettings: warningDraft,
+      savedSettings,
+      saveLocal: async () => {
+        localCalls += 1;
+      },
+      saveRemote: async () => {
+        remoteCalls += 1;
+      },
+    });
+
+    assertEqual(validation.errors, [], "varoitus ei ole estava virhe");
+    assertEqual(validation.warnings.length > 0, true, "pieni tavoite antaa varoituksen");
+    assertEqual(
+      { localCalls, remoteCalls },
+      { localCalls: 1, remoteCalls: 1 },
+      "varoitus ei esta tallennusta",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const draftSettings = createSettings({ targetShowerReserve: 4.5 });
+    const localWrites: EnergiaZenSettings[] = [];
+    let thrown: unknown = null;
+
+    try {
+      await persistSettingsDraft({
+        draftSettings,
+        savedSettings,
+        saveLocal: async (settings) => {
+          localWrites.push(settings);
+        },
+        saveRemote: async () => {
+          throw new Error("Supabase unavailable");
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assertEqual(
+      thrown instanceof SettingsDraftSaveError &&
+        thrown.rollbackSucceeded,
+      true,
+      "Supabase-virhe raportoi onnistuneen paikallisen rollbackin",
+    );
+    assertEqual(
+      localWrites,
+      [draftSettings, savedSettings],
+      "Supabase-virhe palauttaa AsyncStoragen aiempaan kokonaisuuteen",
+    );
+    assertEqual(
+      draftSettings.targetShowerReserve,
+      4.5,
+      "Supabase-virhe sailyttaa luonnoksen kayttajalle",
+    );
+    assertEqual(
+      savedSettings.targetShowerReserve,
+      4,
+      "Supabase-virhe ei muuta savedSettings-arvoa",
+    );
+  }
+
+  {
+    const payload = buildHeatingControlSettingsPayload(
+      createSettings(),
+      "2026-07-26T12:00:00.000Z",
+    );
+    assertEqual(
+      payload.updated_at,
+      "2026-07-26T12:00:00.000Z",
+      "payloadin updated_at asetetaan tallennushetkesta",
+    );
+  }
+
+  for (const [previousSource, nextSource] of [
+    ["learned", "fixed"],
+    ["fixed", "learned"],
+  ] as const) {
+    const savedSettings = createSettings({ heatingGainSource: previousSource });
+    const nextSettings = createSettings({
+      automaticMaxHeatingHours: 5,
+      heatingGainSource: nextSource,
+      safetyShowerReserve: 1.5,
+      targetShowerReserve: 3.5,
+    });
+    const remotePayloads: Record<string, unknown>[] = [];
+
+    await persistSettingsDraft({
+      draftSettings: nextSettings,
+      savedSettings,
+      saveLocal: async () => {},
+      saveRemote: async (settings) => {
+        await upsertHeatingControlSettings(
+          {
+            from() {
+              return {
+                async upsert(payload) {
+                  remotePayloads.push(payload);
+                  return { error: null };
+                },
+              };
+            },
+          },
+          settings,
+        );
+      },
+    });
+
+    assertEqual(
+      {
+        automatic_max_heating_hours:
+          remotePayloads[0]?.automatic_max_heating_hours,
+        heating_gain_source: remotePayloads[0]?.heating_gain_source,
+        heating_need_mode: remotePayloads[0]?.heating_need_mode,
+        safety_shower_reserve: remotePayloads[0]?.safety_shower_reserve,
+        target_shower_reserve: remotePayloads[0]?.target_shower_reserve,
+        v2_safety_reserve_percent: remotePayloads[0]?.v2_safety_reserve_percent,
+        v2_target_reserve_percent: remotePayloads[0]?.v2_target_reserve_percent,
+      },
+      {
+        automatic_max_heating_hours: 5,
+        heating_gain_source: nextSource,
+        heating_need_mode: "automatic",
+        safety_shower_reserve: 1.5,
+        target_shower_reserve: 3.5,
+        v2_safety_reserve_percent: 30,
+        v2_target_reserve_percent: 75,
+      },
+      `${previousSource} -> ${nextSource} writes the full authoritative settings payload`,
+    );
+  }
+
+  {
+    const invalidNumbers = {
+      ...createSettings(),
+      fullTankShowers: Number.NaN,
+      maxTankTemperature: Number.POSITIVE_INFINITY,
+    };
+    assertEqual(
+      validateSettingsDraft(invalidNumbers, createSettings()).errors.length >= 2,
+      true,
+      "NaN ja aareton arvo ovat estavia virheita",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const invalidRelations = validateSettingsDraft(
+      createSettings({
+        fullTankAverageTemperature: 71,
+        maxTankTemperature: 70,
+      }),
+      savedSettings,
+    );
+    assertEqual(
+      invalidRelations.errors.some(
+        (issue) =>
+          issue.field === "fullTankAverageTemperature" &&
+          issue.message.includes("maksimilämpötilaa"),
+      ),
+      true,
+      "tayden varaajan lampotila ei saa ylittaa maksimia",
+    );
+  }
 }
