@@ -59,13 +59,12 @@ export function runPhysicalEnergyLedgerUnitTests() {
 
   assertClose(
     warmerObservation.modeledStoredEnergyKwh,
-    9.7,
-    "warmer observation may raise modeled stored energy immediately",
+    9.43,
+    "warmer sensor observation remains diagnostic and cannot mint energy",
   );
-  assertClose(
-    warmerObservation.sensorCorrectionGapKwh,
-    0,
-    "accepted warmer observation closes the sensor correction gap",
+  assert(
+    warmerObservation.sensorCorrectionGapKwh < 0,
+    "warmer observation is exposed as a signed model/sensor gap",
   );
 
   const afterValidatedDraw = advancePhysicalEnergyLedger(warmerObservation, {
@@ -80,12 +79,8 @@ export function runPhysicalEnergyLedgerUnitTests() {
 
   assertClose(
     afterValidatedDraw.modeledStoredEnergyKwh,
-    8.19,
-    "validated removal lowers the physical balance only by accepted removal plus modeled loss",
-  );
-  assert(
-    afterValidatedDraw.modeledStoredEnergyKwh > afterValidatedDraw.observedStoredEnergyKwh,
-    "a colder sensor observation cannot erase additional unaccepted energy",
+    7.92,
+    "validated removal subtracts exactly from the physical balance",
   );
   assertClose(
     afterValidatedDraw.cumulativeAcceptedRemovalKwh,
@@ -98,14 +93,14 @@ export function runPhysicalEnergyLedgerUnitTests() {
     heaterPowerKwhPerHour: 3,
     heating: false,
     modeledHeatLossKwh: 0.2,
-    observedStoredEnergyKwh: 7.7,
+    observedStoredEnergyKwh: 8.1,
     timestamp: "2026-09-08T15:35:00.000+03:00",
   });
 
   assertClose(
     noHeatingRest.modeledStoredEnergyKwh,
-    7.99,
-    "without accepted removal, ordinary cooling follows modeled loss instead of a larger unexplained sensor drop",
+    7.72,
+    "later warmer sensor data cannot add an accepted removal back into the ledger",
   );
   assertClose(
     noHeatingRest.cumulativeDeliveredHeatingEnergyKwh,
