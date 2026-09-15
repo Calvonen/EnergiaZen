@@ -112,9 +112,39 @@ export function runLiveV2EnergyShadowUnitTests() {
     reliableDraws: [],
     v1Shadow: { id: "v1", run_at: "2026-09-09T10:05:00.000Z", target_hours: 0 },
   });
-  assert(!unresolvedDraw.available, "unresolved inlet draw fails closed");
-  assert(unresolvedDraw.reason === "unresolved_water_draw_detected", "unresolved draw explains shadow unavailability");
+  assert(!unresolvedDraw.available, "active inlet draw fails closed");
+  assert(unresolvedDraw.reason === "unresolved_water_draw_detected", "active draw explains shadow unavailability");
   assert(unresolvedDraw.comparison === "v2_unavailable", "failed-closed V2 is reported unavailable");
+
+  const stabilizedUnlabeledReadings: ShadowTankReading[] = [];
+  for (let minute = 0; minute <= 30; minute += 1) {
+    const timestamp = new Date(Date.UTC(2026, 8, 9, 11, minute, 0)).toISOString();
+    const beforeDraw = minute <= 4;
+    const duringDraw = minute >= 5 && minute <= 8;
+    const inletTemp = beforeDraw ? 21 : duringDraw ? 14 : 20;
+    const topTemp = beforeDraw ? 55 : 52;
+    const bottomTemp = beforeDraw ? 40 : 35;
+    stabilizedUnlabeledReadings.push(reading(timestamp, topTemp, bottomTemp, inletTemp, false));
+  }
+  const stabilizedUnlabeledDraw = runLiveReserveShadow({
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T11:31:00.000Z"),
+    readings: stabilizedUnlabeledReadings,
+    reliableDraws: [],
+    v1Shadow: { id: "v1", run_at: "2026-09-09T11:30:00.000Z", target_hours: 0 },
+  });
+  assert(
+    stabilizedUnlabeledDraw.available,
+    "unlabeled draw becomes available again after inlet recovery and 15 quiet minutes",
+  );
+  assert(
+    !stabilizedUnlabeledDraw.unresolvedDrawDetected,
+    "completed stabilized draw is not kept unresolved for the whole replay window",
+  );
+  assert(
+    Math.abs((stabilizedUnlabeledDraw.sensorGapKwh ?? 99)) < 0.2,
+    "post-draw re-anchor keeps the forward physical balance close to the stabilized observation",
+  );
 
   const acceptedDraw: ReliableWaterDraw = {
     event_started_at: "2026-09-09T10:04:00.000Z",
