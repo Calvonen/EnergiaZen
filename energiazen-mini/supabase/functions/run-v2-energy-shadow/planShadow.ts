@@ -72,13 +72,22 @@ export function runLiveEnergyPlanShadow({
   const horizon = buildPriceHorizon({ now, prices, standingLossKwhPerHour });
   if (!horizon.ok) return unavailable(horizon.reason, standingLossKwhPerHour);
 
+  // A production-locked active block is authoritative even if it is longer than
+  // the current configured daily maximum (for example after a mid-block setting
+  // reduction or across midnight). Preserve every required hour while keeping
+  // the normal combinatorial cap for optional optimizer selections.
+  const effectiveMaxHeatingHours = Math.max(
+    automaticMaxHeatingHours,
+    constraints.requiredHeatingHourIds.length,
+  );
+
   const plan = optimizeEnergyPlan({
     energyCapacityKwh,
     forbiddenHeatingHourIds: constraints.forbiddenHeatingHourIds,
     heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
     initialRemainingEnergyKwh: reserve.remainingEnergyKwh,
     initialUncertaintyKwh: reserve.balanceUncertaintyKwh,
-    maxHeatingHours: automaticMaxHeatingHours,
+    maxHeatingHours: effectiveMaxHeatingHours,
     requiredHeatingHourIds: constraints.requiredHeatingHourIds,
     segments: horizon.segments,
     thresholds: {
