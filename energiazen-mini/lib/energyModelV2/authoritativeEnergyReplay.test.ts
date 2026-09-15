@@ -31,9 +31,13 @@ export function runAuthoritativeEnergyReplayUnitTests() {
     replay.finalLedger.modeledStoredEnergyKwh,
     "authoritative remaining energy equals reconciled physical ledger",
   );
-  assert(
-    replay.finalAuthoritativeEnergy.remainingEnergyKwh >= replay.finalAuthoritativeEnergy.observedEnergyKwh,
-    "lagging sensors cannot lower authoritative energy below the physical balance",
+  assertClose(
+    replay.finalAuthoritativeEnergy.sensorGapKwh,
+    Math.max(
+      replay.finalLedger.modeledStoredEnergyKwh - replay.finalAuthoritativeEnergy.observedEnergyKwh,
+      0,
+    ),
+    "sensor disagreement is reported diagnostically without changing remaining energy",
   );
   assert(
     replay.finalAuthoritativeEnergy.observedUsableEnergyKwh <= replay.finalAuthoritativeEnergy.observedEnergyKwh,
