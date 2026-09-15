@@ -17,11 +17,7 @@ export type AuthoritativeEnergyState = {
   /** Difference between physical ledger and instantaneous sensor estimate. */
   sensorGapKwh: number;
   quality: AuthoritativeEnergyQuality;
-  /**
-   * Uncertainty in the physical energy balance itself. Sensor lag is kept
-   * separate in sensorGapKwh: known electrical heater input must not become
-   * uncertain merely because stratified sensors have not reacted yet.
-   */
+  /** Uncertainty in the physical energy balance itself. */
   uncertaintyKwh: number;
   reasons: string[];
   timestamp: string;
@@ -35,15 +31,10 @@ export const defaultAuthoritativeEnergyStateConfig: AuthoritativeEnergyStateConf
   degradedSensorGapKwh: 1.5,
 };
 
-/**
- * Promotes the reconciled physical ledger to V2's authoritative scalar energy
- * state while keeping sensor-derived usable energy explicitly observational.
- *
- * A positive ledger/sensor gap is useful evidence about stratification or
- * sensor lag, but it is not evidence that known heater energy disappeared.
- * Therefore the gap may degrade diagnostic quality, but it is never copied
- * into balance uncertainty and never invalidates remaining energy by itself.
- */
+const diagnosticOnlyUncertaintyReasons = new Set([
+  "water-draw-or-mixing-corrected-from-sensors",
+]);
+
 export function createAuthoritativeEnergyState({
   config = defaultAuthoritativeEnergyStateConfig,
   ledger,
@@ -62,6 +53,10 @@ export function createAuthoritativeEnergyState({
     reasons.push("physical/sensor energy gap exceeds degraded threshold");
   }
 
+  const hasPhysicalBalanceUncertainty = observedState.uncertainty.reasons.some(
+    (reason) => !diagnosticOnlyUncertaintyReasons.has(reason),
+  );
+
   return {
     observedEnergyKwh: nonNegative(observedState.storedEnergy.kwh),
     observedUsableEnergyKwh: nonNegative(observedState.usableEnergy.kwh),
@@ -70,7 +65,9 @@ export function createAuthoritativeEnergyState({
     remainingEnergyKwh: nonNegative(ledger.modeledStoredEnergyKwh),
     sensorGapKwh,
     timestamp: ledger.timestamp,
-    uncertaintyKwh: nonNegative(observedState.uncertainty.energyKwh),
+    uncertaintyKwh: hasPhysicalBalanceUncertainty
+      ? nonNegative(observedState.uncertainty.energyKwh)
+      : 0,
   };
 }
 
