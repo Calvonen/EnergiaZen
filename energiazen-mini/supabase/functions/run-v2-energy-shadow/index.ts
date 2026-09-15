@@ -13,7 +13,7 @@ import {
   resolveV2HeatingConstraints,
   type ShadowStoredHeatingPlan,
 } from "./productionConstraints.ts";
-import { evaluateV2PublicationGuard } from "./publicationGuard.ts";
+import { captureV2PublicationCandidate, evaluateV2PublicationGuard } from "./publicationGuard.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import {
   calculateV2EnergyCapacityKwh,
@@ -26,8 +26,6 @@ const replayWindowHours = 6;
 const priceFetchWindowHours = 48;
 const pageSize = 1000;
 const activeBlockSafetyTopTemperatureC = 50;
-// Deliberately compile-time false in this preparation PR. The later cutover
-// change must explicitly replace this and add the atomic publication path.
 const v2PublicationCutoverEnabled = false;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
@@ -126,18 +124,20 @@ Deno.serve(async (request) => {
       reserve: result,
     });
 
-    const latestReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
+    const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
+    const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
+    const publicationCandidate = captureV2PublicationCandidate(plan);
     const publication = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
-      latestTankReadingAt: latestReadingAt,
+      latestTankReadingAt: latestUsableReadingAt,
       now,
       plan,
-      selectedHeatingHourIds: plan.selectedHeatingHourIds,
+      publicationCandidate,
     });
 
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
       run_at: now.toISOString(), replay_start_at: replayStart.toISOString(), replay_end_at: now.toISOString(),
-      latest_tank_reading_at: latestReadingAt, reading_count: result.readingCount,
+      latest_tank_reading_at: latestRawReadingAt, reading_count: result.readingCount,
       reliable_draw_count: result.reliableDrawCount, unresolved_draw_detected: result.unresolvedDrawDetected,
       available: result.available, unavailable_reason: result.reason,
       remaining_energy_kwh: result.remainingEnergyKwh, observed_energy_kwh: result.observedEnergyKwh,
@@ -185,6 +185,7 @@ Deno.serve(async (request) => {
       publication_cutover_enabled: v2PublicationCutoverEnabled,
       publication_ready: publication.ready,
       publication_ready_reason: publication.reason,
+      publication_latest_usable_tank_reading_at: latestUsableReadingAt,
       wrote_to_heating_plans: false,
     });
   } catch (error) {
@@ -206,6 +207,25 @@ async function fetchTankReadings(supabase: ReturnType<typeof createClient>, star
     if (page.length < pageSize) break;
   }
   return rows;
+}
+
+export function deriveLatestUsableReadingAt(readings: ShadowTankReading[]) {
+  let latestAt: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const reading of readings) {
+    const createdMs = Date.parse(reading.created_at);
+    if (
+      Number.isFinite(createdMs) &&
+      Number.isFinite(reading.top_temp) &&
+      Number.isFinite(reading.bottom_temp) &&
+      Number.isFinite(reading.inlet_temp) &&
+      createdMs > latestMs
+    ) {
+      latestMs = createdMs;
+      latestAt = reading.created_at;
+    }
+  }
+  return latestAt;
 }
 
 function helsinkiDateKey(date: Date) {
