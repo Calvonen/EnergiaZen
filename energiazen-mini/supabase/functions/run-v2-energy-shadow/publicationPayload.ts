@@ -24,6 +24,7 @@ export function buildV2StagedPlans(
 
   for (const id of coveredHourIds) {
     const instant = parseHourId(id);
+    requireUtcClockHour(instant, id);
     const instantMs = instant.getTime();
     if (coveredInstants.has(instantMs)) throw new Error(`Duplicate V2 covered hour: ${id}`);
     coveredInstants.add(instantMs);
@@ -40,6 +41,7 @@ export function buildV2StagedPlans(
   const selectedInstants = new Set<number>();
   for (const id of candidate.selectedHeatingHourIds) {
     const instant = parseHourId(id);
+    requireUtcClockHour(instant, id);
     const instantMs = instant.getTime();
     if (selectedInstants.has(instantMs)) throw new Error(`Duplicate V2 selected hour: ${id}`);
     selectedInstants.add(instantMs);
@@ -75,6 +77,7 @@ export function buildV2PriceSnapshot(prices: ShadowElectricityPrice[]) {
   const seen = new Set<number>();
   return prices.map((price) => {
     const startsAt = parseHourId(price.starts_at);
+    requireUtcClockHour(startsAt, price.starts_at);
     const startsAtMs = startsAt.getTime();
     if (seen.has(startsAtMs)) throw new Error(`Duplicate V2 price snapshot interval: ${price.starts_at}`);
     seen.add(startsAtMs);
@@ -106,6 +109,12 @@ function parseHourId(id: string) {
   const instant = new Date(id);
   if (!Number.isFinite(instant.getTime())) throw new Error(`Invalid V2 hour id: ${id}`);
   return instant;
+}
+
+function requireUtcClockHour(instant: Date, id: string) {
+  if (instant.getUTCMinutes() !== 0 || instant.getUTCSeconds() !== 0 || instant.getUTCMilliseconds() !== 0) {
+    throw new Error(`V2 hour is not aligned to a UTC clock-hour boundary: ${id}`);
+  }
 }
 
 function dateKey(date: Date) {
