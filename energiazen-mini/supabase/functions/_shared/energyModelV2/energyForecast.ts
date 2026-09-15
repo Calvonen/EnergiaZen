@@ -82,12 +82,31 @@ export function forecastEnergyHorizon({
     const acceptedRemovalKwh = nonNegative(segment.acceptedRemovalKwh ?? 0);
     const remainingEnergyBeforeKwh = remainingEnergyKwh;
 
-    remainingEnergyKwh = clamp(
-      remainingEnergyKwh + deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
+    const energyDeltaKwh =
+      deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh;
+    const conservativeEnergyBeforeKwh = Math.max(
+      remainingEnergyKwh - uncertaintyKwh,
+      0,
+    );
+    const conservativeEnergyAfterKwh = clamp(
+      conservativeEnergyBeforeKwh +
+        energyDeltaKwh -
+        nonNegative(segment.additionalUncertaintyKwh ?? 0),
       0,
       physicalCapacityKwh,
     );
-    uncertaintyKwh += nonNegative(segment.additionalUncertaintyKwh ?? 0);
+    remainingEnergyKwh = clamp(
+      remainingEnergyKwh + energyDeltaKwh,
+      0,
+      physicalCapacityKwh,
+    );
+    // Saturation clips the nominal and conservative endpoints independently.
+    // Deriving uncertainty from those bounded endpoints prevents heater energy
+    // above physical capacity from being counted as uncertainty a second time.
+    uncertaintyKwh = Math.max(
+      remainingEnergyKwh - conservativeEnergyAfterKwh,
+      0,
+    );
 
     const reserve = evaluateEnergyReserve(
       {

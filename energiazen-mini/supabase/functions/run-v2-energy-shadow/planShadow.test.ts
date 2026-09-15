@@ -132,9 +132,9 @@ export function runLivePlanShadowUnitTests() {
     prices: Array.from({ length: 10 }, (_, index) =>
       price(new Date(Date.parse("2026-09-15T05:00:00.000Z") + index * 3_600_000).toISOString(), index)
     ),
-    reserve: reserve(9.4, 0.6, 9.5),
+    reserve: reserve(9.4, 0.6, 10),
   });
   assert(physicalCapacityBound.available, "capacity-bound forecast remains available");
-  assert(physicalCapacityBound.valid === false, "above-capacity surplus cannot satisfy a later target");
-  assertEqual(physicalCapacityBound.reason, "target_reserve_not_reached", "capacity saturation preserves the target miss");
+  assert(physicalCapacityBound.valid === true, "late heating can still reach physical capacity without banking an early surplus");
+  assertEqual(physicalCapacityBound.reason, null, "a genuinely capacity-reaching plan remains valid");
 }

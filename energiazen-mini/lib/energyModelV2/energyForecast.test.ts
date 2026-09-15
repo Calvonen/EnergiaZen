@@ -156,4 +156,48 @@ export function runEnergyForecastUnitTests() {
     overCapacityLedger.firstTargetMissAt === null,
     "clipping delivery uncertainty does not invent a target miss",
   );
+
+  const segmentSaturation = forecastEnergyHorizon({
+    energyCapacityKwh: 10,
+    heaterPowerKw: 3,
+    initialRemainingEnergyKwh: 9,
+    initialUncertaintyKwh: 1,
+    segments: [
+      {
+        heatingSelected: true,
+        id: "saturating-heat",
+        modeledHeatLossKwh: 0,
+        segmentHours: 1,
+        startDate: "2026-09-15T08:00:00.000Z",
+      },
+      {
+        heatingSelected: false,
+        id: "after-saturation-loss",
+        modeledHeatLossKwh: 0.6,
+        segmentHours: 1,
+        startDate: "2026-09-15T09:00:00.000Z",
+      },
+    ],
+    thresholds: { safetyEnergyKwh: 3, targetEnergyKwh: 9.5 },
+  });
+
+  assertClose(
+    segmentSaturation.points[0].conservativeEnergyAfterKwh,
+    10,
+    "segment saturation caps the conservative endpoint independently",
+  );
+  assertClose(
+    segmentSaturation.points[0].uncertaintyAfterKwh,
+    0,
+    "energy above capacity is not retained as delivery uncertainty",
+  );
+  assertClose(
+    segmentSaturation.points[1].conservativeEnergyAfterKwh,
+    9.4,
+    "post-saturation losses start from capacity rather than an impossible surplus",
+  );
+  assert(
+    segmentSaturation.firstTargetMissAt === "2026-09-15T09:00:00.000Z",
+    "saturating heat satisfies the target immediately but cannot bank overflow against a later loss",
+  );
 }
