@@ -39,6 +39,8 @@ export type LiveReserveShadowResult = {
   observedEnergyKwh: number | null;
   sensorGapKwh: number | null;
   balanceUncertaintyKwh: number;
+  heaterDeliveryUncertaintyKwh: number;
+  heaterCreditGuardTopTempC: number | null;
   conservativeEnergyKwh: number | null;
   safetyEnergyKwh: number;
   targetEnergyKwh: number;
@@ -61,14 +63,17 @@ export const liveReserveShadowConfig = {
   specificHeatKwhPerKgC: 0.001163,
   baselineBalanceUncertaintyKwh: 0.25,
   maxReadingGapMinutes: 15,
+  heaterGuardMarginC: 2,
 } as const;
 
 export function runLiveReserveShadow({
+  maxTankTemperatureC,
   now,
   readings,
   reliableDraws,
   v1Shadow,
 }: {
+  maxTankTemperatureC: number;
   now: Date;
   readings: ShadowTankReading[];
   reliableDraws: ReliableWaterDraw[];
@@ -81,8 +86,31 @@ export function runLiveReserveShadow({
   const v1NeedsEnergyRecovery =
     v1Shadow === null ? null : Math.max(v1Shadow.target_hours ?? 0, 0) > 0;
 
+  const heaterCreditGuardTopTempC =
+    Number.isFinite(maxTankTemperatureC) && maxTankTemperatureC > liveReserveShadowConfig.heaterGuardMarginC
+      ? maxTankTemperatureC - liveReserveShadowConfig.heaterGuardMarginC
+      : null;
+
+  if (heaterCreditGuardTopTempC === null) {
+    return unavailable(
+      "invalid_max_tank_temperature",
+      ordered.length,
+      0,
+      false,
+      v1NeedsEnergyRecovery,
+      null,
+    );
+  }
+
   if (ordered.length < 2) {
-    return unavailable("insufficient_tank_readings", ordered.length, 0, false, v1NeedsEnergyRecovery);
+    return unavailable(
+      "insufficient_tank_readings",
+      ordered.length,
+      0,
+      false,
+      v1NeedsEnergyRecovery,
+      heaterCreditGuardTopTempC,
+    );
   }
 
   const latest = ordered[ordered.length - 1];
@@ -93,6 +121,7 @@ export function runLiveReserveShadow({
       0,
       false,
       v1NeedsEnergyRecovery,
+      heaterCreditGuardTopTempC,
     );
   }
 
@@ -106,10 +135,16 @@ export function runLiveReserveShadow({
       draws.length,
       true,
       v1NeedsEnergyRecovery,
+      heaterCreditGuardTopTempC,
     );
   }
 
+  // The first observation anchors this finite replay window. After that point,
+  // sensors are diagnostic only: energy can change only through explicit
+  // physical terms. This prevents a later warm/mixed sensor observation from
+  // minting energy or undoing an accepted water-draw removal.
   let remainingEnergyKwh = observedStoredEnergyKwh(ordered[0], inletBaseline);
+  let heaterDeliveryUncertaintyKwh = 0;
 
   for (let index = 1; index < ordered.length; index += 1) {
     const previous = ordered[index - 1];
@@ -126,12 +161,31 @@ export function runLiveReserveShadow({
         draws.length,
         false,
         v1NeedsEnergyRecovery,
+        heaterCreditGuardTopTempC,
       );
     }
 
     const deliveredEnergyKwh = previous.heating === true
       ? liveReserveShadowConfig.heaterPowerKw * deltaHours
       : 0;
+
+    // tank_readings.heating is a boolean state, not power telemetry. A true->
+    // false transition means the exact switch-off instant inside the sampling
+    // interval is unknown. Likewise, close to the configured upper tank limit
+    // the mechanical thermostat may interrupt the element even if the relay
+    // state still looks on. Keep nominal energy in the ledger, but subtract the
+    // whole potentially unconfirmed interval from safety via uncertainty.
+    if (
+      deliveredEnergyKwh > 0 &&
+      (
+        current.heating !== true ||
+        Math.max(previous.top_temp as number, current.top_temp as number) >=
+          heaterCreditGuardTopTempC
+      )
+    ) {
+      heaterDeliveryUncertaintyKwh += deliveredEnergyKwh;
+    }
+
     const modeledHeatLossKwh = estimateHeatLossKwh(previous, inletBaseline, deltaHours);
     const acceptedRemovalKwh = draws.reduce((sum, draw) => {
       const endedAt = Date.parse(draw.event_ended_at);
@@ -141,25 +195,20 @@ export function runLiveReserveShadow({
       return sum;
     }, 0);
 
-    const predicted = Math.max(
+    remainingEnergyKwh = Math.max(
       remainingEnergyKwh + deliveredEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
       0,
     );
-    const observed = observedStoredEnergyKwh(current, inletBaseline);
-
-    // Known heater input is conserved. A warmer sensor observation may reveal
-    // energy the ledger underestimated, but a colder observation cannot erase
-    // energy unless an explicit reliable removal above accounts for it.
-    remainingEnergyKwh = Math.max(predicted, observed);
   }
 
   const observedEnergyKwh = observedStoredEnergyKwh(latest, inletBaseline);
-  const sensorGapKwh = Math.max(remainingEnergyKwh - observedEnergyKwh, 0);
+  const sensorGapKwh = remainingEnergyKwh - observedEnergyKwh;
 
-  // Sensor lag/stratification is diagnostic, not uncertainty about known
-  // electrical input. Only balance/model uncertainty is subtracted from the
-  // total remaining-energy reserve decision.
-  const balanceUncertaintyKwh = liveReserveShadowConfig.baselineBalanceUncertaintyKwh;
+  // Sensor/model disagreement is diagnostic. Safety subtracts only uncertainty
+  // in the physical balance itself: baseline model uncertainty plus heater
+  // energy that cannot be proven from the boolean relay samples.
+  const balanceUncertaintyKwh =
+    liveReserveShadowConfig.baselineBalanceUncertaintyKwh + heaterDeliveryUncertaintyKwh;
   const v2Decision = evaluateEnergyReserve({
     quality: "valid",
     remainingEnergyKwh,
@@ -182,7 +231,9 @@ export function runLiveReserveShadow({
     remainingEnergyKwh: round(remainingEnergyKwh),
     observedEnergyKwh: round(observedEnergyKwh),
     sensorGapKwh: round(sensorGapKwh),
-    balanceUncertaintyKwh,
+    balanceUncertaintyKwh: round(balanceUncertaintyKwh),
+    heaterDeliveryUncertaintyKwh: round(heaterDeliveryUncertaintyKwh),
+    heaterCreditGuardTopTempC,
     conservativeEnergyKwh: round(v2Decision.conservativeEnergyKwh),
     safetyEnergyKwh: v2Decision.thresholds.safetyEnergyKwh,
     targetEnergyKwh: v2Decision.thresholds.targetEnergyKwh,
@@ -199,6 +250,7 @@ function unavailable(
   reliableDrawCount: number,
   unresolvedDrawDetected: boolean,
   v1NeedsEnergyRecovery: boolean | null,
+  heaterCreditGuardTopTempC: number | null,
 ): LiveReserveShadowResult {
   return {
     available: false,
@@ -210,6 +262,8 @@ function unavailable(
     observedEnergyKwh: null,
     sensorGapKwh: null,
     balanceUncertaintyKwh: liveReserveShadowConfig.baselineBalanceUncertaintyKwh,
+    heaterDeliveryUncertaintyKwh: 0,
+    heaterCreditGuardTopTempC,
     conservativeEnergyKwh: null,
     safetyEnergyKwh: defaultEnergyReserveThresholds.safetyEnergyKwh,
     targetEnergyKwh: defaultEnergyReserveThresholds.targetEnergyKwh,
