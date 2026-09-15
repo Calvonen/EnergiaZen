@@ -14,6 +14,8 @@ export type HeatingControlSettingsPayload = {
   price_tolerance_cents: number;
   safety_shower_reserve: number;
   target_shower_reserve: number;
+  v2_safety_reserve_percent: number;
+  v2_target_reserve_percent: number;
   timezone: "Europe/Helsinki";
   updated_at: string;
 };
@@ -36,6 +38,8 @@ export function buildHeatingControlSettingsPayload(
     price_tolerance_cents: settings.priceToleranceCents,
     safety_shower_reserve: settings.safetyShowerReserve,
     target_shower_reserve: settings.targetShowerReserve,
+    v2_safety_reserve_percent: settings.v2SafetyReservePercent,
+    v2_target_reserve_percent: settings.v2TargetReservePercent,
     timezone: "Europe/Helsinki",
     updated_at: updatedAt,
   };
