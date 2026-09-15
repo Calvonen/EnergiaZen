@@ -24,6 +24,13 @@ export { normalizeStoredShowerReserves } from "./showerReserveSettings.ts";
 export const defaultTankTemperature = 58;
 
 export type HeatingNeedMode = "automatic" | "fixed";
+
+// "learned" (default): use the heating-gain value learned from real
+// tank_readings once enough valid segments exist, otherwise the fixed
+// fallback (see fallbackHeatingGainPerHour in lib/heatingGain.ts).
+// "fixed": always use the fixed fallback, ignoring the learned value even
+// when one is available - e.g. while distrusting a learned estimate that
+// still has too little data behind it.
 export type HeatingGainSource = "learned" | "fixed";
 
 export const defaultSettings = {
@@ -34,6 +41,10 @@ export const defaultSettings = {
   automaticMaxHeatingHours: defaultAutomaticMaxHeatingHours,
   fixedHeatingHoursPerDay: defaultFixedHeatingHoursPerDay,
   priceDifferenceThresholdCents: 2,
+  // price tolerance / hintojen tasoitus (optimizeHeatingPlan's internal hour
+  // ranking only - see heatingOptimizer.ts). Unrelated to
+  // priceDifferenceThresholdCents above, which only affects fixed-mode's
+  // today-vs-tomorrow day shift. 0 = today's exact behaviour, unchanged.
   priceToleranceCents: 0,
   minTankTemperature: 10,
   maxTankTemperature: 70,
@@ -96,16 +107,20 @@ export type LegacySettings = Partial<EnergiaZenSettings> & {
   tankVolumeLiters?: number;
 };
 
-export function normalizeSettings(settings: LegacySettings): EnergiaZenSettings {
+export function normalizeSettings(
+  settings: LegacySettings,
+): EnergiaZenSettings {
   const tankSizeLiters = settings.tankSizeLiters ?? settings.tankVolumeLiters;
-  const fullTankShowers = settings.fullTankShowers ?? settings.showersAtMaxTemperature;
+  const fullTankShowers =
+    settings.fullTankShowers ?? settings.showersAtMaxTemperature;
   const normalizedFullTankShowers =
     typeof fullTankShowers === "number"
       ? clampSettingValue("fullTankShowers", fullTankShowers)
       : defaultSettings.fullTankShowers;
   const showerReserves = normalizeStoredShowerReserves({
     fullTankShowers: normalizedFullTankShowers,
-    minimumShowersBeforeExpensiveTomorrow: settings.minimumShowersBeforeExpensiveTomorrow,
+    minimumShowersBeforeExpensiveTomorrow:
+      settings.minimumShowersBeforeExpensiveTomorrow,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
   });
@@ -114,19 +129,39 @@ export function normalizeSettings(settings: LegacySettings): EnergiaZenSettings 
     targetPercent: settings.v2TargetReservePercent,
   });
   const backupHours = Array.isArray(settings.backupHours)
-    ? [...new Set(settings.backupHours.filter((hour): hour is number => Number.isInteger(hour) && hour >= 0 && hour <= 23))].sort((a, b) => a - b)
+    ? [
+        ...new Set(
+          settings.backupHours.filter(
+            (hour): hour is number =>
+              Number.isInteger(hour) && hour >= 0 && hour <= 23,
+          ),
+        ),
+      ].sort((a, b) => a - b)
     : defaultSettings.backupHours;
   const heatingHours = normalizeStoredHeatingHours(settings);
 
   return {
-    heatingNeedMode: settings.heatingNeedMode === "fixed" ? "fixed" : defaultSettings.heatingNeedMode,
-    heatingGainSource: settings.heatingGainSource === "fixed" ? "fixed" : defaultSettings.heatingGainSource,
-    fallbackEnabled: typeof settings.fallbackEnabled === "boolean" ? settings.fallbackEnabled : defaultSettings.fallbackEnabled,
-    backupHours: backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
+    heatingNeedMode:
+      settings.heatingNeedMode === "fixed"
+        ? "fixed"
+        : defaultSettings.heatingNeedMode,
+    heatingGainSource:
+      settings.heatingGainSource === "fixed"
+        ? "fixed"
+        : defaultSettings.heatingGainSource,
+    fallbackEnabled:
+      typeof settings.fallbackEnabled === "boolean"
+        ? settings.fallbackEnabled
+        : defaultSettings.fallbackEnabled,
+    backupHours:
+      backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
     ...heatingHours,
     priceDifferenceThresholdCents:
       typeof settings.priceDifferenceThresholdCents === "number"
-        ? Math.min(Math.max(Math.round(settings.priceDifferenceThresholdCents), 0), 10)
+        ? Math.min(
+            Math.max(Math.round(settings.priceDifferenceThresholdCents), 0),
+            10,
+          )
         : defaultSettings.priceDifferenceThresholdCents,
     minTankTemperature: defaultSettings.minTankTemperature,
     priceToleranceCents:
@@ -147,7 +182,10 @@ export function normalizeSettings(settings: LegacySettings): EnergiaZenSettings 
         : defaultSettings.maxTankTemperature,
     fullTankAverageTemperature:
       typeof settings.fullTankAverageTemperature === "number"
-        ? clampSettingValue("fullTankAverageTemperature", settings.fullTankAverageTemperature)
+        ? clampSettingValue(
+            "fullTankAverageTemperature",
+            settings.fullTankAverageTemperature,
+          )
         : typeof settings.maxTankTemperature === "number"
           ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
           : defaultSettings.fullTankAverageTemperature,
