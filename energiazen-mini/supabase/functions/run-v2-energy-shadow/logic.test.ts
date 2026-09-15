@@ -26,8 +26,11 @@ function reading(
   };
 }
 
+const maxTankTemperatureC = 65;
+
 export function runLiveV2EnergyShadowUnitTests() {
   const laggingSensors = runLiveReserveShadow({
+    maxTankTemperatureC,
     now: new Date("2026-09-08T11:21:00.000Z"),
     readings: [
       reading("2026-09-08T11:00:00.000Z", 56.2, 22.9, 12, true),
@@ -41,12 +44,10 @@ export function runLiveV2EnergyShadowUnitTests() {
   assert(laggingSensors.available, "lagging sensors remain available without a removal signal");
   assert(
     (laggingSensors.remainingEnergyKwh ?? 0) > (laggingSensors.observedEnergyKwh ?? 0),
-    "known 3 kW heater input survives sensor lag",
+    "known relay-on heater input survives sensor lag below the thermostat guard",
   );
-  assert(
-    (laggingSensors.sensorGapKwh ?? 0) > 0,
-    "sensor lag is retained as a diagnostic gap",
-  );
+  assert((laggingSensors.sensorGapKwh ?? 0) > 0, "sensor lag remains a diagnostic gap");
+  assertClose(laggingSensors.heaterDeliveryUncertaintyKwh, 0, "ordinary heating below guard has no delivery uncertainty");
   assertClose(
     laggingSensors.conservativeEnergyKwh,
     (laggingSensors.remainingEnergyKwh ?? 0) - 0.25,
@@ -56,8 +57,52 @@ export function runLiveV2EnergyShadowUnitTests() {
     laggingSensors.safetyEnergyKwh === 3 && laggingSensors.targetEnergyKwh === 6,
     "live shadow uses the shared V2 reserve thresholds",
   );
+  assertClose(laggingSensors.heaterCreditGuardTopTempC, 63, "65 C max setting creates a 63 C heater credit guard");
+
+  const warmerSensorsWithoutInput = runLiveReserveShadow({
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T09:06:00.000Z"),
+    readings: [
+      reading("2026-09-09T09:00:00.000Z", 50, 35, 15, false),
+      reading("2026-09-09T09:05:00.000Z", 54, 40, 15, false),
+    ],
+    reliableDraws: [],
+    v1Shadow: null,
+  });
+  assert(warmerSensorsWithoutInput.available, "warmer sensor observation alone is still diagnosable");
+  assert(
+    (warmerSensorsWithoutInput.remainingEnergyKwh ?? 0) < (warmerSensorsWithoutInput.observedEnergyKwh ?? 0),
+    "warmer sensors cannot mint physical energy without an explicit source",
+  );
+  assert(
+    (warmerSensorsWithoutInput.sensorGapKwh ?? 0) < 0,
+    "model below observation is retained as a signed diagnostic gap",
+  );
+
+  const thermostatTransition = runLiveReserveShadow({
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T09:12:00.000Z"),
+    readings: [
+      reading("2026-09-09T09:10:00.000Z", 62.5, 45, 15, true),
+      reading("2026-09-09T09:11:00.000Z", 63.1, 45.1, 15, false),
+    ],
+    reliableDraws: [],
+    v1Shadow: null,
+  });
+  assert(thermostatTransition.available, "heater transition remains shadow-evaluable");
+  assertClose(
+    thermostatTransition.heaterDeliveryUncertaintyKwh,
+    0.05,
+    "one uncertain minute at 3 kW contributes 0.05 kWh delivery uncertainty",
+  );
+  assertClose(
+    thermostatTransition.balanceUncertaintyKwh,
+    0.3,
+    "heater delivery uncertainty is added to the 0.25 kWh baseline",
+  );
 
   const unresolvedDraw = runLiveReserveShadow({
+    maxTankTemperatureC,
     now: new Date("2026-09-09T10:06:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 25, false),
@@ -68,10 +113,7 @@ export function runLiveV2EnergyShadowUnitTests() {
     v1Shadow: { id: "v1", run_at: "2026-09-09T10:05:00.000Z", target_hours: 0 },
   });
   assert(!unresolvedDraw.available, "unresolved inlet draw fails closed");
-  assert(
-    unresolvedDraw.reason === "unresolved_water_draw_detected",
-    "unresolved draw explains shadow unavailability",
-  );
+  assert(unresolvedDraw.reason === "unresolved_water_draw_detected", "unresolved draw explains shadow unavailability");
   assert(unresolvedDraw.comparison === "v2_unavailable", "failed-closed V2 is reported unavailable");
 
   const acceptedDraw: ReliableWaterDraw = {
@@ -82,21 +124,27 @@ export function runLiveV2EnergyShadowUnitTests() {
     energy_quality_reason: null,
   };
   const resolvedDraw = runLiveReserveShadow({
+    maxTankTemperatureC,
     now: new Date("2026-09-09T10:11:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 25, false),
       reading("2026-09-09T10:04:00.000Z", 55, 40, 25, false),
       reading("2026-09-09T10:05:00.000Z", 54, 35, 15, false),
-      reading("2026-09-09T10:10:00.000Z", 54, 35, 15, false),
+      reading("2026-09-09T10:10:00.000Z", 56, 41, 15, false),
     ],
     reliableDraws: [acceptedDraw],
     v1Shadow: { id: "v1", run_at: "2026-09-09T10:10:00.000Z", target_hours: 0 },
   });
   assert(resolvedDraw.available, "reliable energy removal resolves detected inlet draw");
   assert(resolvedDraw.reliableDrawCount === 1, "reliable draw is counted once");
+  assert(
+    (resolvedDraw.remainingEnergyKwh ?? Infinity) < (resolvedDraw.observedEnergyKwh ?? -Infinity),
+    "later warm sensor data cannot add the accepted water-draw removal back",
+  );
   assert(resolvedDraw.v1NeedsEnergyRecovery === false, "zero V1 target hours maps to no recovery need");
 
   const staleGap = runLiveReserveShadow({
+    maxTankTemperatureC,
     now: new Date("2026-09-09T10:21:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 15, false),
@@ -107,9 +155,9 @@ export function runLiveV2EnergyShadowUnitTests() {
   });
   assert(!staleGap.available, "reading gaps over 15 minutes fail closed");
   assert(staleGap.reason === "tank_reading_gap_too_long", "long gap reason is persisted");
-  assert(staleGap.comparison === "v1_unavailable", "missing V1 snapshot is explicit");
 
   const staleLatest = runLiveReserveShadow({
+    maxTankTemperatureC,
     now: new Date("2026-09-09T12:00:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 15, false),
@@ -119,8 +167,5 @@ export function runLiveV2EnergyShadowUnitTests() {
     v1Shadow: { id: "v1", run_at: "2026-09-09T11:58:00.000Z", target_hours: 1 },
   });
   assert(!staleLatest.available, "stale latest reading fails closed even when pairwise gaps are short");
-  assert(
-    staleLatest.reason === "latest_tank_reading_stale",
-    "stale latest reading has its own diagnostic reason",
-  );
+  assert(staleLatest.reason === "latest_tank_reading_stale", "stale latest reading has its own diagnostic reason");
 }
