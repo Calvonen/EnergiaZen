@@ -25,3 +25,19 @@ alter table public.v2_energy_reserve_shadow_runs
   drop constraint if exists v2_energy_reserve_shadow_runs_target_percent_check,
   add constraint v2_energy_reserve_shadow_runs_target_percent_check
     check (target_reserve_percent is null or (target_reserve_percent >= 0 and target_reserve_percent <= 100));
+
+-- The settings UI needs the same capacity denominator that the backend used
+-- for its percentage-to-kWh conversion. Keep the shadow table otherwise
+-- private: authenticated clients can read only the timestamp and capacity
+-- columns, and only rows that actually contain a capacity value.
+grant select (run_at, energy_capacity_kwh)
+  on table public.v2_energy_reserve_shadow_runs
+  to authenticated;
+
+drop policy if exists authenticated_read_v2_energy_capacity
+  on public.v2_energy_reserve_shadow_runs;
+create policy authenticated_read_v2_energy_capacity
+  on public.v2_energy_reserve_shadow_runs
+  for select
+  to authenticated
+  using (energy_capacity_kwh is not null);
