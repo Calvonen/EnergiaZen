@@ -14,6 +14,8 @@ create table if not exists public.v2_energy_reserve_shadow_runs (
   observed_energy_kwh double precision,
   sensor_gap_kwh double precision,
   balance_uncertainty_kwh double precision not null default 0,
+  heater_delivery_uncertainty_kwh double precision not null default 0,
+  heater_credit_guard_top_temp_c double precision,
   conservative_energy_kwh double precision,
   safety_energy_kwh double precision not null,
   target_energy_kwh double precision not null,
