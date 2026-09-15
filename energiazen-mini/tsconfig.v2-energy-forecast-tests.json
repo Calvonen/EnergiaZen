@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": ".tmp-v2-energy-forecast-tests",
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "target": "es2020"
+  },
+  "include": [
+    "lib/energyModelV2/energyForecast.ts",
+    "lib/energyModelV2/energyForecast.test.ts",
+    "supabase/functions/_shared/energyModelV2/energyForecast.ts",
+    "supabase/functions/_shared/energyModelV2/energyReservePolicy.ts",
+    "scripts/runEnergyForecastTests.ts"
+  ]
+}
