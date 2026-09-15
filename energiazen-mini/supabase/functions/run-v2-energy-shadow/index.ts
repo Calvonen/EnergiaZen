@@ -33,19 +33,15 @@ Deno.serve(async (request) => {
   }
 
   try {
-    const supabase = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false },
-    });
+    const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
     const now = new Date();
     const replayStart = new Date(now.getTime() - replayWindowHours * 60 * 60 * 1000);
     const readings = await fetchTankReadings(supabase, replayStart.toISOString(), now.toISOString());
 
-    const [drawsResult, v1Result] = await Promise.all([
+    const [drawsResult, v1Result, settingsResult] = await Promise.all([
       supabase
         .from("water_draw_labels")
-        .select(
-          "event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason",
-        )
+        .select("event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason")
         .gte("event_ended_at", replayStart.toISOString())
         .lte("event_started_at", now.toISOString())
         .order("event_started_at", { ascending: true }),
@@ -56,17 +52,21 @@ Deno.serve(async (request) => {
         .order("run_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("heating_control_settings")
+        .select("max_tank_temperature")
+        .eq("id", 1)
+        .maybeSingle(),
     ]);
 
-    if (drawsResult.error) {
-      throw new Error(`Failed to fetch water draw labels: ${drawsResult.error.message}`);
-    }
-    if (v1Result.error) {
-      throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
-    }
+    if (drawsResult.error) throw new Error(`Failed to fetch water draw labels: ${drawsResult.error.message}`);
+    if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
+    if (settingsResult.error) throw new Error(`Failed to fetch heating settings: ${settingsResult.error.message}`);
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
+    const maxTankTemperatureC = Number(settingsResult.data?.max_tank_temperature);
     const result = runLiveReserveShadow({
+      maxTankTemperatureC,
       now,
       readings,
       reliableDraws: (drawsResult.data ?? []) as ReliableWaterDraw[],
@@ -88,6 +88,8 @@ Deno.serve(async (request) => {
       observed_energy_kwh: result.observedEnergyKwh,
       sensor_gap_kwh: result.sensorGapKwh,
       balance_uncertainty_kwh: result.balanceUncertaintyKwh,
+      heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
+      heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       conservative_energy_kwh: result.conservativeEnergyKwh,
       safety_energy_kwh: result.safetyEnergyKwh,
       target_energy_kwh: result.targetEnergyKwh,
@@ -101,9 +103,7 @@ Deno.serve(async (request) => {
       source: "v2_energy_reserve_live_shadow",
     });
 
-    if (insertError) {
-      throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
-    }
+    if (insertError) throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
 
     return jsonResponse({
       status: "ok",
@@ -111,6 +111,8 @@ Deno.serve(async (request) => {
       comparison: result.comparison,
       remaining_energy_kwh: result.remainingEnergyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
+      heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
+      heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       v2_band: result.v2Band,
       v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
       v1_needs_energy_recovery: result.v1NeedsEnergyRecovery,
@@ -118,10 +120,7 @@ Deno.serve(async (request) => {
     });
   } catch (error) {
     console.error("run-v2-energy-shadow failed", error);
-    return jsonResponse(
-      { error: "V2 energy shadow failed", message: error instanceof Error ? error.message : String(error) },
-      500,
-    );
+    return jsonResponse({ error: "V2 energy shadow failed", message: error instanceof Error ? error.message : String(error) }, 500);
   }
 });
 
@@ -141,9 +140,7 @@ async function fetchTankReadings(
       .order("created_at", { ascending: true })
       .range(from, from + pageSize - 1);
 
-    if (error) {
-      throw new Error(`Failed to fetch tank readings: ${error.message}`);
-    }
+    if (error) throw new Error(`Failed to fetch tank readings: ${error.message}`);
 
     const page = (data ?? []) as ShadowTankReading[];
     rows.push(...page);
