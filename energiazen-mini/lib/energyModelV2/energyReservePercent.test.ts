@@ -39,7 +39,7 @@ export function runEnergyReservePercentUnitTests() {
   assert(boundedLow.safetyPercent === 0, "safety is clamped to the database/UI minimum");
 
   const boundedHigh = normalizeV2ReservePercents({ targetPercent: 130, safetyPercent: 130 });
-  assert(boundedHigh.targetPercent === 100, "target is clamped to the database/UI maximum");
+  assert(boundedHigh.targetPercent === 95, "target is capped below the displayed physical-full state");
   assert(boundedHigh.safetyPercent === 95, "safety is clamped to the database/UI maximum");
 
   assert(

@@ -129,11 +129,11 @@ export function validateSettingsDraft(
 
   if (
     isFiniteNumber(v2TargetReservePercent) &&
-    (v2TargetReservePercent < 5 || v2TargetReservePercent > 100)
+    (v2TargetReservePercent < 5 || v2TargetReservePercent > 95)
   ) {
     errors.push({
       field: "v2TargetReservePercent",
-      message: "V2-tavoitevarauksen pitää olla välillä 5–100 %.",
+      message: "V2-tavoitevarauksen pitää olla välillä 5–95 %.",
     });
   }
 

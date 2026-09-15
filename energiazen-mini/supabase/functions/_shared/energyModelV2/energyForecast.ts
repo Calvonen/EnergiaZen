@@ -41,19 +41,22 @@ export type EnergyForecastResult = {
 };
 
 export function forecastEnergyHorizon({
+  energyCapacityKwh,
   heaterPowerKw,
   initialRemainingEnergyKwh,
   initialUncertaintyKwh,
   segments,
   thresholds = defaultEnergyReserveThresholds,
 }: {
+  energyCapacityKwh?: number;
   heaterPowerKw: number;
   initialRemainingEnergyKwh: number;
   initialUncertaintyKwh: number;
   segments: EnergyForecastSegment[];
   thresholds?: EnergyReserveThresholds;
 }): EnergyForecastResult {
-  let remainingEnergyKwh = nonNegative(initialRemainingEnergyKwh);
+  const physicalCapacityKwh = positiveOrInfinity(energyCapacityKwh);
+  let remainingEnergyKwh = Math.min(nonNegative(initialRemainingEnergyKwh), physicalCapacityKwh);
   let uncertaintyKwh = nonNegative(initialUncertaintyKwh);
   let minimumConservativeEnergyKwh = Math.max(remainingEnergyKwh - uncertaintyKwh, 0);
   let firstSafetyViolationAt: string | null = null;
@@ -68,9 +71,10 @@ export function forecastEnergyHorizon({
     const acceptedRemovalKwh = nonNegative(segment.acceptedRemovalKwh ?? 0);
     const remainingEnergyBeforeKwh = remainingEnergyKwh;
 
-    remainingEnergyKwh = Math.max(
+    remainingEnergyKwh = clamp(
       remainingEnergyKwh + deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
       0,
+      physicalCapacityKwh,
     );
     uncertaintyKwh += nonNegative(segment.additionalUncertaintyKwh ?? 0);
 
@@ -132,6 +136,12 @@ export function forecastEnergyHorizon({
 
 function nonNegative(value: number) {
   return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function positiveOrInfinity(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : Number.POSITIVE_INFINITY;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {

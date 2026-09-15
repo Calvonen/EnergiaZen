@@ -79,7 +79,7 @@ const editableSettingRanges = {
   fullTankShowers: { max: 10, min: 3 },
   targetShowerReserve: { max: 10, min: 0.5 },
   safetyShowerReserve: { max: 9.5, min: 0 },
-  v2TargetReservePercent: { max: 100, min: 5 },
+  v2TargetReservePercent: { max: 95, min: 5 },
   v2SafetyReservePercent: { max: 95, min: 0 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },

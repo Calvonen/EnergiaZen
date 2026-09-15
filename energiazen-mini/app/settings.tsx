@@ -166,7 +166,7 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     unit: "suihkua",
   },
   v2TargetReservePercent: {
-    max: 100,
+    max: 95,
     min: 5,
     step: 5,
     unit: "%",

@@ -156,6 +156,7 @@ Deno.serve(async (request) => {
 
     const plan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
+      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,

@@ -9,7 +9,11 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) throw new Error(`${message}: expected ${String(expected)}, got ${String(actual)}`);
 }
 
-function reserve(remainingEnergyKwh: number, balanceUncertaintyKwh = 0.25): LiveReserveShadowResult {
+function reserve(
+  remainingEnergyKwh: number,
+  balanceUncertaintyKwh = 0.25,
+  targetEnergyKwh = 6,
+): LiveReserveShadowResult {
   return {
     available: true,
     reason: null,
@@ -24,9 +28,9 @@ function reserve(remainingEnergyKwh: number, balanceUncertaintyKwh = 0.25): Live
     heaterCreditGuardTopTempC: 63,
     conservativeEnergyKwh: Math.max(remainingEnergyKwh - balanceUncertaintyKwh, 0),
     safetyEnergyKwh: 3,
-    targetEnergyKwh: 6,
-    v2Band: remainingEnergyKwh - balanceUncertaintyKwh >= 6 ? "target_met" : "recovery",
-    v2NeedsEnergyRecovery: remainingEnergyKwh - balanceUncertaintyKwh < 6,
+    targetEnergyKwh,
+    v2Band: remainingEnergyKwh - balanceUncertaintyKwh >= targetEnergyKwh ? "target_met" : "recovery",
+    v2NeedsEnergyRecovery: remainingEnergyKwh - balanceUncertaintyKwh < targetEnergyKwh,
     v1NeedsEnergyRecovery: null,
     comparison: "v1_unavailable",
   };
@@ -52,6 +56,7 @@ export function runLivePlanShadowUnitTests() {
 
   const healthy = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
     inletBaselineC: 12,
     maxTankTemperatureC: 65,
     now,
@@ -66,6 +71,7 @@ export function runLivePlanShadowUnitTests() {
 
   const needsHeat = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
     inletBaselineC: 12,
     maxTankTemperatureC: 65,
     now,
@@ -80,6 +86,7 @@ export function runLivePlanShadowUnitTests() {
 
   const missingCurrent = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
     inletBaselineC: 12,
     maxTankTemperatureC: 65,
     now,
@@ -91,6 +98,7 @@ export function runLivePlanShadowUnitTests() {
 
   const gapped = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
     inletBaselineC: 12,
     maxTankTemperatureC: 65,
     now,
@@ -105,6 +113,7 @@ export function runLivePlanShadowUnitTests() {
 
   const capped = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 5,
+    energyCapacityKwh: 16.864,
     inletBaselineC: 12,
     maxTankTemperatureC: 65,
     now,
@@ -113,4 +122,19 @@ export function runLivePlanShadowUnitTests() {
   });
   assert(!capped.available, "shadow refuses combinatorial settings above its tested cap");
   assertEqual(capped.reason, "max_heating_hours_above_shadow_limit", "shadow cap has an explicit reason");
+
+  const physicalCapacityBound = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 1,
+    energyCapacityKwh: 10,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: Array.from({ length: 10 }, (_, index) =>
+      price(new Date(Date.parse("2026-09-15T05:00:00.000Z") + index * 3_600_000).toISOString(), index)
+    ),
+    reserve: reserve(9.4, 0.6, 9.5),
+  });
+  assert(physicalCapacityBound.available, "capacity-bound forecast remains available");
+  assert(physicalCapacityBound.valid === false, "above-capacity surplus cannot satisfy a later target");
+  assertEqual(physicalCapacityBound.reason, "target_reserve_not_reached", "capacity saturation preserves the target miss");
 }
