@@ -14,14 +14,22 @@ create table if not exists public.v2_heating_plan_publications (
 );
 
 alter table public.v2_heating_plan_publications enable row level security;
-revoke all on table public.v2_heating_plan_publications from public, anon, authenticated;
-grant select, insert, update on table public.v2_heating_plan_publications to service_role;
+revoke all on table public.v2_heating_plan_publications from public, anon, authenticated, service_role;
+-- Writes are intentionally possible only through the SECURITY DEFINER RPC below.
+grant select on table public.v2_heating_plan_publications to service_role;
 
 create or replace function public.publish_v2_heating_plans_staged(
   p_plans jsonb,
   p_expected_plan_versions jsonb,
   p_expected_tank_snapshot jsonb,
+  p_expected_tank_replay jsonb,
+  p_expected_water_draw_snapshot jsonb,
+  p_expected_settings_snapshot jsonb,
+  p_constraint_plan_dates jsonb,
+  p_expected_constraint_plans jsonb,
   p_expected_price_snapshot jsonb,
+  p_replay_start_at timestamptz,
+  p_replay_end_at timestamptz,
   p_published_at timestamptz,
   p_forecast_horizon_end_at timestamptz
 ) returns text
@@ -45,7 +53,13 @@ begin
   if p_plans is null or jsonb_typeof(p_plans) <> 'array' or jsonb_array_length(p_plans) = 0 then return 'plan_payload_invalid'; end if;
   if p_expected_plan_versions is null or jsonb_typeof(p_expected_plan_versions) <> 'array' then return 'plan_snapshot_conflict'; end if;
   if p_expected_tank_snapshot is null or jsonb_typeof(p_expected_tank_snapshot) <> 'object' then return 'tank_snapshot_conflict'; end if;
+  if p_expected_tank_replay is null or jsonb_typeof(p_expected_tank_replay) <> 'array' then return 'tank_snapshot_conflict'; end if;
+  if p_expected_water_draw_snapshot is null or jsonb_typeof(p_expected_water_draw_snapshot) <> 'array' then return 'water_draw_snapshot_conflict'; end if;
+  if p_expected_settings_snapshot is null or jsonb_typeof(p_expected_settings_snapshot) <> 'object' then return 'settings_conflict'; end if;
+  if p_constraint_plan_dates is null or jsonb_typeof(p_constraint_plan_dates) <> 'array' or jsonb_array_length(p_constraint_plan_dates) = 0 then return 'constraint_plan_conflict'; end if;
+  if p_expected_constraint_plans is null or jsonb_typeof(p_expected_constraint_plans) <> 'array' then return 'constraint_plan_conflict'; end if;
   if p_expected_price_snapshot is null or jsonb_typeof(p_expected_price_snapshot) <> 'array' or jsonb_array_length(p_expected_price_snapshot) = 0 then return 'price_snapshot_conflict'; end if;
+  if p_replay_start_at is null or p_replay_end_at is null or p_replay_start_at > p_replay_end_at then return 'tank_snapshot_conflict'; end if;
   if p_published_at is null or p_forecast_horizon_end_at is null then return 'plan_payload_invalid'; end if;
 
   with plans as (select * from jsonb_to_recordset(p_plans) as p(plan_date date, planned_hours jsonb))
@@ -82,9 +96,6 @@ begin
     union all select starts_at from expected group by starts_at, resolution_minutes having count(*) <> 1
   ) invalid;
   if conflict_count > 0 then return 'price_snapshot_conflict'; end if;
-
-  -- Count must exactly fill the UTC span. This catches missing interior hours while
-  -- naturally allowing Helsinki DST days because the source intervals are UTC instants.
   if price_window_end <> price_window_start + expected_price_count * interval '60 minutes' then return 'price_snapshot_conflict'; end if;
 
   with expected as (
@@ -93,18 +104,80 @@ begin
   ) select count(*) into conflict_count from expected where previous_end is not null and starts_at <> previous_end;
   if conflict_count > 0 then return 'price_snapshot_conflict'; end if;
 
+  -- Lock every relation that contributes to reserve calculation or planning
+  -- constraints before comparing the complete snapshots and writing staging rows.
   lock table public.tank_readings in share mode;
+  lock table public.water_draw_labels in share mode;
+  lock table public.heating_control_settings in share mode;
+  lock table public.heating_plans in share mode;
   lock table public.electricity_prices in share mode;
   lock table public.v2_heating_plan_publications in share row exclusive mode;
+
+  -- Full replay-window tank snapshot, not merely the latest anchor. EXCEPT ALL
+  -- catches edits, inserts, deletes and duplicate-count changes in either direction.
+  with expected as (
+    select created_at, top_temp, bottom_temp, inlet_temp, heating
+    from jsonb_to_recordset(p_expected_tank_replay) as r(created_at timestamptz, top_temp double precision, bottom_temp double precision, inlet_temp double precision, heating boolean)
+  ), current_rows as (
+    select created_at, top_temp::double precision, bottom_temp::double precision, inlet_temp::double precision, heating
+    from public.tank_readings where created_at >= p_replay_start_at and created_at <= p_replay_end_at
+  ), delta as (
+    (select * from expected except all select * from current_rows)
+    union all
+    (select * from current_rows except all select * from expected)
+  ) select count(*) into conflict_count from delta;
+  if conflict_count > 0 then return 'tank_snapshot_conflict'; end if;
 
   if not exists (
     select 1 from public.tank_readings r where r.created_at = expected_created_at
       and r.top_temp is not distinct from expected_top_temp and r.bottom_temp is not distinct from expected_bottom_temp
       and r.inlet_temp is not distinct from expected_inlet_temp and r.heating is not distinct from expected_heating
-  ) or exists (
-    select 1 from public.tank_readings r where r.created_at > expected_created_at
-      and r.top_temp is not null and r.bottom_temp is not null and r.inlet_temp is not null and r.heating is not null
   ) then return 'tank_snapshot_conflict'; end if;
+
+  -- Water-draw labels participate in re-anchoring the reserve replay, so their
+  -- entire overlapping replay-window set is an atomic publication input too.
+  with expected as (
+    select event_started_at, event_ended_at, estimated_water_draw_net_energy_kwh, energy_reliable, energy_quality_reason
+    from jsonb_to_recordset(p_expected_water_draw_snapshot) as d(event_started_at timestamptz, event_ended_at timestamptz, estimated_water_draw_net_energy_kwh double precision, energy_reliable boolean, energy_quality_reason text)
+  ), current_rows as (
+    select event_started_at, event_ended_at, estimated_water_draw_net_energy_kwh::double precision, energy_reliable, energy_quality_reason
+    from public.water_draw_labels where event_ended_at >= p_replay_start_at and event_started_at <= p_replay_end_at
+  ), delta as (
+    (select * from expected except all select * from current_rows)
+    union all
+    (select * from current_rows except all select * from expected)
+  ) select count(*) into conflict_count from delta;
+  if conflict_count > 0 then return 'water_draw_snapshot_conflict'; end if;
+
+  -- Settings are compared by the exact values V2 currently consumes.
+  if not exists (
+    select 1 from public.heating_control_settings s
+    cross join jsonb_to_record(p_expected_settings_snapshot) as e(
+      id integer, max_tank_temperature double precision, automatic_max_heating_hours double precision,
+      v2_target_reserve_percent double precision, v2_safety_reserve_percent double precision
+    )
+    where s.id = 1 and e.id = 1
+      and s.max_tank_temperature is not distinct from e.max_tank_temperature
+      and s.automatic_max_heating_hours is not distinct from e.automatic_max_heating_hours
+      and s.v2_target_reserve_percent is not distinct from e.v2_target_reserve_percent
+      and s.v2_safety_reserve_percent is not distinct from e.v2_safety_reserve_percent
+  ) then return 'settings_conflict'; end if;
+
+  -- The V1 plans used to derive active-block/cooldown constraints are also
+  -- snapshotted. Explicit date scope makes an empty expected plan set meaningful.
+  with dates as (
+    select value::date as plan_date from jsonb_array_elements_text(p_constraint_plan_dates)
+  ), expected as (
+    select plan_date, planned_hours, mode
+    from jsonb_to_recordset(p_expected_constraint_plans) as p(plan_date date, planned_hours integer[], mode text)
+  ), current_rows as (
+    select h.plan_date, h.planned_hours, h.mode from public.heating_plans h join dates d using (plan_date)
+  ), delta as (
+    (select * from expected except all select * from current_rows)
+    union all
+    (select * from current_rows except all select * from expected)
+  ) select count(*) into conflict_count from delta;
+  if conflict_count > 0 then return 'constraint_plan_conflict'; end if;
 
   with expected as (
     select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz, ends_at timestamptz, spot_price_cents_kwh numeric, resolution_minutes integer)
@@ -138,5 +211,5 @@ begin
 end;
 $$;
 
-revoke all on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz) from public, anon, authenticated;
-grant execute on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz) to service_role;
+revoke all on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) from public, anon, authenticated;
+grant execute on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) to service_role;
