@@ -1,0 +1,34 @@
+name: Apply V2 percent reserve settings UI
+
+on:
+  push:
+    branches:
+      - feature/v2-percent-reserve-settings
+    paths:
+      - .github/workflows/apply-v2-percent-reserve-settings-ui.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: energiazen-mini
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/v2-percent-reserve-settings
+          fetch-depth: 0
+      - name: Apply settings UI patch
+        run: node scripts/applyV2PercentReserveSettingsUi.cjs
+      - name: Commit patched UI
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/settings.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "feat(v2): show reserve percentages with kWh detail"
+          git push origin HEAD:feature/v2-percent-reserve-settings
