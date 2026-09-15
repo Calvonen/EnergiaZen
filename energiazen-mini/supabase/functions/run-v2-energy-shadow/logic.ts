@@ -83,6 +83,10 @@ export function runLiveReserveShadow({
     .filter(isUsableReading)
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
 
+  // This optional comparison remains useful for isolated unit-level experiments
+  // where the caller can supply a semantically equivalent current-state V1
+  // boolean. Production live-shadow deliberately passes null because V1's
+  // persisted target_hours is a planning-horizon output, not such a boolean.
   const v1NeedsEnergyRecovery =
     v1Shadow === null ? null : Math.max(v1Shadow.target_hours ?? 0, 0) > 0;
 
