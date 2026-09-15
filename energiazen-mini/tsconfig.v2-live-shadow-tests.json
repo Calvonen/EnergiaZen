@@ -13,6 +13,8 @@
     "supabase/functions/run-v2-energy-shadow/productionConstraints.test.ts",
     "supabase/functions/run-v2-energy-shadow/publicationGuard.ts",
     "supabase/functions/run-v2-energy-shadow/publicationGuard.test.ts",
+    "supabase/functions/run-v2-energy-shadow/publicationPayload.ts",
+    "supabase/functions/run-v2-energy-shadow/publicationPayload.test.ts",
     "lib/energyModelV2/energyReservePercent.test.ts"
   ]
 }
