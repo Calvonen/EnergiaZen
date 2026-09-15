@@ -29,11 +29,8 @@ replaceOnce(
   isTemperatureDropProfileFresh,
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
-import {
-  calculateV2EnergyCapacityKwh,
-  reservePercentToKwh,
-} from "@/lib/energyModelV2/energyReservePercent";`,
-'import V2 reserve helpers',
+import { reservePercentToKwh } from "@/lib/energyModelV2/energyReservePercent";`,
+'import V2 reserve helper',
 );
 
 replaceOnce(
@@ -79,47 +76,35 @@ replaceOnce(
 `  const [profileError, setProfileError] = useState<string | null>(null);
   const [showHourlyDetails, setShowHourlyDetails] = useState(false);`,
 `  const [profileError, setProfileError] = useState<string | null>(null);
-  const [latestInletTempC, setLatestInletTempC] = useState<number | null>(null);
+  const [v2EnergyCapacityKwh, setV2EnergyCapacityKwh] = useState<number | null>(null);
   const [showHourlyDetails, setShowHourlyDetails] = useState(false);`,
-'inlet state',
+'capacity state',
 );
 
 replaceOnce(
 `  const settingsSections = useMemo(`,
-`  const loadLatestInletTemperature = useCallback(async () => {
+`  const loadLatestV2EnergyCapacity = useCallback(async () => {
     const { data, error } = await supabase
-      .from("tank_readings")
-      .select("inlet_temp")
-      .not("inlet_temp", "is", null)
-      .order("created_at", { ascending: false })
+      .from("v2_energy_reserve_shadow_runs")
+      .select("energy_capacity_kwh")
+      .not("energy_capacity_kwh", "is", null)
+      .order("run_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (error) {
-      console.warn("Failed to load latest inlet temperature", error);
-      setLatestInletTempC(null);
+      console.warn("Failed to load V2 energy capacity", error);
+      setV2EnergyCapacityKwh(null);
       return;
     }
 
-    const inletTemp = data?.inlet_temp;
-    setLatestInletTempC(
-      typeof inletTemp === "number" && Number.isFinite(inletTemp)
-        ? inletTemp
+    const capacity = data?.energy_capacity_kwh;
+    setV2EnergyCapacityKwh(
+      typeof capacity === "number" && Number.isFinite(capacity) && capacity > 0
+        ? capacity
         : null,
     );
   }, []);
-
-  const v2EnergyCapacityKwh = useMemo(
-    () =>
-      latestInletTempC === null
-        ? null
-        : calculateV2EnergyCapacityKwh({
-            inletTemperatureC: latestInletTempC,
-            maxTankTemperatureC: settings.maxTankTemperature,
-            tankVolumeLiters: settings.tankSizeLiters,
-          }),
-    [latestInletTempC, settings.maxTankTemperature, settings.tankSizeLiters],
-  );
 
   const formatV2ReserveKwh = useCallback(
     (percent: number) => {
@@ -135,7 +120,7 @@ replaceOnce(
   );
 
   const settingsSections = useMemo(`,
-'load inlet and capacity',
+'load backend V2 capacity',
 );
 
 replaceOnce(
@@ -225,10 +210,10 @@ replaceOnce(
 `  useFocusEffect(
     useCallback(() => {
       void loadTemperatureDropProfile();
-      void loadLatestInletTemperature();
-    }, [loadLatestInletTemperature, loadTemperatureDropProfile]),
+      void loadLatestV2EnergyCapacity();
+    }, [loadLatestV2EnergyCapacity, loadTemperatureDropProfile]),
   );`,
-'load inlet on focus',
+'load V2 capacity on focus',
 );
 
 fs.writeFileSync(path, text);
