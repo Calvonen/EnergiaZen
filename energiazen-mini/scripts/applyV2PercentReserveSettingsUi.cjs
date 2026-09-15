@@ -3,6 +3,11 @@ const fs = require('fs');
 const path = 'app/settings.tsx';
 let text = fs.readFileSync(path, 'utf8');
 
+if (text.includes('key: "v2TargetReservePercent"')) {
+  console.log('V2 percent reserve settings UI already applied');
+  process.exit(0);
+}
+
 function replaceOnce(oldText, newText, label) {
   const count = text.split(oldText).length - 1;
   if (count !== 1) {
