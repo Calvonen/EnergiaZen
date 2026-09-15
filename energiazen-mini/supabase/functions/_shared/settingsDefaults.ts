@@ -14,19 +14,16 @@ import {
   defaultFixedHeatingHoursPerDay,
   normalizeStoredHeatingHours,
 } from "./heatingHourSettings.ts";
+import {
+  defaultV2ReservePercents,
+  normalizeV2ReservePercents,
+} from "./energyModelV2/energyReservePercent.ts";
 
 export { normalizeStoredShowerReserves } from "./showerReserveSettings.ts";
 
 export const defaultTankTemperature = 58;
 
 export type HeatingNeedMode = "automatic" | "fixed";
-
-// "learned" (default): use the heating-gain value learned from real
-// tank_readings once enough valid segments exist, otherwise the fixed
-// fallback (see fallbackHeatingGainPerHour in lib/heatingGain.ts).
-// "fixed": always use the fixed fallback, ignoring the learned value even
-// when one is available - e.g. while distrusting a learned estimate that
-// still has too little data behind it.
 export type HeatingGainSource = "learned" | "fixed";
 
 export const defaultSettings = {
@@ -37,10 +34,6 @@ export const defaultSettings = {
   automaticMaxHeatingHours: defaultAutomaticMaxHeatingHours,
   fixedHeatingHoursPerDay: defaultFixedHeatingHoursPerDay,
   priceDifferenceThresholdCents: 2,
-  // price tolerance / hintojen tasoitus (optimizeHeatingPlan's internal hour
-  // ranking only - see heatingOptimizer.ts). Unrelated to
-  // priceDifferenceThresholdCents above, which only affects fixed-mode's
-  // today-vs-tomorrow day shift. 0 = today's exact behaviour, unchanged.
   priceToleranceCents: 0,
   minTankTemperature: 10,
   maxTankTemperature: 70,
@@ -48,6 +41,8 @@ export const defaultSettings = {
   fullTankShowers: 6,
   targetShowerReserve: defaultTargetShowerReserve,
   safetyShowerReserve: defaultSafetyShowerReserve,
+  v2TargetReservePercent: defaultV2ReservePercents.targetPercent,
+  v2SafetyReservePercent: defaultV2ReservePercents.safetyPercent,
   heatingGainSource: "learned" as HeatingGainSource,
 };
 
@@ -60,6 +55,8 @@ export type EditableSettingKey =
   | "fullTankShowers"
   | "targetShowerReserve"
   | "safetyShowerReserve"
+  | "v2TargetReservePercent"
+  | "v2SafetyReservePercent"
   | "maxTankTemperature"
   | "fullTankAverageTemperature"
   | "priceToleranceCents";
@@ -71,6 +68,8 @@ const editableSettingRanges = {
   fullTankShowers: { max: 10, min: 3 },
   targetShowerReserve: { max: 10, min: 0.5 },
   safetyShowerReserve: { max: 9.5, min: 0 },
+  v2TargetReservePercent: { max: 100, min: 5 },
+  v2SafetyReservePercent: { max: 95, min: 0 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },
   priceToleranceCents: { max: 2, min: 0 },
@@ -83,7 +82,9 @@ function clampSettingValue(key: EditableSettingKey, value: number) {
     key === "safetyShowerReserve" ||
     key === "priceToleranceCents"
       ? Math.round(value * 2) / 2
-      : Math.round(value);
+      : key === "v2TargetReservePercent" || key === "v2SafetyReservePercent"
+        ? Math.round(value / 5) * 5
+        : Math.round(value);
 
   return Math.min(Math.max(roundedValue, range.min), range.max);
 }
@@ -95,57 +96,37 @@ export type LegacySettings = Partial<EnergiaZenSettings> & {
   tankVolumeLiters?: number;
 };
 
-export function normalizeSettings(
-  settings: LegacySettings,
-): EnergiaZenSettings {
+export function normalizeSettings(settings: LegacySettings): EnergiaZenSettings {
   const tankSizeLiters = settings.tankSizeLiters ?? settings.tankVolumeLiters;
-  const fullTankShowers =
-    settings.fullTankShowers ?? settings.showersAtMaxTemperature;
+  const fullTankShowers = settings.fullTankShowers ?? settings.showersAtMaxTemperature;
   const normalizedFullTankShowers =
     typeof fullTankShowers === "number"
       ? clampSettingValue("fullTankShowers", fullTankShowers)
       : defaultSettings.fullTankShowers;
   const showerReserves = normalizeStoredShowerReserves({
     fullTankShowers: normalizedFullTankShowers,
-    minimumShowersBeforeExpensiveTomorrow:
-      settings.minimumShowersBeforeExpensiveTomorrow,
+    minimumShowersBeforeExpensiveTomorrow: settings.minimumShowersBeforeExpensiveTomorrow,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
   });
+  const v2ReservePercents = normalizeV2ReservePercents({
+    safetyPercent: settings.v2SafetyReservePercent,
+    targetPercent: settings.v2TargetReservePercent,
+  });
   const backupHours = Array.isArray(settings.backupHours)
-    ? [
-        ...new Set(
-          settings.backupHours.filter(
-            (hour): hour is number =>
-              Number.isInteger(hour) && hour >= 0 && hour <= 23,
-          ),
-        ),
-      ].sort((a, b) => a - b)
+    ? [...new Set(settings.backupHours.filter((hour): hour is number => Number.isInteger(hour) && hour >= 0 && hour <= 23))].sort((a, b) => a - b)
     : defaultSettings.backupHours;
   const heatingHours = normalizeStoredHeatingHours(settings);
 
   return {
-    heatingNeedMode:
-      settings.heatingNeedMode === "fixed"
-        ? "fixed"
-        : defaultSettings.heatingNeedMode,
-    heatingGainSource:
-      settings.heatingGainSource === "fixed"
-        ? "fixed"
-        : defaultSettings.heatingGainSource,
-    fallbackEnabled:
-      typeof settings.fallbackEnabled === "boolean"
-        ? settings.fallbackEnabled
-        : defaultSettings.fallbackEnabled,
-    backupHours:
-      backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
+    heatingNeedMode: settings.heatingNeedMode === "fixed" ? "fixed" : defaultSettings.heatingNeedMode,
+    heatingGainSource: settings.heatingGainSource === "fixed" ? "fixed" : defaultSettings.heatingGainSource,
+    fallbackEnabled: typeof settings.fallbackEnabled === "boolean" ? settings.fallbackEnabled : defaultSettings.fallbackEnabled,
+    backupHours: backupHours.length > 0 ? backupHours : defaultSettings.backupHours,
     ...heatingHours,
     priceDifferenceThresholdCents:
       typeof settings.priceDifferenceThresholdCents === "number"
-        ? Math.min(
-            Math.max(Math.round(settings.priceDifferenceThresholdCents), 0),
-            10,
-          )
+        ? Math.min(Math.max(Math.round(settings.priceDifferenceThresholdCents), 0), 10)
         : defaultSettings.priceDifferenceThresholdCents,
     minTankTemperature: defaultSettings.minTankTemperature,
     priceToleranceCents:
@@ -158,16 +139,15 @@ export function normalizeSettings(
         : defaultSettings.tankSizeLiters,
     fullTankShowers: normalizedFullTankShowers,
     ...showerReserves,
+    v2TargetReservePercent: v2ReservePercents.targetPercent,
+    v2SafetyReservePercent: v2ReservePercents.safetyPercent,
     maxTankTemperature:
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
         : defaultSettings.maxTankTemperature,
     fullTankAverageTemperature:
       typeof settings.fullTankAverageTemperature === "number"
-        ? clampSettingValue(
-            "fullTankAverageTemperature",
-            settings.fullTankAverageTemperature,
-          )
+        ? clampSettingValue("fullTankAverageTemperature", settings.fullTankAverageTemperature)
         : typeof settings.maxTankTemperature === "number"
           ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)
           : defaultSettings.fullTankAverageTemperature,
