@@ -35,6 +35,15 @@ export const defaultAuthoritativeEnergyStateConfig: AuthoritativeEnergyStateConf
   degradedSensorGapKwh: 1.5,
 };
 
+/**
+ * Promotes the reconciled physical ledger to V2's authoritative scalar energy
+ * state while keeping sensor-derived usable energy explicitly observational.
+ *
+ * A positive ledger/sensor gap is useful evidence about stratification or
+ * sensor lag, but it is not evidence that known heater energy disappeared.
+ * Therefore the gap may degrade diagnostic quality, but it is never copied
+ * into balance uncertainty and never invalidates remaining energy by itself.
+ */
 export function createAuthoritativeEnergyState({
   config = defaultAuthoritativeEnergyStateConfig,
   ledger,
@@ -47,10 +56,12 @@ export function createAuthoritativeEnergyState({
   const sensorGapKwh = Math.max(ledger.sensorCorrectionGapKwh, 0);
   const reasons = [...observedState.uncertainty.reasons];
   let quality: AuthoritativeEnergyQuality = observedState.quality;
+
   if (sensorGapKwh >= config.degradedSensorGapKwh && quality === "valid") {
     quality = "degraded";
     reasons.push("physical/sensor energy gap exceeds degraded threshold");
   }
+
   return {
     observedEnergyKwh: nonNegative(observedState.storedEnergy.kwh),
     observedUsableEnergyKwh: nonNegative(observedState.usableEnergy.kwh),
@@ -66,6 +77,7 @@ export function createAuthoritativeEnergyState({
 function nonNegative(value: number) {
   return Number.isFinite(value) ? Math.max(value, 0) : 0;
 }
+
 function unique(values: string[]) {
   return [...new Set(values)];
 }
