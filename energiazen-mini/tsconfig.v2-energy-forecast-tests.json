@@ -11,7 +11,10 @@
   "include": [
     "lib/energyModelV2/energyForecast.ts",
     "lib/energyModelV2/energyForecast.test.ts",
+    "lib/energyModelV2/energyPlanOptimizer.ts",
+    "lib/energyModelV2/energyPlanOptimizer.test.ts",
     "supabase/functions/_shared/energyModelV2/energyForecast.ts",
+    "supabase/functions/_shared/energyModelV2/energyPlanOptimizer.ts",
     "supabase/functions/_shared/energyModelV2/energyReservePolicy.ts",
     "scripts/runEnergyForecastTests.ts"
   ]
