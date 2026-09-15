@@ -70,7 +70,11 @@ Deno.serve(async (request) => {
       now,
       readings,
       reliableDraws: (drawsResult.data ?? []) as ReliableWaterDraw[],
-      v1Shadow,
+      // V1 target_hours is a planning-horizon output, not a current reserve
+      // state. Keep the raw V1 snapshot persisted below for later forecast-to-
+      // forecast analysis, but do not misclassify it as a current V1 recovery
+      // boolean against V2's present-time kWh reserve band.
+      v1Shadow: null,
     });
 
     const latestReadingAt = readings.length > 0 ? readings[readings.length - 1].created_at : null;
@@ -98,8 +102,8 @@ Deno.serve(async (request) => {
       v1_shadow_run_id: v1Shadow?.id ?? null,
       v1_run_at: v1Shadow?.run_at ?? null,
       v1_target_hours: v1Shadow?.target_hours ?? null,
-      v1_needs_energy_recovery: result.v1NeedsEnergyRecovery,
-      comparison: result.comparison,
+      v1_needs_energy_recovery: null,
+      comparison: "v1_unavailable",
       source: "v2_energy_reserve_live_shadow",
     });
 
@@ -108,14 +112,14 @@ Deno.serve(async (request) => {
     return jsonResponse({
       status: "ok",
       available: result.available,
-      comparison: result.comparison,
+      comparison: "v1_unavailable",
       remaining_energy_kwh: result.remainingEnergyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       v2_band: result.v2Band,
       v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
-      v1_needs_energy_recovery: result.v1NeedsEnergyRecovery,
+      v1_needs_energy_recovery: null,
       reason: result.reason,
     });
   } catch (error) {
