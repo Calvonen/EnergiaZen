@@ -12,6 +12,10 @@ import type { PhysicalEnergyLedger } from "./physicalEnergyLedger";
 import { resolveAcceptedWaterDrawRemoval } from "./acceptedEnergyRemoval";
 import type { WaterDrawEventSnapshot } from "./waterDrawLabelDomain";
 import type { SensorGeometryEpoch } from "./sensorGeometry";
+import {
+  createAuthoritativeEnergyState,
+  type AuthoritativeEnergyState,
+} from "./authoritativeEnergyState";
 
 export type PhysicalEnergyReplayReading = {
   bottomTempC: number;
@@ -23,6 +27,7 @@ export type PhysicalEnergyReplayReading = {
 
 export type PhysicalEnergyReplayStep = {
   acceptedRemovalEnergyKwh: number;
+  authoritativeEnergy: AuthoritativeEnergyState;
   ledger: PhysicalEnergyLedger;
   observedState: TankState;
   reading: PhysicalEnergyReplayReading;
@@ -44,6 +49,7 @@ export function runPhysicalEnergyReplay({
   );
   if (ordered.length === 0) {
     return {
+      finalAuthoritativeEnergy: null,
       finalLedger: null,
       finalObservedState: null,
       steps: [] as PhysicalEnergyReplayStep[],
@@ -64,15 +70,18 @@ export function runPhysicalEnergyReplay({
   let ledger = createLedgerFromTankState(observedState);
   if (!ledger) {
     return {
+      finalAuthoritativeEnergy: null,
       finalLedger: null,
       finalObservedState: observedState,
       steps: [] as PhysicalEnergyReplayStep[],
     };
   }
 
+  let authoritativeEnergy = createAuthoritativeEnergyState({ ledger, observedState });
   const steps: PhysicalEnergyReplayStep[] = [
     {
       acceptedRemovalEnergyKwh: 0,
+      authoritativeEnergy,
       ledger,
       observedState,
       reading: first,
@@ -123,9 +132,11 @@ export function runPhysicalEnergyReplay({
       observedState,
       previousLedger: ledger,
     });
+    authoritativeEnergy = createAuthoritativeEnergyState({ ledger, observedState });
 
     steps.push({
       acceptedRemovalEnergyKwh,
+      authoritativeEnergy,
       ledger,
       observedState,
       reading,
@@ -133,6 +144,7 @@ export function runPhysicalEnergyReplay({
   }
 
   return {
+    finalAuthoritativeEnergy: authoritativeEnergy,
     finalLedger: ledger,
     finalObservedState: observedState,
     steps,
