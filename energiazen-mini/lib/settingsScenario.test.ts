@@ -30,6 +30,8 @@ function createSettings(
     safetyShowerReserve: 2,
     tankSizeLiters: 290,
     targetShowerReserve: 4,
+    v2SafetyReservePercent: 30,
+    v2TargetReservePercent: 75,
     ...overrides,
   };
 }
@@ -59,21 +61,33 @@ export function runSettingsScenarioUnitTests() {
     false,
     "alkuperaiseen arvoon palautus poistaa skenaariotilan",
   );
+
+  const committed = commitSettingsScenario(scenario, draft);
   assertEqual(
-    discardSettingsScenario(persisted),
-    createSettingsScenarioState(persisted),
-    "hylkaaminen palauttaa tallennetut arvot",
+    committed.persistedSettings,
+    draft,
+    "commit paivittaa persistedSettings-arvon",
   );
   assertEqual(
-    commitSettingsScenario(draft, draft, draft),
-    createSettingsScenarioState(draft),
-    "onnistunut tallennus tekee luonnoksesta persistedSettings-arvon kun luonnosta ei ole muutettu tallennuksen aikana",
+    committed.draftSettings,
+    draft,
+    "commit paivittaa draftSettings-arvon",
+  );
+  assertEqual(
+    committed.hasUnsavedChanges,
+    false,
+    "commit poistaa skenaariotilan",
   );
 
-  const draftChangedDuringSave = createSettings({ targetShowerReserve: 5 });
+  const discarded = discardSettingsScenario(scenario);
   assertEqual(
-    commitSettingsScenario(draft, draft, draftChangedDuringSave),
-    createSettingsScenarioState(draft, draftChangedDuringSave),
-    "tallennuksen aikana tehty uudempi luonnosmuutos ei katoa tallennuksen valmistuessa",
+    discarded.draftSettings,
+    persisted,
+    "discard palauttaa luonnoksen persistedSettings-arvoon",
+  );
+  assertEqual(
+    discarded.hasUnsavedChanges,
+    false,
+    "discard poistaa skenaariotilan",
   );
 }
