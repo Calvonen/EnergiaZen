@@ -33,15 +33,19 @@ export function runV2PublicationPayloadUnitTests() {
     { plan_date: "2026-09-15", planned_hours: [] },
     { plan_date: "2026-09-16", planned_hours: [] },
   ], "no-heat decision clears all covered dates");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [] }, []), "covered horizon required");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["not-a-date"] }, covered), "malformed hour rejected");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["2026-09-15T19:00:00.000Z"] }, covered), "selected hour must be exact covered instant");
 
-  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["not-a-date"] }), "malformed hour rejected");
-  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [
-    "2026-10-25T00:00:00.000Z",
-    "2026-10-25T01:00:00.000Z",
-  ] }, [
-    "2026-10-25T00:00:00.000Z",
-    "2026-10-25T01:00:00.000Z",
-  ]), "DST repeated local hour rejected fail-closed");
+  const dstCovered = ["2026-10-25T00:00:00.000Z", "2026-10-25T01:00:00.000Z"];
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [dstCovered[0]] }, dstCovered), "first repeated DST occurrence rejected");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [dstCovered[1]] }, dstCovered), "second repeated DST occurrence rejected");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: dstCovered }, dstCovered), "both repeated DST occurrences rejected");
+
+  assertDeepEqual(buildV2StagedPlans(
+    { selectedHeatingHourIds: ["2026-09-15T10:00:00+00:00"] },
+    ["2026-09-15T10:00:00Z"],
+  ), [{ plan_date: "2026-09-15", planned_hours: [13] }], "equivalent timestamp spellings accepted");
 
   const readings = [
     { created_at: "2026-09-15T10:00:00Z", top_temp: 55, bottom_temp: 40, inlet_temp: 10, heating: false },
@@ -66,6 +70,6 @@ export function runV2PublicationPayloadUnitTests() {
 
   assertThrows(() => buildV2PriceSnapshot([
     { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
-    { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
-  ]), "duplicate price intervals rejected");
+    { starts_at: "2026-09-15T10:00:00Z", ends_at: "2026-09-15T11:00:00Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
+  ]), "duplicate equivalent price intervals rejected");
 }
