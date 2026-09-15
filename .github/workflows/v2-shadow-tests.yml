@@ -1,0 +1,37 @@
+name: V2 shadow tests
+
+on:
+  pull_request:
+    paths:
+      - "energiazen-mini/lib/energyModelV2/**"
+      - "energiazen-mini/supabase/functions/run-v2-energy-shadow/**"
+      - "energiazen-mini/supabase/functions/_shared/energyModelV2/**"
+      - "energiazen-mini/supabase/functions/_shared/waterDrawDetection.ts"
+      - "energiazen-mini/supabase/functions/_shared/tankReadingFreshness.ts"
+      - "energiazen-mini/supabase/functions/_shared/tankMonitorAlert.ts"
+      - "energiazen-mini/tsconfig.v2-live-shadow-tests.json"
+      - "energiazen-mini/tsconfig.forecast-tests.json"
+      - "energiazen-mini/package.json"
+      - "energiazen-mini/package-lock.json"
+      - ".github/workflows/v2-shadow-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: energiazen-mini
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run V2 and forecast tests
+        run: npm test
