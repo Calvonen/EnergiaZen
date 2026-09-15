@@ -61,33 +61,21 @@ export function runSettingsScenarioUnitTests() {
     false,
     "alkuperaiseen arvoon palautus poistaa skenaariotilan",
   );
-
-  const committed = commitSettingsScenario(scenario, draft);
   assertEqual(
-    committed.persistedSettings,
-    draft,
-    "commit paivittaa persistedSettings-arvon",
+    discardSettingsScenario(persisted),
+    createSettingsScenarioState(persisted),
+    "hylkaaminen palauttaa tallennetut arvot",
   );
   assertEqual(
-    committed.draftSettings,
-    draft,
-    "commit paivittaa draftSettings-arvon",
-  );
-  assertEqual(
-    committed.hasUnsavedChanges,
-    false,
-    "commit poistaa skenaariotilan",
+    commitSettingsScenario(draft, draft, draft),
+    createSettingsScenarioState(draft),
+    "onnistunut tallennus tekee luonnoksesta persistedSettings-arvon kun luonnosta ei ole muutettu tallennuksen aikana",
   );
 
-  const discarded = discardSettingsScenario(scenario);
+  const draftChangedDuringSave = createSettings({ targetShowerReserve: 5 });
   assertEqual(
-    discarded.draftSettings,
-    persisted,
-    "discard palauttaa luonnoksen persistedSettings-arvoon",
-  );
-  assertEqual(
-    discarded.hasUnsavedChanges,
-    false,
-    "discard poistaa skenaariotilan",
+    commitSettingsScenario(draft, draft, draftChangedDuringSave),
+    createSettingsScenarioState(draft, draftChangedDuringSave),
+    "tallennuksen aikana tehty uudempi luonnosmuutos ei katoa tallennuksen valmistuessa",
   );
 }
