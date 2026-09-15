@@ -39,12 +39,9 @@ begin
   if p_expected_constraint_plans is null or jsonb_typeof(p_expected_constraint_plans)<>'array' then return 'constraint_plan_conflict'; end if;
   if p_expected_price_snapshot is null or jsonb_typeof(p_expected_price_snapshot)<>'array' or jsonb_array_length(p_expected_price_snapshot)=0 then return 'price_snapshot_conflict'; end if;
   if p_replay_end_at is null then return 'tank_snapshot_conflict'; end if;
-  -- These bounds are not caller-selected scopes: they are invariants of the live V2 planning read.
   if p_replay_start_at is null or p_replay_start_at <> p_replay_end_at - interval '6 hours' then return 'tank_snapshot_conflict'; end if;
   if p_price_fetch_end_at is null or p_price_fetch_end_at <> p_replay_end_at + interval '48 hours' then return 'price_snapshot_conflict'; end if;
   if p_published_at is null or p_forecast_horizon_end_at is null then return 'plan_payload_invalid'; end if;
-  -- Publication must still belong to the planning clock. A delayed RPC must not
-  -- publish after the current modeled hourly interval has rolled over.
   if clock_timestamp() < p_replay_end_at or clock_timestamp() >= date_trunc('hour', p_replay_end_at) + interval '1 hour' then return 'plan_snapshot_conflict'; end if;
   if p_published_at < p_replay_end_at or p_published_at >= date_trunc('hour', p_replay_end_at) + interval '1 hour' then return 'plan_payload_invalid'; end if;
   planning_date := (p_replay_end_at at time zone 'Europe/Helsinki')::date;
@@ -74,9 +71,15 @@ begin
   with expected as (select starts_at,ends_at,lag(ends_at) over(order by starts_at) previous_end from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from expected where previous_end is not null and starts_at<>previous_end;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
 
-  -- The staged table is date based, so every Helsinki date represented by the
-  -- covered price/forecast horizon must have an explicit row, including [] hours.
-  forecast_last_date := ((price_window_end - interval '1 microsecond') at time zone 'Europe/Helsinki')::date;
+  -- The query snapshot can extend into the day after tomorrow. Bind staged dates
+  -- to the separately supplied modeled horizon, and prove that boundary is an
+  -- actual end boundary inside the exact snapshotted hourly series.
+  if p_forecast_horizon_end_at <= price_window_start or p_forecast_horizon_end_at > price_window_end then return 'plan_payload_invalid'; end if;
+  if not exists (
+    select 1 from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
+    where p.ends_at = p_forecast_horizon_end_at
+  ) then return 'plan_payload_invalid'; end if;
+  forecast_last_date := ((p_forecast_horizon_end_at - interval '1 microsecond') at time zone 'Europe/Helsinki')::date;
   with recursive required_dates(plan_date) as (
     select (price_window_start at time zone 'Europe/Helsinki')::date
     union all select plan_date + 1 from required_dates where plan_date < forecast_last_date
