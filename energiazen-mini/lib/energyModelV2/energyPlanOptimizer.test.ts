@@ -92,7 +92,7 @@ export function runEnergyPlanOptimizerUnitTests() {
 
   const partialEnough = optimizeEnergyPlan({
     heaterPowerKw: 3,
-    initialRemainingEnergyKwh: 5.5,
+    initialRemainingEnergyKwh: 5.6,
     initialUncertaintyKwh: 0.25,
     maxHeatingHours: 2,
     segments: [
