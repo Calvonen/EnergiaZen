@@ -1,4 +1,6 @@
 import { runEnergyForecastUnitTests } from "../lib/energyModelV2/energyForecast.test";
+import { runEnergyPlanOptimizerUnitTests } from "../lib/energyModelV2/energyPlanOptimizer.test";
 
 runEnergyForecastUnitTests();
-console.log("energyForecast tests passed");
+runEnergyPlanOptimizerUnitTests();
+console.log("energyForecast and energyPlanOptimizer tests passed");
