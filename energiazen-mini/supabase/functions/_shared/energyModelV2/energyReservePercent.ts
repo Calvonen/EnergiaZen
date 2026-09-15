@@ -16,6 +16,10 @@ export const defaultV2ReservePercents: EnergyReservePercentSettings = {
 };
 
 export const defaultWaterSpecificHeatKwhPerKgC = 0.001163;
+export const minV2TargetReservePercent = 5;
+export const maxV2TargetReservePercent = 100;
+export const minV2SafetyReservePercent = 0;
+export const maxV2SafetyReservePercent = 95;
 
 export function calculateV2EnergyCapacityKwh({
   inletTemperatureC,
@@ -60,17 +64,32 @@ export function normalizeV2ReservePercents({
   safetyPercent,
   targetPercent,
 }: Partial<EnergyReservePercentSettings>): EnergyReservePercentSettings {
-  const target = clampAndRoundPercent(targetPercent, defaultV2ReservePercents.targetPercent);
+  const target = clampAndRoundPercent(
+    targetPercent,
+    defaultV2ReservePercents.targetPercent,
+    minV2TargetReservePercent,
+    maxV2TargetReservePercent,
+  );
   const safety = Math.min(
-    clampAndRoundPercent(safetyPercent, defaultV2ReservePercents.safetyPercent),
+    clampAndRoundPercent(
+      safetyPercent,
+      defaultV2ReservePercents.safetyPercent,
+      minV2SafetyReservePercent,
+      maxV2SafetyReservePercent,
+    ),
     target,
   );
   return { safetyPercent: safety, targetPercent: target };
 }
 
-function clampAndRoundPercent(value: number | undefined, fallback: number) {
+function clampAndRoundPercent(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+) {
   const normalized = Number.isFinite(value) ? value as number : fallback;
-  return Math.round(clamp(normalized, 0, 100) / 5) * 5;
+  return Math.round(clamp(normalized, min, max) / 5) * 5;
 }
 
 function clamp(value: number, min: number, max: number) {
