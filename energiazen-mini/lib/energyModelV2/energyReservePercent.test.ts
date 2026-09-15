@@ -34,6 +34,14 @@ export function runEnergyReservePercentUnitTests() {
   assert(ordered.targetPercent === 40, "target stays at configured normalized value");
   assert(ordered.safetyPercent === 40, "safety is capped to target");
 
+  const boundedLow = normalizeV2ReservePercents({ targetPercent: -20, safetyPercent: -10 });
+  assert(boundedLow.targetPercent === 5, "target is clamped to the database/UI minimum");
+  assert(boundedLow.safetyPercent === 0, "safety is clamped to the database/UI minimum");
+
+  const boundedHigh = normalizeV2ReservePercents({ targetPercent: 130, safetyPercent: 130 });
+  assert(boundedHigh.targetPercent === 100, "target is clamped to the database/UI maximum");
+  assert(boundedHigh.safetyPercent === 95, "safety is clamped to the database/UI maximum");
+
   assert(
     calculateV2EnergyCapacityKwh({ inletTemperatureC: 65, maxTankTemperatureC: 65, tankVolumeLiters: 290 }) === null,
     "non-positive temperature range fails closed",
