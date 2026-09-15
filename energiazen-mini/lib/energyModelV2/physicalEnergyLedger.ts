@@ -42,11 +42,11 @@ export function createPhysicalEnergyLedger({
  * Advances the V2 physical energy balance independently from instantaneous
  * sensor temperatures.
  *
- * Known heater input is conserved. An observation may move modeled energy
- * upward immediately, but it cannot erase already-accounted heater energy
- * unless the caller supplies explicit acceptedRemovalEnergyKwh (for example
- * a validated water draw). This is intentionally stricter than V1's direct
- * sensor overwrite and provides the invariant required by V2-BUG-007.
+ * After the initial observation anchors the ledger, total modeled energy may
+ * change only through explicit physical terms: heater input, modeled standing
+ * loss, and accepted removal energy. Sensor observations remain diagnostic;
+ * they neither erase known heater energy nor mint energy back into the ledger
+ * after an accepted water draw.
  */
 export function advancePhysicalEnergyLedger(
   previous: PhysicalEnergyLedger,
@@ -61,20 +61,12 @@ export function advancePhysicalEnergyLedger(
     ? heaterPowerKwhPerHour * deltaHours
     : 0;
 
-  const predictedStoredEnergyKwh = nonNegative(
+  const modeledStoredEnergyKwh = nonNegative(
     previous.modeledStoredEnergyKwh +
       deliveredHeatingEnergyKwh -
       modeledHeatLossKwh -
       acceptedRemovalEnergyKwh,
   );
-
-  // Without explicit evidence of an energy-removing event, sensor lag,
-  // stratification or mixing may not erase physically delivered heater
-  // energy. A warmer-than-predicted observation is safe to accept because it
-  // only reveals energy the model had underestimated.
-  const modeledStoredEnergyKwh = acceptedRemovalEnergyKwh > 0
-    ? observedStoredEnergyKwh
-    : Math.max(predictedStoredEnergyKwh, observedStoredEnergyKwh);
 
   return {
     cumulativeAcceptedRemovalKwh:
