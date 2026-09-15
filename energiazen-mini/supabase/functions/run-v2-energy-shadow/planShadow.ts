@@ -80,6 +80,10 @@ export function runLiveEnergyPlanShadow({
     initialUncertaintyKwh: reserve.balanceUncertaintyKwh,
     maxHeatingHours: automaticMaxHeatingHours,
     segments: horizon.segments,
+    thresholds: {
+      safetyEnergyKwh: reserve.safetyEnergyKwh,
+      targetEnergyKwh: reserve.targetEnergyKwh,
+    },
   });
 
   return {
