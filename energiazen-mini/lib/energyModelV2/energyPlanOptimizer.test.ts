@@ -16,13 +16,12 @@ function segment(
   segmentHours = 1,
 ): EnergyPlanCandidateSegment {
   return {
-    heatingSelected: undefined as never,
     id,
     modeledHeatLossKwh,
     priceCentsPerKwh,
     segmentHours,
     startDate: `2026-09-15T${String(hour).padStart(2, "0")}:00:00.000Z`,
-  } as EnergyPlanCandidateSegment;
+  };
 }
 
 export function runEnergyPlanOptimizerUnitTests() {
