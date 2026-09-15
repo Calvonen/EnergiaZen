@@ -27,6 +27,7 @@ declare
   expected_created_at timestamptz; expected_top_temp double precision; expected_bottom_temp double precision;
   expected_inlet_temp double precision; expected_heating boolean; plan_count integer; written_count integer;
   conflict_count integer; expected_price_count integer; price_window_start timestamptz; price_window_end timestamptz;
+  planning_date date;
 begin
   if p_plans is null or jsonb_typeof(p_plans) <> 'array' or jsonb_array_length(p_plans)=0 then return 'plan_payload_invalid'; end if;
   if p_expected_plan_versions is null or jsonb_typeof(p_expected_plan_versions)<>'array' then return 'plan_snapshot_conflict'; end if;
@@ -37,15 +38,15 @@ begin
   if p_constraint_plan_dates is null or jsonb_typeof(p_constraint_plan_dates)<>'array' or jsonb_array_length(p_constraint_plan_dates)=0 then return 'constraint_plan_conflict'; end if;
   if p_expected_constraint_plans is null or jsonb_typeof(p_expected_constraint_plans)<>'array' then return 'constraint_plan_conflict'; end if;
   if p_expected_price_snapshot is null or jsonb_typeof(p_expected_price_snapshot)<>'array' or jsonb_array_length(p_expected_price_snapshot)=0 then return 'price_snapshot_conflict'; end if;
-  if p_price_fetch_end_at is null then return 'price_snapshot_conflict'; end if;
-  if p_replay_start_at is null or p_replay_end_at is null or p_replay_start_at>p_replay_end_at then return 'tank_snapshot_conflict'; end if;
+  if p_replay_end_at is null then return 'tank_snapshot_conflict'; end if;
+  -- These bounds are not caller-selected scopes: they are invariants of the live V2 planning read.
+  if p_replay_start_at is null or p_replay_start_at <> p_replay_end_at - interval '6 hours' then return 'tank_snapshot_conflict'; end if;
+  if p_price_fetch_end_at is null or p_price_fetch_end_at <> p_replay_end_at + interval '48 hours' then return 'price_snapshot_conflict'; end if;
   if p_published_at is null or p_forecast_horizon_end_at is null then return 'plan_payload_invalid'; end if;
+  planning_date := (p_replay_end_at at time zone 'Europe/Helsinki')::date;
 
   with plans as (select * from jsonb_to_recordset(p_plans) as p(plan_date date, planned_hours jsonb))
-  select count(*) into conflict_count from (
-    select plan_date from plans where plan_date is null or planned_hours is null or jsonb_typeof(planned_hours)<>'array'
-    union all select plan_date from plans group by plan_date having count(*)<>1
-  ) x;
+  select count(*) into conflict_count from (select plan_date from plans where plan_date is null or planned_hours is null or jsonb_typeof(planned_hours)<>'array' union all select plan_date from plans group by plan_date having count(*)<>1) x;
   if conflict_count>0 then return 'plan_payload_invalid'; end if;
 
   with plans as (select plan_date from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb)), versions as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz))
@@ -54,27 +55,27 @@ begin
 
   if exists (select 1 from jsonb_array_elements(p_constraint_plan_dates) e where jsonb_typeof(e.value)<>'string' or nullif(e.value #>> '{}','') is null) then return 'constraint_plan_conflict'; end if;
   begin
-    with dates as (select value::date plan_date from jsonb_array_elements_text(p_constraint_plan_dates))
-    select count(*) into conflict_count from (select plan_date from dates where plan_date is null union all select plan_date from dates group by plan_date having count(*)<>1) x;
+    with dates as (select value::date plan_date from jsonb_array_elements_text(p_constraint_plan_dates)), required_dates as (select planning_date plan_date union all select planning_date + 1)
+    select count(*) into conflict_count from (
+      select plan_date from dates where plan_date is null
+      union all select plan_date from dates group by plan_date having count(*)<>1
+      union all select r.plan_date from required_dates r left join dates d using(plan_date) where d.plan_date is null
+      union all select d.plan_date from dates d left join required_dates r using(plan_date) where r.plan_date is null
+    ) x;
   exception when others then return 'constraint_plan_conflict'; end;
   if conflict_count>0 then return 'constraint_plan_conflict'; end if;
 
-  select s.created_at,s.top_temp,s.bottom_temp,s.inlet_temp,s.heating into expected_created_at,expected_top_temp,expected_bottom_temp,expected_inlet_temp,expected_heating
-  from jsonb_to_record(p_expected_tank_snapshot) as s(created_at timestamptz,top_temp double precision,bottom_temp double precision,inlet_temp double precision,heating boolean);
+  select s.created_at,s.top_temp,s.bottom_temp,s.inlet_temp,s.heating into expected_created_at,expected_top_temp,expected_bottom_temp,expected_inlet_temp,expected_heating from jsonb_to_record(p_expected_tank_snapshot) as s(created_at timestamptz,top_temp double precision,bottom_temp double precision,inlet_temp double precision,heating boolean);
   if expected_created_at is null or expected_top_temp is null or expected_bottom_temp is null or expected_inlet_temp is null or expected_heating is null then return 'tank_snapshot_conflict'; end if;
 
-  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer))
-  select min(starts_at),max(ends_at),count(*) into price_window_start,price_window_end,expected_price_count from expected;
+  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select min(starts_at),max(ends_at),count(*) into price_window_start,price_window_end,expected_price_count from expected;
   if price_window_start is null or price_window_end is null then return 'price_snapshot_conflict'; end if;
-  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer))
-  select count(*) into conflict_count from (select starts_at from expected where starts_at is null or ends_at is null or spot_price_cents_kwh is null or resolution_minutes<>60 or ends_at<>starts_at+interval '60 minutes' or starts_at<>date_trunc('hour',starts_at) union all select starts_at from expected group by starts_at,resolution_minutes having count(*)<>1) x;
+  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from (select starts_at from expected where starts_at is null or ends_at is null or spot_price_cents_kwh is null or resolution_minutes<>60 or ends_at<>starts_at+interval '60 minutes' or starts_at<>date_trunc('hour',starts_at) union all select starts_at from expected group by starts_at,resolution_minutes having count(*)<>1) x;
   if conflict_count>0 or price_window_end<>price_window_start+expected_price_count*interval '60 minutes' then return 'price_snapshot_conflict'; end if;
   with expected as (select starts_at,ends_at,lag(ends_at) over(order by starts_at) previous_end from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from expected where previous_end is not null and starts_at<>previous_end;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
 
-  lock table public.tank_readings in share mode; lock table public.water_draw_labels in share mode;
-  lock table public.heating_control_settings in share mode; lock table public.heating_plans in share mode;
-  lock table public.electricity_prices in share mode; lock table public.v2_heating_plan_publications in share row exclusive mode;
+  lock table public.tank_readings in share mode; lock table public.water_draw_labels in share mode; lock table public.heating_control_settings in share mode; lock table public.heating_plans in share mode; lock table public.electricity_prices in share mode; lock table public.v2_heating_plan_publications in share row exclusive mode;
 
   with expected as (select created_at,top_temp,bottom_temp,inlet_temp,heating from jsonb_to_recordset(p_expected_tank_replay) as r(created_at timestamptz,top_temp double precision,bottom_temp double precision,inlet_temp double precision,heating boolean)), current_rows as (select created_at,top_temp::double precision,bottom_temp::double precision,inlet_temp::double precision,heating from public.tank_readings where created_at>=p_replay_start_at and created_at<=p_replay_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'tank_snapshot_conflict'; end if;
@@ -89,23 +90,7 @@ begin
   with dates as (select value::date plan_date from jsonb_array_elements_text(p_constraint_plan_dates)), expected as (select plan_date,planned_hours,mode from jsonb_to_recordset(p_expected_constraint_plans) as p(plan_date date,planned_hours integer[],mode text)), current_rows as (select h.plan_date,h.planned_hours,h.mode from public.heating_plans h join dates d using(plan_date)), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'constraint_plan_conflict'; end if;
 
-  -- Recheck the complete original Edge price-query scope, not merely the contiguous
-  -- snapshot span. The Edge query was: FI/60m, ends_at > captured now
-  -- (p_replay_end_at), starts_at <= p_price_fetch_end_at. Any insertion, deletion,
-  -- duplicate or value change anywhere in that scope invalidates publication.
-  with expected as (
-    select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes
-    from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
-  ), current_rows as (
-    select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes
-    from public.electricity_prices
-    where region='FI' and resolution_minutes=60
-      and ends_at>p_replay_end_at and starts_at<=p_price_fetch_end_at
-  ), delta as (
-    (select * from expected except all select * from current_rows)
-    union all
-    (select * from current_rows except all select * from expected)
-  ) select count(*) into conflict_count from delta;
+  with expected as (select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)), current_rows as (select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes from public.electricity_prices where region='FI' and resolution_minutes=60 and ends_at>p_replay_end_at and starts_at<=p_price_fetch_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
 
   with expected as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz)) select count(*) into conflict_count from expected e left join public.v2_heating_plan_publications c on c.plan_date=e.plan_date where (e.updated_at is null and c.plan_date is not null) or (e.updated_at is not null and (c.plan_date is null or c.updated_at is distinct from e.updated_at));
