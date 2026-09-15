@@ -47,8 +47,6 @@ begin
   select count(*) into conflict_count from (select plan_date from versions where plan_date is null union all select plan_date from versions group by plan_date having count(*)<>1 union all select p.plan_date from plans p left join versions v using(plan_date) where v.plan_date is null union all select v.plan_date from versions v left join plans p using(plan_date) where p.plan_date is null) x;
   if conflict_count>0 then return 'plan_snapshot_conflict'; end if;
 
-  -- Scope must be a real, unique set of dates. NULL or duplicate dates could otherwise
-  -- turn the V1 constraint recheck into an empty join and bypass the snapshot boundary.
   if exists (select 1 from jsonb_array_elements(p_constraint_plan_dates) e where jsonb_typeof(e.value)<>'string' or nullif(e.value #>> '{}','') is null) then return 'constraint_plan_conflict'; end if;
   begin
     with dates as (select value::date plan_date from jsonb_array_elements_text(p_constraint_plan_dates))
@@ -77,9 +75,11 @@ begin
   if conflict_count>0 then return 'tank_snapshot_conflict'; end if;
   if not exists(select 1 from public.tank_readings r where r.created_at=expected_created_at and r.top_temp is not distinct from expected_top_temp and r.bottom_temp is not distinct from expected_bottom_temp and r.inlet_temp is not distinct from expected_inlet_temp and r.heating is not distinct from expected_heating) then return 'tank_snapshot_conflict'; end if;
 
-  -- logic.ts considers a row usable from timestamp + finite temperatures; heating may be
-  -- NULL. Therefore any newer finite-temperature row invalidates this publication.
-  if exists(select 1 from public.tank_readings r where r.created_at>p_replay_end_at and r.created_at>expected_created_at and r.top_temp is not null and r.bottom_temp is not null and r.inlet_temp is not null and r.top_temp not in ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision) and r.bottom_temp not in ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision) and r.inlet_temp not in ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision)) then return 'tank_snapshot_conflict'; end if;
+  -- Production constraints consume the raw latest tank row (top_temp/heating), while
+  -- reserve replay consumes the usable subset. Therefore *any* row newer than the
+  -- snapshotted replay boundary can change a publication input and must invalidate
+  -- the transaction, even when bottom/inlet/relay fields are null or non-finite.
+  if exists(select 1 from public.tank_readings r where r.created_at>p_replay_end_at) then return 'tank_snapshot_conflict'; end if;
 
   with expected as (select event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason from jsonb_to_recordset(p_expected_water_draw_snapshot) as d(event_started_at timestamptz,event_ended_at timestamptz,estimated_water_draw_net_energy_kwh double precision,energy_reliable boolean,energy_quality_reason text)), current_rows as (select event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh::double precision,energy_reliable,energy_quality_reason from public.water_draw_labels where event_ended_at>=p_replay_start_at and event_started_at<=p_replay_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'water_draw_snapshot_conflict'; end if;
