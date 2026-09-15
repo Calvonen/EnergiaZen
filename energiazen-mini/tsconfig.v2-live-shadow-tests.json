@@ -8,6 +8,7 @@
     "supabase/functions/run-v2-energy-shadow/logic.ts",
     "supabase/functions/run-v2-energy-shadow/logic.test.ts",
     "supabase/functions/run-v2-energy-shadow/planShadow.ts",
-    "supabase/functions/run-v2-energy-shadow/planShadow.test.ts"
+    "supabase/functions/run-v2-energy-shadow/planShadow.test.ts",
+    "lib/energyModelV2/energyReservePercent.test.ts"
   ]
 }

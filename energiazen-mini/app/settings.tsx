@@ -48,12 +48,14 @@ import {
   isTemperatureDropProfileFresh,
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
+import { reservePercentToKwh } from "@/lib/energyModelV2/energyReservePercent";
 
 type SettingsRow = {
   accent: string;
   description?: string;
   key?: EditableSettingKey;
   label: string;
+  secondaryValue?: string;
   subheadingBefore?: string;
   validationKey?: SettingsValidationField;
   value: string;
@@ -162,6 +164,18 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
     min: 0,
     step: 0.5,
     unit: "suihkua",
+  },
+  v2TargetReservePercent: {
+    max: 95,
+    min: 5,
+    step: 5,
+    unit: "%",
+  },
+  v2SafetyReservePercent: {
+    max: 95,
+    min: 0,
+    step: 5,
+    unit: "%",
   },
   maxTankTemperature: {
     options: [55, 60, 65, 70, 75, 80],
@@ -274,6 +288,7 @@ export default function SettingsScreen() {
     useState<TemperatureDropProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [v2EnergyCapacityKwh, setV2EnergyCapacityKwh] = useState<number | null>(null);
   const [showHourlyDetails, setShowHourlyDetails] = useState(false);
   const [expandedSections, setExpandedSections] = useState<
     Record<CollapsibleSectionKey, boolean>
@@ -299,6 +314,42 @@ export default function SettingsScreen() {
       setIsProfileLoading(false);
     }
   }, []);
+
+  const loadLatestV2EnergyCapacity = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("v2_energy_reserve_shadow_runs")
+      .select("energy_capacity_kwh")
+      .not("energy_capacity_kwh", "is", null)
+      .order("run_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Failed to load V2 energy capacity", error);
+      setV2EnergyCapacityKwh(null);
+      return;
+    }
+
+    const capacity = data?.energy_capacity_kwh;
+    setV2EnergyCapacityKwh(
+      typeof capacity === "number" && Number.isFinite(capacity) && capacity > 0
+        ? capacity
+        : null,
+    );
+  }, []);
+
+  const formatV2ReserveKwh = useCallback(
+    (percent: number) => {
+      if (v2EnergyCapacityKwh === null) {
+        return "kWh-arvio ei saatavilla";
+      }
+      const kwh = reservePercentToKwh(percent, v2EnergyCapacityKwh);
+      return kwh === null
+        ? "kWh-arvio ei saatavilla"
+        : "≈ " + kwh.toFixed(1).replace(".", ",") + " kWh";
+    },
+    [v2EnergyCapacityKwh],
+  );
 
   const settingsSections = useMemo(
     (): SettingsSection[] => {
@@ -355,43 +406,68 @@ export default function SettingsScreen() {
         ],
       },
       ...(showAutomaticSettings
-        ? [{
-        title: "Lämminvesivaraus",
-        rows: [
-          {
-            accent: "#36f4d4",
-            description:
-              "Optimointi pyrkii pitämään käytettävissä yleensä vähintään tämän määrän suihkuja. Varaus voi hetkellisesti laskea tavoitteen alle, jos edullisia lämmitystunteja on tulossa.",
-            key: "targetShowerReserve",
-            label: "Tavoitevaraus suihkuina",
-            value: `${settings.targetShowerReserve} suihkua`,
-          },
-          {
-            accent: "#ffcf5a",
-            description:
-              "Ennustettu varaus ei saa laskea tämän alle. Jos raja uhkaa alittua, lämmitystä aikaistetaan hinnasta riippumatta.",
-            key: "safetyShowerReserve",
-            label: "Turvaraja suihkuina",
-            value: `${settings.safetyShowerReserve} suihkua`,
-          },
-          {
-            accent: "#54eaa0",
-            description:
-              "Optimointi voi käyttää enintään tämän määrän lämmitystunteja tarkasteluikkunan aikana. Todellinen tuntimäärä määräytyy varaajan ennusteen mukaan.",
-            key: "automaticMaxHeatingHours",
-            label: "Lämmitystuntien enimmäismäärä",
-            value: `${settings.automaticMaxHeatingHours} h`,
-          },
-          {
-            accent: "#ff7bd1",
-            description:
-              "Tämän toleranssin sisällä olevat hinnat käsitellään optimoinnissa samanarvoisina, jotta pieni hintaero ei yksin ratkaise lämmitystunnin valintaa. Näytetyt ja tallennetut hinnat pysyvät ennallaan.",
-            key: "priceToleranceCents",
-            label: "Hintatoleranssi",
-            value: `${settings.priceToleranceCents} snt/kWh`,
-          },
-        ],
-      } as SettingsSection]
+        ? [
+            {
+              title: "Lämminvesivaraus",
+              rows: [
+                {
+                  accent: "#36f4d4",
+                  description:
+                    "Nykyinen V1-ohjaus pyrkii pitämään käytettävissä yleensä vähintään tämän määrän suihkuja. Varaus voi hetkellisesti laskea tavoitteen alle, jos edullisia lämmitystunteja on tulossa.",
+                  key: "targetShowerReserve",
+                  label: "Tavoitevaraus suihkuina",
+                  value: `${settings.targetShowerReserve} suihkua`,
+                },
+                {
+                  accent: "#ffcf5a",
+                  description:
+                    "Nykyisen V1-ohjauksen ennustettu varaus ei saa laskea tämän alle. Jos raja uhkaa alittua, lämmitystä aikaistetaan hinnasta riippumatta.",
+                  key: "safetyShowerReserve",
+                  label: "Turvaraja suihkuina",
+                  value: `${settings.safetyShowerReserve} suihkua`,
+                },
+                {
+                  accent: "#54eaa0",
+                  description:
+                    "Optimointi voi käyttää enintään tämän määrän lämmitystunteja tarkasteluikkunan aikana. Todellinen tuntimäärä määräytyy varaajan ennusteen mukaan.",
+                  key: "automaticMaxHeatingHours",
+                  label: "Lämmitystuntien enimmäismäärä",
+                  value: `${settings.automaticMaxHeatingHours} h`,
+                },
+                {
+                  accent: "#ff7bd1",
+                  description:
+                    "Tämän toleranssin sisällä olevat hinnat käsitellään optimoinnissa samanarvoisina, jotta pieni hintaero ei yksin ratkaise lämmitystunnin valintaa. Näytetyt ja tallennetut hinnat pysyvät ennallaan.",
+                  key: "priceToleranceCents",
+                  label: "Hintatoleranssi",
+                  value: `${settings.priceToleranceCents} snt/kWh`,
+                },
+              ],
+            } as SettingsSection,
+            {
+              title: "V2 energiavaraus (shadow)",
+              rows: [
+                {
+                  accent: "#36f4d4",
+                  description:
+                    "V2-shadow pyrkii pitämään varaajan mallinnetusta energiakapasiteetista vähintään tämän osuuden. Tämä asetus ei vielä ohjaa Shellyä.",
+                  key: "v2TargetReservePercent",
+                  label: "Tavoitevaraus",
+                  secondaryValue: formatV2ReserveKwh(settings.v2TargetReservePercent),
+                  value: `${settings.v2TargetReservePercent} %`,
+                },
+                {
+                  accent: "#ffcf5a",
+                  description:
+                    "V2-shadown konservatiivinen energiamäärä ei saa laskea tämän osuuden alle. Tämä asetus vaikuttaa vain rinnakkaiseen V2-laskentaan.",
+                  key: "v2SafetyReservePercent",
+                  label: "Turvaraja",
+                  secondaryValue: formatV2ReserveKwh(settings.v2SafetyReservePercent),
+                  value: `${settings.v2SafetyReservePercent} %`,
+                },
+              ],
+            } as SettingsSection,
+          ]
         : [{
             title: "Kiinteä lämmitys",
             rows: [
@@ -407,7 +483,7 @@ export default function SettingsScreen() {
           } as SettingsSection]),
     ];
     },
-    [settings],
+    [formatV2ReserveKwh, settings],
   );
   const settingsRows = settingsSections.flatMap((section) => section.rows);
   const getCollapsibleSectionDetails = (title: string) => {
@@ -597,7 +673,8 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadTemperatureDropProfile();
-    }, [loadTemperatureDropProfile]),
+      void loadLatestV2EnergyCapacity();
+    }, [loadLatestV2EnergyCapacity, loadTemperatureDropProfile]),
   );
 
   const isProfileFresh = temperatureDropProfile
@@ -948,7 +1025,19 @@ export default function SettingsScreen() {
                         </Text>
                       ) : null}
                     </View>
-                    <Text style={styles.settingValue}>{row.value}</Text>
+                    <View style={{ alignItems: "flex-end", gap: 2 }}>
+                      <Text style={styles.settingValue}>{row.value}</Text>
+                      {row.secondaryValue ? (
+                        <Text
+                          style={[
+                            styles.settingDescription,
+                            { textAlign: "right" },
+                          ]}
+                        >
+                          {row.secondaryValue}
+                        </Text>
+                      ) : null}
+                    </View>
                   </>
                 );
 

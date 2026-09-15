@@ -13,14 +13,15 @@ import type { EnergiaZenSettings } from "./settings";
 // plays no part in isHeatingControlSettingsRowAuthoritative's completeness
 // check. backup_hours/fallback_enabled/price_tolerance_cents are selected
 // purely so mergeHeatingControlSettingsBackfillPayload below can preserve
-// them too if already set remotely - they likewise play no part in the
+// them too if already set remotely. The V2 reserve percentages are selected
+// for the same reason. These fields likewise play no part in the
 // completeness check (backup_hours/fallback_enabled are Shelly's own
 // fail-safe fields; price_tolerance_cents is an optional optimizer tuning
 // value with a safe default of 0 - see resolveOptimizerSettings in
 // run-heating-optimizer/logic.ts, which never requires it for publication
 // readiness - none of the three are run-heating-optimizer readiness inputs).
 export const heatingControlSettingsCompletenessColumns =
-  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,backup_hours,fallback_enabled,price_tolerance_cents,updated_at";
+  "heating_need_mode,automatic_max_heating_hours,safety_shower_reserve,target_shower_reserve,full_tank_showers,full_tank_average_temperature,min_tank_temperature,max_tank_temperature,heating_gain_source,backup_hours,fallback_enabled,price_tolerance_cents,v2_safety_reserve_percent,v2_target_reserve_percent,updated_at";
 
 export type HeatingControlSettingsCompletenessRow = {
   automatic_max_heating_hours: number | null;
@@ -35,6 +36,8 @@ export type HeatingControlSettingsCompletenessRow = {
   price_tolerance_cents: number | null;
   safety_shower_reserve: number | null;
   target_shower_reserve: number | null;
+  v2_safety_reserve_percent: number | null;
+  v2_target_reserve_percent: number | null;
   updated_at: string | null;
 };
 
@@ -52,6 +55,18 @@ function isValidHeatingGainSource(
 
 function isValidBackupHours(value: number[] | null): value is number[] {
   return Array.isArray(value) && value.length > 0;
+}
+
+function isValidV2ReservePercent(
+  value: number | null,
+  minimum: number,
+): value is number {
+  return (
+    Number.isFinite(value) &&
+    (value as number) >= minimum &&
+    (value as number) <= 95 &&
+    (value as number) % 5 === 0
+  );
 }
 
 // True only once the Supabase row carries every authoritative optimizer
@@ -102,6 +117,8 @@ export type HeatingControlSettingsBackfillPayloadFields = {
   price_tolerance_cents: number;
   safety_shower_reserve: number;
   target_shower_reserve: number;
+  v2_safety_reserve_percent: number;
+  v2_target_reserve_percent: number;
 };
 
 // Codex P2 (PR #193, startup backfill follow-up): the original backfill
@@ -175,6 +192,18 @@ export function mergeHeatingControlSettingsBackfillPayload<
     target_shower_reserve: Number.isFinite(observedRow.target_shower_reserve)
       ? (observedRow.target_shower_reserve as number)
       : localPayload.target_shower_reserve,
+    v2_safety_reserve_percent: isValidV2ReservePercent(
+      observedRow.v2_safety_reserve_percent,
+      0,
+    )
+      ? observedRow.v2_safety_reserve_percent
+      : localPayload.v2_safety_reserve_percent,
+    v2_target_reserve_percent: isValidV2ReservePercent(
+      observedRow.v2_target_reserve_percent,
+      5,
+    )
+      ? observedRow.v2_target_reserve_percent
+      : localPayload.v2_target_reserve_percent,
   };
 }
 

@@ -28,6 +28,8 @@ const numericFields: SettingsValidationField[] = [
   "fullTankShowers",
   "targetShowerReserve",
   "safetyShowerReserve",
+  "v2TargetReservePercent",
+  "v2SafetyReservePercent",
 ];
 
 function isFiniteNumber(value: unknown): value is number {
@@ -75,6 +77,8 @@ export function validateSettingsDraft(
   const fullTankShowers = draftSettings.fullTankShowers;
   const targetShowerReserve = draftSettings.targetShowerReserve;
   const safetyShowerReserve = draftSettings.safetyShowerReserve;
+  const v2TargetReservePercent = draftSettings.v2TargetReservePercent;
+  const v2SafetyReservePercent = draftSettings.v2SafetyReservePercent;
   const minTankTemperature = draftSettings.minTankTemperature;
   const maxTankTemperature = draftSettings.maxTankTemperature;
   const fullTankAverageTemperature =
@@ -120,6 +124,37 @@ export function validateSettingsDraft(
     errors.push({
       field: "targetShowerReserve",
       message: "Tavoitevaraus ei voi ylittää täyden varaajan suihkumäärää.",
+    });
+  }
+
+  if (
+    isFiniteNumber(v2TargetReservePercent) &&
+    (v2TargetReservePercent < 5 || v2TargetReservePercent > 95)
+  ) {
+    errors.push({
+      field: "v2TargetReservePercent",
+      message: "V2-tavoitevarauksen pitää olla välillä 5–95 %.",
+    });
+  }
+
+  if (
+    isFiniteNumber(v2SafetyReservePercent) &&
+    (v2SafetyReservePercent < 0 || v2SafetyReservePercent > 95)
+  ) {
+    errors.push({
+      field: "v2SafetyReservePercent",
+      message: "V2-turvarajan pitää olla välillä 0–95 %.",
+    });
+  }
+
+  if (
+    isFiniteNumber(v2SafetyReservePercent) &&
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2SafetyReservePercent > v2TargetReservePercent
+  ) {
+    errors.push({
+      field: "v2SafetyReservePercent",
+      message: "V2-turvaraja ei voi ylittää tavoitevarausta.",
     });
   }
 
@@ -227,6 +262,27 @@ export function validateSettingsDraft(
     warnings.push({
       field: "safetyShowerReserve",
       message: "Turvaraja on hyvin lähellä tavoitevarausta.",
+    });
+  }
+
+  if (
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2TargetReservePercent >= 90
+  ) {
+    warnings.push({
+      field: "v2TargetReservePercent",
+      message: "Korkea V2-tavoite voi lisätä lämmityskertoja.",
+    });
+  }
+
+  if (
+    isFiniteNumber(v2SafetyReservePercent) &&
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2TargetReservePercent - v2SafetyReservePercent <= 10
+  ) {
+    warnings.push({
+      field: "v2SafetyReservePercent",
+      message: "V2-turvaraja on lähellä tavoitevarausta.",
     });
   }
 

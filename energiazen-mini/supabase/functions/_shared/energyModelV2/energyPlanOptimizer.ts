@@ -21,6 +21,7 @@ export type EnergyPlanOptimizationResult = {
 };
 
 export function optimizeEnergyPlan({
+  energyCapacityKwh,
   forbiddenHeatingHourIds = [],
   heaterPowerKw,
   initialRemainingEnergyKwh,
@@ -30,6 +31,7 @@ export function optimizeEnergyPlan({
   segments,
   thresholds,
 }: {
+  energyCapacityKwh?: number;
   forbiddenHeatingHourIds?: string[];
   heaterPowerKw: number;
   initialRemainingEnergyKwh: number;
@@ -46,13 +48,13 @@ export function optimizeEnergyPlan({
   const maxSelected = Math.max(0, Math.floor(maxHeatingHours));
 
   if ([...required].some((id) => forbidden.has(id))) {
-    return invalidResult("required_hour_is_forbidden", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds);
+    return invalidResult("required_hour_is_forbidden", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
   if ([...required].some((id) => !byId.has(id))) {
-    return invalidResult("required_hour_missing", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds);
+    return invalidResult("required_hour_missing", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
   if (required.size > maxSelected) {
-    return invalidResult("required_hours_exceed_max", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds);
+    return invalidResult("required_hours_exceed_max", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
 
   const optionalIds = ordered
@@ -68,6 +70,7 @@ export function optimizeEnergyPlan({
     for (const extraIds of combinations(optionalIds, optionalCount)) {
       const selected = new Set([...required, ...extraIds]);
       const evaluated = evaluateSelection({
+        energyCapacityKwh,
         heaterPowerKw,
         initialRemainingEnergyKwh,
         initialUncertaintyKwh,
@@ -86,6 +89,7 @@ export function optimizeEnergyPlan({
   }
 
   const winner = bestValid ?? bestFallback ?? evaluateSelection({
+    energyCapacityKwh,
     heaterPowerKw,
     initialRemainingEnergyKwh,
     initialUncertaintyKwh,
@@ -116,6 +120,7 @@ type EvaluatedPlan = {
 };
 
 function evaluateSelection({
+  energyCapacityKwh,
   heaterPowerKw,
   initialRemainingEnergyKwh,
   initialUncertaintyKwh,
@@ -123,6 +128,7 @@ function evaluateSelection({
   selected,
   thresholds,
 }: {
+  energyCapacityKwh?: number;
   heaterPowerKw: number;
   initialRemainingEnergyKwh: number;
   initialUncertaintyKwh: number;
@@ -131,6 +137,7 @@ function evaluateSelection({
   thresholds?: EnergyReserveThresholds;
 }): EvaluatedPlan {
   const forecast = forecastEnergyHorizon({
+    energyCapacityKwh,
     heaterPowerKw,
     initialRemainingEnergyKwh,
     initialUncertaintyKwh,
@@ -193,8 +200,10 @@ function invalidResult(
   initialRemainingEnergyKwh: number,
   initialUncertaintyKwh: number,
   thresholds?: EnergyReserveThresholds,
+  energyCapacityKwh?: number,
 ): EnergyPlanOptimizationResult {
   const forecast = forecastEnergyHorizon({
+    energyCapacityKwh,
     heaterPowerKw,
     initialRemainingEnergyKwh,
     initialUncertaintyKwh,

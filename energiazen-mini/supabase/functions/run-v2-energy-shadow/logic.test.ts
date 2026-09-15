@@ -1,4 +1,10 @@
-import { runLiveReserveShadow, type ReliableWaterDraw, type ShadowTankReading } from "./logic";
+import {
+  applyReserveThresholds,
+  deriveUsableReadingInletBaselineC,
+  runLiveReserveShadow,
+  type ReliableWaterDraw,
+  type ShadowTankReading,
+} from "./logic";
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);
@@ -29,6 +35,18 @@ function reading(
 const maxTankTemperatureC = 65;
 
 export function runLiveV2EnergyShadowUnitTests() {
+  const capacityBaseline = deriveUsableReadingInletBaselineC([
+    reading("invalid", 55, 40, 2, false),
+    reading("2026-09-08T10:00:00.000Z", Number.NaN, 40, 4, false),
+    reading("2026-09-08T10:05:00.000Z", 55, 40, 12, false),
+    reading("2026-09-08T10:10:00.000Z", 55, 40, 14, false),
+  ]);
+  assertClose(
+    capacityBaseline,
+    12,
+    "capacity baseline excludes the same unusable readings as the reserve replay",
+  );
+
   const laggingSensors = runLiveReserveShadow({
     maxTankTemperatureC,
     now: new Date("2026-09-08T11:21:00.000Z"),
@@ -198,4 +216,21 @@ export function runLiveV2EnergyShadowUnitTests() {
   });
   assert(!staleLatest.available, "stale latest reading fails closed even when pairwise gaps are short");
   assert(staleLatest.reason === "latest_tank_reading_stale", "stale latest reading has its own diagnostic reason");
+
+  const unavailableWithDerivedThresholds = applyReserveThresholds(staleLatest, 5.4, 17.1);
+  assert(!unavailableWithDerivedThresholds.available, "thresholds do not mask replay unavailability");
+  assert(
+    unavailableWithDerivedThresholds.reason === "latest_tank_reading_stale",
+    "derived thresholds preserve the replay failure reason",
+  );
+  assertClose(
+    unavailableWithDerivedThresholds.safetyEnergyKwh,
+    5.4,
+    "unavailable runs persist the percentage-derived safety threshold",
+  );
+  assertClose(
+    unavailableWithDerivedThresholds.targetEnergyKwh,
+    17.1,
+    "unavailable runs persist the percentage-derived target threshold",
+  );
 }

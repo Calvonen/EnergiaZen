@@ -37,6 +37,8 @@ const completeAutomaticRow: HeatingControlSettingsCompletenessRow = {
   price_tolerance_cents: 0.5,
   safety_shower_reserve: 1.5,
   target_shower_reserve: 3,
+  v2_safety_reserve_percent: 30,
+  v2_target_reserve_percent: 75,
   updated_at: "2026-08-14T10:00:00.000Z",
 };
 
@@ -55,6 +57,8 @@ const legacyEmptyRow: HeatingControlSettingsCompletenessRow = {
   price_tolerance_cents: null,
   safety_shower_reserve: null,
   target_shower_reserve: null,
+  v2_safety_reserve_percent: null,
+  v2_target_reserve_percent: null,
   updated_at: null,
 };
 
@@ -71,6 +75,8 @@ const localPayload: HeatingControlSettingsBackfillPayloadFields = {
   price_tolerance_cents: 0,
   safety_shower_reserve: 1,
   target_shower_reserve: 2,
+  v2_safety_reserve_percent: 25,
+  v2_target_reserve_percent: 70,
 };
 
 export async function runHeatingControlSettingsBackfillUnitTests() {
@@ -199,6 +205,31 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
     );
   }
 
+  // A startup backfill triggered by an unrelated legacy field must not
+  // overwrite V2 percentages saved by another device.
+  {
+    const rowWithRemoteV2Percentages: HeatingControlSettingsCompletenessRow = {
+      ...legacyEmptyRow,
+      heating_need_mode: "automatic",
+      v2_safety_reserve_percent: 35,
+      v2_target_reserve_percent: 85,
+    };
+    const merged = mergeHeatingControlSettingsBackfillPayload(
+      localPayload,
+      rowWithRemoteV2Percentages,
+    );
+    assertEqual(
+      merged.v2_safety_reserve_percent,
+      35,
+      "a valid remote V2 safety percentage must survive an unrelated startup backfill",
+    );
+    assertEqual(
+      merged.v2_target_reserve_percent,
+      85,
+      "a valid remote V2 target percentage must survive an unrelated startup backfill",
+    );
+  }
+
   // backup_hours/fallback_enabled/price_tolerance_cents must be part of the
   // same merge policy as every other field - including preserving an
   // explicit `false`/`0`, not just truthy values.
@@ -318,6 +349,10 @@ export async function runHeatingControlSettingsBackfillUnitTests() {
         price_tolerance_cents: fullyAuthoritativeRow.price_tolerance_cents,
         safety_shower_reserve: fullyAuthoritativeRow.safety_shower_reserve,
         target_shower_reserve: fullyAuthoritativeRow.target_shower_reserve,
+        v2_safety_reserve_percent:
+          fullyAuthoritativeRow.v2_safety_reserve_percent,
+        v2_target_reserve_percent:
+          fullyAuthoritativeRow.v2_target_reserve_percent,
       },
       "merging with a fully authoritative remote row must yield exactly the remote's own values for every field, never the local payload's",
     );

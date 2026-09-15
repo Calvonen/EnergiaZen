@@ -1,6 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
+  applyReserveThresholds,
+  deriveUsableReadingInletBaselineC,
   runLiveReserveShadow,
   type ReliableWaterDraw,
   type ShadowTankReading,
@@ -10,6 +12,12 @@ import {
   runLiveEnergyPlanShadow,
   type ShadowElectricityPrice,
 } from "./planShadow.ts";
+import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
+import {
+  calculateV2EnergyCapacityKwh,
+  normalizeV2ReservePercents,
+  reservePercentToKwh,
+} from "../_shared/energyModelV2/energyReservePercent.ts";
 
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
 const replayWindowHours = 6;
@@ -60,7 +68,7 @@ Deno.serve(async (request) => {
         .maybeSingle(),
       supabase
         .from("heating_control_settings")
-        .select("max_tank_temperature,automatic_max_heating_hours")
+        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent")
         .eq("id", 1)
         .maybeSingle(),
       supabase
@@ -81,26 +89,37 @@ Deno.serve(async (request) => {
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const maxTankTemperatureC = Number(settingsResult.data?.max_tank_temperature);
     const automaticMaxHeatingHours = Number(settingsResult.data?.automatic_max_heating_hours);
-    const result = runLiveReserveShadow({
+    const reservePercents = normalizeV2ReservePercents({
+      targetPercent: Number(settingsResult.data?.v2_target_reserve_percent),
+      safetyPercent: Number(settingsResult.data?.v2_safety_reserve_percent),
+    });
+
+    const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
+    const energyCapacityKwh = calculateV2EnergyCapacityKwh({
+      inletTemperatureC: inletBaselineC,
+      maxTankTemperatureC,
+      tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
+    });
+    const targetEnergyKwh = energyCapacityKwh === null
+      ? null
+      : reservePercentToKwh(reservePercents.targetPercent, energyCapacityKwh);
+    const safetyEnergyKwh = energyCapacityKwh === null
+      ? null
+      : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
+
+    const baseResult = runLiveReserveShadow({
       maxTankTemperatureC,
       now,
       readings,
       reliableDraws: (drawsResult.data ?? []) as ReliableWaterDraw[],
-      // V1 target_hours is a planning-horizon output, not a current reserve
-      // state. Keep the raw V1 snapshot persisted below for later forecast-to-
-      // forecast analysis, but do not misclassify it as a current V1 recovery
-      // boolean against V2's present-time kWh reserve band.
       v1Shadow: null,
     });
 
-    const inletValues = readings.flatMap((reading) =>
-      typeof reading.inlet_temp === "number" && Number.isFinite(reading.inlet_temp)
-        ? [reading.inlet_temp]
-        : [],
-    );
-    const inletBaselineC = inletValues.length ? Math.min(...inletValues) : Number.NaN;
+    const result = applyReserveThresholds(baseResult, safetyEnergyKwh, targetEnergyKwh);
+
     const plan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
+      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -126,6 +145,9 @@ Deno.serve(async (request) => {
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       conservative_energy_kwh: result.conservativeEnergyKwh,
+      energy_capacity_kwh: energyCapacityKwh,
+      safety_reserve_percent: reservePercents.safetyPercent,
+      target_reserve_percent: reservePercents.targetPercent,
       safety_energy_kwh: result.safetyEnergyKwh,
       target_energy_kwh: result.targetEnergyKwh,
       v2_band: result.v2Band,
@@ -158,6 +180,11 @@ Deno.serve(async (request) => {
       status: "ok",
       available: result.available,
       comparison: "v1_unavailable",
+      energy_capacity_kwh: energyCapacityKwh,
+      safety_reserve_percent: reservePercents.safetyPercent,
+      target_reserve_percent: reservePercents.targetPercent,
+      safety_energy_kwh: result.safetyEnergyKwh,
+      target_energy_kwh: result.targetEnergyKwh,
       remaining_energy_kwh: result.remainingEnergyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,

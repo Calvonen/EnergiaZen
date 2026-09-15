@@ -14,6 +14,10 @@ import {
   defaultFixedHeatingHoursPerDay,
   normalizeStoredHeatingHours,
 } from "./heatingHourSettings.ts";
+import {
+  defaultV2ReservePercents,
+  normalizeV2ReservePercents,
+} from "./energyModelV2/energyReservePercent.ts";
 
 export { normalizeStoredShowerReserves } from "./showerReserveSettings.ts";
 
@@ -48,6 +52,8 @@ export const defaultSettings = {
   fullTankShowers: 6,
   targetShowerReserve: defaultTargetShowerReserve,
   safetyShowerReserve: defaultSafetyShowerReserve,
+  v2TargetReservePercent: defaultV2ReservePercents.targetPercent,
+  v2SafetyReservePercent: defaultV2ReservePercents.safetyPercent,
   heatingGainSource: "learned" as HeatingGainSource,
 };
 
@@ -60,6 +66,8 @@ export type EditableSettingKey =
   | "fullTankShowers"
   | "targetShowerReserve"
   | "safetyShowerReserve"
+  | "v2TargetReservePercent"
+  | "v2SafetyReservePercent"
   | "maxTankTemperature"
   | "fullTankAverageTemperature"
   | "priceToleranceCents";
@@ -71,6 +79,8 @@ const editableSettingRanges = {
   fullTankShowers: { max: 10, min: 3 },
   targetShowerReserve: { max: 10, min: 0.5 },
   safetyShowerReserve: { max: 9.5, min: 0 },
+  v2TargetReservePercent: { max: 95, min: 5 },
+  v2SafetyReservePercent: { max: 95, min: 0 },
   maxTankTemperature: { max: 90, min: 40 },
   fullTankAverageTemperature: { max: 90, min: 20 },
   priceToleranceCents: { max: 2, min: 0 },
@@ -83,7 +93,9 @@ function clampSettingValue(key: EditableSettingKey, value: number) {
     key === "safetyShowerReserve" ||
     key === "priceToleranceCents"
       ? Math.round(value * 2) / 2
-      : Math.round(value);
+      : key === "v2TargetReservePercent" || key === "v2SafetyReservePercent"
+        ? Math.round(value / 5) * 5
+        : Math.round(value);
 
   return Math.min(Math.max(roundedValue, range.min), range.max);
 }
@@ -111,6 +123,10 @@ export function normalizeSettings(
       settings.minimumShowersBeforeExpensiveTomorrow,
     safetyShowerReserve: settings.safetyShowerReserve,
     targetShowerReserve: settings.targetShowerReserve,
+  });
+  const v2ReservePercents = normalizeV2ReservePercents({
+    safetyPercent: settings.v2SafetyReservePercent,
+    targetPercent: settings.v2TargetReservePercent,
   });
   const backupHours = Array.isArray(settings.backupHours)
     ? [
@@ -158,6 +174,8 @@ export function normalizeSettings(
         : defaultSettings.tankSizeLiters,
     fullTankShowers: normalizedFullTankShowers,
     ...showerReserves,
+    v2TargetReservePercent: v2ReservePercents.targetPercent,
+    v2SafetyReservePercent: v2ReservePercents.safetyPercent,
     maxTankTemperature:
       typeof settings.maxTankTemperature === "number"
         ? clampSettingValue("maxTankTemperature", settings.maxTankTemperature)

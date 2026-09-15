@@ -30,6 +30,8 @@ function createSettings(
     safetyShowerReserve: 2,
     tankSizeLiters: 290,
     targetShowerReserve: 4,
+    v2SafetyReservePercent: 30,
+    v2TargetReservePercent: 75,
     ...overrides,
   };
 }

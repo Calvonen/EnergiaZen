@@ -37,6 +37,7 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
 
 export function runLiveEnergyPlanShadow({
   automaticMaxHeatingHours,
+  energyCapacityKwh,
   inletBaselineC,
   maxTankTemperatureC,
   now,
@@ -44,6 +45,7 @@ export function runLiveEnergyPlanShadow({
   reserve,
 }: {
   automaticMaxHeatingHours: number;
+  energyCapacityKwh: number;
   inletBaselineC: number;
   maxTankTemperatureC: number;
   now: Date;
@@ -63,7 +65,12 @@ export function runLiveEnergyPlanShadow({
   if (automaticMaxHeatingHours > maxShadowHeatingHours) {
     return unavailable("max_heating_hours_above_shadow_limit");
   }
-  if (!Number.isFinite(maxTankTemperatureC) || !Number.isFinite(inletBaselineC)) {
+  if (
+    !Number.isFinite(maxTankTemperatureC) ||
+    !Number.isFinite(inletBaselineC) ||
+    !Number.isFinite(energyCapacityKwh) ||
+    energyCapacityKwh <= 0
+  ) {
     return unavailable("invalid_thermal_inputs");
   }
 
@@ -75,11 +82,16 @@ export function runLiveEnergyPlanShadow({
   if (!horizon.ok) return unavailable(horizon.reason, standingLossKwhPerHour);
 
   const plan = optimizeEnergyPlan({
+    energyCapacityKwh,
     heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
     initialRemainingEnergyKwh: reserve.remainingEnergyKwh,
     initialUncertaintyKwh: reserve.balanceUncertaintyKwh,
     maxHeatingHours: automaticMaxHeatingHours,
     segments: horizon.segments,
+    thresholds: {
+      safetyEnergyKwh: reserve.safetyEnergyKwh,
+      targetEnergyKwh: reserve.targetEnergyKwh,
+    },
   });
 
   return {

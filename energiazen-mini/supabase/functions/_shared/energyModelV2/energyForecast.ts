@@ -41,20 +41,34 @@ export type EnergyForecastResult = {
 };
 
 export function forecastEnergyHorizon({
+  energyCapacityKwh,
   heaterPowerKw,
   initialRemainingEnergyKwh,
   initialUncertaintyKwh,
   segments,
   thresholds = defaultEnergyReserveThresholds,
 }: {
+  energyCapacityKwh?: number;
   heaterPowerKw: number;
   initialRemainingEnergyKwh: number;
   initialUncertaintyKwh: number;
   segments: EnergyForecastSegment[];
   thresholds?: EnergyReserveThresholds;
 }): EnergyForecastResult {
-  let remainingEnergyKwh = nonNegative(initialRemainingEnergyKwh);
-  let uncertaintyKwh = nonNegative(initialUncertaintyKwh);
+  const physicalCapacityKwh = positiveOrInfinity(energyCapacityKwh);
+  const initialEnergyKwh = nonNegative(initialRemainingEnergyKwh);
+  const initialConservativeEnergyKwh = Math.max(
+    initialEnergyKwh - nonNegative(initialUncertaintyKwh),
+    0,
+  );
+  let remainingEnergyKwh = Math.min(initialEnergyKwh, physicalCapacityKwh);
+  // If the nominal ledger exceeds physical capacity, clip its uncertainty by
+  // the same overflow. This preserves the already-computed conservative lower
+  // bound instead of effectively subtracting delivery uncertainty twice.
+  let uncertaintyKwh = Math.max(
+    remainingEnergyKwh - Math.min(initialConservativeEnergyKwh, physicalCapacityKwh),
+    0,
+  );
   let minimumConservativeEnergyKwh = Math.max(remainingEnergyKwh - uncertaintyKwh, 0);
   let firstSafetyViolationAt: string | null = null;
   let firstTargetMissAt: string | null = null;
@@ -68,11 +82,31 @@ export function forecastEnergyHorizon({
     const acceptedRemovalKwh = nonNegative(segment.acceptedRemovalKwh ?? 0);
     const remainingEnergyBeforeKwh = remainingEnergyKwh;
 
-    remainingEnergyKwh = Math.max(
-      remainingEnergyKwh + deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
+    const energyDeltaKwh =
+      deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh;
+    const conservativeEnergyBeforeKwh = Math.max(
+      remainingEnergyKwh - uncertaintyKwh,
       0,
     );
-    uncertaintyKwh += nonNegative(segment.additionalUncertaintyKwh ?? 0);
+    const conservativeEnergyAfterKwh = clamp(
+      conservativeEnergyBeforeKwh +
+        energyDeltaKwh -
+        nonNegative(segment.additionalUncertaintyKwh ?? 0),
+      0,
+      physicalCapacityKwh,
+    );
+    remainingEnergyKwh = clamp(
+      remainingEnergyKwh + energyDeltaKwh,
+      0,
+      physicalCapacityKwh,
+    );
+    // Saturation clips the nominal and conservative endpoints independently.
+    // Deriving uncertainty from those bounded endpoints prevents heater energy
+    // above physical capacity from being counted as uncertainty a second time.
+    uncertaintyKwh = Math.max(
+      remainingEnergyKwh - conservativeEnergyAfterKwh,
+      0,
+    );
 
     const reserve = evaluateEnergyReserve(
       {
@@ -132,6 +166,12 @@ export function forecastEnergyHorizon({
 
 function nonNegative(value: number) {
   return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function positiveOrInfinity(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : Number.POSITIVE_INFINITY;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {

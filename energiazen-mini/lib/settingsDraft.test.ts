@@ -38,6 +38,8 @@ function createSettings(
     safetyShowerReserve: 2,
     tankSizeLiters: 290,
     targetShowerReserve: 4,
+    v2SafetyReservePercent: 30,
+    v2TargetReservePercent: 75,
     ...overrides,
   };
 }
@@ -179,8 +181,7 @@ export async function runSettingsDraftUnitTests() {
         backup_hours: payload.backup_hours,
         automatic_max_heating_hours: payload.automatic_max_heating_hours,
         fallback_enabled: payload.fallback_enabled,
-        full_tank_average_temperature:
-          payload.full_tank_average_temperature,
+        full_tank_average_temperature: payload.full_tank_average_temperature,
         full_tank_showers: payload.full_tank_showers,
         heating_gain_source: payload.heating_gain_source,
         heating_need_mode: payload.heating_need_mode,
@@ -189,6 +190,8 @@ export async function runSettingsDraftUnitTests() {
         min_tank_temperature: payload.min_tank_temperature,
         safety_shower_reserve: payload.safety_shower_reserve,
         target_shower_reserve: payload.target_shower_reserve,
+        v2_safety_reserve_percent: payload.v2_safety_reserve_percent,
+        v2_target_reserve_percent: payload.v2_target_reserve_percent,
         timezone: payload.timezone,
         updatedAtIsString: typeof payload.updated_at === "string",
       },
@@ -205,6 +208,8 @@ export async function runSettingsDraftUnitTests() {
         min_tank_temperature: 10,
         safety_shower_reserve: 2,
         target_shower_reserve: 4.5,
+        v2_safety_reserve_percent: 30,
+        v2_target_reserve_percent: 75,
         timezone: "Europe/Helsinki",
         updatedAtIsString: true,
       },
@@ -246,6 +251,20 @@ export async function runSettingsDraftUnitTests() {
       { localCalls, remoteCalls },
       { localCalls: 0, remoteCalls: 0 },
       "invalidi luonnos ei kirjoita paikallisesti tai Supabaseen",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const invalidV2Draft = createSettings({
+      v2SafetyReservePercent: 80,
+      v2TargetReservePercent: 70,
+    });
+    const validation = validateSettingsDraft(invalidV2Draft, savedSettings);
+    assertEqual(
+      validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
+      true,
+      "V2 turvaraja ei saa ylittaa tavoitevarausta",
     );
   }
 
@@ -377,6 +396,8 @@ export async function runSettingsDraftUnitTests() {
         heating_need_mode: remotePayloads[0]?.heating_need_mode,
         safety_shower_reserve: remotePayloads[0]?.safety_shower_reserve,
         target_shower_reserve: remotePayloads[0]?.target_shower_reserve,
+        v2_safety_reserve_percent: remotePayloads[0]?.v2_safety_reserve_percent,
+        v2_target_reserve_percent: remotePayloads[0]?.v2_target_reserve_percent,
       },
       {
         automatic_max_heating_hours: 5,
@@ -384,6 +405,8 @@ export async function runSettingsDraftUnitTests() {
         heating_need_mode: "automatic",
         safety_shower_reserve: 1.5,
         target_shower_reserve: 3.5,
+        v2_safety_reserve_percent: 30,
+        v2_target_reserve_percent: 75,
       },
       `${previousSource} -> ${nextSource} writes the full authoritative settings payload`,
     );
