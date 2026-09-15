@@ -1,6 +1,5 @@
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import { optimizeEnergyPlan } from "../_shared/energyModelV2/energyPlanOptimizer.ts";
-import { getDateKeyOffset, getFinnishDateKey } from "../_shared/heatingLogic.ts";
 import { liveReserveShadowConfig, type LiveReserveShadowResult } from "./logic.ts";
 
 export type ShadowElectricityPrice = {
@@ -29,6 +28,12 @@ export type LiveEnergyPlanShadowResult = {
 
 const assumption = "standing_loss_only_no_future_draws" as const;
 const maxShadowHeatingHours = 4;
+const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
 
 export function runLiveEnergyPlanShadow({
   automaticMaxHeatingHours,
@@ -112,8 +117,8 @@ function buildPriceHorizon({
       startDate: string;
     }> }
   | { ok: false; reason: string } {
-  const today = getDateKeyOffset(0, now);
-  const tomorrow = getDateKeyOffset(1, now);
+  const today = helsinkiDateKey(now);
+  const tomorrow = helsinkiDateKeyOffset(now, 1);
   const nowMs = now.getTime();
   const ordered = prices
     .filter((price) =>
@@ -122,7 +127,7 @@ function buildPriceHorizon({
       Number.isFinite(Date.parse(price.starts_at)) &&
       Number.isFinite(Date.parse(price.ends_at)) &&
       Date.parse(price.ends_at) > nowMs &&
-      [today, tomorrow].includes(getFinnishDateKey(price.starts_at))
+      [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at)))
     )
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
@@ -198,6 +203,24 @@ function layerEnergy(massKg: number, temperatureC: number, inletTempC: number) {
     massKg * liveReserveShadowConfig.specificHeatKwhPerKgC * (temperatureC - inletTempC),
     0,
   );
+}
+
+function helsinkiDateKey(date: Date) {
+  const parts = helsinkiDateFormatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function helsinkiDateKeyOffset(date: Date, dayOffset: number) {
+  const key = helsinkiDateKey(date);
+  const [year, month, day] = key.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return "";
+  // Noon UTC remains safely inside the intended Helsinki calendar day even
+  // across DST transitions, so shifting calendar components never assumes a
+  // fixed 24-hour local day.
+  return helsinkiDateKey(new Date(Date.UTC(year, month - 1, day + dayOffset, 12)));
 }
 
 function unavailable(reason: string, standingLossKwhPerHour: number | null = null): LiveEnergyPlanShadowResult {
