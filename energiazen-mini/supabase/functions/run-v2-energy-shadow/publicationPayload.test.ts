@@ -65,7 +65,7 @@ export function runV2PublicationPayloadUnitTests() {
   ], []), "duplicate plan dates rejected");
 
   assertThrows(() => buildV2PriceSnapshot([
-    { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
-    { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
+    { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1 },
+    { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1 },
   ]), "duplicate price intervals rejected");
 }
