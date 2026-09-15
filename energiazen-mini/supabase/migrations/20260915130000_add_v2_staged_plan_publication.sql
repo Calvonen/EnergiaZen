@@ -19,6 +19,7 @@ create or replace function public.publish_v2_heating_plans_staged(
   p_expected_tank_replay jsonb, p_expected_water_draw_snapshot jsonb,
   p_expected_settings_snapshot jsonb, p_constraint_plan_dates jsonb,
   p_expected_constraint_plans jsonb, p_expected_price_snapshot jsonb,
+  p_price_fetch_end_at timestamptz,
   p_replay_start_at timestamptz, p_replay_end_at timestamptz,
   p_published_at timestamptz, p_forecast_horizon_end_at timestamptz
 ) returns text language plpgsql security definer set search_path = public as $$
@@ -36,6 +37,7 @@ begin
   if p_constraint_plan_dates is null or jsonb_typeof(p_constraint_plan_dates)<>'array' or jsonb_array_length(p_constraint_plan_dates)=0 then return 'constraint_plan_conflict'; end if;
   if p_expected_constraint_plans is null or jsonb_typeof(p_expected_constraint_plans)<>'array' then return 'constraint_plan_conflict'; end if;
   if p_expected_price_snapshot is null or jsonb_typeof(p_expected_price_snapshot)<>'array' or jsonb_array_length(p_expected_price_snapshot)=0 then return 'price_snapshot_conflict'; end if;
+  if p_price_fetch_end_at is null then return 'price_snapshot_conflict'; end if;
   if p_replay_start_at is null or p_replay_end_at is null or p_replay_start_at>p_replay_end_at then return 'tank_snapshot_conflict'; end if;
   if p_published_at is null or p_forecast_horizon_end_at is null then return 'plan_payload_invalid'; end if;
 
@@ -74,11 +76,6 @@ begin
   with expected as (select created_at,top_temp,bottom_temp,inlet_temp,heating from jsonb_to_recordset(p_expected_tank_replay) as r(created_at timestamptz,top_temp double precision,bottom_temp double precision,inlet_temp double precision,heating boolean)), current_rows as (select created_at,top_temp::double precision,bottom_temp::double precision,inlet_temp::double precision,heating from public.tank_readings where created_at>=p_replay_start_at and created_at<=p_replay_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'tank_snapshot_conflict'; end if;
   if not exists(select 1 from public.tank_readings r where r.created_at=expected_created_at and r.top_temp is not distinct from expected_top_temp and r.bottom_temp is not distinct from expected_bottom_temp and r.inlet_temp is not distinct from expected_inlet_temp and r.heating is not distinct from expected_heating) then return 'tank_snapshot_conflict'; end if;
-
-  -- Production constraints consume the raw latest tank row (top_temp/heating), while
-  -- reserve replay consumes the usable subset. Therefore *any* row newer than the
-  -- snapshotted replay boundary can change a publication input and must invalidate
-  -- the transaction, even when bottom/inlet/relay fields are null or non-finite.
   if exists(select 1 from public.tank_readings r where r.created_at>p_replay_end_at) then return 'tank_snapshot_conflict'; end if;
 
   with expected as (select event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason from jsonb_to_recordset(p_expected_water_draw_snapshot) as d(event_started_at timestamptz,event_ended_at timestamptz,estimated_water_draw_net_energy_kwh double precision,energy_reliable boolean,energy_quality_reason text)), current_rows as (select event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh::double precision,energy_reliable,energy_quality_reason from public.water_draw_labels where event_ended_at>=p_replay_start_at and event_started_at<=p_replay_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
@@ -94,6 +91,17 @@ begin
   with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from public.electricity_prices c left join expected e on e.starts_at=c.starts_at and e.resolution_minutes=c.resolution_minutes where c.region='FI' and c.resolution_minutes=60 and c.starts_at>=price_window_start and c.starts_at<price_window_end and e.starts_at is null;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
 
+  -- The Edge query is scoped through p_price_fetch_end_at. A row appended after the
+  -- snapshot but still inside that original query scope can change buildPriceHorizon,
+  -- even when it starts exactly at the submitted snapshot's right edge. Reject it.
+  if exists(
+    select 1 from public.electricity_prices c
+    where c.region='FI' and c.resolution_minutes=60
+      and c.ends_at > p_published_at
+      and c.starts_at >= price_window_end
+      and c.starts_at <= p_price_fetch_end_at
+  ) then return 'price_snapshot_conflict'; end if;
+
   with expected as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz)) select count(*) into conflict_count from expected e left join public.v2_heating_plan_publications c on c.plan_date=e.plan_date where (e.updated_at is null and c.plan_date is not null) or (e.updated_at is not null and (c.plan_date is null or c.updated_at is distinct from e.updated_at));
   if conflict_count>0 then return 'plan_snapshot_conflict'; end if;
 
@@ -106,5 +114,5 @@ begin
   return 'published';
 end; $$;
 
-revoke all on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) from public,anon,authenticated;
-grant execute on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz) to service_role;
+revoke all on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz,timestamptz) from public,anon,authenticated;
+grant execute on function public.publish_v2_heating_plans_staged(jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,jsonb,timestamptz,timestamptz,timestamptz,timestamptz,timestamptz) to service_role;
