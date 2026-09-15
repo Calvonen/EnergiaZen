@@ -123,6 +123,25 @@ export function runLivePlanShadowUnitTests() {
   assert(!capped.available, "shadow refuses combinatorial settings above its tested cap");
   assertEqual(capped.reason, "max_heating_hours_above_shadow_limit", "shadow cap has an explicit reason");
 
+  const lockedHourIds = contiguous.map((item) => item.starts_at);
+  const lockedAboveConfiguredCap = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 1,
+    constraints: {
+      forbiddenHeatingHourIds: [],
+      requiredHeatingHourIds: lockedHourIds,
+    },
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: contiguous,
+    reserve: reserve(5.4),
+  });
+  assert(lockedAboveConfiguredCap.available, "locked active block remains available above configured cap");
+  assert(lockedAboveConfiguredCap.reason !== "required_hours_exceed_max", "locked block expands the effective optimizer cap");
+  assertEqual(lockedAboveConfiguredCap.selectedHeatingHourIds.length, 3, "every locked hour is preserved");
+  assertEqual(lockedAboveConfiguredCap.selectedHeatingHourIds.join("|"), lockedHourIds.join("|"), "locked block selection remains intact");
+
   const physicalCapacityBound = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 1,
     energyCapacityKwh: 10,
