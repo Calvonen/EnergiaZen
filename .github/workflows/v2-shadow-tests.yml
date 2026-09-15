@@ -9,8 +9,9 @@ on:
       - "energiazen-mini/supabase/functions/_shared/settingsDefaults.ts"
       - "energiazen-mini/lib/heatingControlSettingsPayload.ts"
       - "energiazen-mini/lib/settingsDraft.ts"
+      - "energiazen-mini/lib/settingsDraft.test.ts"
+      - "energiazen-mini/lib/settingsScenario.test.ts"
       - "energiazen-mini/app/settings.tsx"
-      - "energiazen-mini/scripts/applyV2PercentReserveSettingsUi.cjs"
       - "energiazen-mini/supabase/migrations/**"
       - "energiazen-mini/supabase/functions/_shared/waterDrawDetection.ts"
       - "energiazen-mini/supabase/functions/_shared/tankReadingFreshness.ts"
@@ -46,47 +47,3 @@ jobs:
         run: npx tsc -p tsconfig.v2-energy-forecast-tests.json && node .tmp-v2-energy-forecast-tests/scripts/runEnergyForecastTests.js
       - name: Run live V2 energy plan shadow tests
         run: npx tsc -p tsconfig.v2-live-shadow-tests.json && node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/planShadow.test.js').runLivePlanShadowUnitTests()"
-
-  patch-percent-settings-ui:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v2-percent-reserve-settings'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    defaults:
-      run:
-        working-directory: energiazen-mini
-    steps:
-      - name: Checkout head branch
-        uses: actions/checkout@v4
-        with:
-          ref: feature/v2-percent-reserve-settings
-          fetch-depth: 0
-      - name: Repair one-shot staging script syntax
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/applyV2PercentReserveSettingsUi.cjs')
-          text = path.read_text()
-          text = text.replace(
-              ': `≈ ${kwh.toFixed(1).replace(".", ",")} kWh`;',
-              ': "≈ " + kwh.toFixed(1).replace(".", ",") + " kWh";'
-          )
-          text = text.replace(
-              'summary: `${settings.v2TargetReservePercent} % tavoite • ${settings.v2SafetyReservePercent} % turvaraja`,',
-              'summary: settings.v2TargetReservePercent + " % tavoite • " + settings.v2SafetyReservePercent + " % turvaraja",'
-          )
-          path.write_text(text)
-          PY
-      - name: Apply V2 percent settings UI patch
-        run: node scripts/applyV2PercentReserveSettingsUi.cjs
-      - name: Commit patched settings UI
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/settings.tsx
-          if git diff --cached --quiet; then
-            echo "V2 percent settings UI already applied"
-            exit 0
-          fi
-          git commit -m "feat(v2): show reserve percentages with kWh detail"
-          git push origin HEAD:feature/v2-percent-reserve-settings
