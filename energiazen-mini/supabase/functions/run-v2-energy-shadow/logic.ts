@@ -1,4 +1,3 @@
-import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import {
   defaultEnergyReserveThresholds,
@@ -6,6 +5,7 @@ import {
 } from "../_shared/energyModelV2/energyReservePolicy.ts";
 import { compareEnergyReserveShadow } from "../_shared/energyModelV2/energyReserveShadow.ts";
 import { isTankReadingFreshForCalculation } from "../_shared/tankReadingFreshness.ts";
+import { resolveLiveDrawReanchors } from "./liveWaterDrawReanchor.ts";
 
 export type ShadowTankReading = {
   created_at: string;
@@ -125,10 +125,15 @@ export function runLiveReserveShadow({
     );
   }
 
-  const inletBaseline = Math.min(...ordered.map((r) => r.inlet_temp as number));
+  const inletBaseline = Math.min(...ordered.map((reading) => reading.inlet_temp as number));
   const draws = reliableDraws.filter(isReliableDraw);
-  const unresolvedDrawDetected = hasUnresolvedDetectedDraw(ordered, draws);
-  if (unresolvedDrawDetected) {
+  const drawResolution = resolveLiveDrawReanchors({
+    coldInletBaselineC: inletBaseline,
+    readings: ordered,
+    reliableDraws: draws,
+  });
+
+  if (drawResolution.unresolved) {
     return unavailable(
       "unresolved_water_draw_detected",
       ordered.length,
@@ -139,10 +144,14 @@ export function runLiveReserveShadow({
     );
   }
 
+  const reanchorIndexes = new Set(drawResolution.reanchorIndexes);
+
   // The first observation anchors this finite replay window. After that point,
-  // sensors are diagnostic only: energy can change only through explicit
-  // physical terms. This prevents a later warm/mixed sensor observation from
-  // minting energy or undoing an accepted water-draw removal.
+  // sensors are diagnostic only except for an explicit conservative re-anchor
+  // after an unlabeled water draw has recovered and the tank has been quiet for
+  // the same 15-minute stabilization period used by V2 diagnostics. Re-anchor
+  // deliberately discards pre-draw hidden energy rather than guessing the
+  // removed kWh amount.
   let remainingEnergyKwh = observedStoredEnergyKwh(ordered[0], inletBaseline);
   let heaterDeliveryUncertaintyKwh = 0;
 
@@ -199,6 +208,14 @@ export function runLiveReserveShadow({
       remainingEnergyKwh + deliveredEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
       0,
     );
+
+    if (reanchorIndexes.has(index)) {
+      remainingEnergyKwh = observedStoredEnergyKwh(current, inletBaseline);
+      // The measured post-draw state becomes a new conservative physical
+      // anchor, so uncertainty about heater delivery before that anchor no
+      // longer affects the forward balance.
+      heaterDeliveryUncertaintyKwh = 0;
+    }
   }
 
   const observedEnergyKwh = observedStoredEnergyKwh(latest, inletBaseline);
@@ -287,26 +304,6 @@ function isReliableDraw(draw: ReliableWaterDraw) {
     typeof draw.estimated_water_draw_net_energy_kwh === "number" &&
     Number.isFinite(draw.estimated_water_draw_net_energy_kwh) &&
     draw.estimated_water_draw_net_energy_kwh > 0;
-}
-
-function hasUnresolvedDetectedDraw(readings: ShadowTankReading[], draws: ReliableWaterDraw[]) {
-  for (let index = 1; index < readings.length; index += 1) {
-    const windowStart = Math.max(0, index - 6);
-    const window = readings.slice(windowStart, index + 1).map((reading) => ({
-      inletTemperatureC: reading.inlet_temp,
-      time: Date.parse(reading.created_at),
-    }));
-    if (!detectsWaterDraw(window)) continue;
-
-    const currentMs = Date.parse(readings[index].created_at);
-    const matched = draws.some((draw) => {
-      const start = Date.parse(draw.event_started_at) - 5 * 60_000;
-      const end = Date.parse(draw.event_ended_at) + 5 * 60_000;
-      return currentMs >= start && currentMs <= end;
-    });
-    if (!matched) return true;
-  }
-  return false;
 }
 
 function observedStoredEnergyKwh(reading: ShadowTankReading, inletTempC: number) {
