@@ -42,7 +42,10 @@ begin
   if p_published_at is null or p_forecast_horizon_end_at is null then return 'plan_payload_invalid'; end if;
 
   with plans as (select * from jsonb_to_recordset(p_plans) as p(plan_date date, planned_hours jsonb))
-  select count(*) into conflict_count from (select plan_date from plans where plan_date is null or jsonb_typeof(planned_hours)<>'array' union all select plan_date from plans group by plan_date having count(*)<>1) x;
+  select count(*) into conflict_count from (
+    select plan_date from plans where plan_date is null or planned_hours is null or jsonb_typeof(planned_hours)<>'array'
+    union all select plan_date from plans group by plan_date having count(*)<>1
+  ) x;
   if conflict_count>0 then return 'plan_payload_invalid'; end if;
 
   with plans as (select plan_date from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb)), versions as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz))
@@ -86,21 +89,24 @@ begin
   with dates as (select value::date plan_date from jsonb_array_elements_text(p_constraint_plan_dates)), expected as (select plan_date,planned_hours,mode from jsonb_to_recordset(p_expected_constraint_plans) as p(plan_date date,planned_hours integer[],mode text)), current_rows as (select h.plan_date,h.planned_hours,h.mode from public.heating_plans h join dates d using(plan_date)), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'constraint_plan_conflict'; end if;
 
-  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from expected e left join public.electricity_prices c on c.region='FI' and c.starts_at=e.starts_at and c.resolution_minutes=e.resolution_minutes where c.id is null or c.ends_at is distinct from e.ends_at or c.spot_price_cents_kwh is distinct from e.spot_price_cents_kwh;
+  -- Recheck the complete original Edge price-query scope, not merely the contiguous
+  -- snapshot span. The Edge query was: FI/60m, ends_at > captured now
+  -- (p_replay_end_at), starts_at <= p_price_fetch_end_at. Any insertion, deletion,
+  -- duplicate or value change anywhere in that scope invalidates publication.
+  with expected as (
+    select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes
+    from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
+  ), current_rows as (
+    select starts_at,ends_at,spot_price_cents_kwh,resolution_minutes
+    from public.electricity_prices
+    where region='FI' and resolution_minutes=60
+      and ends_at>p_replay_end_at and starts_at<=p_price_fetch_end_at
+  ), delta as (
+    (select * from expected except all select * from current_rows)
+    union all
+    (select * from current_rows except all select * from expected)
+  ) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
-  with expected as (select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from public.electricity_prices c left join expected e on e.starts_at=c.starts_at and e.resolution_minutes=c.resolution_minutes where c.region='FI' and c.resolution_minutes=60 and c.starts_at>=price_window_start and c.starts_at<price_window_end and e.starts_at is null;
-  if conflict_count>0 then return 'price_snapshot_conflict'; end if;
-
-  -- The Edge query is scoped through p_price_fetch_end_at. A row appended after the
-  -- snapshot but still inside that original query scope can change buildPriceHorizon,
-  -- even when it starts exactly at the submitted snapshot's right edge. Reject it.
-  if exists(
-    select 1 from public.electricity_prices c
-    where c.region='FI' and c.resolution_minutes=60
-      and c.ends_at > p_published_at
-      and c.starts_at >= price_window_end
-      and c.starts_at <= p_price_fetch_end_at
-  ) then return 'price_snapshot_conflict'; end if;
 
   with expected as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz)) select count(*) into conflict_count from expected e left join public.v2_heating_plan_publications c on c.plan_date=e.plan_date where (e.updated_at is null and c.plan_date is not null) or (e.updated_at is not null and (c.plan_date is null or c.updated_at is distinct from e.updated_at));
   if conflict_count>0 then return 'plan_snapshot_conflict'; end if;
