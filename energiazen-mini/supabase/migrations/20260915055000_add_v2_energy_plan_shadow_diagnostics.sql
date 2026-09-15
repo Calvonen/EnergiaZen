@@ -1,0 +1,15 @@
+alter table public.v2_energy_reserve_shadow_runs
+  add column if not exists plan_available boolean,
+  add column if not exists plan_valid boolean,
+  add column if not exists plan_unavailable_reason text,
+  add column if not exists plan_assumption text,
+  add column if not exists forecast_horizon_end_at timestamptz,
+  add column if not exists forecast_standing_loss_kwh_per_hour double precision,
+  add column if not exists forecast_min_conservative_energy_kwh double precision,
+  add column if not exists forecast_first_target_miss_at timestamptz,
+  add column if not exists forecast_first_safety_violation_at timestamptz,
+  add column if not exists plan_selected_heating_hour_ids jsonb,
+  add column if not exists plan_selected_heating_energy_kwh double precision,
+  add column if not exists plan_total_cost_cents double precision,
+  add column if not exists plan_candidate_count integer,
+  add column if not exists plan_evaluated_combination_count integer;
