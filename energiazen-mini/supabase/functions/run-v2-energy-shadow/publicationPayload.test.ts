@@ -36,6 +36,8 @@ export function runV2PublicationPayloadUnitTests() {
   assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [] }, []), "covered horizon required");
   assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["not-a-date"] }, covered), "malformed hour rejected");
   assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["2026-09-15T19:00:00.000Z"] }, covered), "selected hour must be exact covered instant");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [] }, ["2026-09-15T10:30:00Z"]), "off-hour covered interval rejected");
+  assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: ["2026-09-15T10:30:00Z"] }, ["2026-09-15T10:30:00Z"]), "off-hour selected interval rejected");
 
   const dstCovered = ["2026-10-25T00:00:00.000Z", "2026-10-25T01:00:00.000Z"];
   assertThrows(() => buildV2StagedPlans({ selectedHeatingHourIds: [dstCovered[0]] }, dstCovered), "first repeated DST occurrence rejected");
@@ -72,4 +74,7 @@ export function runV2PublicationPayloadUnitTests() {
     { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
     { starts_at: "2026-09-15T10:00:00Z", ends_at: "2026-09-15T11:00:00Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
   ]), "duplicate equivalent price intervals rejected");
+  assertThrows(() => buildV2PriceSnapshot([
+    { starts_at: "2026-09-15T10:30:00Z", ends_at: "2026-09-15T11:30:00Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
+  ]), "off-hour price interval rejected before staging");
 }
