@@ -14,29 +14,43 @@ const helsinkiHour = new Intl.DateTimeFormat("en-GB", {
 
 export function buildV2StagedPlans(
   candidate: V2PublicationCandidate,
-  coveredHourIds: string[] = candidate.selectedHeatingHourIds,
+  coveredHourIds: string[],
 ): V2StagedPlan[] {
+  if (!coveredHourIds.length) throw new Error("V2 publication horizon is empty");
   const byDate = new Map<string, Set<number>>();
+  const coveredInstants = new Set<number>();
+  const coveredLocalSlots = new Map<string, number>();
+  const ambiguousLocalSlots = new Set<string>();
+
   for (const id of coveredHourIds) {
     const instant = parseHourId(id);
+    const instantMs = instant.getTime();
+    if (coveredInstants.has(instantMs)) throw new Error(`Duplicate V2 covered hour: ${id}`);
+    coveredInstants.add(instantMs);
     const date = dateKey(instant);
-    if (!date) throw new Error(`Invalid V2 covered hour: ${id}`);
+    const hour = Number(helsinkiHour.format(instant));
+    if (!date || !Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error(`Invalid V2 covered hour: ${id}`);
     if (!byDate.has(date)) byDate.set(date, new Set<number>());
+    const localSlot = `${date}:${hour}`;
+    const previousInstantMs = coveredLocalSlots.get(localSlot);
+    if (previousInstantMs !== undefined && previousInstantMs !== instantMs) ambiguousLocalSlots.add(localSlot);
+    else coveredLocalSlots.set(localSlot, instantMs);
   }
 
-  const localSlots = new Map<string, string>();
+  const selectedInstants = new Set<number>();
   for (const id of candidate.selectedHeatingHourIds) {
     const instant = parseHourId(id);
+    const instantMs = instant.getTime();
+    if (selectedInstants.has(instantMs)) throw new Error(`Duplicate V2 selected hour: ${id}`);
+    selectedInstants.add(instantMs);
+    if (!coveredInstants.has(instantMs)) throw new Error(`Selected V2 hour is outside publication horizon: ${id}`);
     const date = dateKey(instant);
     const hour = Number(helsinkiHour.format(instant));
     if (!date || !Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error(`Invalid V2 selected hour: ${id}`);
-    if (!byDate.has(date)) throw new Error(`Selected V2 hour is outside publication horizon: ${id}`);
     const localSlot = `${date}:${hour}`;
-    const previousUtcId = localSlots.get(localSlot);
-    if (previousUtcId && previousUtcId !== id) {
-      throw new Error(`Ambiguous Helsinki DST hour cannot be staged safely: ${previousUtcId}, ${id}`);
+    if (ambiguousLocalSlots.has(localSlot)) {
+      throw new Error(`Ambiguous Helsinki DST hour cannot be staged safely: ${id}`);
     }
-    localSlots.set(localSlot, id);
     byDate.get(date)!.add(hour);
   }
   return [...byDate.entries()]
@@ -58,17 +72,17 @@ export function buildV2TankSnapshot(readings: ShadowTankReading[], anchorAt: str
 }
 
 export function buildV2PriceSnapshot(prices: ShadowElectricityPrice[]) {
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   return prices.map((price) => {
-    const resolutionMinutes = 60;
-    const key = `${price.starts_at}|${resolutionMinutes}`;
-    if (seen.has(key)) throw new Error(`Duplicate V2 price snapshot interval: ${key}`);
-    seen.add(key);
+    const startsAt = parseHourId(price.starts_at);
+    const startsAtMs = startsAt.getTime();
+    if (seen.has(startsAtMs)) throw new Error(`Duplicate V2 price snapshot interval: ${price.starts_at}`);
+    seen.add(startsAtMs);
     return {
       starts_at: price.starts_at,
       ends_at: price.ends_at,
       spot_price_cents_kwh: price.spot_price_cents_kwh,
-      resolution_minutes: resolutionMinutes,
+      resolution_minutes: 60,
     };
   });
 }
@@ -90,9 +104,7 @@ export function buildExpectedV2PlanVersions(
 
 function parseHourId(id: string) {
   const instant = new Date(id);
-  if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== id) {
-    throw new Error(`Invalid V2 hour id: ${id}`);
-  }
+  if (!Number.isFinite(instant.getTime())) throw new Error(`Invalid V2 hour id: ${id}`);
   return instant;
 }
 
