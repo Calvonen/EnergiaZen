@@ -66,6 +66,13 @@ export const liveReserveShadowConfig = {
   heaterGuardMarginC: 2,
 } as const;
 
+export function deriveUsableReadingInletBaselineC(readings: ShadowTankReading[]) {
+  const usableReadings = readings.filter(isUsableReading);
+  return usableReadings.length > 0
+    ? Math.min(...usableReadings.map((reading) => reading.inlet_temp as number))
+    : null;
+}
+
 export function runLiveReserveShadow({
   maxTankTemperatureC,
   now,
@@ -129,7 +136,9 @@ export function runLiveReserveShadow({
     );
   }
 
-  const inletBaseline = Math.min(...ordered.map((reading) => reading.inlet_temp as number));
+  // `ordered` is the authoritative replay input. Derive the baseline from it so
+  // reserve energy and percentage capacity always use identical observations.
+  const inletBaseline = deriveUsableReadingInletBaselineC(ordered) as number;
   const draws = reliableDraws.filter(isReliableDraw);
   const drawResolution = resolveLiveDrawReanchors({
     coldInletBaselineC: inletBaseline,

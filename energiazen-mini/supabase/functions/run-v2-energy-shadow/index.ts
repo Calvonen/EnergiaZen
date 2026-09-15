@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
+  deriveUsableReadingInletBaselineC,
   runLiveReserveShadow,
   type ReliableWaterDraw,
   type ShadowTankReading,
@@ -93,12 +94,7 @@ Deno.serve(async (request) => {
       safetyPercent: Number(settingsResult.data?.v2_safety_reserve_percent),
     });
 
-    const inletValues = readings.flatMap((reading) =>
-      typeof reading.inlet_temp === "number" && Number.isFinite(reading.inlet_temp)
-        ? [reading.inlet_temp]
-        : [],
-    );
-    const inletBaselineC = inletValues.length ? Math.min(...inletValues) : Number.NaN;
+    const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
     const energyCapacityKwh = calculateV2EnergyCapacityKwh({
       inletTemperatureC: inletBaselineC,
       maxTankTemperatureC,
