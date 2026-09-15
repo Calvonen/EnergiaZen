@@ -56,8 +56,19 @@ export function forecastEnergyHorizon({
   thresholds?: EnergyReserveThresholds;
 }): EnergyForecastResult {
   const physicalCapacityKwh = positiveOrInfinity(energyCapacityKwh);
-  let remainingEnergyKwh = Math.min(nonNegative(initialRemainingEnergyKwh), physicalCapacityKwh);
-  let uncertaintyKwh = nonNegative(initialUncertaintyKwh);
+  const initialEnergyKwh = nonNegative(initialRemainingEnergyKwh);
+  const initialConservativeEnergyKwh = Math.max(
+    initialEnergyKwh - nonNegative(initialUncertaintyKwh),
+    0,
+  );
+  let remainingEnergyKwh = Math.min(initialEnergyKwh, physicalCapacityKwh);
+  // If the nominal ledger exceeds physical capacity, clip its uncertainty by
+  // the same overflow. This preserves the already-computed conservative lower
+  // bound instead of effectively subtracting delivery uncertainty twice.
+  let uncertaintyKwh = Math.max(
+    remainingEnergyKwh - Math.min(initialConservativeEnergyKwh, physicalCapacityKwh),
+    0,
+  );
   let minimumConservativeEnergyKwh = Math.max(remainingEnergyKwh - uncertaintyKwh, 0);
   let firstSafetyViolationAt: string | null = null;
   let firstTargetMissAt: string | null = null;

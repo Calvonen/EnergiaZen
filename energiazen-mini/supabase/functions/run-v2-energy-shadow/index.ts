@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 import {
+  applyReserveThresholds,
   deriveUsableReadingInletBaselineC,
   runLiveReserveShadow,
   type ReliableWaterDraw,
@@ -12,7 +13,6 @@ import {
   type ShadowElectricityPrice,
 } from "./planShadow.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
-import { evaluateEnergyReserve } from "../_shared/energyModelV2/energyReservePolicy.ts";
 import {
   calculateV2EnergyCapacityKwh,
   normalizeV2ReservePercents,
@@ -115,44 +115,7 @@ Deno.serve(async (request) => {
       v1Shadow: null,
     });
 
-    const result = (() => {
-      if (
-        !baseResult.available ||
-        baseResult.remainingEnergyKwh === null ||
-        targetEnergyKwh === null ||
-        safetyEnergyKwh === null
-      ) {
-        return targetEnergyKwh === null || safetyEnergyKwh === null
-          ? {
-              ...baseResult,
-              available: false,
-              reason: "v2_percent_thresholds_unavailable",
-              safetyEnergyKwh: safetyEnergyKwh ?? baseResult.safetyEnergyKwh,
-              targetEnergyKwh: targetEnergyKwh ?? baseResult.targetEnergyKwh,
-              v2Band: "invalid" as const,
-              v2NeedsEnergyRecovery: null,
-            }
-          : baseResult;
-      }
-
-      const decision = evaluateEnergyReserve(
-        {
-          quality: "valid",
-          remainingEnergyKwh: baseResult.remainingEnergyKwh,
-          uncertaintyKwh: baseResult.balanceUncertaintyKwh,
-        },
-        { safetyEnergyKwh, targetEnergyKwh },
-      );
-
-      return {
-        ...baseResult,
-        conservativeEnergyKwh: decision.conservativeEnergyKwh,
-        safetyEnergyKwh: decision.thresholds.safetyEnergyKwh,
-        targetEnergyKwh: decision.thresholds.targetEnergyKwh,
-        v2Band: decision.band,
-        v2NeedsEnergyRecovery: decision.needsEnergyRecovery,
-      };
-    })();
+    const result = applyReserveThresholds(baseResult, safetyEnergyKwh, targetEnergyKwh);
 
     const plan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,

@@ -136,4 +136,24 @@ export function runEnergyForecastUnitTests() {
 
   assertClose(uncertaintyGrowth.points[0].uncertaintyAfterKwh, 0.75, "forecast uncertainty accumulates separately from physical energy");
   assertClose(uncertaintyGrowth.finalRemainingEnergyKwh, 6.5, "uncertainty cannot delete physical energy");
+
+  const overCapacityLedger = forecastEnergyHorizon({
+    energyCapacityKwh: 18.5,
+    heaterPowerKw: 3,
+    initialRemainingEnergyKwh: 19.5,
+    initialUncertaintyKwh: 1.5,
+    segments: [],
+    thresholds: { safetyEnergyKwh: 5.5, targetEnergyKwh: 17.5 },
+  });
+
+  assertClose(overCapacityLedger.finalRemainingEnergyKwh, 18.5, "nominal energy is capped at capacity");
+  assertClose(
+    overCapacityLedger.finalConservativeEnergyKwh,
+    18,
+    "capacity clipping preserves the pre-clamp conservative lower bound",
+  );
+  assert(
+    overCapacityLedger.firstTargetMissAt === null,
+    "clipping delivery uncertainty does not invent a target miss",
+  );
 }

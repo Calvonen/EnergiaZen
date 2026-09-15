@@ -1,4 +1,5 @@
 import {
+  applyReserveThresholds,
   deriveUsableReadingInletBaselineC,
   runLiveReserveShadow,
   type ReliableWaterDraw,
@@ -215,4 +216,21 @@ export function runLiveV2EnergyShadowUnitTests() {
   });
   assert(!staleLatest.available, "stale latest reading fails closed even when pairwise gaps are short");
   assert(staleLatest.reason === "latest_tank_reading_stale", "stale latest reading has its own diagnostic reason");
+
+  const unavailableWithDerivedThresholds = applyReserveThresholds(staleLatest, 5.4, 17.1);
+  assert(!unavailableWithDerivedThresholds.available, "thresholds do not mask replay unavailability");
+  assert(
+    unavailableWithDerivedThresholds.reason === "latest_tank_reading_stale",
+    "derived thresholds preserve the replay failure reason",
+  );
+  assertClose(
+    unavailableWithDerivedThresholds.safetyEnergyKwh,
+    5.4,
+    "unavailable runs persist the percentage-derived safety threshold",
+  );
+  assertClose(
+    unavailableWithDerivedThresholds.targetEnergyKwh,
+    17.1,
+    "unavailable runs persist the percentage-derived target threshold",
+  );
 }

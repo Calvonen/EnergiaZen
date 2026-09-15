@@ -73,6 +73,46 @@ export function deriveUsableReadingInletBaselineC(readings: ShadowTankReading[])
     : null;
 }
 
+export function applyReserveThresholds(
+  baseResult: LiveReserveShadowResult,
+  safetyEnergyKwh: number | null,
+  targetEnergyKwh: number | null,
+): LiveReserveShadowResult {
+  if (safetyEnergyKwh === null || targetEnergyKwh === null) {
+    return {
+      ...baseResult,
+      available: false,
+      reason: "v2_percent_thresholds_unavailable",
+      safetyEnergyKwh: safetyEnergyKwh ?? baseResult.safetyEnergyKwh,
+      targetEnergyKwh: targetEnergyKwh ?? baseResult.targetEnergyKwh,
+      v2Band: "invalid",
+      v2NeedsEnergyRecovery: null,
+    };
+  }
+
+  if (!baseResult.available || baseResult.remainingEnergyKwh === null) {
+    return { ...baseResult, safetyEnergyKwh, targetEnergyKwh };
+  }
+
+  const decision = evaluateEnergyReserve(
+    {
+      quality: "valid",
+      remainingEnergyKwh: baseResult.remainingEnergyKwh,
+      uncertaintyKwh: baseResult.balanceUncertaintyKwh,
+    },
+    { safetyEnergyKwh, targetEnergyKwh },
+  );
+
+  return {
+    ...baseResult,
+    conservativeEnergyKwh: decision.conservativeEnergyKwh,
+    safetyEnergyKwh: decision.thresholds.safetyEnergyKwh,
+    targetEnergyKwh: decision.thresholds.targetEnergyKwh,
+    v2Band: decision.band,
+    v2NeedsEnergyRecovery: decision.needsEnergyRecovery,
+  };
+}
+
 export function runLiveReserveShadow({
   maxTankTemperatureC,
   now,
