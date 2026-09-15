@@ -51,3 +51,4 @@ jobs:
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/planShadow.test.js').runLivePlanShadowUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/productionConstraints.test.js').runProductionConstraintUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/publicationGuard.test.js').runV2PublicationGuardUnitTests()"
+          node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/publicationPayload.test.js').runV2PublicationPayloadUnitTests()"
