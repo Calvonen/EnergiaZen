@@ -129,7 +129,7 @@ Deno.serve(async (request) => {
     const latestReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const publication = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
-      latestTankReadingAt,
+      latestTankReadingAt: latestReadingAt,
       now,
       plan,
       selectedHeatingHourIds: plan.selectedHeatingHourIds,
@@ -173,7 +173,7 @@ Deno.serve(async (request) => {
       conservative_energy_kwh: result.conservativeEnergyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
-      v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
+      v2_band: result.v2Band, v2_needsEnergyRecovery: result.v2NeedsEnergyRecovery,
       v1_needs_energy_recovery: null, reason: result.reason, plan_available: plan.available,
       plan_valid: plan.valid, plan_reason: plan.reason,
       plan_required_heating_hour_ids: constraints.requiredHeatingHourIds,
