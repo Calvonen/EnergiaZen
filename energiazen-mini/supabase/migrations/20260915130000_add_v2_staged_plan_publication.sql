@@ -92,7 +92,7 @@ begin
   with expected as (
     select * from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz, ends_at timestamptz, spot_price_cents_kwh numeric, resolution_minutes integer)
   ) select count(*) into conflict_count from (
-    select starts_at from expected where starts_at is null or ends_at is null or spot_price_cents_kwh is null or resolution_minutes <> 60 or ends_at <> starts_at + interval '60 minutes'
+    select starts_at from expected where starts_at is null or ends_at is null or spot_price_cents_kwh is null or resolution_minutes <> 60 or ends_at <> starts_at + interval '60 minutes' or starts_at <> date_trunc('hour', starts_at)
     union all select starts_at from expected group by starts_at, resolution_minutes having count(*) <> 1
   ) invalid;
   if conflict_count > 0 then return 'price_snapshot_conflict'; end if;
@@ -132,6 +132,21 @@ begin
     select 1 from public.tank_readings r where r.created_at = expected_created_at
       and r.top_temp is not distinct from expected_top_temp and r.bottom_temp is not distinct from expected_bottom_temp
       and r.inlet_temp is not distinct from expected_inlet_temp and r.heating is not distinct from expected_heating
+  ) then return 'tank_snapshot_conflict'; end if;
+
+  -- A reading that arrived after the Edge replay end means the calculation is
+  -- already stale even when the snapshotted replay window and anchor are unchanged.
+  -- Match the TypeScript usable-reading predicate: finite temperatures and a
+  -- known relay state are required before a newer row can supersede the anchor.
+  if exists (
+    select 1 from public.tank_readings r
+    where r.created_at > p_replay_end_at
+      and r.created_at > expected_created_at
+      and r.top_temp is not null and r.bottom_temp is not null and r.inlet_temp is not null
+      and r.top_temp not in ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)
+      and r.bottom_temp not in ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)
+      and r.inlet_temp not in ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)
+      and r.heating is not null
   ) then return 'tank_snapshot_conflict'; end if;
 
   -- Water-draw labels participate in re-anchoring the reserve replay, so their
