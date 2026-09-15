@@ -61,6 +61,22 @@ jobs:
         with:
           ref: feature/v2-percent-reserve-settings
           fetch-depth: 0
+      - name: Repair one-shot staging script syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/applyV2PercentReserveSettingsUi.cjs')
+          text = path.read_text()
+          text = text.replace(
+              ': `≈ ${kwh.toFixed(1).replace(".", ",")} kWh`;',
+              ': "≈ " + kwh.toFixed(1).replace(".", ",") + " kWh";'
+          )
+          text = text.replace(
+              'summary: `${settings.v2TargetReservePercent} % tavoite • ${settings.v2SafetyReservePercent} % turvaraja`,',
+              'summary: settings.v2TargetReservePercent + " % tavoite • " + settings.v2SafetyReservePercent + " % turvaraja",'
+          )
+          path.write_text(text)
+          PY
       - name: Apply V2 percent settings UI patch
         run: node scripts/applyV2PercentReserveSettingsUi.cjs
       - name: Commit patched settings UI
