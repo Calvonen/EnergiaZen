@@ -1,1 +1,0 @@
-The separate home Water Usage History navigation card in app/(tabs)/index.tsx is intentionally not part of the V2 reserve data path. Remove that home-only navigation surface in the same UI rollout; keep /water-draw-history and backend water-draw labels/data because V2 still depends on them.
