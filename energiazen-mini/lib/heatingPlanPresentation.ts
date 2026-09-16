@@ -396,6 +396,7 @@ export function buildStoredHeatingPlanPresentation({
     percent: number | null;
     safetyReservePercent: number | null;
     targetReservePercent: number | null;
+    isFallback?: boolean;
   } | null;
 }): HeatingPlanPresentation {
   const v2ForecastAvailable =
@@ -409,7 +410,9 @@ export function buildStoredHeatingPlanPresentation({
     v2EnergyReserve.targetReservePercent !== null &&
     v2EnergyReserve.safetyReservePercent !== null;
   const v2ForecastSummary = v2ForecastAvailable
-    ? `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
+    ? v2EnergyReserve.isFallback
+      ? `Viimeisin varma arvio ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
+      : `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
     : "V2-energiavaraennuste ei ole juuri nyt saatavilla.";
 
   return {
@@ -460,7 +463,9 @@ export function buildStoredHeatingPlanPresentation({
     }),
     statusSummary: v2EnergyReserve
       ? v2ForecastAvailable
-        ? "V2-suunnitelma käytössä"
+        ? v2EnergyReserve.isFallback
+          ? "V2-suunnitelma käytössä · viimeisin varma arvio"
+          : "V2-suunnitelma käytössä"
         : "V2-suunnitelma käytössä · ennuste ei saatavilla"
       : "Viimeksi tallennettu suunnitelma",
   };

@@ -1,4 +1,4 @@
-export const HOME_RESERVE_MAX_AGE_MS = 12 * 60_000;
+export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
 
 export type V2HomeReserveSnapshot = {
   run_at: string | null;
@@ -10,6 +10,9 @@ export type V2HomeReserveSnapshot = {
   forecast_min_conservative_energy_kwh: number | null;
   forecast_final_conservative_energy_kwh: number | null;
   forecast_horizon_end_at: string | null;
+  latest_run_at: string | null;
+  latest_run_available: boolean | null;
+  latest_unavailable_reason: string | null;
 };
 
 export type V2HomeReservePresentation = {
@@ -25,6 +28,9 @@ export type V2HomeReservePresentation = {
   forecastFinalEnergyKwh: number | null;
   forecastFinalPercent: number | null;
   forecastHorizonEndAt: string | null;
+  isFallback: boolean;
+  sourceAgeMinutes: number | null;
+  latestUnavailableReason: string | null;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -92,12 +98,20 @@ export function buildV2HomeReservePresentation(
       forecastFinalEnergyKwh: null,
       forecastFinalPercent: null,
       forecastHorizonEndAt: null,
+      isFallback: false,
+      sourceAgeMinutes: null,
+      latestUnavailableReason: null,
     };
   }
 
   const percent = clamp((energy / capacity) * 100, 0, 100);
   const forecastMinimumPercent = clamp((forecastMinimumEnergy / capacity) * 100, 0, 100);
   const forecastFinalPercent = clamp((forecastFinalEnergy / capacity) * 100, 0, 100);
+  const runAtMs = Date.parse(reserve?.run_at ?? "");
+  const latestRunAtMs = Date.parse(reserve?.latest_run_at ?? "");
+  const sourceAgeMinutes = Number.isFinite(runAtMs) ? Math.max(0, (nowMs - runAtMs) / 60_000) : null;
+  const isFallback = reserve?.latest_run_available === false ||
+    (Number.isFinite(latestRunAtMs) && Number.isFinite(runAtMs) && latestRunAtMs > runAtMs);
   return {
     available: true,
     fillPercent: percent,
@@ -111,5 +125,8 @@ export function buildV2HomeReservePresentation(
     forecastFinalEnergyKwh: forecastFinalEnergy,
     forecastFinalPercent,
     forecastHorizonEndAt,
+    isFallback,
+    sourceAgeMinutes,
+    latestUnavailableReason: reserve?.latest_unavailable_reason ?? null,
   };
 }

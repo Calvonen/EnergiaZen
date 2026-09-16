@@ -22,6 +22,9 @@ const unavailablePresentation: V2HomeReservePresentation = {
   forecastFinalEnergyKwh: null,
   forecastFinalPercent: null,
   forecastHorizonEndAt: null,
+  isFallback: false,
+  sourceAgeMinutes: null,
+  latestUnavailableReason: null,
 };
 
 export function useV2HomeReserve() {
