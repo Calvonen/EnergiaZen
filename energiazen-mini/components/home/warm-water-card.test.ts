@@ -15,6 +15,9 @@ export function runV2HomeReservePresentationUnitTests() {
     forecast_min_conservative_energy_kwh: 10.6,
     forecast_final_conservative_energy_kwh: 13.3,
     forecast_horizon_end_at: "2026-09-17T21:00:00Z",
+    latest_run_at: "2026-09-16T08:55:00Z",
+    latest_run_available: true,
+    latest_unavailable_reason: null,
   };
 
   const current = buildV2HomeReservePresentation(base, now);
@@ -31,13 +34,27 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error(`expected V2 horizon-end reserve near 75.26%, got ${current.forecastFinalPercent}`);
   }
 
+  const fallback = buildV2HomeReservePresentation(
+    {
+      ...base,
+      run_at: "2026-09-16T08:50:00Z",
+      latest_run_at: "2026-09-16T08:59:00Z",
+      latest_run_available: false,
+      latest_unavailable_reason: "unresolved_water_draw_detected",
+    },
+    now,
+  );
+  if (!fallback.available || !fallback.isFallback || fallback.percent === null) {
+    throw new Error("expected a recent last-good V2 snapshot to remain displayable as fallback");
+  }
+
   const stale = buildV2HomeReservePresentation(
-    { ...base, run_at: "2026-09-16T08:47:00Z" },
+    { ...base, run_at: "2026-09-16T08:29:00Z" },
     now,
   );
   if (stale.available || stale.percent !== null || stale.fillPercent !== 0 ||
       stale.safetyReservePercent !== null || stale.targetReservePercent !== null) {
-    throw new Error("expected a 13-minute-old production snapshot and its limit markers to fail closed");
+    throw new Error("expected a 31-minute-old production snapshot and its limit markers to fail closed");
   }
 
   const future = buildV2HomeReservePresentation(
