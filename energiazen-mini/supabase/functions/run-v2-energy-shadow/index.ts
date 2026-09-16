@@ -262,7 +262,8 @@ async function fetchWaterDraws(supabase: ReturnType<typeof createClient>, startI
     const { data, error } = await supabase.from("water_draw_labels")
       .select("event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason")
       .gte("event_ended_at", startIso).lte("event_started_at", endIso)
-      .order("event_started_at", { ascending: true }).range(from, from + pageSize - 1);
+      .order("event_started_at", { ascending: true }).order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
     if (error) throw new Error(`Failed to fetch water draw labels: ${error.message}`);
     const page = (data ?? []) as ReliableWaterDraw[];
     rows.push(...page);
