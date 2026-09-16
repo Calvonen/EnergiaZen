@@ -60,30 +60,42 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
 
   useEffect(() => {
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNext = () => {
+      if (!active) return;
+      timer = setTimeout(() => {
+        void loadReserve();
+      }, HOME_RESERVE_REFRESH_MS);
+    };
 
     const loadReserve = async () => {
+      // Schedule the next refresh only after this request settles. This guarantees
+      // at most one in-flight RPC, so an older completion cannot overwrite a newer one.
       try {
         const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");
         if (!active) return;
+        setNowMs(Date.now());
         if (error) {
           setReserve(null);
-          return;
+        } else {
+          const row = Array.isArray(data) ? data[0] : null;
+          setReserve((row as V2HomeReserveSnapshot | undefined) ?? null);
         }
-        const row = Array.isArray(data) ? data[0] : null;
-        setReserve((row as V2HomeReserveSnapshot | undefined) ?? null);
       } catch {
-        if (active) setReserve(null);
+        if (active) {
+          setNowMs(Date.now());
+          setReserve(null);
+        }
+      } finally {
+        scheduleNext();
       }
     };
 
     void loadReserve();
-    const interval = setInterval(() => {
-      setNowMs(Date.now());
-      void loadReserve();
-    }, HOME_RESERVE_REFRESH_MS);
     return () => {
       active = false;
-      clearInterval(interval);
+      if (timer !== null) clearTimeout(timer);
     };
   }, []);
 
