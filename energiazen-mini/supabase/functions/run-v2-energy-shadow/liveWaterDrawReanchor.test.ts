@@ -57,6 +57,23 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(drawDuringHeatingResult.unresolved, "inlet drop plus bottom-temperature response still fails closed during heating");
   assert(drawDuringHeatingResult.detectedUnlabeledDrawCount === 1, "real draw response is still counted once");
 
+  // A missing polling interval means we cannot prove heating was continuous.
+  // Even with heating=true at both endpoints and a rising bottom sensor, keep
+  // the inlet draw signal fail-closed rather than overestimating reserve.
+  const heatingWithSampleGap = [
+    reading(36, 29.6, 18.9, true),
+    reading(37, 29.9, 18.9, true),
+    reading(40, 30.4, 13.5, true),
+    reading(41, 30.6, 13.1, true),
+  ];
+  const heatingWithSampleGapResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: heatingWithSampleGap,
+    reliableDraws: [],
+  });
+  assert(heatingWithSampleGapResult.unresolved, "heating inlet drop across a polling gap remains fail-closed");
+  assert(heatingWithSampleGapResult.detectedUnlabeledDrawCount === 1, "gapped heating signal is still counted as a possible draw");
+
   // Outside continuous heating, the original inlet-only fail-closed detector is
   // unchanged.
   const idleDraw = [
