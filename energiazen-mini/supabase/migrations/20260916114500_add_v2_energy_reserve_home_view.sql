@@ -6,8 +6,8 @@ returns table (
   available boolean,
   conservative_energy_kwh double precision,
   energy_capacity_kwh double precision,
-  safety_reserve_percent integer,
-  target_reserve_percent integer
+  safety_reserve_percent double precision,
+  target_reserve_percent double precision
 )
 language sql
 security definer
