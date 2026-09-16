@@ -1,0 +1,48 @@
+name: Apply V2 Home last-good fallback
+
+on:
+  push:
+    branches:
+      - feature/v2-home-last-good-reserve
+    paths:
+      - ".github/workflows/apply-v2-home-last-good.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v2-home-last-good-reserve
+          fetch-depth: 0
+      - name: Apply patch
+        run: python .github/scripts/apply_v2_home_last_good.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+      - name: Install dependencies
+        working-directory: energiazen-mini
+        run: npm ci
+      - name: Test
+        working-directory: energiazen-mini
+        run: npm test
+      - name: Typecheck
+        working-directory: energiazen-mini
+        run: npx tsc --noEmit
+      - name: Lint
+        working-directory: energiazen-mini
+        run: npm run lint
+      - name: Commit final patch
+        run: |
+          rm -rf energiazen-mini/.tmp-forecast-tests energiazen-mini/.tmp-v2-live-shadow-tests
+          rm -f .github/scripts/apply_v2_home_last_good.py .github/workflows/apply-v2-home-last-good.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v2): keep last good reserve visible on Home"
+          git push origin HEAD:feature/v2-home-last-good-reserve
