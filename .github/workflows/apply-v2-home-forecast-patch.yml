@@ -14,269 +14,21 @@ jobs:
   patch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           ref: feature/v2-home-forecast-final
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: Apply patch
+        run: python .github/scripts/apply_v2_home_forecast_patch.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: energiazen-mini/package-lock.json
-
-      - name: Apply focused V2 forecast patch
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          index_path = Path("energiazen-mini/app/(tabs)/index.tsx")
-          text = index_path.read_text()
-
-          old_import = 'import { useSettingsScenario } from "@/lib/settingsScenarioContext";\nimport { supabase } from "@/lib/supabase";'
-          new_import = 'import { useSettingsScenario } from "@/lib/settingsScenarioContext";\nimport { useV2HomeReserve } from "@/lib/useV2HomeReserve";\nimport { supabase } from "@/lib/supabase";'
-          if old_import not in text:
-              raise SystemExit("settings import anchor not found")
-          text = text.replace(old_import, new_import, 1)
-
-          old_home = 'export default function HomeScreen() {\n  const homeRenderStartedAt = Date.now();\n  logHomeDayTabPerformance("HomeScreen render start");\n  const router = useRouter();'
-          new_home = 'export default function HomeScreen() {\n  const homeRenderStartedAt = Date.now();\n  logHomeDayTabPerformance("HomeScreen render start");\n  const router = useRouter();\n  const v2HomeReserve = useV2HomeReserve();'
-          if old_home not in text:
-              raise SystemExit("HomeScreen anchor not found")
-          text = text.replace(old_home, new_home, 1)
-
-          old_stored = '''    const storedPlans = [
-      storedHeatingPlans[todayPlanDate],
-      storedHeatingPlans[tomorrowPlanDate],
-    ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
-
-    if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
-      return null;
-    }
-'''
-          new_stored = '''    const storedPlans = [
-      storedHeatingPlans[todayPlanDate],
-      storedHeatingPlans[tomorrowPlanDate],
-    ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
-    const isV2EnergyPlan = storedPlans.some(
-      (plan) => plan.reason === "V2 energy plan",
-    );
-
-    if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
-      return null;
-    }
-'''
-          if old_stored not in text:
-              raise SystemExit("storedPlans anchor not found")
-          text = text.replace(old_stored, new_stored, 1)
-
-          old_forecast = '''    const forecast =
-      storedSelectedHeatingHourIds.length === storedPlannedHourCount
-        ? buildStoredHeatingPlanForecastFields({
-            currentBottomTemperature: bottomTemp,
-            currentTopTemperature: topTemp,
-            currentWeightedTemperature,
-            hourlyDrops: hourlyTemperatureDropProfile,
-            isCurrentlyHeating: isCurrentlyHeatingConfirmed,
-            optimizationResult: activeOptimizationRun.result,
-            optimizerHours: activeOptimizationRun.hours,
-            recoveryReadings: tankTemperatureHistory,
-            runSettings: activeOptimizationRun.appSettings,
-            storedSelectedHeatingHourIds,
-            todayPlanDate,
-            tomorrowPlanDate,
-          })
-        : null;
-
-    return buildStoredHeatingPlanPresentation({
-      currentOptimizerPresentation: activeOptimizerPresentation,
-      forecast,
-      selectedHours,
-    });
-'''
-          new_forecast = '''    const forecast =
-      !isV2EnergyPlan &&
-      storedSelectedHeatingHourIds.length === storedPlannedHourCount
-        ? buildStoredHeatingPlanForecastFields({
-            currentBottomTemperature: bottomTemp,
-            currentTopTemperature: topTemp,
-            currentWeightedTemperature,
-            hourlyDrops: hourlyTemperatureDropProfile,
-            isCurrentlyHeating: isCurrentlyHeatingConfirmed,
-            optimizationResult: activeOptimizationRun.result,
-            optimizerHours: activeOptimizationRun.hours,
-            recoveryReadings: tankTemperatureHistory,
-            runSettings: activeOptimizationRun.appSettings,
-            storedSelectedHeatingHourIds,
-            todayPlanDate,
-            tomorrowPlanDate,
-          })
-        : null;
-
-    return buildStoredHeatingPlanPresentation({
-      currentOptimizerPresentation: isV2EnergyPlan
-        ? null
-        : activeOptimizerPresentation,
-      forecast,
-      selectedHours,
-      v2EnergyReserve: isV2EnergyPlan ? v2HomeReserve : null,
-    });
-'''
-          if old_forecast not in text:
-              raise SystemExit("stored forecast anchor not found")
-          text = text.replace(old_forecast, new_forecast, 1)
-
-          old_dep = '''    todayPlanDate,
-    tomorrowPlanDate,
-    topTemp,
-  ]);'''
-          new_dep = '''    todayPlanDate,
-    tomorrowPlanDate,
-    topTemp,
-    v2HomeReserve,
-  ]);'''
-          if old_dep not in text:
-              raise SystemExit("stored presentation dependency anchor not found")
-          text = text.replace(old_dep, new_dep, 1)
-          index_path.write_text(text)
-
-          presentation_path = Path("energiazen-mini/lib/heatingPlanPresentation.ts")
-          p = presentation_path.read_text()
-          old_sig = '''export function buildStoredHeatingPlanPresentation({
-  currentOptimizerPresentation = null,
-  forecast = null,
-  selectedHours,
-}: {
-'''
-          new_sig = '''export function buildStoredHeatingPlanPresentation({
-  currentOptimizerPresentation = null,
-  forecast = null,
-  selectedHours,
-  v2EnergyReserve = null,
-}: {
-'''
-          if old_sig not in p:
-              raise SystemExit("presentation signature anchor not found")
-          p = p.replace(old_sig, new_sig, 1)
-
-          old_type = '''  forecast?: {
-    forecastDetails: HeatingPlanForecastDetails;
-    forecastSummary: string;
-  } | null;
-  selectedHours: HeatingPlanPresentation["selectedHours"];
-}): HeatingPlanPresentation {
-  return {
-'''
-          new_type = '''  forecast?: {
-    forecastDetails: HeatingPlanForecastDetails;
-    forecastSummary: string;
-  } | null;
-  selectedHours: HeatingPlanPresentation["selectedHours"];
-  v2EnergyReserve?: {
-    available: boolean;
-    capacityKwh: number | null;
-    energyKwh: number | null;
-    forecastMinimumEnergyKwh: number | null;
-    forecastMinimumPercent: number | null;
-    percent: number | null;
-    safetyReservePercent: number | null;
-    targetReservePercent: number | null;
-  } | null;
-}): HeatingPlanPresentation {
-  const v2ForecastAvailable =
-    v2EnergyReserve?.available === true &&
-    v2EnergyReserve.percent !== null &&
-    v2EnergyReserve.energyKwh !== null &&
-    v2EnergyReserve.capacityKwh !== null &&
-    v2EnergyReserve.forecastMinimumPercent !== null &&
-    v2EnergyReserve.targetReservePercent !== null &&
-    v2EnergyReserve.safetyReservePercent !== null;
-  const v2ForecastSummary = v2ForecastAvailable
-    ? `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} % · tavoite ${formatFinnishDecimal(v2EnergyReserve.targetReservePercent as number)} % · turvaraja ${formatFinnishDecimal(v2EnergyReserve.safetyReservePercent as number)} %`
-    : "V2-energiavaraennuste ei ole juuri nyt saatavilla.";
-
-  return {
-'''
-          if old_type not in p:
-              raise SystemExit("presentation type anchor not found")
-          p = p.replace(old_type, new_type, 1)
-
-          p = p.replace(
-              '    forecastDetails: forecast?.forecastDetails ?? null,\n    forecastSectionLabel: "Ennuste",\n    forecastSummary:\n      forecast?.forecastSummary ??\n      "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",',
-              '    forecastDetails: v2EnergyReserve ? null : forecast?.forecastDetails ?? null,\n    forecastSectionLabel: v2EnergyReserve ? "V2-energiavara" : "Ennuste",\n    forecastSummary: v2EnergyReserve\n      ? v2ForecastSummary\n      : forecast?.forecastSummary ??\n        "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",',
-              1,
-          )
-          p = p.replace(
-              '    limitsSectionLabel: currentOptimizerPresentation\n      ? "Nykyiset rajat"\n      : "Käytetyt rajat",\n    limitsSummary: currentOptimizerPresentation\n      ? currentOptimizerPresentation.limitsSummary\n      : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",\n    priceToleranceSummary: currentOptimizerPresentation\n      ? currentOptimizerPresentation.priceToleranceSummary\n      : null,\n    reason: "Näytetään viimeksi tallennetut lämmitystunnit.",',
-              '    limitsSectionLabel: v2EnergyReserve\n      ? "V2-rajat"\n      : currentOptimizerPresentation\n        ? "Nykyiset rajat"\n        : "Käytetyt rajat",\n    limitsSummary: v2EnergyReserve &&\n      v2EnergyReserve.targetReservePercent !== null &&\n      v2EnergyReserve.safetyReservePercent !== null\n      ? `Tavoite ${formatFinnishDecimal(v2EnergyReserve.targetReservePercent)} % · turvaraja ${formatFinnishDecimal(v2EnergyReserve.safetyReservePercent)} %`\n      : currentOptimizerPresentation\n        ? currentOptimizerPresentation.limitsSummary\n        : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",\n    priceToleranceSummary: v2EnergyReserve\n      ? null\n      : currentOptimizerPresentation\n        ? currentOptimizerPresentation.priceToleranceSummary\n        : null,\n    reason: v2EnergyReserve\n      ? "V2 optimoi lämmitystunnit energiavaran ja hinnan perusteella."\n      : "Näytetään viimeksi tallennetut lämmitystunnit.",',
-              1,
-          )
-          p = p.replace(
-              '    statusSummary: "Viimeksi tallennettu suunnitelma",',
-              '    statusSummary: v2EnergyReserve\n      ? v2ForecastAvailable\n        ? "V2-suunnitelma käytössä"\n        : "V2-suunnitelma käytössä · ennuste ei saatavilla"\n      : "Viimeksi tallennettu suunnitelma",',
-              1,
-          )
-          presentation_path.write_text(p)
-
-          reserve_path = Path("energiazen-mini/lib/v2HomeReservePresentation.ts")
-          r = reserve_path.read_text()
-          r = r.replace(
-              '  target_reserve_percent: number | null;\n};',
-              '  target_reserve_percent: number | null;\n  forecast_min_conservative_energy_kwh: number | null;\n  forecast_horizon_end_at: string | null;\n};',
-              1,
-          )
-          r = r.replace(
-              '  targetReservePercent: number | null;\n};',
-              '  targetReservePercent: number | null;\n  forecastMinimumEnergyKwh: number | null;\n  forecastMinimumPercent: number | null;\n  forecastHorizonEndAt: string | null;\n};',
-              1,
-          )
-          r = r.replace(
-              '  const targetReservePercent = reserve?.target_reserve_percent;\n  const valid =',
-              '  const targetReservePercent = reserve?.target_reserve_percent;\n  const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;\n  const forecastHorizonEndAt = reserve?.forecast_horizon_end_at;\n  const valid =',
-              1,
-          )
-          r = r.replace(
-              '    targetReservePercent >= 0 &&\n    targetReservePercent <= 100;',
-              '    targetReservePercent >= 0 &&\n    targetReservePercent <= 100 &&\n    typeof forecastMinimumEnergy === "number" &&\n    Number.isFinite(forecastMinimumEnergy) &&\n    forecastMinimumEnergy >= 0 &&\n    typeof forecastHorizonEndAt === "string" &&\n    Number.isFinite(Date.parse(forecastHorizonEndAt));',
-              1,
-          )
-          r = r.replace(
-              '      targetReservePercent: null,\n    };',
-              '      targetReservePercent: null,\n      forecastMinimumEnergyKwh: null,\n      forecastMinimumPercent: null,\n      forecastHorizonEndAt: null,\n    };',
-              1,
-          )
-          r = r.replace(
-              '  const percent = clamp((energy / capacity) * 100, 0, 100);\n  return {',
-              '  const percent = clamp((energy / capacity) * 100, 0, 100);\n  const forecastMinimumPercent = clamp((forecastMinimumEnergy / capacity) * 100, 0, 100);\n  return {',
-              1,
-          )
-          r = r.replace(
-              '    targetReservePercent,\n  };',
-              '    targetReservePercent,\n    forecastMinimumEnergyKwh: forecastMinimumEnergy,\n    forecastMinimumPercent,\n    forecastHorizonEndAt,\n  };',
-              1,
-          )
-          reserve_path.write_text(r)
-
-          hook = '''import { useCallback, useEffect, useState } from "react";\n\nimport { supabase } from "./supabase";\nimport {\n  buildV2HomeReservePresentation,\n  type V2HomeReservePresentation,\n  type V2HomeReserveSnapshot,\n} from "./v2HomeReservePresentation";\n\nconst refreshIntervalMs = 60_000;\n\nconst unavailablePresentation: V2HomeReservePresentation = {\n  available: false,\n  fillPercent: 0,\n  percent: null,\n  energyKwh: null,\n  capacityKwh: null,\n  safetyReservePercent: null,\n  targetReservePercent: null,\n  forecastMinimumEnergyKwh: null,\n  forecastMinimumPercent: null,\n  forecastHorizonEndAt: null,\n};\n\nexport function useV2HomeReserve() {\n  const [presentation, setPresentation] = useState<V2HomeReservePresentation>(\n    unavailablePresentation,\n  );\n\n  const refresh = useCallback(async () => {\n    const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");\n    if (error) {\n      setPresentation(unavailablePresentation);\n      return;\n    }\n\n    const row = Array.isArray(data) ? data[0] ?? null : data;\n    setPresentation(\n      buildV2HomeReservePresentation(\n        (row ?? null) as V2HomeReserveSnapshot | null,\n        Date.now(),\n      ),\n    );\n  }, []);\n\n  useEffect(() => {\n    void refresh();\n    const intervalId = setInterval(() => void refresh(), refreshIntervalMs);\n    return () => clearInterval(intervalId);\n  }, [refresh]);\n\n  return presentation;\n}\n'''
-          Path("energiazen-mini/lib/useV2HomeReserve.ts").write_text(hook)
-
-          migration = '''-- Extend the authenticated Home reserve RPC with the V2 plan forecast minimum.\n-- The full shadow table remains service-role only.\ndrop function if exists public.get_v2_energy_reserve_home();\n\ncreate function public.get_v2_energy_reserve_home()\nreturns table (\n  run_at timestamptz,\n  available boolean,\n  conservative_energy_kwh double precision,\n  energy_capacity_kwh double precision,\n  safety_reserve_percent double precision,\n  target_reserve_percent double precision,\n  forecast_min_conservative_energy_kwh double precision,\n  forecast_horizon_end_at timestamptz\n)\nlanguage sql\nsecurity definer\nset search_path = public, pg_temp\nstable\nas $$\n  select\n    shadow.run_at,\n    shadow.available,\n    shadow.conservative_energy_kwh,\n    shadow.energy_capacity_kwh,\n    shadow.safety_reserve_percent,\n    shadow.target_reserve_percent,\n    shadow.forecast_min_conservative_energy_kwh,\n    shadow.forecast_horizon_end_at\n  from public.v2_energy_reserve_shadow_runs as shadow\n  order by shadow.run_at desc\n  limit 1;\n$$;\n\nrevoke all on function public.get_v2_energy_reserve_home() from public, anon;\ngrant execute on function public.get_v2_energy_reserve_home() to authenticated;\n'''
-          Path("energiazen-mini/supabase/migrations/20260916153500_extend_v2_energy_reserve_home_forecast.sql").write_text(migration)
-
-          test_path = Path("energiazen-mini/components/home/warm-water-card.test.ts")
-          t = test_path.read_text()
-          t = t.replace(
-              '    target_reserve_percent: 75,\n  };',
-              '    target_reserve_percent: 75,\n    forecast_min_conservative_energy_kwh: 10.6,\n    forecast_horizon_end_at: "2026-09-17T21:00:00Z",\n  };',
-              1,
-          )
-          marker = '''  if (current.safetyReservePercent !== 30 || current.targetReservePercent !== 75) {\n    throw new Error("expected current production reserve limits to be presented from the validated snapshot");\n  }\n'''
-          addition = marker + '''  if (current.forecastMinimumPercent === null || Math.abs(current.forecastMinimumPercent - 59.98) >= 0.05) {\n    throw new Error(`expected V2 forecast minimum near 59.98%, got ${current.forecastMinimumPercent}`);\n  }\n'''
-          if marker not in t:
-              raise SystemExit("reserve test anchor not found")
-          t = t.replace(marker, addition, 1)
-          test_path.write_text(t)
-          PY
 
       - name: Install dependencies
         working-directory: energiazen-mini
@@ -286,7 +38,7 @@ jobs:
         working-directory: energiazen-mini
         run: npm test
 
-      - name: Typecheck app
+      - name: Typecheck
         working-directory: energiazen-mini
         run: npx tsc --noEmit
 
@@ -298,11 +50,6 @@ jobs:
         run: |
           git config user.name "EnergyZen automation"
           git config user.email "actions@users.noreply.github.com"
-          git add energiazen-mini/app/'(tabs)'/index.tsx \
-                  energiazen-mini/lib/heatingPlanPresentation.ts \
-                  energiazen-mini/lib/v2HomeReservePresentation.ts \
-                  energiazen-mini/lib/useV2HomeReserve.ts \
-                  energiazen-mini/components/home/warm-water-card.test.ts \
-                  energiazen-mini/supabase/migrations/20260916153500_extend_v2_energy_reserve_home_forecast.sql
+          git add energiazen-mini
           git commit -m "feat(v2): show authoritative energy forecast on home"
           git push origin HEAD:feature/v2-home-forecast-final
