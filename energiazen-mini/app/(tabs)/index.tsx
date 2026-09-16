@@ -115,6 +115,7 @@ import {
 } from "@/lib/settings";
 import { validateSettingsDraft } from "@/lib/settingsDraft";
 import { useSettingsScenario } from "@/lib/settingsScenarioContext";
+import { useV2HomeReserve } from "@/lib/useV2HomeReserve";
 import { supabase } from "@/lib/supabase";
 import {
   buildHourlyTemperatureDropProfileResult,
@@ -833,6 +834,7 @@ export default function HomeScreen() {
   const homeRenderStartedAt = Date.now();
   logHomeDayTabPerformance("HomeScreen render start");
   const router = useRouter();
+  const v2HomeReserve = useV2HomeReserve();
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const [hourlyPrices, setHourlyPrices] = useState<HourlyPrice[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
@@ -1513,6 +1515,9 @@ export default function HomeScreen() {
       storedHeatingPlans[todayPlanDate],
       storedHeatingPlans[tomorrowPlanDate],
     ].filter((plan): plan is StoredHeatingPlan => Boolean(plan));
+    const isV2EnergyPlan = storedPlans.some(
+      (plan) => plan.reason === "V2 energy plan",
+    );
 
     if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
       return null;
@@ -1608,6 +1613,7 @@ export default function HomeScreen() {
     );
 
     const forecast =
+      !isV2EnergyPlan &&
       storedSelectedHeatingHourIds.length === storedPlannedHourCount
         ? buildStoredHeatingPlanForecastFields({
             currentBottomTemperature: bottomTemp,
@@ -1626,9 +1632,12 @@ export default function HomeScreen() {
         : null;
 
     return buildStoredHeatingPlanPresentation({
-      currentOptimizerPresentation: activeOptimizerPresentation,
+      currentOptimizerPresentation: isV2EnergyPlan
+        ? null
+        : activeOptimizerPresentation,
       forecast,
       selectedHours,
+      v2EnergyReserve: isV2EnergyPlan ? v2HomeReserve : null,
     });
   }, [
     activeOptimizationRun,
@@ -1645,6 +1654,7 @@ export default function HomeScreen() {
     todayPlanDate,
     tomorrowPlanDate,
     topTemp,
+    v2HomeReserve,
   ]);
   useEffect(() => {
     setPlanView(hasUnsavedChanges ? "scenario" : "active");
