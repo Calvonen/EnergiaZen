@@ -170,9 +170,9 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
   // response. Do not turn that heater-only inlet oscillation into an
   // unresolved draw. This suppression is deliberately fail-closed: every
   // sample in the full detection window must be heating, every bottom reading
-  // must be finite, and the bottom temperature must not fall materially. A
-  // real draw that interrupts heating or produces a bottom-temperature drop
-  // is still detected normally.
+  // must be finite, adjacent samples must be contiguous, and the bottom
+  // temperature must not fall materially. A gap, interrupted heating, missing
+  // bottom data or a bottom-temperature drop keeps the original draw signal.
   if (isContinuousHeatingWithoutTankDrawResponse(window)) {
     return false;
   }
@@ -186,8 +186,22 @@ function isContinuousHeatingWithoutTankDrawResponse(readings: LiveDrawReading[])
   }
 
   for (let index = 1; index < readings.length; index += 1) {
-    const previousBottom = readings[index - 1].bottom_temp;
-    const currentBottom = readings[index].bottom_temp;
+    const previous = readings[index - 1];
+    const current = readings[index];
+    const previousMs = Date.parse(previous.created_at);
+    const currentMs = Date.parse(current.created_at);
+    const gapMinutes = (currentMs - previousMs) / 60_000;
+    if (
+      !Number.isFinite(previousMs) ||
+      !Number.isFinite(currentMs) ||
+      gapMinutes <= 0 ||
+      gapMinutes > MAX_SEGMENT_MINUTES
+    ) {
+      return false;
+    }
+
+    const previousBottom = previous.bottom_temp;
+    const currentBottom = current.bottom_temp;
     if (!finiteTemperature(previousBottom) || !finiteTemperature(currentBottom)) {
       return false;
     }
