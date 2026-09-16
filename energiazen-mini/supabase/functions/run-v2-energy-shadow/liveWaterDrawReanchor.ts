@@ -1,7 +1,4 @@
-import {
-  detectsWaterDraw,
-  waterDrawDetectionLimits,
-} from "../_shared/waterDrawDetection.ts";
+import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
 
 export type LiveDrawReading = {
   created_at: string;
@@ -33,7 +30,6 @@ const MIN_TANK_STABILIZATION_MINUTES = 15;
 const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SEGMENT_MINUTES = 2;
 const LABEL_MATCH_MARGIN_MINUTES = 5;
-const HEATING_DRAW_RESPONSE_TOLERANCE_C = 0.05;
 
 export function resolveLiveDrawReanchors({
   coldInletBaselineC,
@@ -67,6 +63,14 @@ export function resolveLiveDrawReanchors({
       continue;
     }
 
+    // Inlet evidence remains authoritative even while the heater is on. A real
+    // draw can be thermally masked by the 3 kW heater, so a flat or rising
+    // bottom sensor cannot safely prove that the inlet drop was sensor-only.
+    // Treat that situation as ambiguous and fail closed. Once the inlet has
+    // recovered and the unheated tank has been quiet long enough, re-anchor to
+    // the measured tank state instead of estimating how much energy the draw
+    // removed. This handles both a real draw and a heater-induced inlet probe
+    // oscillation without ever crediting uncertain energy to the live ledger.
     const drawDetected = currentSampleHasDrawSignal(readings, index);
     const matchedReliableDraw = drawDetected && isMatchedByReliableDraw(currentMs, reliableDraws);
     const unmatchedDraw = drawDetected && !matchedReliableDraw;
@@ -154,7 +158,7 @@ export function resolveLiveDrawReanchors({
 
 function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) {
   const currentTime = Date.parse(readings[index].created_at);
-  const windowStartMs = currentTime - waterDrawDetectionLimits.windowMinutes * 60_000;
+  const windowStartMs = currentTime - 5 * 60_000;
   const window = readings
     .slice(0, index + 1)
     .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
@@ -163,84 +167,7 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
     time: Date.parse(reading.created_at),
   }));
 
-  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {
-    return false;
-  }
-
-  // Bind heater-only suppression to the samples that first establish the
-  // qualifying inlet drop, not to every later sample that merely keeps that
-  // same drop inside the trailing window. Otherwise the first idle sample
-  // after the heater switches off would reclassify the already-observed
-  // heater-only oscillation as a water draw.
-  const dropSpan = firstQualifyingInletDropSpan(window);
-  if (
-    dropSpan &&
-    isContinuousHeatingWithoutTankDrawResponse(
-      window.slice(dropSpan.startIndex, dropSpan.endIndex + 1),
-    )
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-function firstQualifyingInletDropSpan(readings: LiveDrawReading[]) {
-  for (let laterIndex = 1; laterIndex < readings.length; laterIndex += 1) {
-    const later = readings[laterIndex];
-    const laterMs = Date.parse(later.created_at);
-    if (!finiteTemperature(later.inlet_temp) || !Number.isFinite(laterMs)) continue;
-
-    for (let earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex -= 1) {
-      const earlier = readings[earlierIndex];
-      const earlierMs = Date.parse(earlier.created_at);
-      if (!Number.isFinite(earlierMs)) continue;
-      const minutesApart = (laterMs - earlierMs) / 60_000;
-      if (minutesApart > waterDrawDetectionLimits.windowMinutes) break;
-      if (minutesApart <= 0 || !finiteTemperature(earlier.inlet_temp)) continue;
-      if (
-        (earlier.inlet_temp as number) - (later.inlet_temp as number) >=
-        waterDrawDetectionLimits.minDropCelsius
-      ) {
-        return { startIndex: earlierIndex, endIndex: laterIndex };
-      }
-    }
-  }
-
-  return null;
-}
-
-function isContinuousHeatingWithoutTankDrawResponse(readings: LiveDrawReading[]) {
-  if (readings.length < 2 || readings.some((reading) => reading.heating !== true)) {
-    return false;
-  }
-
-  for (let index = 1; index < readings.length; index += 1) {
-    const previous = readings[index - 1];
-    const current = readings[index];
-    const previousMs = Date.parse(previous.created_at);
-    const currentMs = Date.parse(current.created_at);
-    const gapMinutes = (currentMs - previousMs) / 60_000;
-    if (
-      !Number.isFinite(previousMs) ||
-      !Number.isFinite(currentMs) ||
-      gapMinutes <= 0 ||
-      gapMinutes > MAX_SEGMENT_MINUTES
-    ) {
-      return false;
-    }
-
-    const previousBottom = previous.bottom_temp;
-    const currentBottom = current.bottom_temp;
-    if (!finiteTemperature(previousBottom) || !finiteTemperature(currentBottom)) {
-      return false;
-    }
-    if (currentBottom < previousBottom - HEATING_DRAW_RESPONSE_TOLERANCE_C) {
-      return false;
-    }
-  }
-
-  return true;
+  return inletSamples.length >= 2 && detectsWaterDraw(inletSamples);
 }
 
 function isMatchedByReliableDraw(currentMs: number, draws: LiveReliableDraw[]) {
