@@ -47,7 +47,7 @@ export function buildV2StagedPlans(candidate: V2PublicationCandidate, coveredHou
   }));
 }
 
-export function buildV2TankSnapshot(rows: Array<{ created_at: string; top_temp: number; bottom_temp: number; inlet_temp: number; heating: boolean | null }>, anchorAt: string) {
+export function buildV2TankSnapshot(rows: Array<{ created_at: string; top_temp: number | null; bottom_temp: number | null; inlet_temp: number | null; heating: boolean | null }>, anchorAt: string) {
   const row = rows.find((candidate) => candidate.created_at === anchorAt);
   if (!row || ![row.top_temp, row.bottom_temp, row.inlet_temp].every(Number.isFinite) || typeof row.heating !== "boolean") return null;
   return {
