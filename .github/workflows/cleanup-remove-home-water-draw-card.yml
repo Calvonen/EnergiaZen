@@ -1,0 +1,29 @@
+name: Cleanup Home card branch
+
+on:
+  push:
+    branches:
+      - feature/remove-home-water-draw-card
+    paths:
+      - ".github/workflows/cleanup-remove-home-water-draw-card.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/remove-home-water-draw-card
+          fetch-depth: 0
+      - name: Cleanup and commit
+        run: |
+          rm -rf energiazen-mini/.tmp-v2-live-shadow-tests energiazen-mini/.tmp-forecast-tests
+          rm -f .github/workflows/cleanup-remove-home-water-draw-card.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: remove generated test artifacts"
+          git push origin HEAD:feature/remove-home-water-draw-card
