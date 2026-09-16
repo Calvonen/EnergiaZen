@@ -3386,27 +3386,6 @@ export default function HomeScreen() {
           />
         </View>
 
-        <Pressable
-          accessibilityHint="Avaa vedenkäyttöhistorian"
-          accessibilityLabel="Vedenkäyttöhistoria. Merkitse suihkut ja muu vedenkäyttö"
-          accessibilityRole="button"
-          android_ripple={{ color: "rgba(54,244,212,0.12)" }}
-          onPress={() => router.push("/water-draw-history")}
-          style={({ pressed }) => [
-            styles.waterDrawHistoryCard,
-            pressed && styles.waterDrawHistoryCardPressed,
-          ]}
-        >
-          <Text style={styles.waterDrawHistoryIcon}>📋</Text>
-          <View style={styles.waterDrawHistoryText}>
-            <Text style={styles.waterDrawHistoryTitle}>
-              Vedenkäyttöhistoria
-            </Text>
-            <Text style={styles.waterDrawHistorySubtitle}>
-              Merkitse suihkut ja muu vedenkäyttö
-            </Text>
-          </View>
-        </Pressable>
 
         <View style={styles.chartCard}>
           <View style={styles.daySelector}>
