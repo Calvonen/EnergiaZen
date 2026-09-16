@@ -2,6 +2,10 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { supabase } from "@/lib/supabase";
+import {
+  buildV2HomeReservePresentation,
+  type V2HomeReserveSnapshot,
+} from "@/lib/v2HomeReservePresentation";
 
 function getWarmWaterCardTheme() {
   const accent = "#26d9d2";
@@ -23,19 +27,7 @@ const LIMIT_LABEL_LINE_HEIGHT = 14;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
 const LIMIT_COLOR = "#9fc7ff";
 const HOME_RESERVE_REFRESH_MS = 60_000;
-// Shadow normally runs every five minutes. Allow one missed cadence plus margin,
-// then fail closed instead of presenting a frozen reserve as current.
-const HOME_RESERVE_MAX_AGE_MS = 12 * 60_000;
 const SCALE_TICKS = [100, 75, 50, 25, 0] as const;
-
-type V2HomeReserve = {
-  run_at: string | null;
-  available: boolean | null;
-  conservative_energy_kwh: number | null;
-  energy_capacity_kwh: number | null;
-  safety_reserve_percent: number | null;
-  target_reserve_percent: number | null;
-};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -47,14 +39,6 @@ function markerTop(percent: number) {
 
 function formatKwh(value: number) {
   return value.toFixed(1).replace(".", ",");
-}
-
-function isFreshRunAt(runAt: string | null | undefined, nowMs: number) {
-  if (typeof runAt !== "string" || runAt.length === 0) return false;
-  const runAtMs = Date.parse(runAt);
-  if (!Number.isFinite(runAtMs)) return false;
-  const ageMs = nowMs - runAtMs;
-  return ageMs >= 0 && ageMs <= HOME_RESERVE_MAX_AGE_MS;
 }
 
 export type WarmWaterCardProps = {
@@ -71,7 +55,7 @@ export type WarmWaterCardProps = {
 
 export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
-  const [reserve, setReserve] = useState<V2HomeReserve | null>(null);
+  const [reserve, setReserve] = useState<V2HomeReserveSnapshot | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -86,7 +70,7 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
           return;
         }
         const row = Array.isArray(data) ? data[0] : null;
-        setReserve((row as V2HomeReserve | undefined) ?? null);
+        setReserve((row as V2HomeReserveSnapshot | undefined) ?? null);
       } catch {
         if (active) setReserve(null);
       }
@@ -104,16 +88,9 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
   }, []);
 
   const presentation = useMemo(() => {
-    const capacity = reserve?.energy_capacity_kwh;
-    const energy = reserve?.conservative_energy_kwh;
-    const available = reserve?.available === true;
-    const fresh = isFreshRunAt(reserve?.run_at, nowMs);
-    const valid =
-      available && fresh &&
-      typeof capacity === "number" && Number.isFinite(capacity) && capacity > 0 &&
-      typeof energy === "number" && Number.isFinite(energy);
-
-    if (!valid) {
+    const reservePresentation = buildV2HomeReservePresentation(reserve, nowMs);
+    if (!reservePresentation.available || reservePresentation.percent === null ||
+        reservePresentation.energyKwh === null || reservePresentation.capacityKwh === null) {
       return {
         accessibilityLabel: "Lämminvesivaraus, V2-energiavara ei ole juuri nyt saatavilla",
         energyLabel: "V2-varaus ei saatavilla",
@@ -122,12 +99,11 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
       };
     }
 
-    const percent = clamp((energy / capacity) * 100, 0, 100);
     return {
-      accessibilityLabel: `Lämminvesivaraus ${Math.round(percent)} prosenttia, ${formatKwh(energy)} kilowattituntia ${formatKwh(capacity)} kilowattitunnista`,
-      energyLabel: `${formatKwh(energy)} / ${formatKwh(capacity)} kWh`,
-      fillPercent: percent,
-      percentLabel: `${Math.round(percent)} %`,
+      accessibilityLabel: `Lämminvesivaraus ${Math.round(reservePresentation.percent)} prosenttia, ${formatKwh(reservePresentation.energyKwh)} kilowattituntia ${formatKwh(reservePresentation.capacityKwh)} kilowattitunnista`,
+      energyLabel: `${formatKwh(reservePresentation.energyKwh)} / ${formatKwh(reservePresentation.capacityKwh)} kWh`,
+      fillPercent: reservePresentation.fillPercent,
+      percentLabel: `${Math.round(reservePresentation.percent)} %`,
     };
   }, [nowMs, reserve]);
 
