@@ -63,6 +63,14 @@ export function resolveLiveDrawReanchors({
       continue;
     }
 
+    // Inlet evidence remains authoritative even while the heater is on. A real
+    // draw can be thermally masked by the 3 kW heater, so a flat or rising
+    // bottom sensor cannot safely prove that the inlet drop was sensor-only.
+    // Treat that situation as ambiguous and fail closed. Once the inlet has
+    // recovered and the unheated tank has been quiet long enough, re-anchor to
+    // the measured tank state instead of estimating how much energy the draw
+    // removed. This handles both a real draw and a heater-induced inlet probe
+    // oscillation without ever crediting uncertain energy to the live ledger.
     const drawDetected = currentSampleHasDrawSignal(readings, index);
     const matchedReliableDraw = drawDetected && isMatchedByReliableDraw(currentMs, reliableDraws);
     const unmatchedDraw = drawDetected && !matchedReliableDraw;
@@ -153,12 +161,13 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
   const windowStartMs = currentTime - 5 * 60_000;
   const window = readings
     .slice(0, index + 1)
-    .filter((reading) => Date.parse(reading.created_at) >= windowStartMs)
-    .map((reading) => ({
-      inletTemperatureC: reading.inlet_temp,
-      time: Date.parse(reading.created_at),
-    }));
-  return window.length >= 2 && detectsWaterDraw(window);
+    .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
+  const inletSamples = window.map((reading) => ({
+    inletTemperatureC: reading.inlet_temp,
+    time: Date.parse(reading.created_at),
+  }));
+
+  return inletSamples.length >= 2 && detectsWaterDraw(inletSamples);
 }
 
 function isMatchedByReliableDraw(currentMs: number, draws: LiveReliableDraw[]) {
