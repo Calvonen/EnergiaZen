@@ -59,16 +59,20 @@ export function runV2PublicationPayloadUnitTests() {
   assertEqual(buildV2TankSnapshot(readings, readings[1].created_at), null, "unusable anchor rejected");
 
   assertDeepEqual(buildExpectedV2PlanVersions(
-    [{ plan_date: "2026-09-15", planned_hours: [2, 3] }, { plan_date: "2026-09-16", planned_hours: [] }],
+    ["2026-09-15", "2026-09-16"],
     [{ plan_date: "2026-09-15", updated_at: "2026-09-15T09:00:00Z" }],
   ), [
     { plan_date: "2026-09-15", updated_at: "2026-09-15T09:00:00Z" },
     { plan_date: "2026-09-16", updated_at: null },
-  ], "CAS versions cover every plan date");
-  assertThrows(() => buildExpectedV2PlanVersions([
-    { plan_date: "2026-09-15", planned_hours: [] },
-    { plan_date: "2026-09-15", planned_hours: [2] },
-  ], []), "duplicate plan dates rejected");
+  ], "CAS versions cover both planning dates independently of current plans");
+  assertDeepEqual(buildExpectedV2PlanVersions(
+    ["2026-09-15", "2026-09-16"],
+    [{ plan_date: "2026-09-16", updated_at: "2026-09-15T09:05:00Z" }],
+  ), [
+    { plan_date: "2026-09-15", updated_at: null },
+    { plan_date: "2026-09-16", updated_at: "2026-09-15T09:05:00Z" },
+  ], "shrinking horizon still snapshots stale tomorrow for CAS cleanup");
+  assertThrows(() => buildExpectedV2PlanVersions(["2026-09-15", "2026-09-15"], []), "duplicate planning dates rejected");
 
   assertThrows(() => buildV2PriceSnapshot([
     { starts_at: "2026-09-15T10:00:00.000Z", ends_at: "2026-09-15T11:00:00.000Z", spot_price_cents_kwh: 1, resolution_minutes: 60 },
