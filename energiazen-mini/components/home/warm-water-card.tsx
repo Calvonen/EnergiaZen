@@ -87,8 +87,12 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
     };
   }, []);
 
+  const reservePresentation = useMemo(
+    () => buildV2HomeReservePresentation(reserve, nowMs),
+    [nowMs, reserve],
+  );
+
   const presentation = useMemo(() => {
-    const reservePresentation = buildV2HomeReservePresentation(reserve, nowMs);
     if (!reservePresentation.available || reservePresentation.percent === null ||
         reservePresentation.energyKwh === null || reservePresentation.capacityKwh === null) {
       return {
@@ -105,14 +109,24 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
       fillPercent: reservePresentation.fillPercent,
       percentLabel: `${Math.round(reservePresentation.percent)} %`,
     };
-  }, [nowMs, reserve]);
+  }, [reservePresentation]);
 
-  const safetyPercent = clamp(reserve?.safety_reserve_percent ?? 30, 0, 100);
-  const targetPercent = clamp(reserve?.target_reserve_percent ?? 75, 0, 100);
-  const limitMarkers = [
-    { key: "safety", label: `${Math.round(safetyPercent)} %`, percent: safetyPercent },
-    { key: "target", label: `${Math.round(targetPercent)} %`, percent: targetPercent },
-  ];
+  const limitMarkers = reservePresentation.available &&
+    reservePresentation.safetyReservePercent !== null &&
+    reservePresentation.targetReservePercent !== null
+    ? [
+        {
+          key: "safety",
+          label: `${Math.round(reservePresentation.safetyReservePercent)} %`,
+          percent: reservePresentation.safetyReservePercent,
+        },
+        {
+          key: "target",
+          label: `${Math.round(reservePresentation.targetReservePercent)} %`,
+          percent: reservePresentation.targetReservePercent,
+        },
+      ]
+    : [];
 
   return (
     <View style={[styles.metricCard, styles.waterCard, {
