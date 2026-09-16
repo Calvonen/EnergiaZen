@@ -8,6 +8,7 @@ export type V2HomeReserveSnapshot = {
   safety_reserve_percent: number | null;
   target_reserve_percent: number | null;
   forecast_min_conservative_energy_kwh: number | null;
+  forecast_final_conservative_energy_kwh: number | null;
   forecast_horizon_end_at: string | null;
 };
 
@@ -21,6 +22,8 @@ export type V2HomeReservePresentation = {
   targetReservePercent: number | null;
   forecastMinimumEnergyKwh: number | null;
   forecastMinimumPercent: number | null;
+  forecastFinalEnergyKwh: number | null;
+  forecastFinalPercent: number | null;
   forecastHorizonEndAt: string | null;
 };
 
@@ -48,6 +51,7 @@ export function buildV2HomeReservePresentation(
   const safetyReservePercent = reserve?.safety_reserve_percent;
   const targetReservePercent = reserve?.target_reserve_percent;
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
+  const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
   const forecastHorizonEndAt = reserve?.forecast_horizon_end_at;
   const valid =
     reserve?.available === true &&
@@ -68,6 +72,9 @@ export function buildV2HomeReservePresentation(
     typeof forecastMinimumEnergy === "number" &&
     Number.isFinite(forecastMinimumEnergy) &&
     forecastMinimumEnergy >= 0 &&
+    typeof forecastFinalEnergy === "number" &&
+    Number.isFinite(forecastFinalEnergy) &&
+    forecastFinalEnergy >= 0 &&
     typeof forecastHorizonEndAt === "string" &&
     Number.isFinite(Date.parse(forecastHorizonEndAt));
 
@@ -82,12 +89,15 @@ export function buildV2HomeReservePresentation(
       targetReservePercent: null,
       forecastMinimumEnergyKwh: null,
       forecastMinimumPercent: null,
+      forecastFinalEnergyKwh: null,
+      forecastFinalPercent: null,
       forecastHorizonEndAt: null,
     };
   }
 
   const percent = clamp((energy / capacity) * 100, 0, 100);
   const forecastMinimumPercent = clamp((forecastMinimumEnergy / capacity) * 100, 0, 100);
+  const forecastFinalPercent = clamp((forecastFinalEnergy / capacity) * 100, 0, 100);
   return {
     available: true,
     fillPercent: percent,
@@ -98,6 +108,8 @@ export function buildV2HomeReservePresentation(
     targetReservePercent,
     forecastMinimumEnergyKwh: forecastMinimumEnergy,
     forecastMinimumPercent,
+    forecastFinalEnergyKwh: forecastFinalEnergy,
+    forecastFinalPercent,
     forecastHorizonEndAt,
   };
 }

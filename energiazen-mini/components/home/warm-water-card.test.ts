@@ -13,6 +13,7 @@ export function runV2HomeReservePresentationUnitTests() {
     safety_reserve_percent: 30,
     target_reserve_percent: 75,
     forecast_min_conservative_energy_kwh: 10.6,
+    forecast_final_conservative_energy_kwh: 13.3,
     forecast_horizon_end_at: "2026-09-17T21:00:00Z",
   };
 
@@ -25,6 +26,9 @@ export function runV2HomeReservePresentationUnitTests() {
   }
   if (current.forecastMinimumPercent === null || Math.abs(current.forecastMinimumPercent - 59.98) >= 0.05) {
     throw new Error(`expected V2 forecast minimum near 59.98%, got ${current.forecastMinimumPercent}`);
+  }
+  if (current.forecastFinalPercent === null || Math.abs(current.forecastFinalPercent - 75.26) >= 0.05) {
+    throw new Error(`expected V2 horizon-end reserve near 75.26%, got ${current.forecastFinalPercent}`);
   }
 
   const stale = buildV2HomeReservePresentation(

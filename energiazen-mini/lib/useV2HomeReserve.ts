@@ -19,6 +19,8 @@ const unavailablePresentation: V2HomeReservePresentation = {
   targetReservePercent: null,
   forecastMinimumEnergyKwh: null,
   forecastMinimumPercent: null,
+  forecastFinalEnergyKwh: null,
+  forecastFinalPercent: null,
   forecastHorizonEndAt: null,
 };
 

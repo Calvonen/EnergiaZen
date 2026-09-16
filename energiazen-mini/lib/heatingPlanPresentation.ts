@@ -391,6 +391,8 @@ export function buildStoredHeatingPlanPresentation({
     energyKwh: number | null;
     forecastMinimumEnergyKwh: number | null;
     forecastMinimumPercent: number | null;
+    forecastFinalEnergyKwh: number | null;
+    forecastFinalPercent: number | null;
     percent: number | null;
     safetyReservePercent: number | null;
     targetReservePercent: number | null;
@@ -402,10 +404,12 @@ export function buildStoredHeatingPlanPresentation({
     v2EnergyReserve.energyKwh !== null &&
     v2EnergyReserve.capacityKwh !== null &&
     v2EnergyReserve.forecastMinimumPercent !== null &&
+    v2EnergyReserve.forecastFinalEnergyKwh !== null &&
+    v2EnergyReserve.forecastFinalPercent !== null &&
     v2EnergyReserve.targetReservePercent !== null &&
     v2EnergyReserve.safetyReservePercent !== null;
   const v2ForecastSummary = v2ForecastAvailable
-    ? `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} % · tavoite ${formatFinnishDecimal(v2EnergyReserve.targetReservePercent as number)} % · turvaraja ${formatFinnishDecimal(v2EnergyReserve.safetyReservePercent as number)} %`
+    ? `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
     : "V2-energiavaraennuste ei ole juuri nyt saatavilla.";
 
   return {
