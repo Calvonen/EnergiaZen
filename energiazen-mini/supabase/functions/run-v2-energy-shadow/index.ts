@@ -14,6 +14,7 @@ import {
   type ShadowStoredHeatingPlan,
 } from "./productionConstraints.ts";
 import { captureV2PublicationCandidate, evaluateV2PublicationGuard } from "./publicationGuard.ts";
+import { buildV2StagedPublicationArgs, type StoredStagedPlanVersion } from "./stagedPublication.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import {
   calculateV2EnergyCapacityKwh,
@@ -26,6 +27,7 @@ const replayWindowHours = 6;
 const priceFetchWindowHours = 48;
 const pageSize = 1000;
 const activeBlockSafetyTopTemperatureC = 50;
+const v2StagedPublicationEnabled = true;
 const v2PublicationCutoverEnabled = false;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
@@ -54,7 +56,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [drawsResult, v1Result, settingsResult, pricesResult, heatingPlansResult] = await Promise.all([
+    const [drawsResult, v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult] = await Promise.all([
       supabase.from("water_draw_labels")
         .select("event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason")
         .gte("event_ended_at", replayStart.toISOString()).lte("event_started_at", now.toISOString())
@@ -71,6 +73,8 @@ Deno.serve(async (request) => {
         .lte("starts_at", priceFetchEnd.toISOString()).order("starts_at", { ascending: true }),
       supabase.from("heating_plans").select("plan_date,planned_hours,mode")
         .in("plan_date", [today, tomorrow]),
+      supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
+        .in("plan_date", [today, tomorrow]),
     ]);
 
     if (drawsResult.error) throw new Error(`Failed to fetch water draw labels: ${drawsResult.error.message}`);
@@ -78,15 +82,19 @@ Deno.serve(async (request) => {
     if (settingsResult.error) throw new Error(`Failed to fetch heating settings: ${settingsResult.error.message}`);
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
+    if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
+    if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
+    const draws = (drawsResult.data ?? []) as ReliableWaterDraw[];
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
-    const maxTankTemperatureC = Number(settingsResult.data?.max_tank_temperature);
-    const automaticMaxHeatingHours = Number(settingsResult.data?.automatic_max_heating_hours);
+    const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
+    const maxTankTemperatureC = Number(settingsResult.data.max_tank_temperature);
+    const automaticMaxHeatingHours = Number(settingsResult.data.automatic_max_heating_hours);
     const reservePercents = normalizeV2ReservePercents({
-      targetPercent: Number(settingsResult.data?.v2_target_reserve_percent),
-      safetyPercent: Number(settingsResult.data?.v2_safety_reserve_percent),
+      targetPercent: Number(settingsResult.data.v2_target_reserve_percent),
+      safetyPercent: Number(settingsResult.data.v2_safety_reserve_percent),
     });
 
     const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
@@ -102,7 +110,7 @@ Deno.serve(async (request) => {
       maxTankTemperatureC,
       now,
       readings,
-      reliableDraws: (drawsResult.data ?? []) as ReliableWaterDraw[],
+      reliableDraws: draws,
       v1Shadow: null,
     });
     const result = applyReserveThresholds(baseResult, safetyEnergyKwh, targetEnergyKwh);
@@ -127,13 +135,51 @@ Deno.serve(async (request) => {
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
     const publicationCandidate = captureV2PublicationCandidate(plan);
-    const publication = evaluateV2PublicationGuard({
+    const stagedPublicationReadiness = evaluateV2PublicationGuard({
+      enabled: v2StagedPublicationEnabled,
+      latestTankReadingAt: latestUsableReadingAt,
+      now,
+      plan,
+      publicationCandidate,
+    });
+    const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
       latestTankReadingAt: latestUsableReadingAt,
       now,
       plan,
       publicationCandidate,
     });
+
+    let stagedPublicationResult: string | null = null;
+    if (stagedPublicationReadiness.ready && latestUsableReadingAt) {
+      const rpcArgs = buildV2StagedPublicationArgs({
+        candidate: publicationCandidate,
+        constraintPlans: storedPlans,
+        draws,
+        latestUsableReadingAt,
+        now,
+        plan,
+        prices,
+        priceFetchEnd,
+        readings,
+        replayStart,
+        settings: {
+          max_tank_temperature: Number(settingsResult.data.max_tank_temperature),
+          automatic_max_heating_hours: Number(settingsResult.data.automatic_max_heating_hours),
+          v2_target_reserve_percent: Number(settingsResult.data.v2_target_reserve_percent),
+          v2_safety_reserve_percent: Number(settingsResult.data.v2_safety_reserve_percent),
+        },
+        storedStagedVersions,
+        today,
+        tomorrow,
+      });
+      const { data: publishResult, error: publishError } = await supabase.rpc("publish_v2_heating_plans_staged", rpcArgs);
+      if (publishError) throw new Error(`Failed to publish V2 staged plan: ${publishError.message}`);
+      stagedPublicationResult = typeof publishResult === "string" ? publishResult : String(publishResult);
+      if (stagedPublicationResult !== "published") {
+        console.warn("V2 staged publication rejected", stagedPublicationResult);
+      }
+    }
 
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
       run_at: now.toISOString(), replay_start_at: replayStart.toISOString(), replay_end_at: now.toISOString(),
@@ -182,9 +228,13 @@ Deno.serve(async (request) => {
       plan_selected_heating_energy_kwh: plan.selectedHeatingEnergyKwh,
       plan_total_cost_cents: plan.totalCostCents, forecast_horizon_end_at: plan.forecastHorizonEndAt,
       forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
+      staged_publication_enabled: v2StagedPublicationEnabled,
+      staged_publication_ready: stagedPublicationReadiness.ready,
+      staged_publication_ready_reason: stagedPublicationReadiness.reason,
+      staged_publication_result: stagedPublicationResult,
       publication_cutover_enabled: v2PublicationCutoverEnabled,
-      publication_ready: publication.ready,
-      publication_ready_reason: publication.reason,
+      publication_ready: cutoverPublicationReadiness.ready,
+      publication_ready_reason: cutoverPublicationReadiness.reason,
       publication_latest_usable_tank_reading_at: latestUsableReadingAt,
       wrote_to_heating_plans: false,
     });
