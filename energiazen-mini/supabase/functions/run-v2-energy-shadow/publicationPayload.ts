@@ -1,68 +1,54 @@
-import type { ShadowElectricityPrice } from "./planShadow.ts";
-import type { ShadowTankReading } from "./logic.ts";
-import type { V2PublicationCandidate } from "./publicationGuard.ts";
+export type V2PublicationCandidate = {
+  selectedHeatingHourIds: string[];
+};
 
-export type V2StagedPlan = { plan_date: string; planned_hours: number[] };
-export type V2StagedPlanVersion = { plan_date: string; updated_at: string | null };
+export type V2StagedPlan = {
+  plan_date: string;
+  planned_hours: number[];
+};
 
-const helsinkiDate = new Intl.DateTimeFormat("en-CA", {
-  day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
+export type V2StagedPlanVersion = {
+  plan_date: string;
+  updated_at: string | null;
+};
+
+const HELSINKI_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Helsinki",
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
 });
-const helsinkiHour = new Intl.DateTimeFormat("en-GB", {
-  hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Helsinki",
-});
 
-export function buildV2StagedPlans(
-  candidate: V2PublicationCandidate,
-  coveredHourIds: string[],
-): V2StagedPlan[] {
-  if (!coveredHourIds.length) throw new Error("V2 publication horizon is empty");
-  const byDate = new Map<string, Set<number>>();
+export function buildV2StagedPlans(candidate: V2PublicationCandidate, coveredHourIds: string[]): V2StagedPlan[] {
+  if (coveredHourIds.length === 0) throw new Error("V2 publication requires a covered forecast horizon");
   const coveredInstants = new Set<number>();
-  const coveredLocalSlots = new Map<string, number>();
-  const ambiguousLocalSlots = new Set<string>();
-
+  const coveredSlots = new Map<string, number>();
+  const byDate = new Map<string, Set<number>>();
   for (const id of coveredHourIds) {
     const instant = parseHourId(id);
     requireUtcClockHour(instant, id);
-    const instantMs = instant.getTime();
-    if (coveredInstants.has(instantMs)) throw new Error(`Duplicate V2 covered hour: ${id}`);
-    coveredInstants.add(instantMs);
-    const date = dateKey(instant);
-    const hour = Number(helsinkiHour.format(instant));
-    if (!date || !Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error(`Invalid V2 covered hour: ${id}`);
-    if (!byDate.has(date)) byDate.set(date, new Set<number>());
-    const localSlot = `${date}:${hour}`;
-    const previousInstantMs = coveredLocalSlots.get(localSlot);
-    if (previousInstantMs !== undefined && previousInstantMs !== instantMs) ambiguousLocalSlots.add(localSlot);
-    else coveredLocalSlots.set(localSlot, instantMs);
+    const ms = instant.getTime();
+    if (coveredInstants.has(ms)) throw new Error(`Duplicate covered V2 hour: ${id}`);
+    coveredInstants.add(ms);
+    const { date, hour } = helsinkiDateHour(instant);
+    const slot = `${date}:${hour}`;
+    coveredSlots.set(slot, (coveredSlots.get(slot) ?? 0) + 1);
+    if (!byDate.has(date)) byDate.set(date, new Set());
   }
-
-  const selectedInstants = new Set<number>();
   for (const id of candidate.selectedHeatingHourIds) {
     const instant = parseHourId(id);
     requireUtcClockHour(instant, id);
-    const instantMs = instant.getTime();
-    if (selectedInstants.has(instantMs)) throw new Error(`Duplicate V2 selected hour: ${id}`);
-    selectedInstants.add(instantMs);
-    if (!coveredInstants.has(instantMs)) throw new Error(`Selected V2 hour is outside publication horizon: ${id}`);
-    const date = dateKey(instant);
-    const hour = Number(helsinkiHour.format(instant));
-    if (!date || !Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error(`Invalid V2 selected hour: ${id}`);
-    const localSlot = `${date}:${hour}`;
-    if (ambiguousLocalSlots.has(localSlot)) {
-      throw new Error(`Ambiguous Helsinki DST hour cannot be staged safely: ${id}`);
-    }
+    if (!coveredInstants.has(instant.getTime())) throw new Error(`Selected V2 hour is outside covered horizon: ${id}`);
+    const { date, hour } = helsinkiDateHour(instant);
+    if ((coveredSlots.get(`${date}:${hour}`) ?? 0) !== 1) throw new Error(`Ambiguous Helsinki V2 hour: ${date} ${hour}`);
     byDate.get(date)!.add(hour);
   }
-  return [...byDate.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([plan_date, hours]) => ({ plan_date, planned_hours: [...hours].sort((a, b) => a - b) }));
+  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([plan_date, hours]) => ({
+    plan_date,
+    planned_hours: [...hours].sort((a, b) => a - b),
+  }));
 }
 
-export function buildV2TankSnapshot(readings: ShadowTankReading[], anchorAt: string | null) {
-  if (!anchorAt) return null;
-  const row = readings.find((reading) => reading.created_at === anchorAt);
+export function buildV2TankSnapshot(rows: Array<{ created_at: string; top_temp: number; bottom_temp: number; inlet_temp: number; heating: boolean | null }>, anchorAt: string) {
+  const row = rows.find((candidate) => candidate.created_at === anchorAt);
   if (!row || ![row.top_temp, row.bottom_temp, row.inlet_temp].every(Number.isFinite) || typeof row.heating !== "boolean") return null;
   return {
     created_at: row.created_at,
@@ -73,7 +59,7 @@ export function buildV2TankSnapshot(readings: ShadowTankReading[], anchorAt: str
   };
 }
 
-export function buildV2PriceSnapshot(prices: ShadowElectricityPrice[]) {
+export function buildV2PriceSnapshot(prices: Array<{ starts_at: string; ends_at: string; spot_price_cents_kwh: number; resolution_minutes: number }>) {
   const seen = new Set<number>();
   return prices.map((price) => {
     const startsAt = parseHourId(price.starts_at);
@@ -91,16 +77,17 @@ export function buildV2PriceSnapshot(prices: ShadowElectricityPrice[]) {
 }
 
 export function buildExpectedV2PlanVersions(
-  plans: V2StagedPlan[],
+  planningDates: string[],
   stored: Array<{ plan_date: string; updated_at: string }>,
 ): V2StagedPlanVersion[] {
   const seen = new Set<string>();
-  return plans.map((plan) => {
-    if (seen.has(plan.plan_date)) throw new Error(`Duplicate V2 plan date: ${plan.plan_date}`);
-    seen.add(plan.plan_date);
+  return planningDates.map((plan_date) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(plan_date)) throw new Error(`Invalid V2 planning date: ${plan_date}`);
+    if (seen.has(plan_date)) throw new Error(`Duplicate V2 planning date: ${plan_date}`);
+    seen.add(plan_date);
     return {
-      plan_date: plan.plan_date,
-      updated_at: stored.find((row) => row.plan_date === plan.plan_date)?.updated_at ?? null,
+      plan_date,
+      updated_at: stored.find((row) => row.plan_date === plan_date)?.updated_at ?? null,
     };
   });
 }
@@ -113,14 +100,11 @@ function parseHourId(id: string) {
 
 function requireUtcClockHour(instant: Date, id: string) {
   if (instant.getUTCMinutes() !== 0 || instant.getUTCSeconds() !== 0 || instant.getUTCMilliseconds() !== 0) {
-    throw new Error(`V2 hour is not aligned to a UTC clock-hour boundary: ${id}`);
+    throw new Error(`V2 hour is not aligned to a UTC clock hour: ${id}`);
   }
 }
 
-function dateKey(date: Date) {
-  const parts = helsinkiDate.formatToParts(date);
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  return year && month && day ? `${year}-${month}-${day}` : "";
+function helsinkiDateHour(instant: Date) {
+  const parts = Object.fromEntries(HELSINKI_PARTS.formatToParts(instant).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
