@@ -115,6 +115,8 @@
     "lib/tankReadingFreshness.ts",
     "lib/tankReadingFreshness.test.ts",
     "supabase/functions/_shared/tankReadingFreshness.ts",
+    "lib/v2HomeReservePresentation.ts",
+    "components/home/warm-water-card.test.ts",
     "lib/energyModelV2/sensorGeometry.ts",
     "lib/energyModelV2/sensorGeometry.test.ts",
     "supabase/functions/_shared/energyModelV2/sensorGeometry.ts",
