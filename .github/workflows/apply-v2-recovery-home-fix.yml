@@ -1,0 +1,73 @@
+name: Apply V2 recovery/Home fix
+on:
+  push:
+    branches: [fix/v2-recover-reserve-and-hide-past-hours]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v2-recover-reserve-and-hide-past-hours
+      - name: Apply patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('energiazen-mini/supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.ts')
+          s = p.read_text()
+          old = '''  return inletSamples.length >= 2 && detectsWaterDraw(inletSamples);\n}\n\nfunction isMatchedByReliableDraw'''
+          new = '''  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {\n    return false;\n  }\n\n  // During a continuous heating response the inlet probe can cool sharply even\n  // though both tank sensors keep rising. Treat that production-shaped pattern\n  // as heater-induced probe oscillation, not a draw. Any relay interruption,\n  // sampling gap, missing tank value or material tank-temperature drop keeps the\n  // original fail-closed draw classification.\n  return !isHeaterOnlyInletOscillation(window);\n}\n\nfunction isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {\n  if (\n    window.length < 2 ||\n    window.some(\n      (reading) =>\n        reading.heating !== true ||\n        !finiteTemperature(reading.top_temp) ||\n        !finiteTemperature(reading.bottom_temp),\n    )\n  ) {\n    return false;\n  }\n\n  const maxAllowedDropC = 0.25;\n  for (let index = 1; index < window.length; index += 1) {\n    const current = window[index];\n    const previous = window[index - 1];\n    const gapMinutes =\n      (Date.parse(current.created_at) - Date.parse(previous.created_at)) / 60_000;\n\n    if (\n      !Number.isFinite(gapMinutes) ||\n      gapMinutes <= 0 ||\n      gapMinutes > MAX_SEGMENT_MINUTES ||\n      (current.top_temp as number) < (previous.top_temp as number) - maxAllowedDropC ||\n      (current.bottom_temp as number) <\n        (previous.bottom_temp as number) - maxAllowedDropC\n    ) {\n      return false;\n    }\n  }\n\n  return true;\n}\n\nfunction isMatchedByReliableDraw'''
+          if old not in s:
+              raise SystemExit('liveWaterDrawReanchor anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('energiazen-mini/supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.test.ts')
+          s = p.read_text()
+          s = s.replace(
+            'assert(ambiguousHeatingResult.unresolved, "heating-time inlet drop remains unresolved even when bottom rises");\n  assert(ambiguousHeatingResult.detectedUnlabeledDrawCount === 1, "ambiguous heating-time inlet drop is counted once");',
+            'assert(!ambiguousHeatingResult.unresolved, "continuous heating with rising tank sensors suppresses inlet-only false draw");\n  assert(ambiguousHeatingResult.detectedUnlabeledDrawCount === 0, "heater-only inlet oscillation is not counted as a draw");',
+            1,
+          )
+          s = s.replace(
+            '// Production-shaped ambiguity: the inlet probe drops by >5 C while the 3 kW\n  // heater is on and the bottom keeps rising. That trace cannot distinguish a\n  // heater-induced probe oscillation from a real draw whose cooling is masked\n  // by active heating, so the live ledger must fail closed.',
+            '// Production-shaped false positive: the inlet probe drops by >5 C while the\n  // 3 kW heater is continuously on and both tank sensors keep rising. This is\n  // the observed heater-only probe oscillation and must not poison V2 reserve.',
+            1,
+          )
+          p.write_text(s)
+
+          p = Path('energiazen-mini/app/(tabs)/index.tsx')
+          s = p.read_text()
+          old = '''      return normalizeStoredHeatingPlanHours(plan.planned_hours).map((hour) => {\n        const priceHour = hourlyPrices.find('''
+          new = '''      return normalizeStoredHeatingPlanHours(plan.planned_hours)\n        .filter((hour) => {\n          if (planDate !== todayPlanDate) {\n            return true;\n          }\n\n          const priceHour = hourlyPrices.find(\n            (item) =>\n              getFinnishDateKey(item.startDate) === planDate &&\n              getHelsinkiHourNumber(item.date) === hour,\n          );\n\n          // Home shows the remaining authoritative plan, not historical hours\n          // that have already ended. If price metadata is missing we keep the\n          // hour (fail closed) because its end time cannot be proven.\n          return (\n            !priceHour ||\n            priceHour.endDate.getTime() > currentHourStart.getTime()\n          );\n        })\n        .map((hour) => {\n        const priceHour = hourlyPrices.find('''
+          if old not in s:
+              raise SystemExit('index selectedHours anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: energiazen-mini/package-lock.json
+      - name: Install dependencies
+        working-directory: energiazen-mini
+        run: npm ci
+      - name: Test
+        working-directory: energiazen-mini
+        run: npm test
+      - name: Typecheck
+        working-directory: energiazen-mini
+        run: npx tsc --noEmit
+      - name: Lint
+        working-directory: energiazen-mini
+        run: npm run lint
+      - name: Commit final patch
+        run: |
+          git rm .github/workflows/apply-v2-recovery-home-fix.yml
+          git add energiazen-mini/app/'(tabs)'/index.tsx energiazen-mini/supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.ts energiazen-mini/supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.test.ts
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(v2): recover reserve and hide elapsed plan hours"
+          git push
