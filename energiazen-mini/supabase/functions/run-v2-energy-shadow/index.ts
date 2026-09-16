@@ -52,15 +52,14 @@ Deno.serve(async (request) => {
     const now = new Date();
     const replayStart = new Date(now.getTime() - replayWindowHours * 3_600_000);
     const priceFetchEnd = new Date(now.getTime() + priceFetchWindowHours * 3_600_000);
-    const readings = await fetchTankReadings(supabase, replayStart.toISOString(), now.toISOString());
+    const [readings, draws] = await Promise.all([
+      fetchTankReadings(supabase, replayStart.toISOString(), now.toISOString()),
+      fetchWaterDraws(supabase, replayStart.toISOString(), now.toISOString()),
+    ]);
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [drawsResult, v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult] = await Promise.all([
-      supabase.from("water_draw_labels")
-        .select("event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason")
-        .gte("event_ended_at", replayStart.toISOString()).lte("event_started_at", now.toISOString())
-        .order("event_started_at", { ascending: true }),
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -77,7 +76,6 @@ Deno.serve(async (request) => {
         .in("plan_date", [today, tomorrow]),
     ]);
 
-    if (drawsResult.error) throw new Error(`Failed to fetch water draw labels: ${drawsResult.error.message}`);
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
     if (settingsResult.error) throw new Error(`Failed to fetch heating settings: ${settingsResult.error.message}`);
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
@@ -86,7 +84,6 @@ Deno.serve(async (request) => {
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
-    const draws = (drawsResult.data ?? []) as ReliableWaterDraw[];
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
@@ -134,29 +131,30 @@ Deno.serve(async (request) => {
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
+    const latestPublishableReadingAt = deriveLatestPublishableReadingAt(readings);
     const publicationCandidate = captureV2PublicationCandidate(plan);
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2StagedPublicationEnabled,
-      latestTankReadingAt: latestUsableReadingAt,
+      latestTankReadingAt: latestPublishableReadingAt,
       now,
       plan,
       publicationCandidate,
     });
     const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
-      latestTankReadingAt: latestUsableReadingAt,
+      latestTankReadingAt: latestPublishableReadingAt,
       now,
       plan,
       publicationCandidate,
     });
 
     let stagedPublicationResult: string | null = null;
-    if (stagedPublicationReadiness.ready && latestUsableReadingAt) {
+    if (stagedPublicationReadiness.ready && latestPublishableReadingAt) {
       const rpcArgs = buildV2StagedPublicationArgs({
         candidate: publicationCandidate,
         constraintPlans: storedPlans,
         draws,
-        latestUsableReadingAt,
+        latestUsableReadingAt: latestPublishableReadingAt,
         now,
         plan,
         prices,
@@ -176,9 +174,7 @@ Deno.serve(async (request) => {
       const { data: publishResult, error: publishError } = await supabase.rpc("publish_v2_heating_plans_staged", rpcArgs);
       if (publishError) throw new Error(`Failed to publish V2 staged plan: ${publishError.message}`);
       stagedPublicationResult = typeof publishResult === "string" ? publishResult : String(publishResult);
-      if (stagedPublicationResult !== "published") {
-        console.warn("V2 staged publication rejected", stagedPublicationResult);
-      }
+      if (stagedPublicationResult !== "published") console.warn("V2 staged publication rejected", stagedPublicationResult);
     }
 
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
@@ -236,6 +232,7 @@ Deno.serve(async (request) => {
       publication_ready: cutoverPublicationReadiness.ready,
       publication_ready_reason: cutoverPublicationReadiness.reason,
       publication_latest_usable_tank_reading_at: latestUsableReadingAt,
+      publication_latest_publishable_tank_reading_at: latestPublishableReadingAt,
       wrote_to_heating_plans: false,
     });
   } catch (error) {
@@ -259,7 +256,30 @@ async function fetchTankReadings(supabase: ReturnType<typeof createClient>, star
   return rows;
 }
 
+async function fetchWaterDraws(supabase: ReturnType<typeof createClient>, startIso: string, endIso: string): Promise<ReliableWaterDraw[]> {
+  const rows: ReliableWaterDraw[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase.from("water_draw_labels")
+      .select("event_started_at,event_ended_at,estimated_water_draw_net_energy_kwh,energy_reliable,energy_quality_reason")
+      .gte("event_ended_at", startIso).lte("event_started_at", endIso)
+      .order("event_started_at", { ascending: true }).range(from, from + pageSize - 1);
+    if (error) throw new Error(`Failed to fetch water draw labels: ${error.message}`);
+    const page = (data ?? []) as ReliableWaterDraw[];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
+
 export function deriveLatestUsableReadingAt(readings: ShadowTankReading[]) {
+  return deriveLatestReadingAt(readings, false);
+}
+
+export function deriveLatestPublishableReadingAt(readings: ShadowTankReading[]) {
+  return deriveLatestReadingAt(readings, true);
+}
+
+function deriveLatestReadingAt(readings: ShadowTankReading[], requireRelayState: boolean) {
   let latestAt: string | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const reading of readings) {
@@ -269,6 +289,7 @@ export function deriveLatestUsableReadingAt(readings: ShadowTankReading[]) {
       Number.isFinite(reading.top_temp) &&
       Number.isFinite(reading.bottom_temp) &&
       Number.isFinite(reading.inlet_temp) &&
+      (!requireRelayState || typeof reading.heating === "boolean") &&
       createdMs > latestMs
     ) {
       latestMs = createdMs;
