@@ -200,11 +200,11 @@ export function runLiveReserveShadow({
   const reanchorIndexes = new Set(drawResolution.reanchorIndexes);
 
   // The first observation anchors this finite replay window. After that point,
-  // sensors are diagnostic only except for an explicit conservative re-anchor
-  // after an unlabeled water draw has recovered and the tank has been quiet for
-  // the same 15-minute stabilization period used by V2 diagnostics. Re-anchor
-  // deliberately discards pre-draw hidden energy rather than guessing the
-  // removed kWh amount.
+  // sensors are diagnostic except when we explicitly re-anchor. A recovered
+  // water draw creates one kind of conservative physical anchor. A telemetry
+  // gap longer than maxReadingGapMinutes creates another: the post-gap measured
+  // state is safer than either guessing relay/draw activity inside the blind
+  // interval or poisoning the complete six-hour replay until that gap ages out.
   let remainingEnergyKwh = observedStoredEnergyKwh(ordered[0], inletBaseline);
   let heaterDeliveryUncertaintyKwh = 0;
 
@@ -217,14 +217,12 @@ export function runLiveReserveShadow({
     const gapMinutes = deltaHours * 60;
 
     if (gapMinutes > liveReserveShadowConfig.maxReadingGapMinutes) {
-      return unavailable(
-        "tank_reading_gap_too_long",
-        ordered.length,
-        draws.length,
-        false,
-        v1NeedsEnergyRecovery,
-        heaterCreditGuardTopTempC,
-      );
+      remainingEnergyKwh = observedStoredEnergyKwh(current, inletBaseline);
+      // Nothing inside the blind interval is credited. The first trustworthy
+      // post-gap sensor observation becomes a fresh physical anchor, so any
+      // pre-gap heater-delivery uncertainty no longer propagates forward.
+      heaterDeliveryUncertaintyKwh = 0;
+      continue;
     }
 
     const deliveredEnergyKwh = previous.heating === true
