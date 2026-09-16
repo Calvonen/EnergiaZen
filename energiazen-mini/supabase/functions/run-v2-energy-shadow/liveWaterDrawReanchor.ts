@@ -30,6 +30,7 @@ const MIN_TANK_STABILIZATION_MINUTES = 15;
 const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SEGMENT_MINUTES = 2;
 const LABEL_MATCH_MARGIN_MINUTES = 5;
+const HEATING_DRAW_RESPONSE_TOLERANCE_C = 0.05;
 
 export function resolveLiveDrawReanchors({
   coldInletBaselineC,
@@ -153,12 +154,49 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
   const windowStartMs = currentTime - 5 * 60_000;
   const window = readings
     .slice(0, index + 1)
-    .filter((reading) => Date.parse(reading.created_at) >= windowStartMs)
-    .map((reading) => ({
-      inletTemperatureC: reading.inlet_temp,
-      time: Date.parse(reading.created_at),
-    }));
-  return window.length >= 2 && detectsWaterDraw(window);
+    .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
+  const inletSamples = window.map((reading) => ({
+    inletTemperatureC: reading.inlet_temp,
+    time: Date.parse(reading.created_at),
+  }));
+
+  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {
+    return false;
+  }
+
+  // Production showed the stagnant inlet probe cycling cold while the 3 kW
+  // heater was continuously on. During that event the bottom sensor kept
+  // rising monotonically, which is the opposite of a cold-water replacement
+  // response. Do not turn that heater-only inlet oscillation into an
+  // unresolved draw. This suppression is deliberately fail-closed: every
+  // sample in the full detection window must be heating, every bottom reading
+  // must be finite, and the bottom temperature must not fall materially. A
+  // real draw that interrupts heating or produces a bottom-temperature drop
+  // is still detected normally.
+  if (isContinuousHeatingWithoutTankDrawResponse(window)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isContinuousHeatingWithoutTankDrawResponse(readings: LiveDrawReading[]) {
+  if (readings.length < 2 || readings.some((reading) => reading.heating !== true)) {
+    return false;
+  }
+
+  for (let index = 1; index < readings.length; index += 1) {
+    const previousBottom = readings[index - 1].bottom_temp;
+    const currentBottom = readings[index].bottom_temp;
+    if (!finiteTemperature(previousBottom) || !finiteTemperature(currentBottom)) {
+      return false;
+    }
+    if (currentBottom < previousBottom - HEATING_DRAW_RESPONSE_TOLERANCE_C) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isMatchedByReliableDraw(currentMs: number, draws: LiveReliableDraw[]) {
