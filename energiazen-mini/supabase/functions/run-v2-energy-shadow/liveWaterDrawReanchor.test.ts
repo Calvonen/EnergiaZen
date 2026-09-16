@@ -20,10 +20,9 @@ function reading(
 }
 
 export function runLiveWaterDrawReanchorUnitTests() {
-  // Production-shaped ambiguity: the inlet probe drops by >5 C while the 3 kW
-  // heater is on and the bottom keeps rising. That trace cannot distinguish a
-  // heater-induced probe oscillation from a real draw whose cooling is masked
-  // by active heating, so the live ledger must fail closed.
+  // Production-shaped false positive: the inlet probe drops by >5 C while the
+  // 3 kW heater is continuously on and both tank sensors keep rising. This is
+  // the observed heater-only probe oscillation and must not poison V2 reserve.
   const ambiguousHeatingInletDrop = [
     reading(36, 29.6, 18.9, true),
     reading(37, 29.9, 18.9, true),
@@ -37,8 +36,8 @@ export function runLiveWaterDrawReanchorUnitTests() {
     readings: ambiguousHeatingInletDrop,
     reliableDraws: [],
   });
-  assert(ambiguousHeatingResult.unresolved, "heating-time inlet drop remains unresolved even when bottom rises");
-  assert(ambiguousHeatingResult.detectedUnlabeledDrawCount === 1, "ambiguous heating-time inlet drop is counted once");
+  assert(!ambiguousHeatingResult.unresolved, "continuous heating with rising tank sensors suppresses inlet-only false draw");
+  assert(ambiguousHeatingResult.detectedUnlabeledDrawCount === 0, "heater-only inlet oscillation is not counted as a draw");
 
   // Heater shutoff alone does not make the ambiguity disappear. The inlet is
   // still cold, so the ledger remains fail-closed instead of silently restoring

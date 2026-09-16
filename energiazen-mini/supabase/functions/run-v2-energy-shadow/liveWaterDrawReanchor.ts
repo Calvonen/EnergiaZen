@@ -167,7 +167,51 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
     time: Date.parse(reading.created_at),
   }));
 
-  return inletSamples.length >= 2 && detectsWaterDraw(inletSamples);
+  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {
+    return false;
+  }
+
+  // During a continuous heating response the inlet probe can cool sharply even
+  // though both tank sensors keep rising. Treat that production-shaped pattern
+  // as heater-induced probe oscillation, not a draw. Any relay interruption,
+  // sampling gap, missing tank value or material tank-temperature drop keeps the
+  // original fail-closed draw classification.
+  return !isHeaterOnlyInletOscillation(window);
+}
+
+function isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {
+  if (
+    window.length < 2 ||
+    window.some(
+      (reading) =>
+        reading.heating !== true ||
+        !finiteTemperature(reading.top_temp) ||
+        !finiteTemperature(reading.bottom_temp),
+    )
+  ) {
+    return false;
+  }
+
+  const maxAllowedDropC = 0.25;
+  for (let index = 1; index < window.length; index += 1) {
+    const current = window[index];
+    const previous = window[index - 1];
+    const gapMinutes =
+      (Date.parse(current.created_at) - Date.parse(previous.created_at)) / 60_000;
+
+    if (
+      !Number.isFinite(gapMinutes) ||
+      gapMinutes <= 0 ||
+      gapMinutes > MAX_SEGMENT_MINUTES ||
+      (current.top_temp as number) < (previous.top_temp as number) - maxAllowedDropC ||
+      (current.bottom_temp as number) <
+        (previous.bottom_temp as number) - maxAllowedDropC
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isMatchedByReliableDraw(currentMs: number, draws: LiveReliableDraw[]) {

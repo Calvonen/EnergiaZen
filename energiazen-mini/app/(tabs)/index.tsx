@@ -1530,7 +1530,27 @@ export default function HomeScreen() {
         return [];
       }
 
-      return normalizeStoredHeatingPlanHours(plan.planned_hours).map((hour) => {
+      return normalizeStoredHeatingPlanHours(plan.planned_hours)
+        .filter((hour) => {
+          if (planDate !== todayPlanDate) {
+            return true;
+          }
+
+          const priceHour = hourlyPrices.find(
+            (item) =>
+              getFinnishDateKey(item.startDate) === planDate &&
+              getHelsinkiHourNumber(item.date) === hour,
+          );
+
+          // Home shows the remaining authoritative plan, not historical hours
+          // that have already ended. If price metadata is missing we keep the
+          // hour (fail closed) because its end time cannot be proven.
+          return (
+            !priceHour ||
+            priceHour.endDate.getTime() > currentHourStart.getTime()
+          );
+        })
+        .map((hour) => {
         const priceHour = hourlyPrices.find(
           (item) =>
             getFinnishDateKey(item.startDate) === planDate &&
