@@ -8,7 +8,8 @@
 -- two automatic writers racing each other.
 --
 -- Rollback is intentionally simple:
---   update cron.job set active = true where jobname = 'run-heating-optimizer-shadow-hourly';
+--   select cron.alter_job(jobid, active := true)
+--   from cron.job where jobname = 'run-heating-optimizer-shadow-hourly';
 --   drop trigger if exists mirror_v2_heating_plan_to_production on public.v2_heating_plan_publications;
 -- Existing heating_plans rows remain usable by V1 after rollback.
 
@@ -143,8 +144,8 @@ execute function public.mirror_v2_heating_plan_to_production();
 
 -- V2 becomes the sole automatic publisher. Keep the job definition in place
 -- but inactive so rollback does not require reconstructing its schedule/body.
-update cron.job
-set active = false
+select cron.alter_job(jobid, active := false)
+from cron.job
 where jobname = 'run-heating-optimizer-shadow-hourly';
 
 -- Seed the production control plane from the latest staged rows. UPDATE fires
