@@ -20,6 +20,19 @@ jobs:
           fetch-depth: 0
       - name: Apply patch
         run: python .github/scripts/apply_v2_horizon_end_energy.py
+      - name: Update V2 test fixtures
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('energiazen-mini/supabase/functions/run-v2-energy-shadow/publicationGuard.test.ts')
+          s = p.read_text()
+          s = s.replace('    forecastHorizonEndAt: "2026-09-16T21:00:00.000Z",\n    minimumConservativeEnergyKwh: 6,', '    forecastHorizonEndAt: "2026-09-16T21:00:00.000Z",\n    finalConservativeEnergyKwh: 8,\n    minimumConservativeEnergyKwh: 6,', 1)
+          p.write_text(s)
+          p = Path('energiazen-mini/supabase/functions/run-v2-energy-shadow/stagedPublication.test.ts')
+          s = p.read_text()
+          s = s.replace('      forecastHorizonEndAt: "2026-09-16T22:00:00.000Z", minimumConservativeEnergyKwh: 10,', '      forecastHorizonEndAt: "2026-09-16T22:00:00.000Z", finalConservativeEnergyKwh: 12, minimumConservativeEnergyKwh: 10,', 1)
+          p.write_text(s)
+          PY
       - uses: actions/setup-node@v4
         with:
           node-version: 22
