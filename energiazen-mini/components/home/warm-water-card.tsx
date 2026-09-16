@@ -27,6 +27,7 @@ const LIMIT_LABEL_LINE_HEIGHT = 14;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
 const LIMIT_COLOR = "#9fc7ff";
 const HOME_RESERVE_REFRESH_MS = 60_000;
+const HOME_RESERVE_CLOCK_TICK_MS = 60_000;
 const SCALE_TICKS = [100, 75, 50, 25, 0] as const;
 
 function clamp(value: number, min: number, max: number) {
@@ -60,11 +61,17 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Freshness must advance independently of network completion. If an RPC hangs,
+    // this clock still causes a snapshot older than the fail-closed limit to disappear.
+    const clockTimer = setInterval(() => {
+      if (active) setNowMs(Date.now());
+    }, HOME_RESERVE_CLOCK_TICK_MS);
 
     const scheduleNext = () => {
       if (!active) return;
-      timer = setTimeout(() => {
+      refreshTimer = setTimeout(() => {
         void loadReserve();
       }, HOME_RESERVE_REFRESH_MS);
     };
@@ -95,7 +102,8 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
     void loadReserve();
     return () => {
       active = false;
-      if (timer !== null) clearTimeout(timer);
+      clearInterval(clockTimer);
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
     };
   }, []);
 
@@ -127,84 +135,34 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
     reservePresentation.safetyReservePercent !== null &&
     reservePresentation.targetReservePercent !== null
     ? [
-        {
-          key: "safety",
-          label: `${Math.round(reservePresentation.safetyReservePercent)} %`,
-          percent: reservePresentation.safetyReservePercent,
-        },
-        {
-          key: "target",
-          label: `${Math.round(reservePresentation.targetReservePercent)} %`,
-          percent: reservePresentation.targetReservePercent,
-        },
+        { key: "safety", label: `${Math.round(reservePresentation.safetyReservePercent)} %`, percent: reservePresentation.safetyReservePercent },
+        { key: "target", label: `${Math.round(reservePresentation.targetReservePercent)} %`, percent: reservePresentation.targetReservePercent },
       ]
     : [];
 
   return (
-    <View style={[styles.metricCard, styles.waterCard, {
-      backgroundColor: theme.backgroundColor,
-      borderColor: theme.borderColor,
-      shadowColor: theme.shadowColor,
-    }]}>
-      <Pressable
-        accessibilityLabel={presentation.accessibilityLabel}
-        accessibilityRole="button"
-        android_ripple={{ color: "rgba(255,255,255,0.1)" }}
-        onPress={onPress}
-        style={({ pressed }) => [styles.metricCardPressable, pressed && styles.pressedMetricCard]}
-      >
-        <View style={styles.cardLabelRow}>
-          <Text style={styles.cardLabel}>Lämminvesivaraus</Text>
-        </View>
+    <View style={[styles.metricCard, styles.waterCard, { backgroundColor: theme.backgroundColor, borderColor: theme.borderColor, shadowColor: theme.shadowColor }]}>
+      <Pressable accessibilityLabel={presentation.accessibilityLabel} accessibilityRole="button" android_ripple={{ color: "rgba(255,255,255,0.1)" }} onPress={onPress} style={({ pressed }) => [styles.metricCardPressable, pressed && styles.pressedMetricCard]}>
+        <View style={styles.cardLabelRow}><Text style={styles.cardLabel}>Lämminvesivaraus</Text></View>
         <View style={styles.warmWaterContent}>
           <View style={styles.warmWaterTankArea}>
             <View style={styles.tankScaleRow}>
-              <View style={styles.scaleColumnLeft}>
-                <View style={styles.scaleNumbers}>
-                  {SCALE_TICKS.map((tick) => (
-                    <Text allowFontScaling={false} key={tick} style={[styles.scaleNumberLeft, { top: `${markerTop(tick)}%` }]}>
-                      {tick}
-                    </Text>
-                  ))}
-                </View>
-              </View>
+              <View style={styles.scaleColumnLeft}><View style={styles.scaleNumbers}>
+                {SCALE_TICKS.map((tick) => <Text allowFontScaling={false} key={tick} style={[styles.scaleNumberLeft, { top: `${markerTop(tick)}%` }]}>{tick}</Text>)}
+              </View></View>
               <View style={styles.tankVisual}>
-                <View style={[styles.tankFill, {
-                  backgroundColor: theme.fillColor,
-                  height: `${presentation.fillPercent}%`,
-                  shadowColor: theme.shadowColor,
-                }]} />
-                {presentation.fillPercent > 0 ? (
-                  <View style={[styles.tankSurface, {
-                    backgroundColor: theme.surfaceColor,
-                    bottom: `${presentation.fillPercent}%`,
-                  }]} />
-                ) : null}
+                <View style={[styles.tankFill, { backgroundColor: theme.fillColor, height: `${presentation.fillPercent}%`, shadowColor: theme.shadowColor }]} />
+                {presentation.fillPercent > 0 ? <View style={[styles.tankSurface, { backgroundColor: theme.surfaceColor, bottom: `${presentation.fillPercent}%` }]} /> : null}
                 <View pointerEvents="none" style={styles.tankScaleLines}>
-                  {SCALE_TICKS.map((tick) => (
-                    <Fragment key={tick}>
-                      <View style={[styles.tankScaleLineSegment, styles.tankScaleLineLeft, { top: `${markerTop(tick)}%` }]} />
-                      <View style={[styles.tankScaleLineSegment, styles.tankScaleLineRight, { top: `${markerTop(tick)}%` }]} />
-                    </Fragment>
-                  ))}
-                  {limitMarkers.map((marker) => (
-                    <View key={marker.key} style={[styles.tankScaleLineSegment, styles.tankScaleLineCenterLimit, { top: `${markerTop(marker.percent)}%` }]} />
-                  ))}
+                  {SCALE_TICKS.map((tick) => <Fragment key={tick}><View style={[styles.tankScaleLineSegment, styles.tankScaleLineLeft, { top: `${markerTop(tick)}%` }]} /><View style={[styles.tankScaleLineSegment, styles.tankScaleLineRight, { top: `${markerTop(tick)}%` }]} /></Fragment>)}
+                  {limitMarkers.map((marker) => <View key={marker.key} style={[styles.tankScaleLineSegment, styles.tankScaleLineCenterLimit, { top: `${markerTop(marker.percent)}%` }]} />)}
                 </View>
-                <View style={[styles.tankBubble, styles.tankBubbleOne]} />
-                <View style={[styles.tankBubble, styles.tankBubbleTwo]} />
-                <View style={[styles.tankBubble, styles.tankBubbleThree]} />
+                <View style={[styles.tankBubble, styles.tankBubbleOne]} /><View style={[styles.tankBubble, styles.tankBubbleTwo]} /><View style={[styles.tankBubble, styles.tankBubbleThree]} />
                 <Text style={styles.tankPrimaryValue}>{presentation.percentLabel}</Text>
               </View>
-              <View style={styles.scaleColumnRight}>
-                <View style={styles.scaleNumbers}>
-                  {limitMarkers.map((marker) => (
-                    <Text allowFontScaling={false} key={marker.key} style={[styles.scaleNumberRightLimit, { top: `${markerTop(marker.percent)}%` }]}>
-                      {marker.label}
-                    </Text>
-                  ))}
-                </View>
-              </View>
+              <View style={styles.scaleColumnRight}><View style={styles.scaleNumbers}>
+                {limitMarkers.map((marker) => <Text allowFontScaling={false} key={marker.key} style={[styles.scaleNumberRightLimit, { top: `${markerTop(marker.percent)}%` }]}>{marker.label}</Text>)}
+              </View></View>
             </View>
             <Text style={styles.energyLabel}>{presentation.energyLabel}</Text>
           </View>
