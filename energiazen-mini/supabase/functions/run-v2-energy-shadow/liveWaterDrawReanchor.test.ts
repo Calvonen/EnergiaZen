@@ -40,6 +40,22 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(!heaterOnlyResult.unresolved, "continuous heating with rising bottom temperature ignores inlet-only oscillation");
   assert(heaterOnlyResult.detectedUnlabeledDrawCount === 0, "heater-only inlet oscillation is not counted as a draw");
 
+  // The first idle sample after shutoff must not resurrect the same inlet drop
+  // as a new draw merely because it remains inside the trailing five-minute
+  // detector window. The samples that established the drop were all contiguous
+  // heating samples with a rising bottom sensor.
+  const heaterOscillationThenIdle = [
+    ...heaterOnlyInletOscillation,
+    reading(42, 31.0, 13.2, false),
+  ];
+  const heaterOscillationThenIdleResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: heaterOscillationThenIdle,
+    reliableDraws: [],
+  });
+  assert(!heaterOscillationThenIdleResult.unresolved, "heater-only inlet drop stays suppressed after heater shutoff");
+  assert(heaterOscillationThenIdleResult.detectedUnlabeledDrawCount === 0, "idle sample does not recount the heater-only inlet drop");
+
   // Preserve fail-closed behaviour when the same inlet signature is accompanied
   // by an actual cold-water response at the bottom sensor.
   const drawDuringHeating = [
