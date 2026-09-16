@@ -23,6 +23,9 @@ const LIMIT_LABEL_LINE_HEIGHT = 14;
 const PRIMARY_VALUE_LINE_HEIGHT = 34;
 const LIMIT_COLOR = "#9fc7ff";
 const HOME_RESERVE_REFRESH_MS = 60_000;
+// Shadow normally runs every five minutes. Allow one missed cadence plus margin,
+// then fail closed instead of presenting a frozen reserve as current.
+const HOME_RESERVE_MAX_AGE_MS = 12 * 60_000;
 const SCALE_TICKS = [100, 75, 50, 25, 0] as const;
 
 type V2HomeReserve = {
@@ -46,6 +49,14 @@ function formatKwh(value: number) {
   return value.toFixed(1).replace(".", ",");
 }
 
+function isFreshRunAt(runAt: string | null | undefined, nowMs: number) {
+  if (typeof runAt !== "string" || runAt.length === 0) return false;
+  const runAtMs = Date.parse(runAt);
+  if (!Number.isFinite(runAtMs)) return false;
+  const ageMs = nowMs - runAtMs;
+  return ageMs >= 0 && ageMs <= HOME_RESERVE_MAX_AGE_MS;
+}
+
 export type WarmWaterCardProps = {
   // Legacy props stay accepted while V1 remains the production controller.
   // The card itself is read-only V2 presentation and does not change control ownership.
@@ -61,19 +72,31 @@ export type WarmWaterCardProps = {
 export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
   const [reserve, setReserve] = useState<V2HomeReserve | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     let active = true;
 
     const loadReserve = async () => {
-      const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");
-      if (!active || error) return;
-      const row = Array.isArray(data) ? data[0] : null;
-      setReserve((row as V2HomeReserve | undefined) ?? null);
+      try {
+        const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");
+        if (!active) return;
+        if (error) {
+          setReserve(null);
+          return;
+        }
+        const row = Array.isArray(data) ? data[0] : null;
+        setReserve((row as V2HomeReserve | undefined) ?? null);
+      } catch {
+        if (active) setReserve(null);
+      }
     };
 
     void loadReserve();
-    const interval = setInterval(() => void loadReserve(), HOME_RESERVE_REFRESH_MS);
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+      void loadReserve();
+    }, HOME_RESERVE_REFRESH_MS);
     return () => {
       active = false;
       clearInterval(interval);
@@ -84,8 +107,9 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
     const capacity = reserve?.energy_capacity_kwh;
     const energy = reserve?.conservative_energy_kwh;
     const available = reserve?.available === true;
+    const fresh = isFreshRunAt(reserve?.run_at, nowMs);
     const valid =
-      available &&
+      available && fresh &&
       typeof capacity === "number" && Number.isFinite(capacity) && capacity > 0 &&
       typeof energy === "number" && Number.isFinite(energy);
 
@@ -105,7 +129,7 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
       fillPercent: percent,
       percentLabel: `${Math.round(percent)} %`,
     };
-  }, [reserve]);
+  }, [nowMs, reserve]);
 
   const safetyPercent = clamp(reserve?.safety_reserve_percent ?? 30, 0, 100);
   const targetPercent = clamp(reserve?.target_reserve_percent ?? 75, 0, 100);
