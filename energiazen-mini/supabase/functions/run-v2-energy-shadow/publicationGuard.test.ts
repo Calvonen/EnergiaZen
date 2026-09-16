@@ -14,6 +14,7 @@ function plan(overrides: Partial<LiveEnergyPlanShadowResult> = {}): LiveEnergyPl
     firstSafetyViolationAt: null,
     firstTargetMissAt: null,
     forecastHorizonEndAt: "2026-09-16T21:00:00.000Z",
+    finalConservativeEnergyKwh: 8,
     minimumConservativeEnergyKwh: 6,
     reason: null,
     selectedHeatingEnergyKwh: 3,

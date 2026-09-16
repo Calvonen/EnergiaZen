@@ -23,7 +23,7 @@ export function runV2StagedPublicationUnitTests() {
     plan: {
       available: true, assumption: "standing_loss_only_no_future_draws", candidateCount: 1,
       evaluatedCombinationCount: 1, firstSafetyViolationAt: null, firstTargetMissAt: null,
-      forecastHorizonEndAt: "2026-09-16T22:00:00.000Z", minimumConservativeEnergyKwh: 10,
+      forecastHorizonEndAt: "2026-09-16T22:00:00.000Z", finalConservativeEnergyKwh: 12, minimumConservativeEnergyKwh: 10,
       reason: null, selectedHeatingEnergyKwh: 3, selectedHeatingHourIds: ["2026-09-15T21:00:00.000Z"],
       standingLossKwhPerHour: 0.1, totalCostCents: 3, valid: true,
     },

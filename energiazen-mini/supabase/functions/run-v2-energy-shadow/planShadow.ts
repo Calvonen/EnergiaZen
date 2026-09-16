@@ -18,6 +18,7 @@ export type LiveEnergyPlanShadowResult = {
   firstSafetyViolationAt: string | null;
   firstTargetMissAt: string | null;
   forecastHorizonEndAt: string | null;
+  finalConservativeEnergyKwh: number | null;
   minimumConservativeEnergyKwh: number | null;
   reason: string | null;
   selectedHeatingEnergyKwh: number | null;
@@ -104,6 +105,7 @@ export function runLiveEnergyPlanShadow({
     firstSafetyViolationAt: plan.forecast.firstSafetyViolationAt,
     firstTargetMissAt: plan.forecast.firstTargetMissAt,
     forecastHorizonEndAt: horizon.horizonEndAt,
+    finalConservativeEnergyKwh: plan.forecast.finalConservativeEnergyKwh,
     minimumConservativeEnergyKwh: plan.forecast.minimumConservativeEnergyKwh,
     reason: plan.violationReason,
     selectedHeatingEnergyKwh: plan.selectedHeatingEnergyKwh,
@@ -204,6 +206,7 @@ function unavailable(reason: string, standingLossKwhPerHour: number | null = nul
     firstSafetyViolationAt: null,
     firstTargetMissAt: null,
     forecastHorizonEndAt: null,
+    finalConservativeEnergyKwh: null,
     minimumConservativeEnergyKwh: null,
     reason,
     selectedHeatingEnergyKwh: null,
