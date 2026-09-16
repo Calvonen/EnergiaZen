@@ -1,27 +1,53 @@
-// Presentation regressions for the production-shaped V2 reserve snapshot.
-// Keep these rules explicit so a future UI refactor cannot silently switch
-// the card back to shower-count/non-conservative semantics or show stale data.
-const energy = 11.183;
-const capacity = 17.673;
-const percent = Math.min(100, Math.max(0, (energy / capacity) * 100));
+import {
+  buildV2HomeReservePresentation,
+  type V2HomeReserveSnapshot,
+} from "../../lib/v2HomeReservePresentation";
 
-if (Math.abs(percent - 63.28) >= 0.05) {
-  throw new Error(`expected conservative V2 reserve near 63.28%, got ${percent}`);
-}
+export function runV2HomeReservePresentationUnitTests() {
+  const now = Date.parse("2026-09-16T09:00:00Z");
+  const base: V2HomeReserveSnapshot = {
+    run_at: "2026-09-16T08:55:00Z",
+    available: true,
+    conservative_energy_kwh: 11.183,
+    energy_capacity_kwh: 17.673,
+    safety_reserve_percent: 30,
+    target_reserve_percent: 75,
+  };
 
-const maxAgeMs = 12 * 60_000;
-function isFresh(runAtMs: number, nowMs: number) {
-  const ageMs = nowMs - runAtMs;
-  return Number.isFinite(runAtMs) && ageMs >= 0 && ageMs <= maxAgeMs;
-}
+  const current = buildV2HomeReservePresentation(base, now);
+  if (!current.available || current.percent === null || Math.abs(current.percent - 63.28) >= 0.05) {
+    throw new Error(`expected production reserve presentation near 63.28%, got ${current.percent}`);
+  }
 
-const now = Date.parse("2026-09-16T09:00:00Z");
-if (!isFresh(Date.parse("2026-09-16T08:49:00Z"), now)) {
-  throw new Error("expected an 11-minute-old reserve snapshot to remain fresh");
-}
-if (isFresh(Date.parse("2026-09-16T08:47:00Z"), now)) {
-  throw new Error("expected a 13-minute-old reserve snapshot to fail closed");
-}
-if (isFresh(Date.parse("2026-09-16T09:01:00Z"), now)) {
-  throw new Error("expected a future-dated reserve snapshot to fail closed");
+  const stale = buildV2HomeReservePresentation(
+    { ...base, run_at: "2026-09-16T08:47:00Z" },
+    now,
+  );
+  if (stale.available || stale.percent !== null || stale.fillPercent !== 0) {
+    throw new Error("expected a 13-minute-old production snapshot to fail closed");
+  }
+
+  const future = buildV2HomeReservePresentation(
+    { ...base, run_at: "2026-09-16T09:01:00Z" },
+    now,
+  );
+  if (future.available) {
+    throw new Error("expected a future-dated production snapshot to fail closed");
+  }
+
+  const unavailable = buildV2HomeReservePresentation(
+    { ...base, available: false },
+    now,
+  );
+  if (unavailable.available || unavailable.percent !== null) {
+    throw new Error("expected an unavailable V2 snapshot to fail closed");
+  }
+
+  const invalidCapacity = buildV2HomeReservePresentation(
+    { ...base, energy_capacity_kwh: 0 },
+    now,
+  );
+  if (invalidCapacity.available) {
+    throw new Error("expected zero capacity to fail closed");
+  }
 }
