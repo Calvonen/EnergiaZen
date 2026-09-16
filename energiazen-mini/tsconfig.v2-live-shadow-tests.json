@@ -7,6 +7,8 @@
   "include": [
     "supabase/functions/run-v2-energy-shadow/logic.ts",
     "supabase/functions/run-v2-energy-shadow/logic.test.ts",
+    "supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.ts",
+    "supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.test.ts",
     "supabase/functions/run-v2-energy-shadow/planShadow.ts",
     "supabase/functions/run-v2-energy-shadow/planShadow.test.ts",
     "supabase/functions/run-v2-energy-shadow/productionConstraints.ts",
