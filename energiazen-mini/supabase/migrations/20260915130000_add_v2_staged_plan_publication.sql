@@ -27,7 +27,7 @@ declare
   expected_created_at timestamptz; expected_top_temp double precision; expected_bottom_temp double precision;
   expected_inlet_temp double precision; expected_heating boolean; plan_count integer; written_count integer;
   conflict_count integer; expected_price_count integer; price_window_start timestamptz; price_window_end timestamptz;
-  planning_date date; forecast_last_date date;
+  planning_date date; forecast_last_date date; derived_forecast_horizon_end_at timestamptz;
 begin
   if p_plans is null or jsonb_typeof(p_plans) <> 'array' or jsonb_array_length(p_plans)=0 then return 'plan_payload_invalid'; end if;
   if p_expected_plan_versions is null or jsonb_typeof(p_expected_plan_versions)<>'array' then return 'plan_snapshot_conflict'; end if;
@@ -71,17 +71,33 @@ begin
   with expected as (select starts_at,ends_at,lag(ends_at) over(order by starts_at) previous_end from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)) select count(*) into conflict_count from expected where previous_end is not null and starts_at<>previous_end;
   if conflict_count>0 then return 'price_snapshot_conflict'; end if;
 
-  -- The query snapshot can extend into the day after tomorrow. Bind staged dates
-  -- to the separately supplied modeled horizon, and prove that boundary is an
-  -- actual end boundary inside the exact snapshotted hourly series.
-  if p_forecast_horizon_end_at <= price_window_start or p_forecast_horizon_end_at > price_window_end then return 'plan_payload_invalid'; end if;
+  -- Reproduce buildPriceHorizon at the SQL publication boundary. The first
+  -- modeled interval must contain the captured planning clock, and the modeled
+  -- horizon consists of every snapshotted interval whose Helsinki start date is
+  -- planning today or tomorrow. The caller-supplied boundary is only accepted
+  -- when it exactly matches this derived result.
+  with expected as (
+    select starts_at, ends_at
+    from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
+    where ends_at > p_replay_end_at
+      and (starts_at at time zone 'Europe/Helsinki')::date in (planning_date, planning_date + 1)
+  ), first_interval as (
+    select starts_at, ends_at from expected order by starts_at limit 1
+  )
+  select max(e.ends_at) into derived_forecast_horizon_end_at from expected e;
+  if derived_forecast_horizon_end_at is null then return 'price_snapshot_conflict'; end if;
   if not exists (
-    select 1 from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
-    where p.ends_at = p_forecast_horizon_end_at
-  ) then return 'plan_payload_invalid'; end if;
-  forecast_last_date := ((p_forecast_horizon_end_at - interval '1 microsecond') at time zone 'Europe/Helsinki')::date;
+    select 1
+    from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
+    where p.ends_at > p_replay_end_at
+      and (p.starts_at at time zone 'Europe/Helsinki')::date in (planning_date, planning_date + 1)
+      and p.starts_at <= p_replay_end_at and p.ends_at > p_replay_end_at
+  ) then return 'price_snapshot_conflict'; end if;
+  if p_forecast_horizon_end_at is distinct from derived_forecast_horizon_end_at then return 'plan_payload_invalid'; end if;
+
+  forecast_last_date := ((derived_forecast_horizon_end_at - interval '1 microsecond') at time zone 'Europe/Helsinki')::date;
   with recursive required_dates(plan_date) as (
-    select (price_window_start at time zone 'Europe/Helsinki')::date
+    select planning_date
     union all select plan_date + 1 from required_dates where plan_date < forecast_last_date
   ), plans as (select plan_date from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb))
   select count(*) into conflict_count from (
@@ -90,7 +106,38 @@ begin
   ) x;
   if conflict_count>0 then return 'plan_payload_invalid'; end if;
 
+  -- Every requested local control slot must correspond to exactly one modeled
+  -- UTC price interval. Zero matches means an unmodeled hour; multiple matches
+  -- means an ambiguous Helsinki fall-back hour that integer planned_hours cannot
+  -- represent safely.
+  begin
+    with modeled as (
+      select starts_at, (starts_at at time zone 'Europe/Helsinki')::date plan_date,
+             extract(hour from starts_at at time zone 'Europe/Helsinki')::integer local_hour
+      from jsonb_to_recordset(p_expected_price_snapshot) as p(starts_at timestamptz,ends_at timestamptz,spot_price_cents_kwh numeric,resolution_minutes integer)
+      where ends_at > p_replay_end_at
+        and starts_at < derived_forecast_horizon_end_at
+        and (starts_at at time zone 'Europe/Helsinki')::date in (planning_date, planning_date + 1)
+    ), requested as (
+      select p.plan_date, h.value::integer local_hour
+      from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb)
+      cross join lateral jsonb_array_elements_text(p.planned_hours) h(value)
+    )
+    select count(*) into conflict_count
+    from requested r
+    left join modeled m on m.plan_date=r.plan_date and m.local_hour=r.local_hour
+    group by r.plan_date,r.local_hour
+    having count(m.starts_at)<>1
+    limit 1;
+  exception when others then return 'plan_payload_invalid'; end;
+  if coalesce(conflict_count,0)>0 then return 'plan_payload_invalid'; end if;
+
   lock table public.tank_readings in share mode; lock table public.water_draw_labels in share mode; lock table public.heating_control_settings in share mode; lock table public.heating_plans in share mode; lock table public.electricity_prices in share mode; lock table public.v2_heating_plan_publications in share row exclusive mode;
+
+  -- Locks can block across the hour boundary. Recheck freshness only after all
+  -- source/staging locks are held so a plan cannot publish after its modeled
+  -- current interval has expired.
+  if clock_timestamp() < p_replay_end_at or clock_timestamp() >= date_trunc('hour', p_replay_end_at) + interval '1 hour' then return 'plan_snapshot_conflict'; end if;
 
   with expected as (select created_at,top_temp,bottom_temp,inlet_temp,heating from jsonb_to_recordset(p_expected_tank_replay) as r(created_at timestamptz,top_temp double precision,bottom_temp double precision,inlet_temp double precision,heating boolean)), current_rows as (select created_at,top_temp::double precision,bottom_temp::double precision,inlet_temp::double precision,heating from public.tank_readings where created_at>=p_replay_start_at and created_at<=p_replay_end_at), delta as ((select * from expected except all select * from current_rows) union all (select * from current_rows except all select * from expected)) select count(*) into conflict_count from delta;
   if conflict_count>0 then return 'tank_snapshot_conflict'; end if;
@@ -111,9 +158,13 @@ begin
   with expected as (select * from jsonb_to_recordset(p_expected_plan_versions) as v(plan_date date,updated_at timestamptz)) select count(*) into conflict_count from expected e left join public.v2_heating_plan_publications c on c.plan_date=e.plan_date where (e.updated_at is null and c.plan_date is not null) or (e.updated_at is not null and (c.plan_date is null or c.updated_at is distinct from e.updated_at));
   if conflict_count>0 then return 'plan_snapshot_conflict'; end if;
 
+  -- Keep the freshness check adjacent to the actual write as well. Snapshot
+  -- comparisons above are bounded but should never extend publication lifetime.
+  if clock_timestamp() >= date_trunc('hour', p_replay_end_at) + interval '1 hour' then return 'plan_snapshot_conflict'; end if;
+
   plan_count:=jsonb_array_length(p_plans);
   insert into public.v2_heating_plan_publications(plan_date,planned_hours,source,published_at,anchor_tank_reading_at,forecast_horizon_end_at,updated_at)
-  select p.plan_date,coalesce(array(select distinct value::integer from jsonb_array_elements_text(p.planned_hours) value order by value::integer),'{}'),'v2_energy_plan',p_published_at,expected_created_at,p_forecast_horizon_end_at,p_published_at from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb)
+  select p.plan_date,coalesce(array(select distinct value::integer from jsonb_array_elements_text(p.planned_hours) value order by value::integer),'{}'),'v2_energy_plan',p_published_at,expected_created_at,derived_forecast_horizon_end_at,p_published_at from jsonb_to_recordset(p_plans) as p(plan_date date,planned_hours jsonb)
   on conflict(plan_date) do update set planned_hours=excluded.planned_hours,source=excluded.source,published_at=excluded.published_at,anchor_tank_reading_at=excluded.anchor_tank_reading_at,forecast_horizon_end_at=excluded.forecast_horizon_end_at,updated_at=excluded.updated_at;
   get diagnostics written_count=row_count;
   if written_count<>plan_count then raise exception 'V2 staged publication row-count mismatch'; end if;
