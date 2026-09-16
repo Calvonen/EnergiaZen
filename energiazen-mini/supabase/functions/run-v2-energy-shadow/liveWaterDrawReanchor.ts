@@ -1,4 +1,7 @@
-import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
+import {
+  detectsWaterDraw,
+  waterDrawDetectionLimits,
+} from "../_shared/waterDrawDetection.ts";
 
 export type LiveDrawReading = {
   created_at: string;
@@ -151,7 +154,7 @@ export function resolveLiveDrawReanchors({
 
 function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) {
   const currentTime = Date.parse(readings[index].created_at);
-  const windowStartMs = currentTime - 5 * 60_000;
+  const windowStartMs = currentTime - waterDrawDetectionLimits.windowMinutes * 60_000;
   const window = readings
     .slice(0, index + 1)
     .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
@@ -164,20 +167,47 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
     return false;
   }
 
-  // Production showed the stagnant inlet probe cycling cold while the 3 kW
-  // heater was continuously on. During that event the bottom sensor kept
-  // rising monotonically, which is the opposite of a cold-water replacement
-  // response. Do not turn that heater-only inlet oscillation into an
-  // unresolved draw. This suppression is deliberately fail-closed: every
-  // sample in the full detection window must be heating, every bottom reading
-  // must be finite, adjacent samples must be contiguous, and the bottom
-  // temperature must not fall materially. A gap, interrupted heating, missing
-  // bottom data or a bottom-temperature drop keeps the original draw signal.
-  if (isContinuousHeatingWithoutTankDrawResponse(window)) {
+  // Bind heater-only suppression to the samples that first establish the
+  // qualifying inlet drop, not to every later sample that merely keeps that
+  // same drop inside the trailing window. Otherwise the first idle sample
+  // after the heater switches off would reclassify the already-observed
+  // heater-only oscillation as a water draw.
+  const dropSpan = firstQualifyingInletDropSpan(window);
+  if (
+    dropSpan &&
+    isContinuousHeatingWithoutTankDrawResponse(
+      window.slice(dropSpan.startIndex, dropSpan.endIndex + 1),
+    )
+  ) {
     return false;
   }
 
   return true;
+}
+
+function firstQualifyingInletDropSpan(readings: LiveDrawReading[]) {
+  for (let laterIndex = 1; laterIndex < readings.length; laterIndex += 1) {
+    const later = readings[laterIndex];
+    const laterMs = Date.parse(later.created_at);
+    if (!finiteTemperature(later.inlet_temp) || !Number.isFinite(laterMs)) continue;
+
+    for (let earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex -= 1) {
+      const earlier = readings[earlierIndex];
+      const earlierMs = Date.parse(earlier.created_at);
+      if (!Number.isFinite(earlierMs)) continue;
+      const minutesApart = (laterMs - earlierMs) / 60_000;
+      if (minutesApart > waterDrawDetectionLimits.windowMinutes) break;
+      if (minutesApart <= 0 || !finiteTemperature(earlier.inlet_temp)) continue;
+      if (
+        (earlier.inlet_temp as number) - (later.inlet_temp as number) >=
+        waterDrawDetectionLimits.minDropCelsius
+      ) {
+        return { startIndex: earlierIndex, endIndex: laterIndex };
+      }
+    }
+  }
+
+  return null;
 }
 
 function isContinuousHeatingWithoutTankDrawResponse(readings: LiveDrawReading[]) {
