@@ -15,6 +15,8 @@ export type V2HomeReservePresentation = {
   percent: number | null;
   energyKwh: number | null;
   capacityKwh: number | null;
+  safetyReservePercent: number | null;
+  targetReservePercent: number | null;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -38,6 +40,8 @@ export function buildV2HomeReservePresentation(
 ): V2HomeReservePresentation {
   const capacity = reserve?.energy_capacity_kwh;
   const energy = reserve?.conservative_energy_kwh;
+  const safetyReservePercent = reserve?.safety_reserve_percent;
+  const targetReservePercent = reserve?.target_reserve_percent;
   const valid =
     reserve?.available === true &&
     isV2HomeReserveSnapshotFresh(reserve.run_at, nowMs) &&
@@ -45,7 +49,15 @@ export function buildV2HomeReservePresentation(
     Number.isFinite(capacity) &&
     capacity > 0 &&
     typeof energy === "number" &&
-    Number.isFinite(energy);
+    Number.isFinite(energy) &&
+    typeof safetyReservePercent === "number" &&
+    Number.isFinite(safetyReservePercent) &&
+    safetyReservePercent >= 0 &&
+    safetyReservePercent <= 100 &&
+    typeof targetReservePercent === "number" &&
+    Number.isFinite(targetReservePercent) &&
+    targetReservePercent >= 0 &&
+    targetReservePercent <= 100;
 
   if (!valid) {
     return {
@@ -54,6 +66,8 @@ export function buildV2HomeReservePresentation(
       percent: null,
       energyKwh: null,
       capacityKwh: null,
+      safetyReservePercent: null,
+      targetReservePercent: null,
     };
   }
 
@@ -64,5 +78,7 @@ export function buildV2HomeReservePresentation(
     percent,
     energyKwh: energy,
     capacityKwh: capacity,
+    safetyReservePercent,
+    targetReservePercent,
   };
 }
