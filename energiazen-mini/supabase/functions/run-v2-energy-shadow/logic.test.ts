@@ -191,18 +191,20 @@ export function runLiveV2EnergyShadowUnitTests() {
   );
   assert(resolvedDraw.v1NeedsEnergyRecovery === false, "zero V1 target hours maps to no recovery need");
 
-  const staleGap = runLiveReserveShadow({
+  const telemetryGap = runLiveReserveShadow({
     maxTankTemperatureC,
     now: new Date("2026-09-09T10:21:00.000Z"),
     readings: [
-      reading("2026-09-09T10:00:00.000Z", 55, 40, 15, false),
-      reading("2026-09-09T10:20:00.000Z", 55, 40, 15, false),
+      reading("2026-09-09T10:00:00.000Z", 55, 40, 15, true),
+      reading("2026-09-09T10:20:00.000Z", 53, 37, 15, false),
     ],
     reliableDraws: [],
     v1Shadow: null,
   });
-  assert(!staleGap.available, "reading gaps over 15 minutes fail closed");
-  assert(staleGap.reason === "tank_reading_gap_too_long", "long gap reason is persisted");
+  assert(telemetryGap.available, "a recovered telemetry gap re-anchors instead of poisoning the full replay window");
+  assertClose(telemetryGap.sensorGapKwh, 0, "post-gap measurement becomes the new physical anchor");
+  assertClose(telemetryGap.heaterDeliveryUncertaintyKwh, 0, "pre-gap relay uncertainty is discarded at the new anchor");
+  assertClose(telemetryGap.balanceUncertaintyKwh, 0.25, "post-gap replay keeps only baseline balance uncertainty");
 
   const staleLatest = runLiveReserveShadow({
     maxTankTemperatureC,
