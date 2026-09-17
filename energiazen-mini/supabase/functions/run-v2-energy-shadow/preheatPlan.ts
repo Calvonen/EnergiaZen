@@ -68,7 +68,7 @@ export function buildV2SoftPreheatPlan({
   const priceById = new Map(prices.map((price) => [price.starts_at, price]));
   const eligible = opportunity.eligiblePreheatHourIds.map((id) => {
     const price = priceById.get(id);
-    if (!price || price.resolution_minutes !== 60) return null;
+    if (!price || !isUsableHourlyPrice(price)) return null;
     const billed = calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh);
     if (billed === null || !Number.isFinite(billed)) return null;
     return { billed, id, startsAtMs: Date.parse(price.starts_at) };
@@ -94,6 +94,19 @@ export function buildV2SoftPreheatPlan({
     requestedPreheatEnergyKwh: round(level.recommendedPreheatEnergyKwh),
     reason: "recommended",
   };
+}
+
+function isUsableHourlyPrice(price: ShadowElectricityPrice) {
+  const start = Date.parse(price.starts_at);
+  const end = Date.parse(price.ends_at);
+  return (
+    price.resolution_minutes === 60 &&
+    Number.isFinite(price.spot_price_cents_kwh) &&
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    end > start &&
+    end - start === 60 * 60 * 1000
+  );
 }
 
 function unavailable(reason: Exclude<V2SoftPreheatPlan["reason"], "recommended" | "preheat_not_needed">): V2SoftPreheatPlan {
