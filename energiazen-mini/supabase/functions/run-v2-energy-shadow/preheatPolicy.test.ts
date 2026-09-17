@@ -90,6 +90,18 @@ export function runV2PreheatPolicyUnitTests() {
     "mid-hour cheap price is ignored by preheat policy",
   );
 
+  const noFutureToday = evaluateV2PreheatOpportunity({
+    now: new Date("2026-09-17T20:30:00.000Z"), // 23:30 Helsinki
+    prices: tomorrow,
+  });
+  assert(!noFutureToday.available, "no remaining today interval cannot create a preheat recommendation");
+  assertEqual(noFutureToday.reason, "no_future_today_prices", "late-day branch stays explicit");
+  assertEqual(
+    noFutureToday.tomorrowCheapestBilledCentsPerKwh,
+    28.62,
+    "late-day telemetry preserves the known tomorrow billed minimum",
+  );
+
   const dstNow = new Date("2026-10-24T12:00:00.000Z");
   const dstTomorrow = hourlyRange("2026-10-24T21:00:00.000Z", 25, 20);
   const dstComplete = evaluateV2PreheatOpportunity({

@@ -12,6 +12,20 @@ export type V2PreheatOpportunity = {
   tomorrowCheapestBilledCentsPerKwh: number | null;
 };
 
+export type V2PreheatHorizon =
+  | {
+    available: true;
+    futureTodayHourIds: string[];
+    reason: "available";
+    tomorrowHourIds: string[];
+  }
+  | {
+    available: false;
+    futureTodayHourIds: string[];
+    reason: "tomorrow_prices_incomplete" | "no_future_today_prices";
+    tomorrowHourIds: string[];
+  };
+
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
   month: "2-digit",
@@ -30,13 +44,13 @@ const helsinkiDateTimePartsFormatter = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
 });
 
-export function evaluateV2PreheatOpportunity({
+export function evaluateV2PreheatHorizon({
   now,
   prices,
 }: {
   now: Date;
   prices: ShadowElectricityPrice[];
-}): V2PreheatOpportunity {
+}): V2PreheatHorizon {
   const tomorrow = helsinkiDateKeyOffset(now, 1);
   const dayAfterTomorrow = helsinkiDateKeyOffset(now, 2);
   const tomorrowStartMs = helsinkiDateStartMs(tomorrow);
@@ -52,13 +66,13 @@ export function evaluateV2PreheatOpportunity({
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
   if (!hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs)) {
-    return unavailable("tomorrow_prices_incomplete");
+    return {
+      available: false,
+      futureTodayHourIds: [],
+      reason: "tomorrow_prices_incomplete",
+      tomorrowHourIds: [],
+    };
   }
-
-  const tomorrowBilledPrices = tomorrowPrices
-    .map((price) => calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh))
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const tomorrowCheapestBilledCentsPerKwh = Math.min(...tomorrowBilledPrices);
 
   const today = helsinkiDateKey(now);
   const nowMs = now.getTime();
@@ -70,15 +84,54 @@ export function evaluateV2PreheatOpportunity({
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
   if (!futureTodayPrices.length) {
-    return unavailable("no_future_today_prices", tomorrowCheapestBilledCentsPerKwh);
+    return {
+      available: false,
+      futureTodayHourIds: [],
+      reason: "no_future_today_prices",
+      tomorrowHourIds: tomorrowPrices.map((price) => price.starts_at),
+    };
   }
 
-  const eligiblePreheatHourIds = futureTodayPrices
-    .filter((price) => {
+  return {
+    available: true,
+    futureTodayHourIds: futureTodayPrices.map((price) => price.starts_at),
+    reason: "available",
+    tomorrowHourIds: tomorrowPrices.map((price) => price.starts_at),
+  };
+}
+
+export function evaluateV2PreheatOpportunity({
+  now,
+  prices,
+}: {
+  now: Date;
+  prices: ShadowElectricityPrice[];
+}): V2PreheatOpportunity {
+  const horizon = evaluateV2PreheatHorizon({ now, prices });
+  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const tomorrowBilledPrices = horizon.tomorrowHourIds
+    .map((hourId) => priceById.get(hourId))
+    .filter((price): price is ShadowElectricityPrice => Boolean(price))
+    .map((price) => calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const tomorrowCheapestBilledCentsPerKwh = tomorrowBilledPrices.length
+    ? Math.min(...tomorrowBilledPrices)
+    : null;
+
+  if (!horizon.available) {
+    return unavailable(horizon.reason, tomorrowCheapestBilledCentsPerKwh);
+  }
+  if (tomorrowCheapestBilledCentsPerKwh === null) {
+    return unavailable("tomorrow_prices_incomplete");
+  }
+
+  const eligiblePreheatHourIds = horizon.futureTodayHourIds
+    .filter((hourId) => {
+      const price = priceById.get(hourId);
+      if (!price) return false;
       const billed = calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh);
       return billed !== null && billed < tomorrowCheapestBilledCentsPerKwh;
-    })
-    .map((price) => price.starts_at);
+    });
 
   if (!eligiblePreheatHourIds.length) {
     return unavailable("no_cheaper_preheat_interval", tomorrowCheapestBilledCentsPerKwh);
