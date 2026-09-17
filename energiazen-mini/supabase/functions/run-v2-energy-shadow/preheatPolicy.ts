@@ -12,12 +12,19 @@ export type V2PreheatOpportunity = {
   tomorrowCheapestBilledCentsPerKwh: number | null;
 };
 
-export type V2PreheatHorizon = {
-  available: boolean;
-  futureTodayHourIds: string[];
-  reason: "available" | "tomorrow_prices_incomplete" | "no_future_today_prices";
-  tomorrowHourIds: string[];
-};
+export type V2PreheatHorizon =
+  | {
+    available: true;
+    futureTodayHourIds: string[];
+    reason: "available";
+    tomorrowHourIds: string[];
+  }
+  | {
+    available: false;
+    futureTodayHourIds: string[];
+    reason: "tomorrow_prices_incomplete" | "no_future_today_prices";
+    tomorrowHourIds: string[];
+  };
 
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
