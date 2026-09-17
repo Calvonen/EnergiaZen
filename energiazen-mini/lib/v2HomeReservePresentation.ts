@@ -50,7 +50,11 @@ function resolveRecommendedPreheatPercent(
   configuredRecommendation: number | null | undefined,
   telemetryRecommendation: number | null | undefined,
 ) {
-  for (const value of [configuredRecommendation, telemetryRecommendation]) {
+  // A fresh shadow row reflects the backend settings actually used by the
+  // V2 optimizer, so it is authoritative over this install's local copy.
+  // The local value is only a fallback for telemetry gaps (for example an
+  // RPC failure or an older row that predates recommended_preheat_percent).
+  for (const value of [telemetryRecommendation, configuredRecommendation]) {
     if (
       typeof value === "number" &&
       Number.isFinite(value) &&
