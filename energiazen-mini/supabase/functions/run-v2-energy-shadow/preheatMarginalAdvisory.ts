@@ -56,6 +56,7 @@ export function buildV2MarginalPreheatAdvisory({
   maxPreheatHours,
   now,
   prices,
+  remainingEnergyKwh,
 }: {
   baselinePlan: LiveEnergyPlanShadowResult;
   conservativeEnergyKwh: number;
@@ -65,6 +66,7 @@ export function buildV2MarginalPreheatAdvisory({
   maxPreheatHours: number;
   now: Date;
   prices: ShadowElectricityPrice[];
+  remainingEnergyKwh: number;
 }): V2MarginalPreheatAdvisory {
   const level = evaluateV2SoftPreheatLevel({ conservativeEnergyKwh, energyCapacityKwh });
   if (!level.available || level.recommendedPreheatEnergyKwh === null) {
@@ -107,7 +109,9 @@ export function buildV2MarginalPreheatAdvisory({
   );
 
   const configuredHourCap = Math.floor(maxPreheatHours);
-  const physicalHeadroomKwh = Math.max(energyCapacityKwh - conservativeEnergyKwh, 0);
+  const physicalHeadroomKwh = Number.isFinite(remainingEnergyKwh)
+    ? Math.max(energyCapacityKwh - remainingEnergyKwh, 0)
+    : 0;
   const immediateWholeHourHeadroomKwh = Math.min(
     level.recommendedPreheatEnergyKwh,
     physicalHeadroomKwh,
