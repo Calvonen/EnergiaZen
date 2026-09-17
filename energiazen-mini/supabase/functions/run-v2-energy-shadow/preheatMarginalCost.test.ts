@@ -66,6 +66,45 @@ export function runV2MarginalPreheatCostUnitTests() {
   });
   assert(!noSavings.available && noSavings.reason === "no_positive_savings", "expected expensive preheat to be rejected");
 
+  const temporalOrderPrices = [
+    hourly("2026-09-17T17:00:00.000Z", 20),
+    hourly("2026-09-17T23:00:00.000Z", 0),
+  ];
+  const impossibleLatePreheat = evaluateV2MarginalPreheatCost({
+    displacedFutureHeatingHourIds: ["2026-09-17T17:00:00.000Z"],
+    maxPreheatHours: 1,
+    preheatCandidateHourIds: ["2026-09-17T23:00:00.000Z"],
+    prices: temporalOrderPrices,
+  });
+  assert(
+    !impossibleLatePreheat.available && impossibleLatePreheat.reason === "no_positive_savings",
+    "expected cheaper but later preheat to be rejected as temporally impossible",
+  );
+
+  const mixedOrderPrices = [
+    hourly("2026-09-17T16:00:00.000Z", 2),
+    hourly("2026-09-17T17:00:00.000Z", 20),
+    hourly("2026-09-17T23:00:00.000Z", 0),
+    hourly("2026-09-18T00:00:00.000Z", 10),
+  ];
+  const mixedOrder = evaluateV2MarginalPreheatCost({
+    displacedFutureHeatingHourIds: [
+      "2026-09-17T17:00:00.000Z",
+      "2026-09-18T00:00:00.000Z",
+    ],
+    maxPreheatHours: 2,
+    preheatCandidateHourIds: [
+      "2026-09-17T16:00:00.000Z",
+      "2026-09-17T23:00:00.000Z",
+    ],
+    prices: mixedOrderPrices,
+  });
+  assert(mixedOrder.available && mixedOrder.pairs.length === 2, "expected two feasible temporal pairs");
+  assert(
+    mixedOrder.pairs.every((pair) => Date.parse(pair.preheatHourId) < Date.parse(pair.displacedFutureHourId)),
+    "expected every recommended preheat interval to precede displaced heating",
+  );
+
   const missing = evaluateV2MarginalPreheatCost({
     displacedFutureHeatingHourIds: ["2026-09-17T22:00:00.000Z"],
     maxPreheatHours: 1,
