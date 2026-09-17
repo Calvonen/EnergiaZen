@@ -108,4 +108,32 @@ export function runV2PreheatPlanUnitTests() {
   });
   assert(!missingPrice.available, "eligible IDs without matching price data fail closed");
   assertEqual(missingPrice.reason, "eligible_price_data_missing", "missing eligible price is explicit");
+
+  const malformedEnd = {
+    ...p18,
+    ends_at: "not-a-date",
+  };
+  const malformedEndPlan = buildV2SoftPreheatPlan({
+    heaterPowerKw: 3,
+    level: level(3),
+    maxPreheatHours: 4,
+    opportunity: opportunity([malformedEnd.starts_at]),
+    prices: [malformedEnd],
+  });
+  assert(!malformedEndPlan.available, "malformed eligible end timestamp fails closed");
+  assertEqual(malformedEndPlan.reason, "eligible_price_data_missing", "malformed end timestamp is rejected explicitly");
+
+  const wrongDuration = {
+    ...p19,
+    ends_at: new Date(Date.parse(p19.starts_at) + 90 * 60_000).toISOString(),
+  };
+  const wrongDurationPlan = buildV2SoftPreheatPlan({
+    heaterPowerKw: 3,
+    level: level(3),
+    maxPreheatHours: 4,
+    opportunity: opportunity([wrongDuration.starts_at]),
+    prices: [wrongDuration],
+  });
+  assert(!wrongDurationPlan.available, "non-hour eligible interval fails closed");
+  assertEqual(wrongDurationPlan.reason, "eligible_price_data_missing", "wrong interval duration is rejected explicitly");
 }
