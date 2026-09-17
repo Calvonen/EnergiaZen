@@ -1,3 +1,4 @@
+import { calculateBilledElectricityPriceCentsPerKwh } from "../_shared/heatingTariff.ts";
 import type { LiveEnergyPlanShadowResult, ShadowElectricityPrice } from "./planShadow.ts";
 import { evaluateV2SoftPreheatLevel, type V2SoftPreheatLevel } from "./preheatLevel.ts";
 import {
@@ -36,18 +37,15 @@ type SafeMatching = {
   retainedBaselineHeatingHourIds: string[];
 };
 
-type MatchingSearchState = {
-  excludedPairKeys: string[];
-  marginalCost: V2MarginalPreheatCostResult;
-  savings: number;
+type DisplacementState = {
+  billedTotal: number;
+  hourIds: string[];
 };
 
 const emptyConstraints: V2HeatingConstraints = {
   forbiddenHeatingHourIds: [],
   requiredHeatingHourIds: [],
 };
-
-const MAX_SAFE_MATCHING_SEARCH_STATES = 128;
 
 export function buildV2MarginalPreheatAdvisory({
   baselinePlan,
@@ -119,7 +117,12 @@ export function buildV2MarginalPreheatAdvisory({
     physicalHeadroomKwh,
   );
   const wholeHourHeadroomCap = Math.floor(immediateWholeHourHeadroomKwh / heaterPowerKw);
-  const initialPairCap = Math.min(configuredHourCap, wholeHourHeadroomCap);
+  const initialPairCap = Math.min(
+    configuredHourCap,
+    wholeHourHeadroomCap,
+    candidatePreheatHourIds.length,
+    displacedFutureHeatingHourIds.length,
+  );
 
   if (initialPairCap <= 0) {
     return advisoryUnavailable({
@@ -211,57 +214,170 @@ function findBestSafeMatching({
   pairCap: number;
   prices: ShadowElectricityPrice[];
 }): SafeMatching | null {
-  const visited = new Set<string>();
-  const frontier: MatchingSearchState[] = [];
+  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const candidates = [...candidatePreheatHourIds].sort(
+    (left, right) => Date.parse(left) - Date.parse(right),
+  );
+  const displaced = [...displacedFutureHeatingHourIds].sort(
+    (left, right) => Date.parse(left) - Date.parse(right),
+  );
 
-  const enqueue = (excludedPairKeys: string[]) => {
-    const normalized = [...new Set(excludedPairKeys)].sort();
-    const stateKey = normalized.join(",");
-    if (visited.has(stateKey) || visited.size >= MAX_SAFE_MATCHING_SEARCH_STATES) return;
-    visited.add(stateKey);
-
-    const marginalCost = evaluateV2MarginalPreheatCost({
-      displacedFutureHeatingHourIds,
-      excludedPairKeys: normalized,
-      maxPreheatHours: pairCap,
-      preheatCandidateHourIds: candidatePreheatHourIds,
+  let best: SafeMatching | null = null;
+  for (const candidateHourIds of combinations(candidates, pairCap)) {
+    const displacedHourIds = findBestDisplacementsForCandidates({
+      baselineSelectedHourIds,
+      candidateHourIds,
+      displacedFutureHeatingHourIds: displaced,
+      heaterPowerKw,
+      immediateWholeHourHeadroomKwh,
+      nowMs,
+      priceById,
       prices,
     });
-    if (!marginalCost.available) return;
-    frontier.push({
-      excludedPairKeys: normalized,
-      marginalCost,
-      savings: totalSavings(marginalCost.pairs),
+    if (!displacedHourIds) continue;
+
+    const marginalCost = evaluateV2MarginalPreheatCost({
+      displacedFutureHeatingHourIds: displacedHourIds,
+      maxPreheatHours: pairCap,
+      preheatCandidateHourIds: candidateHourIds,
+      prices,
     });
-  };
-
-  enqueue([]);
-
-  while (frontier.length) {
-    frontier.sort((left, right) => right.savings - left.savings || compareMatching(left, right));
-    const state = frontier.shift();
-    if (!state) break;
+    if (!marginalCost.available || marginalCost.pairs.length !== pairCap) continue;
 
     const safety = evaluateMatchingHeadroom({
       baselineSelectedHourIds,
       configuredHourCap,
       heaterPowerKw,
       immediateWholeHourHeadroomKwh,
-      marginalCost: state.marginalCost,
+      marginalCost,
       nowMs,
       prices,
     });
-    if (safety) return safety;
+    if (!safety) continue;
 
-    for (const pair of state.marginalCost.pairs) {
-      enqueue([
-        ...state.excludedPairKeys,
-        marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId),
-      ]);
+    if (!best || compareSafeMatching(safety, best) < 0) {
+      best = safety;
     }
   }
 
-  return null;
+  return best;
+}
+
+function findBestDisplacementsForCandidates({
+  baselineSelectedHourIds,
+  candidateHourIds,
+  displacedFutureHeatingHourIds,
+  heaterPowerKw,
+  immediateWholeHourHeadroomKwh,
+  nowMs,
+  priceById,
+  prices,
+}: {
+  baselineSelectedHourIds: Set<string>;
+  candidateHourIds: string[];
+  displacedFutureHeatingHourIds: string[];
+  heaterPowerKw: number;
+  immediateWholeHourHeadroomKwh: number;
+  nowMs: number;
+  priceById: Map<string, ShadowElectricityPrice>;
+  prices: ShadowElectricityPrice[];
+}): string[] | null {
+  const pairCount = candidateHourIds.length;
+  const candidateBilledPrices = candidateHourIds.map((hourId) => billedPrice(hourId, priceById));
+  if (candidateBilledPrices.some((value) => value === null)) return null;
+
+  const states: Array<DisplacementState | null> = Array.from(
+    { length: pairCount + 1 },
+    () => null,
+  );
+  states[0] = { billedTotal: 0, hourIds: [] };
+
+  for (const futureHourId of displacedFutureHeatingHourIds) {
+    const futureBilledPrice = billedPrice(futureHourId, priceById);
+    if (futureBilledPrice === null) return null;
+
+    for (let selectedCount = pairCount - 1; selectedCount >= 0; selectedCount -= 1) {
+      const previous = states[selectedCount];
+      if (!previous) continue;
+
+      const candidateHourId = candidateHourIds[selectedCount];
+      const candidateBilledPrice = candidateBilledPrices[selectedCount];
+      if (candidateBilledPrice === null) continue;
+      if (Date.parse(candidateHourId) >= Date.parse(futureHourId)) continue;
+      if (futureBilledPrice <= candidateBilledPrice) continue;
+      if (
+        !checkpointFitsHeadroom({
+          baselineSelectedHourIds,
+          candidateHourIds,
+          checkpointHourId: futureHourId,
+          heaterPowerKw,
+          immediateWholeHourHeadroomKwh,
+          nowMs,
+          selectedDisplacementHourIds: previous.hourIds,
+          prices,
+        })
+      ) {
+        continue;
+      }
+
+      const next: DisplacementState = {
+        billedTotal: previous.billedTotal + futureBilledPrice,
+        hourIds: [...previous.hourIds, futureHourId],
+      };
+      const nextCount = selectedCount + 1;
+      const current = states[nextCount];
+      if (!current || betterDisplacementState(next, current)) {
+        states[nextCount] = next;
+      }
+    }
+  }
+
+  return states[pairCount]?.hourIds ?? null;
+}
+
+function checkpointFitsHeadroom({
+  baselineSelectedHourIds,
+  candidateHourIds,
+  checkpointHourId,
+  heaterPowerKw,
+  immediateWholeHourHeadroomKwh,
+  nowMs,
+  selectedDisplacementHourIds,
+  prices,
+}: {
+  baselineSelectedHourIds: Set<string>;
+  candidateHourIds: string[];
+  checkpointHourId: string;
+  heaterPowerKw: number;
+  immediateWholeHourHeadroomKwh: number;
+  nowMs: number;
+  selectedDisplacementHourIds: string[];
+  prices: ShadowElectricityPrice[];
+}) {
+  const checkpointMs = Date.parse(checkpointHourId);
+  if (!Number.isFinite(checkpointMs)) return false;
+
+  const baselineEnergyBeforeCheckpoint = [...baselineSelectedHourIds]
+    .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+    .filter((hourId) => Date.parse(hourId) < checkpointMs)
+    .reduce(
+      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+      0,
+    );
+  const displacedEnergyBeforeCheckpoint = selectedDisplacementHourIds
+    .filter((hourId) => Date.parse(hourId) < checkpointMs)
+    .reduce(
+      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+      0,
+    );
+  const preheatEnergyBeforeCheckpoint = candidateHourIds.filter(
+    (hourId) => Date.parse(hourId) < checkpointMs,
+  ).length * heaterPowerKw;
+
+  return (
+    baselineEnergyBeforeCheckpoint - displacedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint <=
+    immediateWholeHourHeadroomKwh + 1e-9
+  );
 }
 
 function evaluateMatchingHeadroom({
@@ -344,11 +460,45 @@ function evaluateMatchingHeadroom({
   };
 }
 
-function totalSavings(pairs: V2MarginalPreheatPair[]) {
-  return pairs.reduce((sum, pair) => sum + pair.savingsCentsPerKwh, 0);
+function combinations<T>(values: T[], count: number): T[][] {
+  if (count === 0) return [[]];
+  if (count < 0 || count > values.length) return [];
+
+  const result: T[][] = [];
+  const choose = (start: number, selected: T[]) => {
+    if (selected.length === count) {
+      result.push([...selected]);
+      return;
+    }
+    const remainingNeeded = count - selected.length;
+    for (let index = start; index <= values.length - remainingNeeded; index += 1) {
+      selected.push(values[index]);
+      choose(index + 1, selected);
+      selected.pop();
+    }
+  };
+  choose(0, []);
+  return result;
 }
 
-function compareMatching(left: MatchingSearchState, right: MatchingSearchState) {
+function billedPrice(
+  hourId: string,
+  priceById: Map<string, ShadowElectricityPrice>,
+) {
+  const price = priceById.get(hourId);
+  if (!price) return null;
+  return calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh);
+}
+
+function betterDisplacementState(left: DisplacementState, right: DisplacementState) {
+  if (left.billedTotal > right.billedTotal) return true;
+  if (left.billedTotal < right.billedTotal) return false;
+  return left.hourIds.join(",").localeCompare(right.hourIds.join(",")) < 0;
+}
+
+function compareSafeMatching(left: SafeMatching, right: SafeMatching) {
+  const savingsDifference = totalSavings(right.marginalCost.pairs) - totalSavings(left.marginalCost.pairs);
+  if (Math.abs(savingsDifference) > 1e-9) return savingsDifference;
   const leftKey = left.marginalCost.pairs
     .map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId))
     .join(",");
@@ -356,6 +506,10 @@ function compareMatching(left: MatchingSearchState, right: MatchingSearchState) 
     .map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId))
     .join(",");
   return leftKey.localeCompare(rightKey);
+}
+
+function totalSavings(pairs: V2MarginalPreheatPair[]) {
+  return pairs.reduce((sum, pair) => sum + pair.savingsCentsPerKwh, 0);
 }
 
 function advisoryUnavailable({
