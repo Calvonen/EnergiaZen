@@ -143,6 +143,7 @@ Deno.serve(async (request) => {
       maxPreheatHours: automaticMaxHeatingHours,
       now,
       prices,
+      recommendedPreheatPercent: reservePercents.targetPercent,
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
     });
 
