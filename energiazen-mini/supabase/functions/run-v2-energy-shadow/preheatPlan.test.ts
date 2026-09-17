@@ -156,4 +156,15 @@ export function runV2PreheatPlanUnitTests() {
   });
   assert(!wrongDurationPlan.available, "non-hour eligible interval fails closed");
   assertEqual(wrongDurationPlan.reason, "eligible_price_data_missing", "wrong interval duration is rejected explicitly");
+
+  const offClock = price("2026-09-17T13:30:00.000Z", 1);
+  const offClockPlan = buildV2SoftPreheatPlan({
+    heaterPowerKw: 3,
+    level: level(3),
+    maxPreheatHours: 4,
+    opportunity: opportunity([offClock.starts_at]),
+    prices: [offClock],
+  });
+  assert(!offClockPlan.available, "off-clock hourly interval fails closed before publication");
+  assertEqual(offClockPlan.reason, "eligible_price_data_missing", "off-clock hourly interval is rejected explicitly");
 }
