@@ -1,5 +1,7 @@
+import { recommendedV2PreheatPercent } from "./energyModelV2/energyReservePercent";
+
 export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
-export const V2_RECOMMENDED_PREHEAT_PERCENT = 90;
+export const V2_RECOMMENDED_PREHEAT_PERCENT = recommendedV2PreheatPercent;
 
 export type V2HomeReserveSnapshot = {
   run_at: string | null;
