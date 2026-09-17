@@ -69,7 +69,7 @@ export function runLivePlanShadowUnitTests() {
   assert(healthy.standingLossKwhPerHour !== null && healthy.standingLossKwhPerHour > 0, "worst-case standing loss is explicit");
   assertEqual(healthy.forecastHorizonEndAt, "2026-09-15T08:00:00.000Z", "horizon end is persisted");
 
-  const needsHeat = runLiveEnergyPlanShadow({
+  const belowTargetButSafe = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
     energyCapacityKwh: 16.864,
     inletBaselineC: 12,
@@ -78,16 +78,30 @@ export function runLivePlanShadowUnitTests() {
     prices: contiguous,
     reserve: reserve(5.4),
   });
-  assert(needsHeat.available, "recoverable reserve still has a plan shadow");
-  assert(needsHeat.valid === true, "optimizer finds a valid recovery plan");
-  assertEqual(needsHeat.selectedHeatingHourIds.length, 1, "one segment is enough to restore target");
+  assert(belowTargetButSafe.available, "below-target reserve still has a plan shadow");
+  assert(belowTargetButSafe.valid === true, "missing advisory target does not invalidate a safety-safe plan");
+  assertEqual(belowTargetButSafe.selectedHeatingHourIds.length, 0, "advisory target alone must not buy electricity");
+  assert(belowTargetButSafe.firstTargetMissAt !== null, "target miss remains visible as forecast metadata");
+
+  const needsSafetyHeat = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: contiguous,
+    reserve: reserve(3.4),
+  });
+  assert(needsSafetyHeat.available, "safety-threatened reserve still has a plan shadow");
+  assert(needsSafetyHeat.valid === true, "optimizer finds a safety-preserving recovery plan");
+  assertEqual(needsSafetyHeat.selectedHeatingHourIds.length, 1, "one segment is enough to preserve safety");
   assertEqual(
-    needsHeat.selectedHeatingHourIds[0],
+    needsSafetyHeat.selectedHeatingHourIds[0],
     "2026-09-15T05:00:00.000Z",
-    "billed tariff keeps the shorter 10 c/kWh partial interval cheaper than a full 2 c/kWh hour",
+    "billed tariff keeps the shorter current interval cheapest when safety requires heat",
   );
-  assertEqual(needsHeat.selectedHeatingEnergyKwh, 1.5, "billed cost ranking preserves the cheaper partial 1.5 kWh segment");
-  assertEqual(needsHeat.totalCostCents, 27.93, "plan cost includes spot margin plus grid and tax");
+  assertEqual(needsSafetyHeat.selectedHeatingEnergyKwh, 1.5, "safety recovery may use the partial 1.5 kWh segment");
+  assertEqual(needsSafetyHeat.totalCostCents, 27.93, "safety recovery cost includes spot margin plus grid and tax");
 
   const winterSpike = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
@@ -100,13 +114,13 @@ export function runLivePlanShadowUnitTests() {
       price("2026-09-15T06:00:00.000Z", 1),
       price("2026-09-15T07:00:00.000Z", 50),
     ],
-    reserve: reserve(5.4),
+    reserve: reserve(3.4),
   });
-  assert(winterSpike.valid === true, "100 c/kWh spike scenario still finds a valid plan");
+  assert(winterSpike.valid === true, "100 c/kWh spike scenario still finds a safe plan");
   assertEqual(
     winterSpike.selectedHeatingHourIds[0],
     "2026-09-15T06:00:00.000Z",
-    "100 c/kWh partial current segment must never beat a 1 c/kWh valid future hour",
+    "100 c/kWh partial current segment must lose to a 1 c/kWh future hour when safety can wait",
   );
   assertEqual(winterSpike.totalCostCents, 28.86, "winter spike comparison uses the billed 9.62 c/kWh future tariff");
 
@@ -121,13 +135,13 @@ export function runLivePlanShadowUnitTests() {
       price("2026-09-15T06:00:00.000Z", -4),
       price("2026-09-15T07:00:00.000Z", 10),
     ],
-    reserve: reserve(5.4),
+    reserve: reserve(3.4),
   });
-  assert(moderatelyNegative.valid === true, "moderately negative spot scenario remains valid");
+  assert(moderatelyNegative.valid === true, "moderately negative spot scenario remains safe");
   assertEqual(
     moderatelyNegative.selectedHeatingHourIds[0],
     "2026-09-15T05:00:00.000Z",
-    "negative spot must not be treated as free when the billed tariff remains positive",
+    "negative spot must still be compared using the positive billed tariff",
   );
   assertEqual(moderatelyNegative.totalCostCents, 5.43, "-5 c/kWh spot still bills 3.62 c/kWh after tariff additions");
 
@@ -189,7 +203,7 @@ export function runLivePlanShadowUnitTests() {
   assertEqual(lockedAboveConfiguredCap.selectedHeatingHourIds.length, 3, "every locked hour is preserved");
   assertEqual(lockedAboveConfiguredCap.selectedHeatingHourIds.join("|"), lockedHourIds.join("|"), "locked block selection remains intact");
 
-  const physicalCapacityBound = runLiveEnergyPlanShadow({
+  const advisoryTargetAboveCurrentReserve = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 1,
     energyCapacityKwh: 10,
     inletBaselineC: 12,
@@ -200,7 +214,8 @@ export function runLivePlanShadowUnitTests() {
     ),
     reserve: reserve(9.4, 0.6, 10),
   });
-  assert(physicalCapacityBound.available, "capacity-bound forecast remains available");
-  assert(physicalCapacityBound.valid === true, "late heating can still reach physical capacity without banking an early surplus");
-  assertEqual(physicalCapacityBound.reason, null, "a genuinely capacity-reaching plan remains valid");
+  assert(advisoryTargetAboveCurrentReserve.available, "capacity-bound forecast remains available");
+  assert(advisoryTargetAboveCurrentReserve.valid === true, "safe plan remains valid even when advisory target is not reached");
+  assertEqual(advisoryTargetAboveCurrentReserve.selectedHeatingHourIds.length, 0, "advisory target does not force capacity-filling heat");
+  assertEqual(advisoryTargetAboveCurrentReserve.reason, null, "safe below-target plan has no violation reason");
 }

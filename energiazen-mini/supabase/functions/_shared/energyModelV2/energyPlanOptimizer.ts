@@ -155,9 +155,13 @@ function evaluateSelection({
     const billedPrice = calculateBilledElectricityPriceCentsPerKwh(segment.priceCentsPerKwh);
     return sum + Math.max(0, heaterPowerKw) * clamp(segment.segmentHours, 0, 1) * finitePrice(billedPrice);
   }, 0);
-  const finalTargetSatisfied = forecast.finalConservativeEnergyKwh >= forecast.thresholds.targetEnergyKwh;
+
+  // Safety is the only hard energy requirement. The target threshold remains in
+  // the forecast as advisory/preheat metadata, but being below it must not force
+  // the optimizer to buy electricity. A later price-horizon policy decides when
+  // voluntarily preheating above safety is economically worthwhile.
   const safetySatisfied = forecast.firstSafetyViolationAt === null;
-  const valid = safetySatisfied && finalTargetSatisfied;
+  const valid = safetySatisfied;
 
   return {
     forecast,
@@ -165,20 +169,15 @@ function evaluateSelection({
     selectedHeatingHourIds: selectedSegments.map((segment) => segment.id),
     totalCostCents,
     valid,
-    violationReason: !safetySatisfied
-      ? "safety_reserve_would_be_violated"
-      : !finalTargetSatisfied
-        ? "target_reserve_not_reached"
-        : null,
+    violationReason: safetySatisfied ? null : "safety_reserve_would_be_violated",
   };
 }
 
 function compareValidPlans(left: EvaluatedPlan, right: EvaluatedPlan) {
-  // Once both plans satisfy the current safety + target validity rules, the
-  // primary optimization objective is what the electricity actually costs at
-  // the billed tariff (spot + margin + grid/tax), not spot alone. Energy amount
-  // is only a tie-breaker after equal cost; later PRs will separately change
-  // target into soft preheat.
+  // Once both plans satisfy the hard safety reserve, the primary objective is
+  // billed electricity cost. The advisory target/preheat level is deliberately
+  // not part of validity or ranking in this PR; later policy may elect to buy
+  // extra cheap energy when the known future horizon justifies it.
   if (left.totalCostCents !== right.totalCostCents) {
     return left.totalCostCents - right.totalCostCents;
   }
