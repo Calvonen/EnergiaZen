@@ -36,7 +36,7 @@ export function runProductionConstraintUnitTests() {
     storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "automatic" }],
   });
   assertArray(safetyOverride.requiredHeatingHourIds, [], "low top temperature must release block lock");
-  assertArray(safetyOverride.forbiddenHeatingHourIds, [], "low top temperature must release block guard");
+  assertArray(safetyOverride.forbiddenHeatingHourIds, [], "already committed current hour remains selectable after block release");
 
   const cooldownNow = new Date("2026-09-15T12:05:00.000Z");
   const cooldown = resolveV2HeatingConstraints({
@@ -60,7 +60,7 @@ export function runProductionConstraintUnitTests() {
     ],
     storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "automatic" }],
   });
-  assertArray(plannedConsecutive.forbiddenHeatingHourIds, [], "already planned consecutive hour must bypass cooldown");
+  assertArray(plannedConsecutive.forbiddenHeatingHourIds, [], "already planned consecutive hour must remain selectable");
 
   const fixedIgnored = resolveV2HeatingConstraints({
     now,
@@ -69,5 +69,42 @@ export function runProductionConstraintUnitTests() {
     storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "fixed" }],
   });
   assertArray(fixedIgnored.requiredHeatingHourIds, [], "fixed plan must not become V2 automatic constraint");
-  assertArray(fixedIgnored.forbiddenHeatingHourIds, [], "fixed plan must not extend automatic block guard");
+  assertArray(fixedIgnored.forbiddenHeatingHourIds, [ids[0]], "fixed plan must not authorize a new V2 mid-hour start");
+
+  const incidentIds = [
+    "2026-09-16T17:00:00.000Z", // 20 Helsinki
+    "2026-09-16T18:00:00.000Z", // 21
+    "2026-09-16T22:00:00.000Z", // 01 next day
+    "2026-09-16T23:00:00.000Z", // 02 next day
+  ];
+  const incident = resolveV2HeatingConstraints({
+    now: new Date("2026-09-16T17:04:01.318Z"),
+    priceHourIds: incidentIds,
+    readings: [reading("2026-09-16T17:04:00.000Z", false, 59)],
+    storedPlans: [
+      { plan_date: "2026-09-16", planned_hours: [], mode: "automatic" },
+      { plan_date: "2026-09-17", planned_hours: [1, 2], mode: "automatic" },
+    ],
+  });
+  assertArray(incident.requiredHeatingHourIds, [], "20:04 replay must not require the current hour");
+  assertArray(
+    incident.forbiddenHeatingHourIds,
+    [incidentIds[0]],
+    "20:04 replay must forbid adding the already-started 20-21 hour",
+  );
+
+  const precommittedCurrent = resolveV2HeatingConstraints({
+    now: new Date("2026-09-16T17:04:01.318Z"),
+    priceHourIds: incidentIds,
+    readings: [reading("2026-09-16T17:04:00.000Z", false, 59)],
+    storedPlans: [
+      { plan_date: "2026-09-16", planned_hours: [20], mode: "automatic" },
+      { plan_date: "2026-09-17", planned_hours: [1, 2], mode: "automatic" },
+    ],
+  });
+  assertArray(
+    precommittedCurrent.forbiddenHeatingHourIds,
+    [],
+    "a current hour committed before its start must remain eligible after the boundary",
+  );
 }
