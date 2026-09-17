@@ -47,6 +47,8 @@ const emptyConstraints: V2HeatingConstraints = {
   requiredHeatingHourIds: [],
 };
 
+const MAX_SAFE_MATCHING_SEARCH_STATES = 128;
+
 export function buildV2MarginalPreheatAdvisory({
   baselinePlan,
   conservativeEnergyKwh,
@@ -215,7 +217,7 @@ function findBestSafeMatching({
   const enqueue = (excludedPairKeys: string[]) => {
     const normalized = [...new Set(excludedPairKeys)].sort();
     const stateKey = normalized.join(",");
-    if (visited.has(stateKey)) return;
+    if (visited.has(stateKey) || visited.size >= MAX_SAFE_MATCHING_SEARCH_STATES) return;
     visited.add(stateKey);
 
     const marginalCost = evaluateV2MarginalPreheatCost({
