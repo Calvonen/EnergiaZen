@@ -6,6 +6,11 @@ import {
   buildV2HomeReservePresentation,
   type V2HomeReserveSnapshot,
 } from "./v2HomeReservePresentation";
+import {
+  getPendingV2Recommendation,
+  isPendingV2RecommendationAcknowledged,
+  persistPendingV2Recommendation,
+} from "./v2RecommendationSaveBaseline";
 
 const refreshIntervalMs = 60_000;
 
@@ -13,10 +18,8 @@ export function useV2HomeReserve() {
   const { persistedSettings } = useSettingsScenario();
   const recommendedPreheatPercent = persistedSettings.v2TargetReservePercent;
   const [snapshot, setSnapshot] = useState<V2HomeReserveSnapshot | null>(null);
-  const [pendingLocalRecommendation, setPendingLocalRecommendation] = useState(false);
+  const [, setPendingRevision] = useState(0);
   const requestGenerationRef = useRef(0);
-  const previousRecommendationRef = useRef(recommendedPreheatPercent);
-  const pendingBaselineRunAtRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     const requestGeneration = ++requestGenerationRef.current;
@@ -35,50 +38,36 @@ export function useV2HomeReserve() {
     setSnapshot((row ?? null) as V2HomeReserveSnapshot | null);
   }, []);
 
-  // A recommendation change after this hook has mounted is a committed local
-  // Settings change, not a fresh-install default. Keep that just-saved value
-  // authoritative while the RPC may still expose an older last-good shadow
-  // row. Record the row we had at save time so an unchanged stale snapshot
-  // cannot acknowledge the new setting accidentally.
+  // A successful Settings save persists a pending recommendation marker that
+  // survives component remounts and app restarts. Clear it only when a shadow
+  // row created after that save confirms the same recommendation. Until then,
+  // buildV2HomeReservePresentation applies the same precedence to every caller.
   useEffect(() => {
-    if (previousRecommendationRef.current === recommendedPreheatPercent) {
-      return;
-    }
-
-    previousRecommendationRef.current = recommendedPreheatPercent;
-    pendingBaselineRunAtRef.current = snapshot?.run_at ?? null;
-    setPendingLocalRecommendation(true);
-    void refresh();
-  }, [recommendedPreheatPercent, refresh, snapshot?.run_at]);
-
-  // Release the local override only after shadow telemetry has advanced beyond
-  // the row visible when the save happened and reports the same recommendation.
-  // Fresh-install hydration never enters this pending state, so authoritative
-  // backend telemetry still wins over a local 90% default there.
-  useEffect(() => {
-    if (!pendingLocalRecommendation) {
-      return;
-    }
-
-    const telemetryRecommendation = snapshot?.recommended_preheat_percent;
-    const runAt = snapshot?.run_at ?? null;
-    const baselineRunAt = pendingBaselineRunAtRef.current;
-    const telemetryAdvanced =
-      baselineRunAt === null
-        ? runAt !== null
-        : runAt !== null && Date.parse(runAt) > Date.parse(baselineRunAt);
-
+    const pending = getPendingV2Recommendation();
     if (
-      telemetryAdvanced &&
-      telemetryRecommendation === recommendedPreheatPercent
+      !pending ||
+      !isPendingV2RecommendationAcknowledged({
+        pending,
+        runAt: snapshot?.run_at,
+        telemetryRecommendation: snapshot?.recommended_preheat_percent,
+      })
     ) {
-      pendingBaselineRunAtRef.current = null;
-      setPendingLocalRecommendation(false);
+      return;
     }
-  }, [pendingLocalRecommendation, recommendedPreheatPercent, snapshot]);
+
+    void persistPendingV2Recommendation(null)
+      .catch(() => {
+        // The in-memory marker is already cleared; a later successful settings
+        // load/save can clean up a stale durable marker.
+      })
+      .finally(() => setPendingRevision((revision) => revision + 1));
+  }, [snapshot]);
 
   useEffect(() => {
     void refresh();
+  }, [recommendedPreheatPercent, refresh]);
+
+  useEffect(() => {
     const intervalId = setInterval(() => void refresh(), refreshIntervalMs);
 
     return () => {
@@ -94,8 +83,7 @@ export function useV2HomeReserve() {
         snapshot,
         Date.now(),
         recommendedPreheatPercent,
-        pendingLocalRecommendation,
       ),
-    [pendingLocalRecommendation, recommendedPreheatPercent, snapshot],
+    [recommendedPreheatPercent, snapshot],
   );
 }
