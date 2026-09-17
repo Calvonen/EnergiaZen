@@ -152,6 +152,23 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected cheap baseline hour left unmatched by the chosen pair to reserve headroom",
   );
 
+  const retainedAfterPreheat = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([
+      "2026-09-17T14:00:00.000Z",
+      "2026-09-17T22:00:00.000Z",
+    ]),
+    conservativeEnergyKwh: 15,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+  });
+  assert(
+    !retainedAfterPreheat.available && retainedAfterPreheat.reason === "insufficient_whole_hour_headroom",
+    "expected retained baseline heat after preheat but before displacement to consume headroom",
+  );
+
   const tinySoftHeadroom = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"]),
     conservativeEnergyKwh: 15,
