@@ -35,16 +35,16 @@ export function runEnergyPlanOptimizerUnitTests() {
   assert(alreadyHealthy.valid, "healthy horizon is valid without heating");
   assertEqual(alreadyHealthy.selectedHeatingHourIds.length, 0, "optimizer does not overheat an already healthy horizon");
 
-  const cheapestEquivalent = optimizeEnergyPlan({
+  const belowTargetButSafe = optimizeEnergyPlan({
     heaterPowerKw: 3,
     initialRemainingEnergyKwh: 4.2,
     initialUncertaintyKwh: 0.25,
     maxHeatingHours: 2,
     segments: [segment("expensive", 8, 20, 0.1), segment("cheap", 9, 2, 0.1)],
   });
-  assert(cheapestEquivalent.valid, "one heating hour can restore target");
-  assertEqual(cheapestEquivalent.selectedHeatingHourIds.length, 1, "minimum heating energy wins before price");
-  assertEqual(cheapestEquivalent.selectedHeatingHourIds[0], "cheap", "cheapest equivalent safe hour is selected");
+  assert(belowTargetButSafe.valid, "safety-safe horizon remains valid below advisory target");
+  assertEqual(belowTargetButSafe.selectedHeatingHourIds.length, 0, "advisory target alone does not buy electricity");
+  assert(belowTargetButSafe.forecast.firstTargetMissAt !== null, "target miss remains available as forecast metadata");
 
   const safetyForcesEarlier = optimizeEnergyPlan({
     heaterPowerKw: 3,
@@ -87,10 +87,11 @@ export function runEnergyPlanOptimizerUnitTests() {
     maxHeatingHours: 1,
     segments: [segment("only", 8, 1, 0.5), segment("later", 9, 2, 0.5)],
   });
-  assert(!insufficientCapacity.valid, "insufficient heating capacity stays invalid");
+  assert(!insufficientCapacity.valid, "insufficient heating capacity stays invalid when safety cannot be preserved");
+  assertEqual(insufficientCapacity.violationReason, "safety_reserve_would_be_violated", "safety failure remains the hard invalidity reason");
   assert(insufficientCapacity.selectedHeatingHourIds.length <= 1, "fallback never exceeds max heating hours");
 
-  const partialEnough = optimizeEnergyPlan({
+  const partialTargetRestorationNoLongerNeeded = optimizeEnergyPlan({
     heaterPowerKw: 3,
     initialRemainingEnergyKwh: 5.6,
     initialUncertaintyKwh: 0.25,
@@ -100,6 +101,7 @@ export function runEnergyPlanOptimizerUnitTests() {
       segment("full", 9, 1, 0.05, 1),
     ],
   });
-  assert(partialEnough.valid, "partial current hour can satisfy target when physically enough");
-  assertEqual(partialEnough.selectedHeatingHourIds[0], "partial", "optimizer minimizes delivered heating energy before cost");
+  assert(partialTargetRestorationNoLongerNeeded.valid, "safe below-target plan remains valid without target restoration");
+  assertEqual(partialTargetRestorationNoLongerNeeded.selectedHeatingHourIds.length, 0, "partial heating is not selected merely to restore advisory target");
+  assert(partialTargetRestorationNoLongerNeeded.forecast.firstTargetMissAt !== null, "advisory target miss remains observable in forecast metadata");
 }
