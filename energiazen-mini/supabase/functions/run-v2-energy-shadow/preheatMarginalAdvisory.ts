@@ -2,7 +2,9 @@ import type { LiveEnergyPlanShadowResult, ShadowElectricityPrice } from "./planS
 import { evaluateV2SoftPreheatLevel, type V2SoftPreheatLevel } from "./preheatLevel.ts";
 import {
   evaluateV2MarginalPreheatCost,
+  marginalPairKey,
   type V2MarginalPreheatCostResult,
+  type V2MarginalPreheatPair,
 } from "./preheatMarginalCost.ts";
 import { evaluateV2PreheatHorizon, type V2PreheatHorizon } from "./preheatPolicy.ts";
 import type { V2HeatingConstraints } from "./productionConstraints.ts";
@@ -25,6 +27,19 @@ export type V2MarginalPreheatAdvisory = {
     | "insufficient_whole_hour_headroom"
     | V2PreheatHorizon["reason"]
     | Exclude<V2MarginalPreheatCostResult["reason"], "recommended">;
+};
+
+type SafeMatching = {
+  marginalCost: V2MarginalPreheatCostResult;
+  maxPreheatHoursByHeadroom: number;
+  retainedBaselineHeatingEnergyKwh: number;
+  retainedBaselineHeatingHourIds: string[];
+};
+
+type MatchingSearchState = {
+  excludedPairKeys: string[];
+  marginalCost: V2MarginalPreheatCostResult;
+  savings: number;
 };
 
 const emptyConstraints: V2HeatingConstraints = {
@@ -115,83 +130,39 @@ export function buildV2MarginalPreheatAdvisory({
   };
 
   for (let pairCap = initialPairCap; pairCap >= 1; pairCap -= 1) {
-    const marginalCost = evaluateV2MarginalPreheatCost({
+    const safeMatching = findBestSafeMatching({
+      baselineSelectedHourIds,
+      candidatePreheatHourIds,
+      configuredHourCap,
       displacedFutureHeatingHourIds,
-      maxPreheatHours: pairCap,
-      preheatCandidateHourIds: candidatePreheatHourIds,
+      heaterPowerKw,
+      immediateWholeHourHeadroomKwh,
+      nowMs,
+      pairCap,
       prices,
     });
-    lastMarginalCost = marginalCost;
-    if (!marginalCost.available) break;
-
-    const displacedIds = new Set(
-      marginalCost.pairs.map((pair) => pair.displacedFutureHourId),
-    );
-    const displacementCheckpointsMs = [...new Set(
-      marginalCost.pairs
-        .map((pair) => Date.parse(pair.displacedFutureHourId))
-        .filter(Number.isFinite),
-    )].sort((left, right) => left - right);
-
-    let safeAtEveryDisplacement = true;
-    for (const checkpointMs of displacementCheckpointsMs) {
-      const retainedBeforeCheckpoint = [...baselineSelectedHourIds]
-        .filter((hourId) => !displacedIds.has(hourId))
-        .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
-        .filter((hourId) => Date.parse(hourId) < checkpointMs);
-      const retainedEnergyBeforeCheckpoint = retainedBeforeCheckpoint.reduce(
-        (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
-        0,
-      );
-      const preheatEnergyBeforeCheckpoint = marginalCost.pairs.filter(
-        (pair) => Date.parse(pair.preheatHourId) < checkpointMs,
-      ).length * heaterPowerKw;
-
-      if (
-        retainedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint >
-        immediateWholeHourHeadroomKwh + 1e-9
-      ) {
-        safeAtEveryDisplacement = false;
-        break;
-      }
-    }
-
-    if (safeAtEveryDisplacement) {
-      const latestDisplacementMs = displacementCheckpointsMs.length
-        ? displacementCheckpointsMs[displacementCheckpointsMs.length - 1]
-        : nowMs;
-      const retainedBaselineHeatingHourIds = [...baselineSelectedHourIds]
-        .filter((hourId) => !displacedIds.has(hourId))
-        .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
-        .filter((hourId) => Date.parse(hourId) < latestDisplacementMs)
-        .sort((left, right) => Date.parse(left) - Date.parse(right));
-      const retainedBaselineHeatingEnergyKwh = round(retainedBaselineHeatingHourIds.reduce(
-        (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
-        0,
-      ));
-      const safeWholeHourCapacityAfterRetained = Math.max(
-        0,
-        Math.floor(
-          (immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh + 1e-9) /
-            heaterPowerKw,
-        ),
-      );
-
+    if (safeMatching) {
       return {
         available: true,
         candidatePreheatHourIds,
         displacedFutureHeatingHourIds,
         level,
-        marginalCost,
-        maxPreheatHoursByHeadroom: Math.min(
-          configuredHourCap,
-          safeWholeHourCapacityAfterRetained,
-        ),
-        retainedBaselineHeatingEnergyKwh,
-        retainedBaselineHeatingHourIds,
+        marginalCost: safeMatching.marginalCost,
+        maxPreheatHoursByHeadroom: safeMatching.maxPreheatHoursByHeadroom,
+        retainedBaselineHeatingEnergyKwh: safeMatching.retainedBaselineHeatingEnergyKwh,
+        retainedBaselineHeatingHourIds: safeMatching.retainedBaselineHeatingHourIds,
         reason: "recommended",
       };
     }
+
+    const fallback = evaluateV2MarginalPreheatCost({
+      displacedFutureHeatingHourIds,
+      maxPreheatHours: pairCap,
+      preheatCandidateHourIds: candidatePreheatHourIds,
+      prices,
+    });
+    lastMarginalCost = fallback;
+    if (!fallback.available) break;
   }
 
   return advisoryUnavailable({
@@ -206,6 +177,174 @@ export function buildV2MarginalPreheatAdvisory({
     retainedBaselineHeatingEnergyKwh: 0,
     retainedBaselineHeatingHourIds: [],
   });
+}
+
+function findBestSafeMatching({
+  baselineSelectedHourIds,
+  candidatePreheatHourIds,
+  configuredHourCap,
+  displacedFutureHeatingHourIds,
+  heaterPowerKw,
+  immediateWholeHourHeadroomKwh,
+  nowMs,
+  pairCap,
+  prices,
+}: {
+  baselineSelectedHourIds: Set<string>;
+  candidatePreheatHourIds: string[];
+  configuredHourCap: number;
+  displacedFutureHeatingHourIds: string[];
+  heaterPowerKw: number;
+  immediateWholeHourHeadroomKwh: number;
+  nowMs: number;
+  pairCap: number;
+  prices: ShadowElectricityPrice[];
+}): SafeMatching | null {
+  const visited = new Set<string>();
+  const frontier: MatchingSearchState[] = [];
+
+  const enqueue = (excludedPairKeys: string[]) => {
+    const normalized = [...new Set(excludedPairKeys)].sort();
+    const stateKey = normalized.join(",");
+    if (visited.has(stateKey)) return;
+    visited.add(stateKey);
+
+    const marginalCost = evaluateV2MarginalPreheatCost({
+      displacedFutureHeatingHourIds,
+      excludedPairKeys: normalized,
+      maxPreheatHours: pairCap,
+      preheatCandidateHourIds: candidatePreheatHourIds,
+      prices,
+    });
+    if (!marginalCost.available) return;
+    frontier.push({
+      excludedPairKeys: normalized,
+      marginalCost,
+      savings: totalSavings(marginalCost.pairs),
+    });
+  };
+
+  enqueue([]);
+
+  while (frontier.length) {
+    frontier.sort((left, right) => right.savings - left.savings || compareMatching(left, right));
+    const state = frontier.shift();
+    if (!state) break;
+
+    const safety = evaluateMatchingHeadroom({
+      baselineSelectedHourIds,
+      configuredHourCap,
+      heaterPowerKw,
+      immediateWholeHourHeadroomKwh,
+      marginalCost: state.marginalCost,
+      nowMs,
+      prices,
+    });
+    if (safety) return safety;
+
+    for (const pair of state.marginalCost.pairs) {
+      enqueue([
+        ...state.excludedPairKeys,
+        marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId),
+      ]);
+    }
+  }
+
+  return null;
+}
+
+function evaluateMatchingHeadroom({
+  baselineSelectedHourIds,
+  configuredHourCap,
+  heaterPowerKw,
+  immediateWholeHourHeadroomKwh,
+  marginalCost,
+  nowMs,
+  prices,
+}: {
+  baselineSelectedHourIds: Set<string>;
+  configuredHourCap: number;
+  heaterPowerKw: number;
+  immediateWholeHourHeadroomKwh: number;
+  marginalCost: V2MarginalPreheatCostResult;
+  nowMs: number;
+  prices: ShadowElectricityPrice[];
+}): SafeMatching | null {
+  if (!marginalCost.available) return null;
+
+  const displacedIds = new Set(
+    marginalCost.pairs.map((pair) => pair.displacedFutureHourId),
+  );
+  const displacementCheckpointsMs = [...new Set(
+    marginalCost.pairs
+      .map((pair) => Date.parse(pair.displacedFutureHourId))
+      .filter(Number.isFinite),
+  )].sort((left, right) => left - right);
+
+  for (const checkpointMs of displacementCheckpointsMs) {
+    const retainedBeforeCheckpoint = [...baselineSelectedHourIds]
+      .filter((hourId) => !displacedIds.has(hourId))
+      .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+      .filter((hourId) => Date.parse(hourId) < checkpointMs);
+    const retainedEnergyBeforeCheckpoint = retainedBeforeCheckpoint.reduce(
+      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+      0,
+    );
+    const preheatEnergyBeforeCheckpoint = marginalCost.pairs.filter(
+      (pair) => Date.parse(pair.preheatHourId) < checkpointMs,
+    ).length * heaterPowerKw;
+
+    if (
+      retainedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint >
+      immediateWholeHourHeadroomKwh + 1e-9
+    ) {
+      return null;
+    }
+  }
+
+  const latestDisplacementMs = displacementCheckpointsMs.length
+    ? displacementCheckpointsMs[displacementCheckpointsMs.length - 1]
+    : nowMs;
+  const retainedBaselineHeatingHourIds = [...baselineSelectedHourIds]
+    .filter((hourId) => !displacedIds.has(hourId))
+    .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+    .filter((hourId) => Date.parse(hourId) < latestDisplacementMs)
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  const retainedBaselineHeatingEnergyKwh = round(retainedBaselineHeatingHourIds.reduce(
+    (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+    0,
+  ));
+  const safeWholeHourCapacityAfterRetained = Math.max(
+    0,
+    Math.floor(
+      (immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh + 1e-9) /
+        heaterPowerKw,
+    ),
+  );
+
+  return {
+    marginalCost,
+    maxPreheatHoursByHeadroom: Math.min(
+      configuredHourCap,
+      safeWholeHourCapacityAfterRetained,
+    ),
+    retainedBaselineHeatingEnergyKwh,
+    retainedBaselineHeatingHourIds,
+  };
+}
+
+function totalSavings(pairs: V2MarginalPreheatPair[]) {
+  return pairs.reduce((sum, pair) => sum + pair.savingsCentsPerKwh, 0);
+}
+
+function compareMatching(left: MatchingSearchState, right: MatchingSearchState) {
+  const leftKey = left.marginalCost.pairs
+    .map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId))
+    .join(",");
+  const rightKey = right.marginalCost.pairs
+    .map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId))
+    .join(",");
+  return leftKey.localeCompare(rightKey);
 }
 
 function advisoryUnavailable({
