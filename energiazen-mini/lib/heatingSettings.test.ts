@@ -27,35 +27,35 @@ function hour(id: string, start: string, price: number) {
 }
 
 export function runHeatingSettingsUnitTests() {
-  const migratedLegacyPreheat = migrateStoredSettings(
+  const preservedLegacySeventyFive = migrateStoredSettings(
     { v2TargetReservePercent: 75 },
     null,
   );
   assertEqual(
     {
-      changed: migratedLegacyPreheat.changed,
-      migrationVersion: migratedLegacyPreheat.migrationVersion,
-      value: migratedLegacyPreheat.settings.v2TargetReservePercent,
+      changed: preservedLegacySeventyFive.changed,
+      migrationVersion: preservedLegacySeventyFive.migrationVersion,
+      value: preservedLegacySeventyFive.settings.v2TargetReservePercent,
     },
     {
-      changed: true,
+      changed: false,
       migrationVersion: currentSettingsStorageMigrationVersion,
-      value: 90,
+      value: 75,
     },
-    "vanha paikallinen 75 prosentin oletus migroidaan kerran 90 prosentin esilammityssuositukseksi",
+    "vanha 75 prosentin arvo sailyy koska sen alkuperaa oletuksena tai kayttajavalintana ei voida erottaa",
   );
 
-  const alreadyMigratedUserChoice = migrateStoredSettings(
+  const alreadyVersionedUserChoice = migrateStoredSettings(
     { v2TargetReservePercent: 75 },
     currentSettingsStorageMigrationVersion,
   );
   assertEqual(
     {
-      changed: alreadyMigratedUserChoice.changed,
-      value: alreadyMigratedUserChoice.settings.v2TargetReservePercent,
+      changed: alreadyVersionedUserChoice.changed,
+      value: alreadyVersionedUserChoice.settings.v2TargetReservePercent,
     },
     { changed: false, value: 75 },
-    "versionoidun migraation jalkeen kayttajan tarkoituksella valitsema 75 prosenttia sailyy",
+    "versionoidun migraation jalkeen kayttajan 75 prosenttia sailyy",
   );
 
   const existingCustomRecommendation = migrateStoredSettings(
