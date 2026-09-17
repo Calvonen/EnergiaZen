@@ -73,6 +73,29 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected every advisory pair to preserve temporal order",
   );
 
+  const baselineAlreadyUsesCheapToday = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([
+      "2026-09-17T13:00:00.000Z",
+      "2026-09-17T22:00:00.000Z",
+    ]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+  });
+  assert(
+    !baselineAlreadyUsesCheapToday.candidatePreheatHourIds.includes("2026-09-17T13:00:00.000Z"),
+    "expected baseline-selected remaining-today heat to be excluded from additive preheat candidates",
+  );
+  assert(
+    baselineAlreadyUsesCheapToday.marginalCost.pairs.every(
+      (pair) => pair.preheatHourId !== "2026-09-17T13:00:00.000Z",
+    ),
+    "expected advisory never to reuse a baseline-selected heating hour as preheat",
+  );
+
   const incompleteTomorrow = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"]),
     conservativeEnergyKwh: 12,
