@@ -64,6 +64,7 @@ export function buildV2MarginalPreheatAdvisory({
   maxPreheatHours,
   now,
   prices,
+  recommendedPreheatPercent,
   remainingEnergyKwh,
 }: {
   baselinePlan: LiveEnergyPlanShadowResult;
@@ -74,9 +75,14 @@ export function buildV2MarginalPreheatAdvisory({
   maxPreheatHours: number;
   now: Date;
   prices: ShadowElectricityPrice[];
+  recommendedPreheatPercent?: number;
   remainingEnergyKwh: number;
 }): V2MarginalPreheatAdvisory {
-  const level = evaluateV2SoftPreheatLevel({ conservativeEnergyKwh, energyCapacityKwh });
+  const level = evaluateV2SoftPreheatLevel({
+    conservativeEnergyKwh,
+    energyCapacityKwh,
+    recommendedPreheatPercent,
+  });
   if (!level.available || level.recommendedPreheatEnergyKwh === null) {
     return unavailable("preheat_level_unavailable", level);
   }
