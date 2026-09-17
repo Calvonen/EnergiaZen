@@ -31,13 +31,19 @@ type MatchingState = {
   savings: number;
 };
 
+export function marginalPairKey(preheatHourId: string, displacedFutureHourId: string) {
+  return `${preheatHourId}|${displacedFutureHourId}`;
+}
+
 export function evaluateV2MarginalPreheatCost({
   displacedFutureHeatingHourIds,
+  excludedPairKeys = [],
   maxPreheatHours,
   preheatCandidateHourIds,
   prices,
 }: {
   displacedFutureHeatingHourIds: string[];
+  excludedPairKeys?: string[];
   maxPreheatHours: number;
   preheatCandidateHourIds: string[];
   prices: ShadowElectricityPrice[];
@@ -67,7 +73,7 @@ export function evaluateV2MarginalPreheatCost({
   const displaced = [...pricedFuture].sort(
     (left, right) => Date.parse(left.hourId) - Date.parse(right.hourId),
   );
-  const pairs = findBestMatching(candidates, displaced, maxHours);
+  const pairs = findBestMatching(candidates, displaced, maxHours, new Set(excludedPairKeys));
 
   if (!pairs.length) {
     return unavailable("no_positive_savings");
@@ -80,6 +86,7 @@ function findBestMatching(
   candidates: PricedHour[],
   displaced: PricedHour[],
   maxHours: number,
+  excludedPairKeys: Set<string>,
 ): V2MarginalPreheatPair[] {
   const pairLimit = Math.min(maxHours, candidates.length, displaced.length);
   const dp: MatchingState[][][] = Array.from({ length: candidates.length + 1 }, () =>
@@ -107,10 +114,12 @@ function findBestMatching(
 
         const previous = dp[candidateIndex - 1][futureIndex - 1][pairCount - 1];
         const savings = future.billedPriceCentsPerKwh - candidate.billedPriceCentsPerKwh;
+        const pairKey = marginalPairKey(candidate.hourId, future.hourId);
         if (
           Number.isFinite(previous.savings) &&
           Date.parse(candidate.hourId) < Date.parse(future.hourId) &&
-          savings > 0
+          savings > 0 &&
+          !excludedPairKeys.has(pairKey)
         ) {
           const matched: MatchingState = {
             savings: previous.savings + savings,
@@ -158,8 +167,8 @@ function betterFinalState(left: MatchingState, right: MatchingState) {
 }
 
 function comparePairs(left: V2MarginalPreheatPair[], right: V2MarginalPreheatPair[]) {
-  const leftKey = left.map((pair) => `${pair.preheatHourId}|${pair.displacedFutureHourId}`).join(",");
-  const rightKey = right.map((pair) => `${pair.preheatHourId}|${pair.displacedFutureHourId}`).join(",");
+  const leftKey = left.map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId)).join(",");
+  const rightKey = right.map((pair) => marginalPairKey(pair.preheatHourId, pair.displacedFutureHourId)).join(",");
   return leftKey.localeCompare(rightKey);
 }
 
