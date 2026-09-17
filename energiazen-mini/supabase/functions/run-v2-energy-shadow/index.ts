@@ -152,21 +152,33 @@ Deno.serve(async (request) => {
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
     });
 
-    const publicationSelectedHeatingHourIds =
-      preheatAdvisory.available && preheatAdvisory.reason === "recommended"
-        ? [...new Set([
-            ...preheatAdvisory.retainedBaselineHeatingHourIds,
-            ...preheatAdvisory.recommendedPreheatHourIds,
-          ])].sort((left, right) => Date.parse(left) - Date.parse(right))
-        : [...plan.selectedHeatingHourIds];
+    const publicationSelectedHeatingHourIds = (() => {
+      if (!preheatAdvisory.available || preheatAdvisory.reason !== "recommended") {
+        return [...plan.selectedHeatingHourIds];
+      }
+
+      const actuallyDisplacedBaselineHourIds = new Set(
+        preheatAdvisory.strategy === "marginal_displacement" && preheatAdvisory.marginalCost.available
+          ? preheatAdvisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
+          : [],
+      );
+      const preservedBaselineHourIds = plan.selectedHeatingHourIds.filter(
+        (hourId) => !actuallyDisplacedBaselineHourIds.has(hourId),
+      );
+
+      return [...new Set([
+        ...preservedBaselineHourIds,
+        ...preheatAdvisory.recommendedPreheatHourIds,
+      ])].sort((left, right) => Date.parse(left) - Date.parse(right));
+    })();
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
     const latestPublishableReadingAt = deriveLatestPublishableReadingAt(readings);
     // Staged publication composes the validated hard-safety baseline with the
-    // economic preheat advisory. Production cutover remains disabled here;
-    // this only keeps the shadow/staged candidate faithful to the configured
-    // soft recommendation for a later explicit cutover decision.
+    // economic preheat advisory. Only baseline hours that the advisory actually
+    // pairs for displacement may be removed; every unmatched safety hour is
+    // preserved. Production cutover remains disabled here.
     const publicationCandidate = captureV2PublicationCandidate(
       plan,
       publicationSelectedHeatingHourIds,
