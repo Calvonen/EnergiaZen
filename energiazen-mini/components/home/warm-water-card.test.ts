@@ -41,9 +41,19 @@ export function runV2HomeReservePresentationUnitTests() {
   const configured = buildV2HomeReservePresentation(
     { ...base, target_reserve_percent: 80 },
     now,
+    80,
   );
   if (!configured.available || configured.recommendedPreheatPercent !== 80) {
     throw new Error("expected the home reserve presentation to expose the configured 80% soft recommendation");
+  }
+
+  const configuredOverridesOlderTelemetry = buildV2HomeReservePresentation(
+    { ...base, target_reserve_percent: 90 },
+    now,
+    80,
+  );
+  if (configuredOverridesOlderTelemetry.recommendedPreheatPercent !== 80) {
+    throw new Error("expected persisted app settings to define the displayed recommendation while telemetry catches up");
   }
 
   const withoutConfiguredRecommendation = buildV2HomeReservePresentation(
@@ -71,30 +81,34 @@ export function runV2HomeReservePresentationUnitTests() {
   const stale = buildV2HomeReservePresentation(
     { ...base, run_at: "2026-09-16T08:29:00Z" },
     now,
+    80,
   );
   if (stale.available || stale.percent !== null || stale.fillPercent !== 0 ||
       stale.safetyReservePercent !== null || stale.targetReservePercent !== null) {
     throw new Error("expected a 31-minute-old production snapshot and its limit markers to fail closed");
   }
-  if (stale.recommendedPreheatPercent !== 90) {
-    throw new Error("expected the default soft recommendation to remain known when telemetry is unavailable");
+  if (stale.recommendedPreheatPercent !== 80) {
+    throw new Error("expected the persisted soft recommendation to remain known when telemetry is unavailable");
   }
 
   const future = buildV2HomeReservePresentation(
     { ...base, run_at: "2026-09-16T09:01:00Z" },
     now,
+    80,
   );
-  if (future.available || future.safetyReservePercent !== null || future.targetReservePercent !== null) {
-    throw new Error("expected a future-dated production snapshot and its limit markers to fail closed");
+  if (future.available || future.safetyReservePercent !== null || future.targetReservePercent !== null || future.recommendedPreheatPercent !== 80) {
+    throw new Error("expected a future-dated production snapshot to fail closed without losing the configured recommendation");
   }
 
   const unavailable = buildV2HomeReservePresentation(
     { ...base, available: false },
     now,
+    80,
   );
   if (unavailable.available || unavailable.percent !== null ||
-      unavailable.safetyReservePercent !== null || unavailable.targetReservePercent !== null) {
-    throw new Error("expected an unavailable V2 snapshot and its live limit markers to fail closed");
+      unavailable.safetyReservePercent !== null || unavailable.targetReservePercent !== null ||
+      unavailable.recommendedPreheatPercent !== 80) {
+    throw new Error("expected unavailable V2 telemetry to fail closed without replacing the configured recommendation");
   }
 
   const invalidCapacity = buildV2HomeReservePresentation(
