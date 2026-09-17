@@ -1,5 +1,8 @@
 import type { EditableSettingKey, EnergiaZenSettings } from "./settings";
-import { recommendedV2PreheatPercent } from "./energyModelV2/energyReservePercent";
+import {
+  maxV2SafetyReservePercent,
+  recommendedV2PreheatPercent,
+} from "./energyModelV2/energyReservePercent";
 
 export type SettingsValidationField =
   | EditableSettingKey
@@ -141,11 +144,11 @@ export function validateSettingsDraft(
   if (
     isFiniteNumber(v2SafetyReservePercent) &&
     (v2SafetyReservePercent < 0 ||
-      v2SafetyReservePercent > recommendedV2PreheatPercent)
+      v2SafetyReservePercent > maxV2SafetyReservePercent)
   ) {
     errors.push({
       field: "v2SafetyReservePercent",
-      message: `V2-turvarajan pitää olla välillä 0–${recommendedV2PreheatPercent} %.`,
+      message: `V2-turvarajan pitää olla välillä 0–${maxV2SafetyReservePercent} %.`,
     });
   }
 
