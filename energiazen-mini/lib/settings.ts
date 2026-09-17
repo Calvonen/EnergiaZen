@@ -5,6 +5,10 @@ import {
   normalizeSettings,
 } from "./settingsDefaults";
 import type { EnergiaZenSettings } from "./settingsDefaults";
+import {
+  currentSettingsStorageMigrationVersion,
+  migrateStoredSettings,
+} from "./settingsStorageMigration";
 
 // Pure defaults/types/normalization live in ./settingsDefaults so they can
 // be imported without AsyncStorage (needed by anything that must also run
@@ -13,24 +17,58 @@ import type { EnergiaZenSettings } from "./settingsDefaults";
 export * from "./settingsDefaults";
 
 export const settingsStorageKey = "energiazen:settings";
+export const settingsStorageMigrationVersionKey =
+  "energiazen:settings:migration-version";
 
 export async function loadSettings() {
   try {
-    const storedSettings = await AsyncStorage.getItem(settingsStorageKey);
+    const [storedSettings, storedMigrationVersion] = await Promise.all([
+      AsyncStorage.getItem(settingsStorageKey),
+      AsyncStorage.getItem(settingsStorageMigrationVersionKey),
+    ]);
 
     if (!storedSettings) {
       return defaultSettings;
     }
 
-    return normalizeSettings(JSON.parse(storedSettings));
+    const parsedSettings = JSON.parse(storedSettings);
+    const parsedMigrationVersion = Number(storedMigrationVersion);
+    const migration = migrateStoredSettings(
+      parsedSettings,
+      Number.isFinite(parsedMigrationVersion) ? parsedMigrationVersion : null,
+    );
+    const normalizedSettings = normalizeSettings(migration.settings);
+
+    if (
+      migration.changed ||
+      parsedMigrationVersion !== currentSettingsStorageMigrationVersion
+    ) {
+      try {
+        await AsyncStorage.multiSet([
+          [settingsStorageKey, JSON.stringify(normalizedSettings)],
+          [
+            settingsStorageMigrationVersionKey,
+            String(currentSettingsStorageMigrationVersion),
+          ],
+        ]);
+      } catch {
+        // The migrated in-memory value is still safer than falling back to
+        // defaults. A later successful save/load can persist the marker.
+      }
+    }
+
+    return normalizedSettings;
   } catch {
     return defaultSettings;
   }
 }
 
 export async function saveSettings(settings: EnergiaZenSettings) {
-  await AsyncStorage.setItem(
-    settingsStorageKey,
-    JSON.stringify(normalizeSettings(settings)),
-  );
+  await AsyncStorage.multiSet([
+    [settingsStorageKey, JSON.stringify(normalizeSettings(settings))],
+    [
+      settingsStorageMigrationVersionKey,
+      String(currentSettingsStorageMigrationVersion),
+    ],
+  ]);
 }
