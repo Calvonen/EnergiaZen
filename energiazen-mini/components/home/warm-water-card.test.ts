@@ -65,6 +65,16 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error("expected authoritative backend telemetry to win over a fresh install's local 90% default");
   }
 
+  const pendingSavedRecommendationOverridesOldTelemetry = buildV2HomeReservePresentation(
+    { ...base, recommended_preheat_percent: 80 },
+    now,
+    90,
+    true,
+  );
+  if (pendingSavedRecommendationOverridesOldTelemetry.recommendedPreheatPercent !== 90) {
+    throw new Error("expected a newly saved local recommendation to win while older shadow telemetry catches up");
+  }
+
   const configuredFallbackWithoutTelemetry = buildV2HomeReservePresentation(
     { ...base, recommended_preheat_percent: null },
     now,
