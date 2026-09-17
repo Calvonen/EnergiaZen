@@ -4,6 +4,7 @@ import { getHeatingModeSettingKeys } from "./heatingModeSettings";
 import { createHeatingOptimizationSettings } from "./heatingOptimizer";
 import {
   currentSettingsStorageMigrationVersion,
+  mergeSettingsForStorage,
   migrateStoredSettings,
 } from "./settingsStorageMigration";
 
@@ -69,6 +70,46 @@ export function runHeatingSettingsUnitTests() {
     },
     { changed: false, value: 80 },
     "vanha ei-oletusarvoinen kayttajavalinta sailyy migraatiossa",
+  );
+
+  assertEqual(
+    mergeSettingsForStorage({
+      migrationVersion: currentSettingsStorageMigrationVersion + 1,
+      normalizedSettings: {
+        heatingMode: "fixed",
+        v2TargetReservePercent: 80,
+      },
+      rawStoredSettings: {
+        futureOnlySetting: "preserve-me",
+        heatingMode: "automatic",
+        v2TargetReservePercent: 90,
+      },
+    }),
+    {
+      futureOnlySetting: "preserve-me",
+      heatingMode: "fixed",
+      v2TargetReservePercent: 80,
+    },
+    "rollback-tallennus sailyttaa tulevan version tuntemattomat kentat ja paivittaa tunnetut kentat",
+  );
+
+  assertEqual(
+    mergeSettingsForStorage({
+      migrationVersion: currentSettingsStorageMigrationVersion,
+      normalizedSettings: {
+        heatingMode: "fixed",
+        v2TargetReservePercent: 80,
+      },
+      rawStoredSettings: {
+        futureOnlySetting: "drop-on-current-schema",
+        heatingMode: "automatic",
+      },
+    }),
+    {
+      heatingMode: "fixed",
+      v2TargetReservePercent: 80,
+    },
+    "nykyisen skeemaversion tallennus ei kanna tuntemattomia kenttia eteenpain",
   );
 
   assertEqual(
