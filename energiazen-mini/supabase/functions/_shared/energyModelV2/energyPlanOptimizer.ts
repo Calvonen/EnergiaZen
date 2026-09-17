@@ -4,6 +4,7 @@ import {
   type EnergyForecastSegment,
 } from "./energyForecast.ts";
 import type { EnergyReserveThresholds } from "./energyReservePolicy.ts";
+import { calculateBilledElectricityPriceCentsPerKwh } from "../heatingTariff.ts";
 
 export type EnergyPlanCandidateSegment = Omit<EnergyForecastSegment, "heatingSelected"> & {
   priceCentsPerKwh: number;
@@ -150,10 +151,10 @@ function evaluateSelection({
     (sum, segment) => sum + Math.max(0, heaterPowerKw) * clamp(segment.segmentHours, 0, 1),
     0,
   );
-  const totalCostCents = selectedSegments.reduce(
-    (sum, segment) => sum + Math.max(0, heaterPowerKw) * clamp(segment.segmentHours, 0, 1) * finitePrice(segment.priceCentsPerKwh),
-    0,
-  );
+  const totalCostCents = selectedSegments.reduce((sum, segment) => {
+    const billedPrice = calculateBilledElectricityPriceCentsPerKwh(segment.priceCentsPerKwh);
+    return sum + Math.max(0, heaterPowerKw) * clamp(segment.segmentHours, 0, 1) * finitePrice(billedPrice);
+  }, 0);
   const finalTargetSatisfied = forecast.finalConservativeEnergyKwh >= forecast.thresholds.targetEnergyKwh;
   const safetySatisfied = forecast.firstSafetyViolationAt === null;
   const valid = safetySatisfied && finalTargetSatisfied;
@@ -173,10 +174,17 @@ function evaluateSelection({
 }
 
 function compareValidPlans(left: EvaluatedPlan, right: EvaluatedPlan) {
+  // Once both plans satisfy the current safety + target validity rules, the
+  // primary optimization objective is what the electricity actually costs at
+  // the billed tariff (spot + margin + grid/tax), not spot alone. Energy amount
+  // is only a tie-breaker after equal cost; later PRs will separately change
+  // target into soft preheat.
+  if (left.totalCostCents !== right.totalCostCents) {
+    return left.totalCostCents - right.totalCostCents;
+  }
   if (left.selectedHeatingEnergyKwh !== right.selectedHeatingEnergyKwh) {
     return left.selectedHeatingEnergyKwh - right.selectedHeatingEnergyKwh;
   }
-  if (left.totalCostCents !== right.totalCostCents) return left.totalCostCents - right.totalCostCents;
   return left.selectedHeatingHourIds.join("|").localeCompare(right.selectedHeatingHourIds.join("|"));
 }
 
@@ -232,8 +240,10 @@ function* combinations(values: string[], count: number, start = 0, prefix: strin
   }
 }
 
-function finitePrice(value: number) {
-  return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+function finitePrice(value: number | null) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : Number.POSITIVE_INFINITY;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
