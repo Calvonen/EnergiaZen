@@ -10,6 +10,7 @@ export type V2PublicationGuardInput = {
   latestTankReadingAt: string | null;
   plan: LiveEnergyPlanShadowResult;
   publicationCandidate: V2PublicationCandidate | null;
+  expectedSelectedHeatingHourIds?: readonly string[];
 };
 
 export type V2PublicationGuardDecision = {
@@ -31,20 +32,25 @@ const maxTankReadingAgeMs = 15 * 60_000;
 /**
  * Capture the independently publishable payload from a validated plan. The
  * copy is deliberate: the guard must compare two snapshots rather than two
- * references to the optimizer's mutable array.
+ * references to the optimizer's mutable array. Callers may provide an
+ * advisory-composed hour set while retaining the validated baseline plan for
+ * readiness checks.
  */
-export function captureV2PublicationCandidate(plan: LiveEnergyPlanShadowResult): V2PublicationCandidate {
-  return { selectedHeatingHourIds: [...plan.selectedHeatingHourIds] };
+export function captureV2PublicationCandidate(
+  plan: LiveEnergyPlanShadowResult,
+  selectedHeatingHourIds: readonly string[] = plan.selectedHeatingHourIds,
+): V2PublicationCandidate {
+  return { selectedHeatingHourIds: [...selectedHeatingHourIds] };
 }
 
 /**
  * Pure readiness gate for the future V2 publication/cutover path.
  *
  * This intentionally performs no database writes and does not alter Shelly
- * ownership. The default runtime call keeps `enabled=false`, so merging and
- * deploying this guard cannot transfer control away from V1. A later cutover
- * PR must explicitly enable the gate and atomically publish the independently
- * captured candidate that passed this check.
+ * ownership. The default runtime call keeps cutover `enabled=false`, so
+ * merging and deploying this guard cannot transfer control away from V1. A
+ * later cutover PR must explicitly enable the gate and atomically publish the
+ * independently captured candidate that passed this check.
  */
 export function evaluateV2PublicationGuard({
   enabled,
@@ -52,6 +58,7 @@ export function evaluateV2PublicationGuard({
   latestTankReadingAt,
   plan,
   publicationCandidate,
+  expectedSelectedHeatingHourIds = plan.selectedHeatingHourIds,
 }: V2PublicationGuardInput): V2PublicationGuardDecision {
   if (!enabled) return { ready: false, reason: "cutover_disabled" };
 
@@ -70,7 +77,7 @@ export function evaluateV2PublicationGuard({
   if (publicationCandidate === null) {
     return { ready: false, reason: "publication_candidate_missing" };
   }
-  if (!sameHourIds(plan.selectedHeatingHourIds, publicationCandidate.selectedHeatingHourIds)) {
+  if (!sameHourIds(expectedSelectedHeatingHourIds, publicationCandidate.selectedHeatingHourIds)) {
     return { ready: false, reason: "selected_hours_mismatch" };
   }
 
