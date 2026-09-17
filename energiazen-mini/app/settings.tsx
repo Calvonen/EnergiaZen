@@ -168,7 +168,7 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
   },
   v2TargetReservePercent: {
     max: 95,
-    min: 5,
+    min: 70,
     step: 5,
     unit: "%",
   },
@@ -451,10 +451,11 @@ export default function SettingsScreen() {
                 {
                   accent: "#36f4d4",
                   description:
-                    "Pehmeä esilämmityssuositus. V2 voi nostaa energiavaraa tätä tasoa kohti, kun halpa tunti voidaan hyödyntää taloudellisesti. Tämä ei ole kova vähimmäisraja.",
+                    `Pehmeä esilämmityssuositus. V2 voi nostaa energiavaraa tätä tasoa kohti, kun halpa tunti voidaan hyödyntää taloudellisesti. Tämä ei ole kova vähimmäisraja. Oletus on ${V2_RECOMMENDED_PREHEAT_PERCENT} %.`,
+                  key: "v2TargetReservePercent",
                   label: "Esilämmityssuositus",
-                  secondaryValue: formatV2ReserveKwh(V2_RECOMMENDED_PREHEAT_PERCENT),
-                  value: `${V2_RECOMMENDED_PREHEAT_PERCENT} %`,
+                  secondaryValue: formatV2ReserveKwh(settings.v2TargetReservePercent),
+                  value: `${settings.v2TargetReservePercent} %`,
                 },
                 {
                   accent: "#ffcf5a",
