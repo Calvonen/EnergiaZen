@@ -24,7 +24,7 @@ export const defaultWaterSpecificHeatKwhPerKgC = 0.001163;
 export const minV2TargetReservePercent = 5;
 export const maxV2TargetReservePercent = 95;
 export const minV2SafetyReservePercent = 0;
-export const maxV2SafetyReservePercent = recommendedV2PreheatPercent;
+export const maxV2SafetyReservePercent = 95;
 
 export function calculateV2EnergyCapacityKwh({
   inletTemperatureC,
