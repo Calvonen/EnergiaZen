@@ -1,25 +1,20 @@
-import { defaultSettings, type LegacySettings } from "./settingsDefaults";
+import type { LegacySettings } from "./settingsDefaults";
 
 export const currentSettingsStorageMigrationVersion = 1;
-export const legacyV2PreheatDefaultPercent = 75;
 
 export function migrateStoredSettings(
   settings: LegacySettings,
   previousVersion: number | null,
 ) {
   const version = Number.isFinite(previousVersion) ? previousVersion as number : 0;
-  const shouldMigrateLegacyPreheatDefault =
-    version < currentSettingsStorageMigrationVersion &&
-    settings.v2TargetReservePercent === legacyV2PreheatDefaultPercent;
 
+  // Version 1 intentionally does not rewrite v2TargetReservePercent. A stored
+  // 75% value may be either the old default or an explicit user choice, and we
+  // have no provenance that can distinguish the two safely. Preserve every
+  // existing recommendation and only advance the migration marker.
   return {
-    changed: shouldMigrateLegacyPreheatDefault,
-    migrationVersion: currentSettingsStorageMigrationVersion,
-    settings: shouldMigrateLegacyPreheatDefault
-      ? {
-          ...settings,
-          v2TargetReservePercent: defaultSettings.v2TargetReservePercent,
-        }
-      : settings,
+    changed: false,
+    migrationVersion: Math.max(version, currentSettingsStorageMigrationVersion),
+    settings,
   };
 }
