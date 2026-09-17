@@ -10,7 +10,7 @@ import {
   type V1ShadowSnapshot,
 } from "./logic.ts";
 import { runLiveEnergyPlanShadow, type ShadowElectricityPrice } from "./planShadow.ts";
-import { buildV2LivePreheatAdvisory } from "./preheatAdvisory.ts";
+import { buildV2MarginalPreheatAdvisory } from "./preheatMarginalAdvisory.ts";
 import { buildV2PriceCeilingSettingTelemetry } from "./priceCeilingSetting.ts";
 import {
   resolveV2HeatingConstraints,
@@ -134,13 +134,16 @@ Deno.serve(async (request) => {
       prices,
       reserve: result,
     });
-    const preheatAdvisory = buildV2LivePreheatAdvisory({
+    const preheatAdvisory = buildV2MarginalPreheatAdvisory({
+      baselinePlan: plan,
       conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
+      constraints,
       energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
       maxPreheatHours: automaticMaxHeatingHours,
       now,
       prices,
+      remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
     });
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
