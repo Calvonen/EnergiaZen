@@ -1,5 +1,6 @@
 import {
   buildV2HomeReservePresentation,
+  V2_RECOMMENDED_PREHEAT_PERCENT,
   type V2HomeReserveSnapshot,
 } from "../../lib/v2HomeReservePresentation";
 
@@ -25,13 +26,24 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error(`expected production reserve presentation near 63.28%, got ${current.percent}`);
   }
   if (current.safetyReservePercent !== 30 || current.targetReservePercent !== 75) {
-    throw new Error("expected current production reserve limits to be presented from the validated snapshot");
+    throw new Error("expected current production reserve limits to remain available as telemetry");
+  }
+  if (current.recommendedPreheatPercent !== V2_RECOMMENDED_PREHEAT_PERCENT || current.recommendedPreheatPercent !== 90) {
+    throw new Error("expected the home reserve presentation to use the 90% soft preheat recommendation");
   }
   if (current.forecastMinimumPercent === null || Math.abs(current.forecastMinimumPercent - 59.98) >= 0.05) {
     throw new Error(`expected V2 forecast minimum near 59.98%, got ${current.forecastMinimumPercent}`);
   }
   if (current.forecastFinalPercent === null || Math.abs(current.forecastFinalPercent - 75.26) >= 0.05) {
     throw new Error(`expected V2 horizon-end reserve near 75.26%, got ${current.forecastFinalPercent}`);
+  }
+
+  const withoutLegacyTarget = buildV2HomeReservePresentation(
+    { ...base, target_reserve_percent: null },
+    now,
+  );
+  if (!withoutLegacyTarget.available || withoutLegacyTarget.targetReservePercent !== null || withoutLegacyTarget.recommendedPreheatPercent !== 90) {
+    throw new Error("expected the V2 home reserve to stay available without the legacy 75% target");
   }
 
   const fallback = buildV2HomeReservePresentation(
@@ -56,6 +68,9 @@ export function runV2HomeReservePresentationUnitTests() {
       stale.safetyReservePercent !== null || stale.targetReservePercent !== null) {
     throw new Error("expected a 31-minute-old production snapshot and its limit markers to fail closed");
   }
+  if (stale.recommendedPreheatPercent !== 90) {
+    throw new Error("expected the static soft recommendation to remain known when telemetry is unavailable");
+  }
 
   const future = buildV2HomeReservePresentation(
     { ...base, run_at: "2026-09-16T09:01:00Z" },
@@ -71,7 +86,7 @@ export function runV2HomeReservePresentationUnitTests() {
   );
   if (unavailable.available || unavailable.percent !== null ||
       unavailable.safetyReservePercent !== null || unavailable.targetReservePercent !== null) {
-    throw new Error("expected an unavailable V2 snapshot and its limit markers to fail closed");
+    throw new Error("expected an unavailable V2 snapshot and its live limit markers to fail closed");
   }
 
   const invalidCapacity = buildV2HomeReservePresentation(
@@ -79,7 +94,7 @@ export function runV2HomeReservePresentationUnitTests() {
     now,
   );
   if (invalidCapacity.available || invalidCapacity.safetyReservePercent !== null || invalidCapacity.targetReservePercent !== null) {
-    throw new Error("expected zero capacity and its limit markers to fail closed");
+    throw new Error("expected zero capacity and its live limit markers to fail closed");
   }
 
   const invalidLimits = buildV2HomeReservePresentation(
@@ -87,6 +102,6 @@ export function runV2HomeReservePresentationUnitTests() {
     now,
   );
   if (invalidLimits.available || invalidLimits.safetyReservePercent !== null || invalidLimits.targetReservePercent !== null) {
-    throw new Error("expected missing reserve limits to fail the whole presentation closed");
+    throw new Error("expected a missing hard safety reserve to fail the whole presentation closed");
   }
 }
