@@ -73,21 +73,25 @@ export function buildV2MarginalPreheatAdvisory({
   }
 
   const nowMs = now.getTime();
-  const displacedFutureHeatingHourIds = [...new Set(baselinePlan.selectedHeatingHourIds)]
+  const baselineSelectedHourIds = new Set(baselinePlan.selectedHeatingHourIds);
+  const displacedFutureHeatingHourIds = [...baselineSelectedHourIds]
     .filter((hourId) => Number.isFinite(Date.parse(hourId)) && Date.parse(hourId) > nowMs)
     .sort((left, right) => Date.parse(left) - Date.parse(right));
+  const candidatePreheatHourIds = horizon.futureTodayHourIds.filter(
+    (hourId) => !baselineSelectedHourIds.has(hourId),
+  );
 
   const marginalCost = evaluateV2MarginalPreheatCost({
     displacedFutureHeatingHourIds,
     maxPreheatHours: maxPreheatHoursByHeadroom,
-    preheatCandidateHourIds: horizon.futureTodayHourIds,
+    preheatCandidateHourIds: candidatePreheatHourIds,
     prices,
   });
 
   if (!marginalCost.available) {
     return {
       available: false,
-      candidatePreheatHourIds: horizon.futureTodayHourIds,
+      candidatePreheatHourIds,
       displacedFutureHeatingHourIds,
       level,
       marginalCost,
@@ -98,7 +102,7 @@ export function buildV2MarginalPreheatAdvisory({
 
   return {
     available: true,
-    candidatePreheatHourIds: horizon.futureTodayHourIds,
+    candidatePreheatHourIds,
     displacedFutureHeatingHourIds,
     level,
     marginalCost,
