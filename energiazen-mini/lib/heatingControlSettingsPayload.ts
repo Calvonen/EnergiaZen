@@ -1,4 +1,4 @@
-import type { EnergiaZenSettings } from "./settings";
+import type { EnergiaZenSettings } from "./settingsDefaults";
 
 export type HeatingControlSettingsPayload = {
   automatic_max_heating_hours: number;
