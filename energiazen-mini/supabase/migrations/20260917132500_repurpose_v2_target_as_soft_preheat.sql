@@ -13,13 +13,10 @@ alter table public.heating_control_settings
   drop constraint if exists heating_control_settings_v2_target_reserve_percent_check,
   drop constraint if exists heating_control_settings_v2_reserve_percent_order_check;
 
--- 75% was the previous default. Move only that default to the new 90% soft
--- recommendation; preserve other legacy values so older installed clients
--- remain writable during the staggered rollout.
-update public.heating_control_settings
-set v2_target_reserve_percent = 90
-where v2_target_reserve_percent = 75;
-
+-- Preserve every existing stored value. In particular, 75% may have been an
+-- intentional user selection rather than merely the previous default, and the
+-- database has no provenance that can distinguish those cases safely. The new
+-- 90% value applies only as the default for newly created rows/settings.
 alter table public.heating_control_settings
   add constraint heating_control_settings_v2_target_reserve_percent_check
     check (
