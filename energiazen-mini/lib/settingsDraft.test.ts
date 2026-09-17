@@ -256,15 +256,29 @@ export async function runSettingsDraftUnitTests() {
 
   {
     const savedSettings = createSettings();
-    const invalidV2Draft = createSettings({
+    const independentV2Draft = createSettings({
       v2SafetyReservePercent: 80,
       v2TargetReservePercent: 70,
     });
-    const validation = validateSettingsDraft(invalidV2Draft, savedSettings);
+    const validation = validateSettingsDraft(independentV2Draft, savedSettings);
     assertEqual(
       validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
-      true,
-      "V2 turvaraja ei saa ylittaa tavoitevarausta",
+      false,
+      "V2 turvaraja ei riipu piilotetusta legacy-targetista",
+    );
+  }
+
+  {
+    const savedSettings = createSettings();
+    const visibleMaximumDraft = createSettings({
+      v2SafetyReservePercent: 95,
+      v2TargetReservePercent: 70,
+    });
+    const validation = validateSettingsDraft(visibleMaximumDraft, savedSettings);
+    assertEqual(
+      validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
+      false,
+      "V2 turvarajan nakyva 95 prosentin vaihtoehto voidaan tallentaa",
     );
   }
 
