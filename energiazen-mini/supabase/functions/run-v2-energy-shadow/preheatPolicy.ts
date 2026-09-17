@@ -108,15 +108,22 @@ export function evaluateV2PreheatOpportunity({
   prices: ShadowElectricityPrice[];
 }): V2PreheatOpportunity {
   const horizon = evaluateV2PreheatHorizon({ now, prices });
-  if (!horizon.available) return unavailable(horizon.reason);
-
   const priceById = new Map(prices.map((price) => [price.starts_at, price]));
   const tomorrowBilledPrices = horizon.tomorrowHourIds
     .map((hourId) => priceById.get(hourId))
     .filter((price): price is ShadowElectricityPrice => Boolean(price))
     .map((price) => calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh))
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const tomorrowCheapestBilledCentsPerKwh = Math.min(...tomorrowBilledPrices);
+  const tomorrowCheapestBilledCentsPerKwh = tomorrowBilledPrices.length
+    ? Math.min(...tomorrowBilledPrices)
+    : null;
+
+  if (!horizon.available) {
+    return unavailable(horizon.reason, tomorrowCheapestBilledCentsPerKwh);
+  }
+  if (tomorrowCheapestBilledCentsPerKwh === null) {
+    return unavailable("tomorrow_prices_incomplete");
+  }
 
   const eligiblePreheatHourIds = horizon.futureTodayHourIds
     .filter((hourId) => {
