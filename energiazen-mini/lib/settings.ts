@@ -9,6 +9,7 @@ import {
   currentSettingsStorageMigrationVersion,
   migrateStoredSettings,
 } from "./settingsStorageMigration";
+import { registerEffectiveSettingsPersister } from "./v2RecommendationSaveBaseline";
 
 // Pure defaults/types/normalization live in ./settingsDefaults so they can
 // be imported without AsyncStorage (needed by anything that must also run
@@ -72,3 +73,5 @@ export async function saveSettings(settings: EnergiaZenSettings) {
     ],
   ]);
 }
+
+registerEffectiveSettingsPersister(saveSettings);
