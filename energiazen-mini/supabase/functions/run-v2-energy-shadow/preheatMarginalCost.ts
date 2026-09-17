@@ -21,6 +21,16 @@ export type V2MarginalPreheatCostResult = {
     | "price_data_missing";
 };
 
+type PricedHour = {
+  billedPriceCentsPerKwh: number;
+  hourId: string;
+};
+
+type MatchingState = {
+  pairs: V2MarginalPreheatPair[];
+  savings: number;
+};
+
 export function evaluateV2MarginalPreheatCost({
   displacedFutureHeatingHourIds,
   maxPreheatHours,
@@ -51,35 +61,13 @@ export function evaluateV2MarginalPreheatCost({
     return unavailable("price_data_missing");
   }
 
-  const feasiblePairs = pricedPreheat.flatMap((candidate) =>
-    pricedFuture.flatMap((future) => {
-      if (Date.parse(candidate.hourId) >= Date.parse(future.hourId)) return [];
-      const savings = future.billedPriceCentsPerKwh - candidate.billedPriceCentsPerKwh;
-      if (savings <= 0) return [];
-      return [{ candidate, future, savings }];
-    })
-  ).sort((left, right) =>
-    right.savings - left.savings ||
-    Date.parse(left.candidate.hourId) - Date.parse(right.candidate.hourId) ||
-    Date.parse(left.future.hourId) - Date.parse(right.future.hourId)
+  const candidates = [...pricedPreheat].sort(
+    (left, right) => Date.parse(left.hourId) - Date.parse(right.hourId),
   );
-
-  const usedPreheat = new Set<string>();
-  const usedFuture = new Set<string>();
-  const pairs: V2MarginalPreheatPair[] = [];
-  for (const { candidate, future, savings } of feasiblePairs) {
-    if (pairs.length >= maxHours) break;
-    if (usedPreheat.has(candidate.hourId) || usedFuture.has(future.hourId)) continue;
-    usedPreheat.add(candidate.hourId);
-    usedFuture.add(future.hourId);
-    pairs.push({
-      displacedFutureHourId: future.hourId,
-      displacedFuturePriceCentsPerKwh: round(future.billedPriceCentsPerKwh),
-      preheatHourId: candidate.hourId,
-      preheatPriceCentsPerKwh: round(candidate.billedPriceCentsPerKwh),
-      savingsCentsPerKwh: round(savings),
-    });
-  }
+  const displaced = [...pricedFuture].sort(
+    (left, right) => Date.parse(left.hourId) - Date.parse(right.hourId),
+  );
+  const pairs = findBestMatching(candidates, displaced, maxHours);
 
   if (!pairs.length) {
     return unavailable("no_positive_savings");
@@ -88,11 +76,87 @@ export function evaluateV2MarginalPreheatCost({
   return { available: true, pairs, reason: "recommended" };
 }
 
+function findBestMatching(
+  candidates: PricedHour[],
+  displaced: PricedHour[],
+  maxHours: number,
+): V2MarginalPreheatPair[] {
+  const pairLimit = Math.min(maxHours, candidates.length, displaced.length);
+  const dp: MatchingState[][][] = Array.from({ length: candidates.length + 1 }, () =>
+    Array.from({ length: displaced.length + 1 }, () =>
+      Array.from({ length: pairLimit + 1 }, () => ({ pairs: [], savings: Number.NEGATIVE_INFINITY })),
+    ),
+  );
+
+  for (let candidateIndex = 0; candidateIndex <= candidates.length; candidateIndex += 1) {
+    for (let futureIndex = 0; futureIndex <= displaced.length; futureIndex += 1) {
+      dp[candidateIndex][futureIndex][0] = { pairs: [], savings: 0 };
+    }
+  }
+
+  for (let candidateIndex = 1; candidateIndex <= candidates.length; candidateIndex += 1) {
+    for (let futureIndex = 1; futureIndex <= displaced.length; futureIndex += 1) {
+      const candidate = candidates[candidateIndex - 1];
+      const future = displaced[futureIndex - 1];
+
+      for (let pairCount = 1; pairCount <= pairLimit; pairCount += 1) {
+        let best = betterState(
+          dp[candidateIndex - 1][futureIndex][pairCount],
+          dp[candidateIndex][futureIndex - 1][pairCount],
+        );
+
+        const previous = dp[candidateIndex - 1][futureIndex - 1][pairCount - 1];
+        const savings = future.billedPriceCentsPerKwh - candidate.billedPriceCentsPerKwh;
+        if (
+          Number.isFinite(previous.savings) &&
+          Date.parse(candidate.hourId) < Date.parse(future.hourId) &&
+          savings > 0
+        ) {
+          const matched: MatchingState = {
+            savings: previous.savings + savings,
+            pairs: [
+              ...previous.pairs,
+              {
+                displacedFutureHourId: future.hourId,
+                displacedFuturePriceCentsPerKwh: round(future.billedPriceCentsPerKwh),
+                preheatHourId: candidate.hourId,
+                preheatPriceCentsPerKwh: round(candidate.billedPriceCentsPerKwh),
+                savingsCentsPerKwh: round(savings),
+              },
+            ],
+          };
+          best = betterState(best, matched);
+        }
+
+        dp[candidateIndex][futureIndex][pairCount] = best;
+      }
+    }
+  }
+
+  for (let pairCount = pairLimit; pairCount >= 1; pairCount -= 1) {
+    const state = dp[candidates.length][displaced.length][pairCount];
+    if (Number.isFinite(state.savings)) return state.pairs;
+  }
+  return [];
+}
+
+function betterState(left: MatchingState, right: MatchingState) {
+  if (right.savings > left.savings) return right;
+  if (right.savings < left.savings) return left;
+  return comparePairs(right.pairs, left.pairs) < 0 ? right : left;
+}
+
+function comparePairs(left: V2MarginalPreheatPair[], right: V2MarginalPreheatPair[]) {
+  const leftKey = left.map((pair) => `${pair.preheatHourId}|${pair.displacedFutureHourId}`).join(",");
+  const rightKey = right.map((pair) => `${pair.preheatHourId}|${pair.displacedFutureHourId}`).join(",");
+  return leftKey.localeCompare(rightKey);
+}
+
 function priceIds(
   hourIds: string[],
   priceById: Map<string, ShadowElectricityPrice>,
 ) {
-  const result: { billedPriceCentsPerKwh: number; hourId: string }[] = [];
+  const result: PricedHour[] = [];
   for (const hourId of [...new Set(hourIds)]) {
     const price = priceById.get(hourId);
     if (!price || !isUsableHourlyPrice(price)) return null;
