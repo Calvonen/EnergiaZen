@@ -1,7 +1,8 @@
 import type { EditableSettingKey, EnergiaZenSettings } from "./settings";
 import {
   maxV2SafetyReservePercent,
-  recommendedV2PreheatPercent,
+  maxV2TargetReservePercent,
+  minV2TargetReservePercent,
 } from "./energyModelV2/energyReservePercent";
 
 export type SettingsValidationField =
@@ -133,11 +134,12 @@ export function validateSettingsDraft(
 
   if (
     isFiniteNumber(v2TargetReservePercent) &&
-    (v2TargetReservePercent < 5 || v2TargetReservePercent > 95)
+    (v2TargetReservePercent < minV2TargetReservePercent ||
+      v2TargetReservePercent > maxV2TargetReservePercent)
   ) {
     errors.push({
       field: "v2TargetReservePercent",
-      message: "V2-legacy-targetin pitää olla välillä 5–95 %.",
+      message: `Esilämmityssuosituksen pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
     });
   }
 
@@ -261,11 +263,12 @@ export function validateSettingsDraft(
 
   if (
     isFiniteNumber(v2SafetyReservePercent) &&
-    recommendedV2PreheatPercent - v2SafetyReservePercent <= 10
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2TargetReservePercent - v2SafetyReservePercent <= 10
   ) {
     warnings.push({
       field: "v2SafetyReservePercent",
-      message: "V2-turvaraja on hyvin lähellä 90 % esilämmityssuositusta.",
+      message: "V2-turvaraja on hyvin lähellä esilämmityssuositusta.",
     });
   }
 
