@@ -11,6 +11,7 @@ import {
 } from "./logic.ts";
 import { runLiveEnergyPlanShadow, type ShadowElectricityPrice } from "./planShadow.ts";
 import { buildV2LivePreheatAdvisory } from "./preheatAdvisory.ts";
+import { buildV2PriceCeilingSettingTelemetry } from "./priceCeilingSetting.ts";
 import {
   resolveV2HeatingConstraints,
   type ShadowStoredHeatingPlan,
@@ -66,7 +67,7 @@ Deno.serve(async (request) => {
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("heating_control_settings")
-        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent")
+        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh")
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
@@ -95,6 +96,9 @@ Deno.serve(async (request) => {
       targetPercent: Number(settingsResult.data.v2_target_reserve_percent),
       safetyPercent: Number(settingsResult.data.v2_safety_reserve_percent),
     });
+    const priceCeilingSetting = buildV2PriceCeilingSettingTelemetry(
+      settingsResult.data.v2_max_billed_price_cents_kwh,
+    );
 
     const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
     const energyCapacityKwh = calculateV2EnergyCapacityKwh({
@@ -237,6 +241,7 @@ Deno.serve(async (request) => {
       forecast_final_conservative_energy_kwh: plan.finalConservativeEnergyKwh,
       forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
       preheat_advisory: preheatAdvisory,
+      price_ceiling_setting: priceCeilingSetting,
       staged_publication_enabled: v2StagedPublicationEnabled,
       staged_publication_ready: stagedPublicationReadiness.ready,
       staged_publication_ready_reason: stagedPublicationReadiness.reason,
