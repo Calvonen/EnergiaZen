@@ -76,18 +76,18 @@ export function runHeatingSettingsUnitTests() {
     mergeSettingsForStorage({
       migrationVersion: currentSettingsStorageMigrationVersion + 1,
       normalizedSettings: {
-        heatingMode: "fixed",
+        heatingNeedMode: "fixed",
         v2TargetReservePercent: 80,
       },
       rawStoredSettings: {
         futureOnlySetting: "preserve-me",
-        heatingMode: "automatic",
+        heatingNeedMode: "automatic",
         v2TargetReservePercent: 90,
       },
     }),
     {
       futureOnlySetting: "preserve-me",
-      heatingMode: "fixed",
+      heatingNeedMode: "fixed",
       v2TargetReservePercent: 80,
     },
     "rollback-tallennus sailyttaa tulevan version tuntemattomat kentat ja paivittaa tunnetut kentat",
@@ -97,16 +97,16 @@ export function runHeatingSettingsUnitTests() {
     mergeSettingsForStorage({
       migrationVersion: currentSettingsStorageMigrationVersion,
       normalizedSettings: {
-        heatingMode: "fixed",
+        heatingNeedMode: "fixed",
         v2TargetReservePercent: 80,
       },
       rawStoredSettings: {
         futureOnlySetting: "drop-on-current-schema",
-        heatingMode: "automatic",
+        heatingNeedMode: "automatic",
       },
     }),
     {
-      heatingMode: "fixed",
+      heatingNeedMode: "fixed",
       v2TargetReservePercent: 80,
     },
     "nykyisen skeemaversion tallennus ei kanna tuntemattomia kenttia eteenpain",
