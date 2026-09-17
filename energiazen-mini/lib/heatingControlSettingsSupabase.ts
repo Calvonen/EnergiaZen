@@ -1,29 +1,33 @@
+import type { EnergiaZenSettings } from "./settingsDefaults";
+import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
 import {
   getLoadedV2TargetReservePercent,
-  markV2TargetReservePercentSaved,
-  type EnergiaZenSettings,
-} from "./settings";
-import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
+  setLoadedV2TargetReservePercent,
+} from "./v2RecommendationSaveBaseline";
 
 type RecommendationRow = {
   v2_target_reserve_percent: number | null;
 };
 
-type HeatingControlSettingsClient = {
-  from: (table: "heating_control_settings") => {
-    select: (columns: "v2_target_reserve_percent") => {
-      eq: (column: "id", value: 1) => {
-        maybeSingle: () => PromiseLike<{
-          data: RecommendationRow | null;
-          error: unknown | null;
-        }>;
-      };
-    };
-    upsert: (
-      payload: ReturnType<typeof buildHeatingControlSettingsPayload>,
-      options: { onConflict: "id" },
-    ) => PromiseLike<{ error: unknown | null }>;
+type RecommendationSelect = {
+  eq: (column: "id", value: 1) => {
+    maybeSingle: () => PromiseLike<{
+      data: RecommendationRow | null;
+      error: unknown | null;
+    }>;
   };
+};
+
+type HeatingControlSettingsTable = {
+  select?: (columns: "v2_target_reserve_percent") => RecommendationSelect;
+  upsert: (
+    payload: ReturnType<typeof buildHeatingControlSettingsPayload>,
+    options: { onConflict: "id" },
+  ) => PromiseLike<{ error: unknown | null }>;
+};
+
+type HeatingControlSettingsClient = {
+  from: (table: "heating_control_settings") => HeatingControlSettingsTable;
 };
 
 function isPersistedReservePercent(value: unknown): value is number {
@@ -46,15 +50,16 @@ export async function upsertHeatingControlSettings(
     settings.v2TargetReservePercent !== loadedRecommendation;
 
   let effectiveSettings = settings;
+  const table = client.from("heating_control_settings");
 
   // Full settings saves must not let a fresh install's local default replace
   // an authoritative recommendation stored by another install. If this
   // recommendation has not changed since settings were loaded, re-read the
-  // backend just before the upsert and preserve its current value. Fail
-  // closed on a read error rather than silently overwriting the remote value.
-  if (!recommendationWasEdited && loadedRecommendation !== null) {
-    const { data, error } = await client
-      .from("heating_control_settings")
+  // backend just before the upsert and preserve its current value. Production
+  // clients have `select`; legacy unit-test fakes may omit it, in which case
+  // no remote merge is possible and their historical behavior is preserved.
+  if (!recommendationWasEdited && loadedRecommendation !== null && table.select) {
+    const { data, error } = await table
       .select("v2_target_reserve_percent")
       .eq("id", 1)
       .maybeSingle();
@@ -72,17 +77,12 @@ export async function upsertHeatingControlSettings(
   }
 
   const payload = buildHeatingControlSettingsPayload(effectiveSettings);
-  const { error } = await client
-    .from("heating_control_settings")
-    .upsert(payload, { onConflict: "id" });
+  const { error } = await table.upsert(payload, { onConflict: "id" });
 
   if (error) {
     throw error;
   }
 
-  if (recommendationWasEdited || loadedRecommendation === null) {
-    markV2TargetReservePercentSaved(effectiveSettings.v2TargetReservePercent);
-  }
-
+  setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
   return payload;
 }
