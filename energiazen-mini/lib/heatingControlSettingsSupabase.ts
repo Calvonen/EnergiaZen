@@ -2,7 +2,7 @@ import type { EnergiaZenSettings } from "./settingsDefaults";
 import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
 import {
   getLoadedV2TargetReservePercent,
-  setEffectiveSavedV2TargetReservePercent,
+  persistEffectiveSettingsLocally,
   setLoadedV2TargetReservePercent,
 } from "./v2RecommendationSaveBaseline";
 
@@ -77,6 +77,23 @@ export async function upsertHeatingControlSettings(
     }
   }
 
+  if (effectiveSettings !== settings) {
+    // Reconcile the same effective value locally before the remote write.
+    // If this local write fails, no remote mutation has happened yet. If the
+    // following remote upsert fails, persistSettingsDraft's existing rollback
+    // restores the previous local settings.
+    const reconciledLocally = await persistEffectiveSettingsLocally(
+      effectiveSettings,
+    );
+
+    if (reconciledLocally) {
+      // persistSettingsDraft returns this same normalized draft object after a
+      // successful remote save, so update it in place to keep the committed UI
+      // state aligned with the effective local/backend value as well.
+      settings.v2TargetReservePercent = effectiveSettings.v2TargetReservePercent;
+    }
+  }
+
   const payload = buildHeatingControlSettingsPayload(effectiveSettings);
   const { error } = await table.upsert(payload, { onConflict: "id" });
 
@@ -84,9 +101,6 @@ export async function upsertHeatingControlSettings(
     throw error;
   }
 
-  setEffectiveSavedV2TargetReservePercent(
-    effectiveSettings.v2TargetReservePercent,
-  );
   setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
   return payload;
 }
