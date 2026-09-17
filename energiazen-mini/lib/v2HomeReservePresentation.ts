@@ -3,6 +3,11 @@ import {
   minV2TargetReservePercent,
   recommendedV2PreheatPercent,
 } from "./energyModelV2/energyReservePercent";
+import {
+  getLoadedV2TargetReservePercent,
+  getPendingV2Recommendation,
+  isPendingV2RecommendationAcknowledged,
+} from "./v2RecommendationSaveBaseline";
 
 export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
 export const V2_RECOMMENDED_PREHEAT_PERCENT = recommendedV2PreheatPercent;
@@ -60,13 +65,6 @@ function resolveRecommendedPreheatPercent(
   telemetryRecommendation: number | null | undefined,
   preferConfiguredRecommendation: boolean,
 ) {
-  // Normally a fresh shadow row is authoritative over this install's local
-  // copy, which protects fresh installs/second devices from masking an older
-  // intentional backend value with their local 90% default. Immediately after
-  // a successful local Settings save, however, the last-good shadow row can
-  // still carry the previous recommendation for up to its freshness window.
-  // The hook marks only that known pending-save window so the just-saved local
-  // value wins until shadow telemetry catches up.
   const ordered = preferConfiguredRecommendation
     ? [configuredRecommendation, telemetryRecommendation]
     : [telemetryRecommendation, configuredRecommendation];
@@ -95,16 +93,33 @@ export function buildV2HomeReservePresentation(
   reserve: V2HomeReserveSnapshot | null,
   nowMs: number,
   configuredRecommendation?: number | null,
-  preferConfiguredRecommendation = false,
+  preferConfiguredRecommendation?: boolean,
 ): V2HomeReservePresentation {
   const capacity = reserve?.energy_capacity_kwh;
   const energy = reserve?.conservative_energy_kwh;
   const safetyReservePercent = reserve?.safety_reserve_percent;
   const targetReservePercent = reserve?.target_reserve_percent;
+  const effectiveConfiguredRecommendation =
+    configuredRecommendation ?? getLoadedV2TargetReservePercent();
+  const pendingRecommendation = getPendingV2Recommendation();
+  const pendingAcknowledged = pendingRecommendation
+    ? isPendingV2RecommendationAcknowledged({
+        pending: pendingRecommendation,
+        runAt: reserve?.run_at,
+        telemetryRecommendation: reserve?.recommended_preheat_percent,
+      })
+    : false;
+  const shouldPreferConfiguredRecommendation =
+    preferConfiguredRecommendation ??
+    Boolean(
+      pendingRecommendation &&
+        !pendingAcknowledged &&
+        effectiveConfiguredRecommendation === pendingRecommendation.value,
+    );
   const recommendedPreheatPercent = resolveRecommendedPreheatPercent(
-    configuredRecommendation,
+    effectiveConfiguredRecommendation,
     reserve?.recommended_preheat_percent,
-    preferConfiguredRecommendation,
+    shouldPreferConfiguredRecommendation,
   );
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
   const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
