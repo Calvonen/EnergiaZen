@@ -118,19 +118,75 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   assert(
     retainedBaseline.retainedBaselineHeatingHourIds.length === 1 &&
       retainedBaseline.retainedBaselineHeatingHourIds[0] === "2026-09-17T13:00:00.000Z",
-    "expected the earlier baseline hour to be retained because no candidate can precede it",
+    "expected the earlier baseline hour to remain reserved after matching",
+  );
+  assert(retainedBaseline.retainedBaselineHeatingEnergyKwh === 3, "expected retained baseline hour to consume 3 kWh of headroom");
+  assert(retainedBaseline.maxPreheatHoursByHeadroom === 1, "expected retained baseline heat to reduce additive preheat to one hour");
+  assert(retainedBaseline.marginalCost.pairs.length === 1, "expected one safe displacement pair after retained heat is accounted for");
+
+  const unmatchedBaselinePrices = [
+    hourly("2026-09-17T13:00:00.000Z", 1),
+    hourly("2026-09-17T14:00:00.000Z", 0),
+    hourly("2026-09-17T15:00:00.000Z", 2),
+    hourly("2026-09-17T22:00:00.000Z", 20),
+    hourly("2026-09-17T23:00:00.000Z", 21),
+    ...tomorrow.filter((price) => !["2026-09-17T22:00:00.000Z", "2026-09-17T23:00:00.000Z"].includes(price.starts_at)),
+  ];
+  const unmatchedBaseline = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([
+      "2026-09-17T14:00:00.000Z",
+      "2026-09-17T22:00:00.000Z",
+      "2026-09-17T23:00:00.000Z",
+    ]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices: unmatchedBaselinePrices,
+  });
+  assert(unmatchedBaseline.available, "expected a reduced but still valid advisory when a cheap baseline hour is left unmatched");
+  assert(unmatchedBaseline.marginalCost.pairs.length === 1, "expected matcher cap to shrink after actual unmatched baseline heat is known");
+  assert(
+    unmatchedBaseline.retainedBaselineHeatingHourIds.includes("2026-09-17T14:00:00.000Z"),
+    "expected cheap baseline hour left unmatched by the chosen pair to reserve headroom",
+  );
+
+  const tinySoftHeadroom = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline(["2026-09-17T22:00:00.000Z"]),
+    conservativeEnergyKwh: 15,
+    energyCapacityKwh: 16.864,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+  });
+  assert(
+    !tinySoftHeadroom.available && tinySoftHeadroom.reason === "insufficient_whole_hour_headroom",
+    "expected sub-hour soft/physical headroom to reject a whole-hour preheat interval",
+  );
+  assert(tinySoftHeadroom.maxPreheatHoursByHeadroom === 0, "expected no whole-hour capacity when less than 3 kWh fits");
+
+  const forbiddenCandidate = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline(["2026-09-17T22:00:00.000Z"]),
+    conservativeEnergyKwh: 12,
+    constraints: {
+      forbiddenHeatingHourIds: ["2026-09-17T13:00:00.000Z"],
+      requiredHeatingHourIds: [],
+    },
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+  });
+  assert(
+    !forbiddenCandidate.candidatePreheatHourIds.includes("2026-09-17T13:00:00.000Z"),
+    "expected production-forbidden cooldown hour to be excluded from preheat candidates",
   );
   assert(
-    retainedBaseline.retainedBaselineHeatingEnergyKwh === 3,
-    "expected retained baseline hour to consume 3 kWh of soft headroom",
-  );
-  assert(
-    retainedBaseline.maxPreheatHoursByHeadroom === 1,
-    "expected retained baseline heat to reduce two-hour soft headroom to one additive preheat hour",
-  );
-  assert(
-    retainedBaseline.marginalCost.pairs.length === 1,
-    "expected at most one displacement pair after retained baseline headroom is reserved",
+    forbiddenCandidate.marginalCost.pairs.every((pair) => pair.preheatHourId !== "2026-09-17T13:00:00.000Z"),
+    "expected forbidden hour never to appear in a marginal preheat pair",
   );
 
   const incompleteTomorrow = buildV2MarginalPreheatAdvisory({
@@ -166,15 +222,15 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
       "2026-09-17T22:00:00.000Z",
       "2026-09-17T23:00:00.000Z",
     ]),
-    conservativeEnergyKwh: 17,
+    conservativeEnergyKwh: 15,
     energyCapacityKwh: 20,
     heaterPowerKw: 3,
     maxPreheatHours: 4,
     now,
     prices,
   });
-  assert(oneHourHeadroom.maxPreheatHoursByHeadroom === 1, "expected sub-3 kWh headroom to allow at most one full-hour preheat");
-  assert(oneHourHeadroom.marginalCost.pairs.length === 1, "expected one whole-hour pair under soft headroom cap");
+  assert(oneHourHeadroom.maxPreheatHoursByHeadroom === 1, "expected exactly one whole heater-hour to fit in 3 kWh soft headroom");
+  assert(oneHourHeadroom.marginalCost.pairs.length === 1, "expected one whole-hour pair under exact headroom cap");
 
   const expensiveTodayPrices = [
     hourly("2026-09-17T13:00:00.000Z", 20),
