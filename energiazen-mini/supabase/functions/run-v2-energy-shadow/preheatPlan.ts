@@ -32,7 +32,6 @@ export function buildV2SoftPreheatPlan({
   opportunity: V2PreheatOpportunity;
   prices: ShadowElectricityPrice[];
 }): V2SoftPreheatPlan {
-  if (!opportunity.available) return unavailable("no_preheat_opportunity");
   if (!level.available || level.recommendedPreheatEnergyKwh === null) {
     return unavailable("preheat_level_unavailable");
   }
@@ -46,6 +45,7 @@ export function buildV2SoftPreheatPlan({
       reason: "preheat_not_needed",
     };
   }
+  if (!opportunity.available) return unavailable("no_preheat_opportunity");
   if (!Number.isFinite(heaterPowerKw) || heaterPowerKw <= 0) {
     return unavailable("invalid_heater_power");
   }
