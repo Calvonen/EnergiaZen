@@ -52,6 +52,7 @@ jobs:
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/planShadow.test.js').runLivePlanShadowUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/preheatPolicy.test.js').runV2PreheatPolicyUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/preheatLevel.test.js').runV2SoftPreheatLevelUnitTests()"
+          node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/preheatPlan.test.js').runV2PreheatPlanUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/productionConstraints.test.js').runProductionConstraintUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/publicationGuard.test.js').runV2PublicationGuardUnitTests()"
           node -e "require('./.tmp-v2-live-shadow-tests/supabase/functions/run-v2-energy-shadow/publicationPayload.test.js').runV2PublicationPayloadUnitTests()"
