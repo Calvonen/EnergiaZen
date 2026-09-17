@@ -169,6 +169,13 @@ export function buildV2MarginalPreheatAdvisory({
         (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
         0,
       ));
+      const safeWholeHourCapacityAfterRetained = Math.max(
+        0,
+        Math.floor(
+          (immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh + 1e-9) /
+            heaterPowerKw,
+        ),
+      );
 
       return {
         available: true,
@@ -176,7 +183,10 @@ export function buildV2MarginalPreheatAdvisory({
         displacedFutureHeatingHourIds,
         level,
         marginalCost,
-        maxPreheatHoursByHeadroom: pairCap,
+        maxPreheatHoursByHeadroom: Math.min(
+          configuredHourCap,
+          safeWholeHourCapacityAfterRetained,
+        ),
         retainedBaselineHeatingEnergyKwh,
         retainedBaselineHeatingHourIds,
         reason: "recommended",
