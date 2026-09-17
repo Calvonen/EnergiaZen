@@ -10,6 +10,11 @@ export type EnergyReserveCapacityInput = {
   specificHeatKwhPerKgC?: number;
 };
 
+// V2 targetPercent is retained for compatibility/telemetry while the staged
+// planner transitions away from treating 75% as a user-facing target. The
+// active policy uses 90% as a soft/economic preheat recommendation and keeps
+// safetyPercent as the independent hard floor.
+export const recommendedV2PreheatPercent = 90;
 export const defaultV2ReservePercents: EnergyReservePercentSettings = {
   safetyPercent: 30,
   targetPercent: 75,
@@ -19,7 +24,7 @@ export const defaultWaterSpecificHeatKwhPerKgC = 0.001163;
 export const minV2TargetReservePercent = 5;
 export const maxV2TargetReservePercent = 95;
 export const minV2SafetyReservePercent = 0;
-export const maxV2SafetyReservePercent = 95;
+export const maxV2SafetyReservePercent = recommendedV2PreheatPercent;
 
 export function calculateV2EnergyCapacityKwh({
   inletTemperatureC,
@@ -70,14 +75,11 @@ export function normalizeV2ReservePercents({
     minV2TargetReservePercent,
     maxV2TargetReservePercent,
   );
-  const safety = Math.min(
-    clampAndRoundPercent(
-      safetyPercent,
-      defaultV2ReservePercents.safetyPercent,
-      minV2SafetyReservePercent,
-      maxV2SafetyReservePercent,
-    ),
-    target,
+  const safety = clampAndRoundPercent(
+    safetyPercent,
+    defaultV2ReservePercents.safetyPercent,
+    minV2SafetyReservePercent,
+    maxV2SafetyReservePercent,
   );
   return { safetyPercent: safety, targetPercent: target };
 }
