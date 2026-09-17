@@ -2,6 +2,10 @@ import { selectRemainingFixedHeatingHours } from "./fixedHeatingPlan";
 import { normalizeStoredHeatingHours } from "./heatingHourSettings";
 import { getHeatingModeSettingKeys } from "./heatingModeSettings";
 import { createHeatingOptimizationSettings } from "./heatingOptimizer";
+import {
+  currentSettingsStorageMigrationVersion,
+  migrateStoredSettings,
+} from "./settingsStorageMigration";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -23,6 +27,50 @@ function hour(id: string, start: string, price: number) {
 }
 
 export function runHeatingSettingsUnitTests() {
+  const migratedLegacyPreheat = migrateStoredSettings(
+    { v2TargetReservePercent: 75 },
+    null,
+  );
+  assertEqual(
+    {
+      changed: migratedLegacyPreheat.changed,
+      migrationVersion: migratedLegacyPreheat.migrationVersion,
+      value: migratedLegacyPreheat.settings.v2TargetReservePercent,
+    },
+    {
+      changed: true,
+      migrationVersion: currentSettingsStorageMigrationVersion,
+      value: 90,
+    },
+    "vanha paikallinen 75 prosentin oletus migroidaan kerran 90 prosentin esilammityssuositukseksi",
+  );
+
+  const alreadyMigratedUserChoice = migrateStoredSettings(
+    { v2TargetReservePercent: 75 },
+    currentSettingsStorageMigrationVersion,
+  );
+  assertEqual(
+    {
+      changed: alreadyMigratedUserChoice.changed,
+      value: alreadyMigratedUserChoice.settings.v2TargetReservePercent,
+    },
+    { changed: false, value: 75 },
+    "versionoidun migraation jalkeen kayttajan tarkoituksella valitsema 75 prosenttia sailyy",
+  );
+
+  const existingCustomRecommendation = migrateStoredSettings(
+    { v2TargetReservePercent: 80 },
+    null,
+  );
+  assertEqual(
+    {
+      changed: existingCustomRecommendation.changed,
+      value: existingCustomRecommendation.settings.v2TargetReservePercent,
+    },
+    { changed: false, value: 80 },
+    "vanha ei-oletusarvoinen kayttajavalinta sailyy migraatiossa",
+  );
+
   assertEqual(
     normalizeStoredHeatingHours({ heatingHoursPerDay: 4 }),
     { automaticMaxHeatingHours: 4, fixedHeatingHoursPerDay: 4 },
