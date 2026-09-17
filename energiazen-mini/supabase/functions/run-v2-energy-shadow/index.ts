@@ -221,6 +221,7 @@ Deno.serve(async (request) => {
       plan_selected_heating_energy_kwh: plan.selectedHeatingEnergyKwh,
       plan_total_cost_cents: plan.totalCostCents, plan_candidate_count: plan.candidateCount,
       plan_evaluated_combination_count: plan.evaluatedCombinationCount,
+      preheat_advisory: preheatAdvisory,
       source: "v2_energy_reserve_live_shadow",
     });
     if (insertError) throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
