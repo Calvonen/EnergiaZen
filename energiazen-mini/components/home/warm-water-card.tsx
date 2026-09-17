@@ -123,17 +123,25 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
       };
     }
     return {
-      accessibilityLabel: `Lämminvesivaraus ${Math.round(reservePresentation.percent)} prosenttia, ${formatKwh(reservePresentation.energyKwh)} kilowattituntia ${formatKwh(reservePresentation.capacityKwh)} kilowattitunnista`,
+      accessibilityLabel: `Lämminvesivaraus ${Math.round(reservePresentation.percent)} prosenttia, ${formatKwh(reservePresentation.energyKwh)} kilowattituntia ${formatKwh(reservePresentation.capacityKwh)} kilowattitunnista. Pehmeä esilämmityssuositus ${Math.round(reservePresentation.recommendedPreheatPercent)} prosenttia. Turvaraja ${Math.round(reservePresentation.safetyReservePercent ?? 0)} prosenttia.`,
       energyLabel: `${formatKwh(reservePresentation.energyKwh)} / ${formatKwh(reservePresentation.capacityKwh)} kWh`,
       fillPercent: reservePresentation.fillPercent,
       percentLabel: `${Math.round(reservePresentation.percent)} %`,
     };
   }, [reservePresentation]);
 
-  const limitMarkers = reservePresentation.available && reservePresentation.safetyReservePercent !== null && reservePresentation.targetReservePercent !== null
+  const limitMarkers = reservePresentation.available && reservePresentation.safetyReservePercent !== null
     ? [
-        { key: "safety", label: `${Math.round(reservePresentation.safetyReservePercent)} %`, percent: reservePresentation.safetyReservePercent },
-        { key: "target", label: `${Math.round(reservePresentation.targetReservePercent)} %`, percent: reservePresentation.targetReservePercent },
+        {
+          key: "safety",
+          label: `${Math.round(reservePresentation.safetyReservePercent)} %`,
+          percent: reservePresentation.safetyReservePercent,
+        },
+        {
+          key: "recommended-preheat",
+          label: `${Math.round(reservePresentation.recommendedPreheatPercent)} %`,
+          percent: reservePresentation.recommendedPreheatPercent,
+        },
       ]
     : [];
 
