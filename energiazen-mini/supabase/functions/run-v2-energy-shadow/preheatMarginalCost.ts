@@ -41,12 +41,14 @@ export function evaluateV2MarginalPreheatCost({
   maxPreheatHours,
   preheatCandidateHourIds,
   prices,
+  requireExactPairCount = false,
 }: {
   displacedFutureHeatingHourIds: string[];
   excludedPairKeys?: string[];
   maxPreheatHours: number;
   preheatCandidateHourIds: string[];
   prices: ShadowElectricityPrice[];
+  requireExactPairCount?: boolean;
 }): V2MarginalPreheatCostResult {
   if (!Number.isFinite(maxPreheatHours) || maxPreheatHours < 0) {
     return unavailable("invalid_max_preheat_hours");
@@ -73,7 +75,13 @@ export function evaluateV2MarginalPreheatCost({
   const displaced = [...pricedFuture].sort(
     (left, right) => Date.parse(left.hourId) - Date.parse(right.hourId),
   );
-  const pairs = findBestMatching(candidates, displaced, maxHours, new Set(excludedPairKeys));
+  const pairs = findBestMatching(
+    candidates,
+    displaced,
+    maxHours,
+    new Set(excludedPairKeys),
+    requireExactPairCount,
+  );
 
   if (!pairs.length) {
     return unavailable("no_positive_savings");
@@ -87,6 +95,7 @@ function findBestMatching(
   displaced: PricedHour[],
   maxHours: number,
   excludedPairKeys: Set<string>,
+  requireExactPairCount: boolean,
 ): V2MarginalPreheatPair[] {
   const pairLimit = Math.min(maxHours, candidates.length, displaced.length);
   const dp: MatchingState[][][] = Array.from({ length: candidates.length + 1 }, () =>
@@ -140,6 +149,11 @@ function findBestMatching(
         dp[candidateIndex][futureIndex][pairCount] = best;
       }
     }
+  }
+
+  if (requireExactPairCount) {
+    const exact = dp[candidates.length][displaced.length][pairLimit];
+    return Number.isFinite(exact.savings) && exact.pairs.length === pairLimit ? exact.pairs : [];
   }
 
   let bestOverall: MatchingState = { pairs: [], savings: Number.NEGATIVE_INFINITY };
