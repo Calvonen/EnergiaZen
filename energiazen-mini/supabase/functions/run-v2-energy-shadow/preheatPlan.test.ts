@@ -30,6 +30,15 @@ function opportunity(ids: string[]): V2PreheatOpportunity {
   };
 }
 
+function unavailableOpportunity(): V2PreheatOpportunity {
+  return {
+    available: false,
+    eligiblePreheatHourIds: [],
+    reason: "tomorrow_prices_incomplete",
+    tomorrowCheapestBilledCentsPerKwh: null,
+  };
+}
+
 function level(requestedKwh: number): V2SoftPreheatLevel {
   return {
     available: true,
@@ -84,6 +93,17 @@ export function runV2PreheatPlanUnitTests() {
   assertEqual(alreadyFull.reason, "preheat_not_needed", "zero headroom is explicit");
   assertEqual(alreadyFull.recommendedHeatingHourIds.length, 0, "zero headroom selects no hours");
 
+  const alreadyFullWithoutPrices = buildV2SoftPreheatPlan({
+    heaterPowerKw: 3,
+    level: level(0),
+    maxPreheatHours: 4,
+    opportunity: unavailableOpportunity(),
+    prices: [],
+  });
+  assert(alreadyFullWithoutPrices.available, "zero headroom does not require tomorrow price availability");
+  assertEqual(alreadyFullWithoutPrices.reason, "preheat_not_needed", "zero headroom wins over missing price opportunity");
+  assertEqual(alreadyFullWithoutPrices.recommendedHeatingHourIds.length, 0, "zero headroom with missing prices still selects no hours");
+
   const noOpportunity = buildV2SoftPreheatPlan({
     heaterPowerKw: 3,
     level: level(4),
@@ -96,7 +116,7 @@ export function runV2PreheatPlanUnitTests() {
     },
     prices,
   });
-  assert(!noOpportunity.available, "missing economic opportunity fails closed");
+  assert(!noOpportunity.available, "missing economic opportunity fails closed when preheat energy is requested");
   assertEqual(noOpportunity.reason, "no_preheat_opportunity", "missing opportunity has explicit reason");
 
   const missingPrice = buildV2SoftPreheatPlan({
