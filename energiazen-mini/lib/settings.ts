@@ -27,6 +27,10 @@ export function getLoadedV2TargetReservePercent() {
   return loadedV2TargetReservePercent;
 }
 
+export function markV2TargetReservePercentSaved(value: number) {
+  loadedV2TargetReservePercent = value;
+}
+
 function isPersistedReservePercent(value: unknown): value is number {
   return (
     typeof value === "number" &&
