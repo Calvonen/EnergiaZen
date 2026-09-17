@@ -46,21 +46,33 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function isValidRecommendation(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= minV2TargetReservePercent &&
+    value <= maxV2TargetReservePercent
+  );
+}
+
 function resolveRecommendedPreheatPercent(
   configuredRecommendation: number | null | undefined,
   telemetryRecommendation: number | null | undefined,
+  preferConfiguredRecommendation: boolean,
 ) {
-  // A fresh shadow row reflects the backend settings actually used by the
-  // V2 optimizer, so it is authoritative over this install's local copy.
-  // The local value is only a fallback for telemetry gaps (for example an
-  // RPC failure or an older row that predates recommended_preheat_percent).
-  for (const value of [telemetryRecommendation, configuredRecommendation]) {
-    if (
-      typeof value === "number" &&
-      Number.isFinite(value) &&
-      value >= minV2TargetReservePercent &&
-      value <= maxV2TargetReservePercent
-    ) {
+  // Normally a fresh shadow row is authoritative over this install's local
+  // copy, which protects fresh installs/second devices from masking an older
+  // intentional backend value with their local 90% default. Immediately after
+  // a successful local Settings save, however, the last-good shadow row can
+  // still carry the previous recommendation for up to its freshness window.
+  // The hook marks only that known pending-save window so the just-saved local
+  // value wins until shadow telemetry catches up.
+  const ordered = preferConfiguredRecommendation
+    ? [configuredRecommendation, telemetryRecommendation]
+    : [telemetryRecommendation, configuredRecommendation];
+
+  for (const value of ordered) {
+    if (isValidRecommendation(value)) {
       return value;
     }
   }
@@ -83,6 +95,7 @@ export function buildV2HomeReservePresentation(
   reserve: V2HomeReserveSnapshot | null,
   nowMs: number,
   configuredRecommendation?: number | null,
+  preferConfiguredRecommendation = false,
 ): V2HomeReservePresentation {
   const capacity = reserve?.energy_capacity_kwh;
   const energy = reserve?.conservative_energy_kwh;
@@ -91,6 +104,7 @@ export function buildV2HomeReservePresentation(
   const recommendedPreheatPercent = resolveRecommendedPreheatPercent(
     configuredRecommendation,
     reserve?.recommended_preheat_percent,
+    preferConfiguredRecommendation,
   );
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
   const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
