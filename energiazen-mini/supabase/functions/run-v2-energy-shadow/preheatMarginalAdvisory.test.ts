@@ -157,6 +157,10 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
       "2026-09-17T22:00:00.000Z",
     ]),
     conservativeEnergyKwh: 15,
+    constraints: {
+      forbiddenHeatingHourIds: [],
+      requiredHeatingHourIds: ["2026-09-17T14:00:00.000Z"],
+    },
     energyCapacityKwh: 20,
     heaterPowerKw: 3,
     maxPreheatHours: 4,
@@ -165,7 +169,17 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   });
   assert(
     !retainedAfterPreheat.available && retainedAfterPreheat.reason === "insufficient_whole_hour_headroom",
-    "expected retained baseline heat after preheat but before displacement to consume headroom",
+    "expected required retained baseline heat after preheat but before displacement to consume headroom",
+  );
+  assert(
+    !retainedAfterPreheat.displacedFutureHeatingHourIds.includes("2026-09-17T14:00:00.000Z"),
+    "expected required heating hour to be excluded from displacement targets",
+  );
+  assert(
+    retainedAfterPreheat.marginalCost.pairs.every(
+      (pair) => pair.displacedFutureHourId !== "2026-09-17T14:00:00.000Z",
+    ),
+    "expected required heating hour never to be reported as displaced",
   );
 
   const tinySoftHeadroom = buildV2MarginalPreheatAdvisory({
