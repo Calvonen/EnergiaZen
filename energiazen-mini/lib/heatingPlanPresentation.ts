@@ -287,8 +287,8 @@ export function buildHeatingPlanPresentation({
 }
 
 export function buildStoredHeatingPlanPresentation({
-  currentOptimizerPresentation = null,
-  forecast = null,
+  currentOptimizerPresentation: _currentOptimizerPresentation = null,
+  forecast: _forecast = null,
   selectedHours,
   v2EnergyReserve = null,
 }: {
@@ -313,39 +313,10 @@ export function buildStoredHeatingPlanPresentation({
     isFallback?: boolean;
   } | null;
 }): HeatingPlanPresentation {
-  if (!v2EnergyReserve) {
-    return {
-      emptyPlanLabel:
-        selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
-      forecastDetails: forecast?.forecastDetails ?? null,
-      forecastSectionLabel: "Ennuste",
-      forecastSummary:
-        forecast?.forecastSummary ??
-        "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",
-      heatingSummary:
-        selectedHours.length === 0
-          ? null
-          : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
-      limitsSectionLabel: currentOptimizerPresentation
-        ? "Nykyiset rajat"
-        : "Käytetyt rajat",
-      limitsSummary: currentOptimizerPresentation
-        ? currentOptimizerPresentation.limitsSummary
-        : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
-      priceToleranceSummary: currentOptimizerPresentation
-        ? currentOptimizerPresentation.priceToleranceSummary
-        : null,
-      reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
-      reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
-      selectedHours: selectedHours.map(formatSelectedHour),
-      statusSummary: "Viimeksi tallennettu suunnitelma",
-    };
-  }
-
   const recommendedPreheatPercent =
-    v2EnergyReserve.recommendedPreheatPercent ?? V2_RECOMMENDED_PREHEAT_PERCENT;
+    v2EnergyReserve?.recommendedPreheatPercent ?? V2_RECOMMENDED_PREHEAT_PERCENT;
   const v2ForecastAvailable =
-    v2EnergyReserve.available === true &&
+    v2EnergyReserve?.available === true &&
     v2EnergyReserve.percent !== null &&
     v2EnergyReserve.energyKwh !== null &&
     v2EnergyReserve.capacityKwh !== null &&
@@ -354,11 +325,11 @@ export function buildStoredHeatingPlanPresentation({
     v2EnergyReserve.forecastFinalPercent !== null &&
     v2EnergyReserve.safetyReservePercent !== null;
   const v2ForecastSummary = v2ForecastAvailable
-    ? v2EnergyReserve.isFallback
+    ? v2EnergyReserve?.isFallback
       ? `Viimeisin varma arvio ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
-      : `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
+      : `Nyt ${formatFinnishDecimal(v2EnergyReserve?.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve?.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve?.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve?.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve?.forecastMinimumPercent as number)} %`
     : "V2-energiavara ei ole juuri nyt saatavilla. Vanhaa suihkuennustetta ei enää käytetä.";
-  const safetyReservePercent = v2EnergyReserve.safetyReservePercent;
+  const safetyReservePercent = v2EnergyReserve?.safetyReservePercent;
   const limitsSummary =
     typeof safetyReservePercent === "number" && Number.isFinite(safetyReservePercent)
       ? `Suositus ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja ${formatFinnishDecimal(safetyReservePercent)} %`
@@ -381,7 +352,7 @@ export function buildStoredHeatingPlanPresentation({
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
     selectedHours: selectedHours.map(formatSelectedHour),
     statusSummary: v2ForecastAvailable
-      ? v2EnergyReserve.isFallback
+      ? v2EnergyReserve?.isFallback
         ? "V2-energiavara · viimeisin varma arvio"
         : "V2-energiavara"
       : "V2-energiavara · ennuste ei saatavilla",
