@@ -14,6 +14,7 @@ export type V2HomeReserveSnapshot = {
   energy_capacity_kwh: number | null;
   safety_reserve_percent: number | null;
   target_reserve_percent: number | null;
+  recommended_preheat_percent?: number | null;
   forecast_min_conservative_energy_kwh: number | null;
   forecast_final_conservative_energy_kwh: number | null;
   forecast_horizon_end_at: string | null;
@@ -85,7 +86,7 @@ export function buildV2HomeReservePresentation(
   const targetReservePercent = reserve?.target_reserve_percent;
   const recommendedPreheatPercent = resolveRecommendedPreheatPercent(
     configuredRecommendation,
-    targetReservePercent,
+    reserve?.recommended_preheat_percent,
   );
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
   const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
