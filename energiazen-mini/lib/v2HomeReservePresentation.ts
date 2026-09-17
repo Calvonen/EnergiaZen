@@ -45,6 +45,24 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function resolveRecommendedPreheatPercent(
+  configuredRecommendation: number | null | undefined,
+  telemetryRecommendation: number | null | undefined,
+) {
+  for (const value of [configuredRecommendation, telemetryRecommendation]) {
+    if (
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= minV2TargetReservePercent &&
+      value <= maxV2TargetReservePercent
+    ) {
+      return value;
+    }
+  }
+
+  return V2_RECOMMENDED_PREHEAT_PERCENT;
+}
+
 export function isV2HomeReserveSnapshotFresh(
   runAt: string | null | undefined,
   nowMs: number,
@@ -59,11 +77,16 @@ export function isV2HomeReserveSnapshotFresh(
 export function buildV2HomeReservePresentation(
   reserve: V2HomeReserveSnapshot | null,
   nowMs: number,
+  configuredRecommendation?: number | null,
 ): V2HomeReservePresentation {
   const capacity = reserve?.energy_capacity_kwh;
   const energy = reserve?.conservative_energy_kwh;
   const safetyReservePercent = reserve?.safety_reserve_percent;
   const targetReservePercent = reserve?.target_reserve_percent;
+  const recommendedPreheatPercent = resolveRecommendedPreheatPercent(
+    configuredRecommendation,
+    targetReservePercent,
+  );
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
   const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
   const forecastHorizonEndAt = reserve?.forecast_horizon_end_at;
@@ -97,7 +120,7 @@ export function buildV2HomeReservePresentation(
       capacityKwh: null,
       safetyReservePercent: null,
       targetReservePercent: null,
-      recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
+      recommendedPreheatPercent,
       forecastMinimumEnergyKwh: null,
       forecastMinimumPercent: null,
       forecastFinalEnergyKwh: null,
@@ -117,13 +140,6 @@ export function buildV2HomeReservePresentation(
   const sourceAgeMinutes = Number.isFinite(runAtMs) ? Math.max(0, (nowMs - runAtMs) / 60_000) : null;
   const isFallback = reserve?.latest_run_available === false ||
     (Number.isFinite(latestRunAtMs) && Number.isFinite(runAtMs) && latestRunAtMs > runAtMs);
-  const configuredPreheatPercent =
-    typeof targetReservePercent === "number" &&
-    Number.isFinite(targetReservePercent) &&
-    targetReservePercent >= minV2TargetReservePercent &&
-    targetReservePercent <= maxV2TargetReservePercent
-      ? targetReservePercent
-      : V2_RECOMMENDED_PREHEAT_PERCENT;
 
   return {
     available: true,
@@ -136,7 +152,7 @@ export function buildV2HomeReservePresentation(
       typeof targetReservePercent === "number" && Number.isFinite(targetReservePercent)
         ? targetReservePercent
         : null,
-    recommendedPreheatPercent: configuredPreheatPercent,
+    recommendedPreheatPercent,
     forecastMinimumEnergyKwh: forecastMinimumEnergy,
     forecastMinimumPercent,
     forecastFinalEnergyKwh: forecastFinalEnergy,
