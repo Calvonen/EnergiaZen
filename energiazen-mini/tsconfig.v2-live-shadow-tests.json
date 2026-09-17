@@ -11,6 +11,8 @@
     "supabase/functions/run-v2-energy-shadow/liveWaterDrawReanchor.test.ts",
     "supabase/functions/run-v2-energy-shadow/planShadow.ts",
     "supabase/functions/run-v2-energy-shadow/planShadow.test.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatPolicy.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatPolicy.test.ts",
     "supabase/functions/run-v2-energy-shadow/productionConstraints.ts",
     "supabase/functions/run-v2-energy-shadow/productionConstraints.test.ts",
     "supabase/functions/run-v2-energy-shadow/publicationGuard.ts",
