@@ -56,13 +56,22 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error("expected the home reserve presentation to expose the configured 80% soft recommendation");
   }
 
-  const configuredOverridesOlderTelemetry = buildV2HomeReservePresentation(
-    { ...base, recommended_preheat_percent: 90 },
+  const telemetryOverridesLocalDefault = buildV2HomeReservePresentation(
+    { ...base, recommended_preheat_percent: 80 },
+    now,
+    90,
+  );
+  if (telemetryOverridesLocalDefault.recommendedPreheatPercent !== 80) {
+    throw new Error("expected authoritative backend telemetry to win over a fresh install's local 90% default");
+  }
+
+  const configuredFallbackWithoutTelemetry = buildV2HomeReservePresentation(
+    { ...base, recommended_preheat_percent: null },
     now,
     80,
   );
-  if (configuredOverridesOlderTelemetry.recommendedPreheatPercent !== 80) {
-    throw new Error("expected persisted app settings to define the displayed recommendation while telemetry catches up");
+  if (configuredFallbackWithoutTelemetry.recommendedPreheatPercent !== 80) {
+    throw new Error("expected local persisted settings to remain the fallback when recommendation telemetry is missing");
   }
 
   const withoutRecommendationTelemetry = buildV2HomeReservePresentation(
@@ -70,7 +79,7 @@ export function runV2HomeReservePresentationUnitTests() {
     now,
   );
   if (!withoutRecommendationTelemetry.available || withoutRecommendationTelemetry.recommendedPreheatPercent !== 90) {
-    throw new Error("expected the V2 home reserve to fall back to the 90% default when recommendation telemetry is missing");
+    throw new Error("expected the V2 home reserve to fall back to the 90% default when recommendation telemetry and local settings are missing");
   }
 
   const fallback = buildV2HomeReservePresentation(
@@ -88,7 +97,7 @@ export function runV2HomeReservePresentationUnitTests() {
   }
 
   const stale = buildV2HomeReservePresentation(
-    { ...base, run_at: "2026-09-16T08:29:00Z" },
+    { ...base, run_at: "2026-09-16T08:29:00Z", recommended_preheat_percent: null },
     now,
     80,
   );
@@ -97,27 +106,27 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error("expected a 31-minute-old production snapshot and its limit markers to fail closed");
   }
   if (stale.recommendedPreheatPercent !== 80) {
-    throw new Error("expected the persisted soft recommendation to remain known when telemetry is unavailable");
+    throw new Error("expected the persisted soft recommendation to remain known when telemetry has no recommendation");
   }
 
   const future = buildV2HomeReservePresentation(
-    { ...base, run_at: "2026-09-16T09:01:00Z" },
+    { ...base, run_at: "2026-09-16T09:01:00Z", recommended_preheat_percent: null },
     now,
     80,
   );
   if (future.available || future.safetyReservePercent !== null || future.targetReservePercent !== null || future.recommendedPreheatPercent !== 80) {
-    throw new Error("expected a future-dated production snapshot to fail closed without losing the configured recommendation");
+    throw new Error("expected a future-dated production snapshot to fail closed without losing the configured fallback recommendation");
   }
 
   const unavailable = buildV2HomeReservePresentation(
-    { ...base, available: false },
+    { ...base, available: false, recommended_preheat_percent: null },
     now,
     80,
   );
   if (unavailable.available || unavailable.percent !== null ||
       unavailable.safetyReservePercent !== null || unavailable.targetReservePercent !== null ||
       unavailable.recommendedPreheatPercent !== 80) {
-    throw new Error("expected unavailable V2 telemetry to fail closed without replacing the configured recommendation");
+    throw new Error("expected unavailable V2 telemetry to fail closed while preserving the configured fallback recommendation");
   }
 
   const invalidCapacity = buildV2HomeReservePresentation(
