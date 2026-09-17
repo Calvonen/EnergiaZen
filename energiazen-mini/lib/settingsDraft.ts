@@ -264,7 +264,7 @@ export function validateSettingsDraft(
   if (
     isFiniteNumber(v2SafetyReservePercent) &&
     isFiniteNumber(v2TargetReservePercent) &&
-    v2TargetReservePercent - v2SafetyReservePercent <= 10
+    Math.abs(v2TargetReservePercent - v2SafetyReservePercent) <= 10
   ) {
     warnings.push({
       field: "v2SafetyReservePercent",
