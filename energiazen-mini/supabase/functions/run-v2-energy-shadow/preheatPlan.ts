@@ -105,7 +105,18 @@ function isUsableHourlyPrice(price: ShadowElectricityPrice) {
     Number.isFinite(start) &&
     Number.isFinite(end) &&
     end > start &&
-    end - start === 60 * 60 * 1000
+    end - start === 60 * 60 * 1000 &&
+    isUtcClockHour(start) &&
+    isUtcClockHour(end)
+  );
+}
+
+function isUtcClockHour(timestampMs: number) {
+  const date = new Date(timestampMs);
+  return (
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0 &&
+    date.getUTCMilliseconds() === 0
   );
 }
 
