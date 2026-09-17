@@ -2,6 +2,7 @@ import type { EnergiaZenSettings } from "./settingsDefaults";
 import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
 import {
   getLoadedV2TargetReservePercent,
+  setEffectiveSavedV2TargetReservePercent,
   setLoadedV2TargetReservePercent,
 } from "./v2RecommendationSaveBaseline";
 
@@ -83,6 +84,9 @@ export async function upsertHeatingControlSettings(
     throw error;
   }
 
+  setEffectiveSavedV2TargetReservePercent(
+    effectiveSettings.v2TargetReservePercent,
+  );
   setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
   return payload;
 }
