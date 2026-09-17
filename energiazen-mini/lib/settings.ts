@@ -21,6 +21,8 @@ export const settingsStorageKey = "energiazen:settings";
 export const settingsStorageMigrationVersionKey =
   "energiazen:settings:migration-version";
 
+let loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
+
 export async function loadSettings() {
   try {
     const [storedSettings, storedMigrationVersion] = await Promise.all([
@@ -29,27 +31,41 @@ export async function loadSettings() {
     ]);
 
     if (!storedSettings) {
+      loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
       return defaultSettings;
     }
 
     const parsedSettings = JSON.parse(storedSettings);
     const parsedMigrationVersion = Number(storedMigrationVersion);
+    const previousMigrationVersion = Number.isFinite(parsedMigrationVersion)
+      ? parsedMigrationVersion
+      : null;
     const migration = migrateStoredSettings(
       parsedSettings,
-      Number.isFinite(parsedMigrationVersion) ? parsedMigrationVersion : null,
+      previousMigrationVersion,
     );
     const normalizedSettings = normalizeSettings(migration.settings);
+    loadedSettingsMigrationVersion = migration.migrationVersion;
 
+    const isFutureVersion =
+      previousMigrationVersion !== null &&
+      previousMigrationVersion > currentSettingsStorageMigrationVersion;
+
+    // A rolled-back binary must never rewrite settings created by a newer
+    // binary. It can normalize a compatible in-memory view, but the durable
+    // future-version payload and marker remain untouched until a newer binary
+    // owns that migration version again.
     if (
-      migration.changed ||
-      parsedMigrationVersion !== currentSettingsStorageMigrationVersion
+      !isFutureVersion &&
+      (migration.changed ||
+        previousMigrationVersion !== migration.migrationVersion)
     ) {
       try {
         await AsyncStorage.multiSet([
           [settingsStorageKey, JSON.stringify(normalizedSettings)],
           [
             settingsStorageMigrationVersionKey,
-            String(currentSettingsStorageMigrationVersion),
+            String(migration.migrationVersion),
           ],
         ]);
       } catch {
@@ -60,6 +76,7 @@ export async function loadSettings() {
 
     return normalizedSettings;
   } catch {
+    loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
     return defaultSettings;
   }
 }
@@ -69,7 +86,12 @@ export async function saveSettings(settings: EnergiaZenSettings) {
     [settingsStorageKey, JSON.stringify(normalizeSettings(settings))],
     [
       settingsStorageMigrationVersionKey,
-      String(currentSettingsStorageMigrationVersion),
+      String(
+        Math.max(
+          loadedSettingsMigrationVersion,
+          currentSettingsStorageMigrationVersion,
+        ),
+      ),
     ],
   ]);
 }
