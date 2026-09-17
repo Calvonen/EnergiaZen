@@ -1,43 +1,36 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { useSettingsScenario } from "./settingsScenarioContext";
 import { supabase } from "./supabase";
 import {
   buildV2HomeReservePresentation,
-  V2_RECOMMENDED_PREHEAT_PERCENT,
   type V2HomeReservePresentation,
   type V2HomeReserveSnapshot,
 } from "./v2HomeReservePresentation";
 
 const refreshIntervalMs = 60_000;
 
-const unavailablePresentation: V2HomeReservePresentation = {
-  available: false,
-  fillPercent: 0,
-  percent: null,
-  energyKwh: null,
-  capacityKwh: null,
-  safetyReservePercent: null,
-  targetReservePercent: null,
-  recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
-  forecastMinimumEnergyKwh: null,
-  forecastMinimumPercent: null,
-  forecastFinalEnergyKwh: null,
-  forecastFinalPercent: null,
-  forecastHorizonEndAt: null,
-  isFallback: false,
-  sourceAgeMinutes: null,
-  latestUnavailableReason: null,
-};
+function buildUnavailablePresentation(
+  recommendedPreheatPercent: number,
+): V2HomeReservePresentation {
+  return buildV2HomeReservePresentation(
+    null,
+    Date.now(),
+    recommendedPreheatPercent,
+  );
+}
 
 export function useV2HomeReserve() {
+  const { persistedSettings } = useSettingsScenario();
+  const recommendedPreheatPercent = persistedSettings.v2TargetReservePercent;
   const [presentation, setPresentation] = useState<V2HomeReservePresentation>(
-    unavailablePresentation,
+    () => buildUnavailablePresentation(recommendedPreheatPercent),
   );
 
   const refresh = useCallback(async () => {
     const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");
     if (error) {
-      setPresentation(unavailablePresentation);
+      setPresentation(buildUnavailablePresentation(recommendedPreheatPercent));
       return;
     }
 
@@ -46,9 +39,10 @@ export function useV2HomeReserve() {
       buildV2HomeReservePresentation(
         (row ?? null) as V2HomeReserveSnapshot | null,
         Date.now(),
+        recommendedPreheatPercent,
       ),
     );
-  }, []);
+  }, [recommendedPreheatPercent]);
 
   useEffect(() => {
     void refresh();
