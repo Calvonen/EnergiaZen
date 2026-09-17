@@ -10,6 +10,7 @@ import {
   migrateStoredSettings,
 } from "./settingsStorageMigration";
 import { supabase } from "./supabase";
+import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline";
 
 // Pure defaults/types/normalization live in ./settingsDefaults so they can
 // be imported without AsyncStorage (needed by anything that must also run
@@ -20,16 +21,6 @@ export * from "./settingsDefaults";
 export const settingsStorageKey = "energiazen:settings";
 export const settingsStorageMigrationVersionKey =
   "energiazen:settings:migration-version";
-
-let loadedV2TargetReservePercent: number | null = null;
-
-export function getLoadedV2TargetReservePercent() {
-  return loadedV2TargetReservePercent;
-}
-
-export function markV2TargetReservePercentSaved(value: number) {
-  loadedV2TargetReservePercent = value;
-}
 
 function isPersistedReservePercent(value: unknown): value is number {
   return (
@@ -119,10 +110,10 @@ export async function loadSettings() {
     const hydratedSettings = await hydrateAuthoritativeV2Recommendation(
       normalizedSettings,
     );
-    loadedV2TargetReservePercent = hydratedSettings.v2TargetReservePercent;
+    setLoadedV2TargetReservePercent(hydratedSettings.v2TargetReservePercent);
     return hydratedSettings;
   } catch {
-    loadedV2TargetReservePercent = defaultSettings.v2TargetReservePercent;
+    setLoadedV2TargetReservePercent(defaultSettings.v2TargetReservePercent);
     return defaultSettings;
   }
 }
