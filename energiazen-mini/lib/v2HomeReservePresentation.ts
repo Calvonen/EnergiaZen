@@ -1,4 +1,8 @@
-import { recommendedV2PreheatPercent } from "./energyModelV2/energyReservePercent";
+import {
+  maxV2TargetReservePercent,
+  minV2TargetReservePercent,
+  recommendedV2PreheatPercent,
+} from "./energyModelV2/energyReservePercent";
 
 export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
 export const V2_RECOMMENDED_PREHEAT_PERCENT = recommendedV2PreheatPercent;
@@ -113,6 +117,14 @@ export function buildV2HomeReservePresentation(
   const sourceAgeMinutes = Number.isFinite(runAtMs) ? Math.max(0, (nowMs - runAtMs) / 60_000) : null;
   const isFallback = reserve?.latest_run_available === false ||
     (Number.isFinite(latestRunAtMs) && Number.isFinite(runAtMs) && latestRunAtMs > runAtMs);
+  const configuredPreheatPercent =
+    typeof targetReservePercent === "number" &&
+    Number.isFinite(targetReservePercent) &&
+    targetReservePercent >= minV2TargetReservePercent &&
+    targetReservePercent <= maxV2TargetReservePercent
+      ? targetReservePercent
+      : V2_RECOMMENDED_PREHEAT_PERCENT;
+
   return {
     available: true,
     fillPercent: percent,
@@ -124,7 +136,7 @@ export function buildV2HomeReservePresentation(
       typeof targetReservePercent === "number" && Number.isFinite(targetReservePercent)
         ? targetReservePercent
         : null,
-    recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
+    recommendedPreheatPercent: configuredPreheatPercent,
     forecastMinimumEnergyKwh: forecastMinimumEnergy,
     forecastMinimumPercent,
     forecastFinalEnergyKwh: forecastFinalEnergy,
