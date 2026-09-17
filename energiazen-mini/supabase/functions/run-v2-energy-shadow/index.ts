@@ -3,12 +3,14 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   applyReserveThresholds,
   deriveUsableReadingInletBaselineC,
+  liveReserveShadowConfig,
   runLiveReserveShadow,
   type ReliableWaterDraw,
   type ShadowTankReading,
   type V1ShadowSnapshot,
 } from "./logic.ts";
 import { runLiveEnergyPlanShadow, type ShadowElectricityPrice } from "./planShadow.ts";
+import { buildV2LivePreheatAdvisory } from "./preheatAdvisory.ts";
 import {
   resolveV2HeatingConstraints,
   type ShadowStoredHeatingPlan,
@@ -128,6 +130,14 @@ Deno.serve(async (request) => {
       prices,
       reserve: result,
     });
+    const preheatAdvisory = buildV2LivePreheatAdvisory({
+      conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
+      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
+      maxPreheatHours: automaticMaxHeatingHours,
+      now,
+      prices,
+    });
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
@@ -226,6 +236,7 @@ Deno.serve(async (request) => {
       plan_total_cost_cents: plan.totalCostCents, forecast_horizon_end_at: plan.forecastHorizonEndAt,
       forecast_final_conservative_energy_kwh: plan.finalConservativeEnergyKwh,
       forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
+      preheat_advisory: preheatAdvisory,
       staged_publication_enabled: v2StagedPublicationEnabled,
       staged_publication_ready: stagedPublicationReadiness.ready,
       staged_publication_ready_reason: stagedPublicationReadiness.reason,
