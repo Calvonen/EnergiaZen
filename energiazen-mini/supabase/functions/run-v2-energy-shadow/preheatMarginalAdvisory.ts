@@ -127,24 +127,49 @@ export function buildV2MarginalPreheatAdvisory({
     const displacedIds = new Set(
       marginalCost.pairs.map((pair) => pair.displacedFutureHourId),
     );
-    const latestPreheatStartMs = Math.max(
-      ...marginalCost.pairs.map((pair) => Date.parse(pair.preheatHourId)),
-    );
-    const retainedBaselineHeatingHourIds = [...baselineSelectedHourIds]
-      .filter((hourId) => !displacedIds.has(hourId))
-      .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
-      .filter((hourId) => Date.parse(hourId) <= latestPreheatStartMs)
-      .sort((left, right) => Date.parse(left) - Date.parse(right));
-    const retainedBaselineHeatingEnergyKwh = round(retainedBaselineHeatingHourIds.reduce(
-      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
-      0,
-    ));
-    const proposedPreheatEnergyKwh = marginalCost.pairs.length * heaterPowerKw;
+    const displacementCheckpointsMs = [...new Set(
+      marginalCost.pairs
+        .map((pair) => Date.parse(pair.displacedFutureHourId))
+        .filter(Number.isFinite),
+    )].sort((left, right) => left - right);
 
-    if (
-      retainedBaselineHeatingEnergyKwh + proposedPreheatEnergyKwh <=
-      immediateWholeHourHeadroomKwh + 1e-9
-    ) {
+    let safeAtEveryDisplacement = true;
+    for (const checkpointMs of displacementCheckpointsMs) {
+      const retainedBeforeCheckpoint = [...baselineSelectedHourIds]
+        .filter((hourId) => !displacedIds.has(hourId))
+        .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+        .filter((hourId) => Date.parse(hourId) < checkpointMs);
+      const retainedEnergyBeforeCheckpoint = retainedBeforeCheckpoint.reduce(
+        (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+        0,
+      );
+      const preheatEnergyBeforeCheckpoint = marginalCost.pairs.filter(
+        (pair) => Date.parse(pair.preheatHourId) < checkpointMs,
+      ).length * heaterPowerKw;
+
+      if (
+        retainedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint >
+        immediateWholeHourHeadroomKwh + 1e-9
+      ) {
+        safeAtEveryDisplacement = false;
+        break;
+      }
+    }
+
+    if (safeAtEveryDisplacement) {
+      const latestDisplacementMs = displacementCheckpointsMs.length
+        ? displacementCheckpointsMs[displacementCheckpointsMs.length - 1]
+        : nowMs;
+      const retainedBaselineHeatingHourIds = [...baselineSelectedHourIds]
+        .filter((hourId) => !displacedIds.has(hourId))
+        .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+        .filter((hourId) => Date.parse(hourId) < latestDisplacementMs)
+        .sort((left, right) => Date.parse(left) - Date.parse(right));
+      const retainedBaselineHeatingEnergyKwh = round(retainedBaselineHeatingHourIds.reduce(
+        (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+        0,
+      ));
+
       return {
         available: true,
         candidatePreheatHourIds,
