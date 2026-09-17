@@ -357,12 +357,12 @@ export function buildStoredHeatingPlanPresentation({
     ? v2EnergyReserve.isFallback
       ? `Viimeisin varma arvio ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
       : `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
-    : "V2-energiavara näkyy varaajakortissa. Vanhaa suihkuennustetta ei enää käytetä.";
+    : "V2-energiavara ei ole juuri nyt saatavilla. Vanhaa suihkuennustetta ei enää käytetä.";
   const safetyReservePercent = v2EnergyReserve.safetyReservePercent;
   const limitsSummary =
     typeof safetyReservePercent === "number" && Number.isFinite(safetyReservePercent)
       ? `Suositus ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja ${formatFinnishDecimal(safetyReservePercent)} %`
-      : `Pehmeä esilämmityssuositus ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja näkyy varaajakortissa.`;
+      : `Pehmeä esilämmityssuositus ${formatFinnishDecimal(recommendedPreheatPercent)} %. Turvaraja ei ole juuri nyt saatavilla.`;
 
   return {
     emptyPlanLabel:
