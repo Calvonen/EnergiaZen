@@ -117,12 +117,7 @@ export function buildV2MarginalPreheatAdvisory({
     physicalHeadroomKwh,
   );
   const wholeHourHeadroomCap = Math.floor(immediateWholeHourHeadroomKwh / heaterPowerKw);
-  const initialPairCap = Math.min(
-    configuredHourCap,
-    wholeHourHeadroomCap,
-    candidatePreheatHourIds.length,
-    displacedFutureHeatingHourIds.length,
-  );
+  const initialPairCap = Math.min(configuredHourCap, wholeHourHeadroomCap);
 
   if (initialPairCap <= 0) {
     return advisoryUnavailable({
