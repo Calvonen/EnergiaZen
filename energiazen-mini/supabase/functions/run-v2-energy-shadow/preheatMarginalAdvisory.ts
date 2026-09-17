@@ -236,6 +236,7 @@ function findBestSafeMatching({
       maxPreheatHours: pairCap,
       preheatCandidateHourIds: candidateHourIds,
       prices,
+      requireExactPairCount: true,
     });
     if (!marginalCost.available || marginalCost.pairs.length !== pairCap) continue;
 
