@@ -10,7 +10,12 @@ import {
   mergeSettingsForStorage,
   migrateStoredSettings,
 } from "./settingsStorageMigration";
-import { registerEffectiveSettingsPersister } from "./v2RecommendationSaveBaseline";
+import {
+  hydratePendingV2Recommendation,
+  registerEffectiveSettingsPersister,
+  registerPendingV2RecommendationPersister,
+  type PendingV2Recommendation,
+} from "./v2RecommendationSaveBaseline";
 
 // Pure defaults/types/normalization live in ./settingsDefaults so they can
 // be imported without AsyncStorage (needed by anything that must also run
@@ -21,16 +26,46 @@ export * from "./settingsDefaults";
 export const settingsStorageKey = "energiazen:settings";
 export const settingsStorageMigrationVersionKey =
   "energiazen:settings:migration-version";
+export const pendingV2RecommendationStorageKey =
+  "energiazen:v2-recommendation:pending";
 
 let loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
 let loadedRawSettingsPayload: unknown = null;
 
+function parsePendingV2Recommendation(
+  value: string | null,
+): PendingV2Recommendation | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as Partial<PendingV2Recommendation>;
+    if (
+      typeof parsed.value === "number" &&
+      Number.isFinite(parsed.value) &&
+      typeof parsed.savedAt === "string" &&
+      Number.isFinite(Date.parse(parsed.savedAt))
+    ) {
+      return { value: parsed.value, savedAt: parsed.savedAt };
+    }
+  } catch {
+    // Ignore a corrupt marker and continue without pending-save precedence.
+  }
+
+  return null;
+}
+
 export async function loadSettings() {
   try {
-    const [storedSettings, storedMigrationVersion] = await Promise.all([
-      AsyncStorage.getItem(settingsStorageKey),
-      AsyncStorage.getItem(settingsStorageMigrationVersionKey),
-    ]);
+    const [storedSettings, storedMigrationVersion, storedPendingRecommendation] =
+      await Promise.all([
+        AsyncStorage.getItem(settingsStorageKey),
+        AsyncStorage.getItem(settingsStorageMigrationVersionKey),
+        AsyncStorage.getItem(pendingV2RecommendationStorageKey),
+      ]);
+
+    hydratePendingV2Recommendation(
+      parsePendingV2Recommendation(storedPendingRecommendation),
+    );
 
     if (!storedSettings) {
       loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
@@ -83,6 +118,7 @@ export async function loadSettings() {
   } catch {
     loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
     loadedRawSettingsPayload = null;
+    hydratePendingV2Recommendation(null);
     return defaultSettings;
   }
 }
@@ -109,3 +145,14 @@ export async function saveSettings(settings: EnergiaZenSettings) {
 }
 
 registerEffectiveSettingsPersister(saveSettings);
+registerPendingV2RecommendationPersister(async (pending) => {
+  if (pending) {
+    await AsyncStorage.setItem(
+      pendingV2RecommendationStorageKey,
+      JSON.stringify(pending),
+    );
+    return;
+  }
+
+  await AsyncStorage.removeItem(pendingV2RecommendationStorageKey);
+});
