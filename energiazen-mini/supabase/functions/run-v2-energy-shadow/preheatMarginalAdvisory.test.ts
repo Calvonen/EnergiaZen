@@ -96,6 +96,43 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected advisory never to reuse a baseline-selected heating hour as preheat",
   );
 
+  const retainedBaselinePrices = [
+    hourly("2026-09-17T13:00:00.000Z", 1),
+    hourly("2026-09-17T14:00:00.000Z", 2),
+    hourly("2026-09-17T15:00:00.000Z", 3),
+    ...tomorrow,
+  ];
+  const retainedBaseline = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([
+      "2026-09-17T13:00:00.000Z",
+      "2026-09-17T22:00:00.000Z",
+      "2026-09-17T23:00:00.000Z",
+    ]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices: retainedBaselinePrices,
+  });
+  assert(
+    retainedBaseline.retainedBaselineHeatingHourIds.length === 1 &&
+      retainedBaseline.retainedBaselineHeatingHourIds[0] === "2026-09-17T13:00:00.000Z",
+    "expected the earlier baseline hour to be retained because no candidate can precede it",
+  );
+  assert(
+    retainedBaseline.retainedBaselineHeatingEnergyKwh === 3,
+    "expected retained baseline hour to consume 3 kWh of soft headroom",
+  );
+  assert(
+    retainedBaseline.maxPreheatHoursByHeadroom === 1,
+    "expected retained baseline heat to reduce two-hour soft headroom to one additive preheat hour",
+  );
+  assert(
+    retainedBaseline.marginalCost.pairs.length === 1,
+    "expected at most one displacement pair after retained baseline headroom is reserved",
+  );
+
   const incompleteTomorrow = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"]),
     conservativeEnergyKwh: 12,
