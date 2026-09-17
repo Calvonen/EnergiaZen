@@ -62,6 +62,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 12,
   });
   assert(recommended.available && recommended.reason === "recommended", "expected marginal preheat recommendation");
   assert(recommended.maxPreheatHoursByHeadroom === 2, "expected 6 kWh soft headroom to cap preheat at two hours");
@@ -71,6 +72,28 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
       Date.parse(pair.preheatHourId) < Date.parse(pair.displacedFutureHourId)
     ),
     "expected every advisory pair to preserve temporal order",
+  );
+
+  const nominalPhysicalHeadroom = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([
+      "2026-09-17T22:00:00.000Z",
+      "2026-09-17T23:00:00.000Z",
+    ]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+    remainingEnergyKwh: 19,
+  });
+  assert(
+    !nominalPhysicalHeadroom.available && nominalPhysicalHeadroom.reason === "insufficient_whole_hour_headroom",
+    "expected nominal stored energy to cap physical headroom even when conservative energy is much lower",
+  );
+  assert(
+    nominalPhysicalHeadroom.maxPreheatHoursByHeadroom === 0,
+    "expected only 1 kWh nominal physical headroom to reject a 3 kWh whole-hour preheat interval",
   );
 
   const baselineAlreadyUsesCheapToday = buildV2MarginalPreheatAdvisory({
@@ -84,6 +107,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 12,
   });
   assert(
     !baselineAlreadyUsesCheapToday.candidatePreheatHourIds.includes("2026-09-17T13:00:00.000Z"),
@@ -113,6 +137,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices: retainedBaselinePrices,
+    remainingEnergyKwh: 12,
   });
   assert(
     retainedBaseline.retainedBaselineHeatingHourIds.length === 1 &&
@@ -143,6 +168,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices: unmatchedBaselinePrices,
+    remainingEnergyKwh: 12,
   });
   assert(unmatchedBaseline.available, "expected a reduced but still valid advisory when a cheap baseline hour is left unmatched");
   assert(unmatchedBaseline.marginalCost.pairs.length === 1, "expected matcher cap to shrink after actual unmatched baseline heat is known");
@@ -166,6 +192,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 15,
   });
   assert(
     !retainedAfterPreheat.available && retainedAfterPreheat.reason === "insufficient_whole_hour_headroom",
@@ -190,6 +217,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 15,
   });
   assert(
     !tinySoftHeadroom.available && tinySoftHeadroom.reason === "insufficient_whole_hour_headroom",
@@ -209,6 +237,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 12,
   });
   assert(
     !forbiddenCandidate.candidatePreheatHourIds.includes("2026-09-17T13:00:00.000Z"),
@@ -227,6 +256,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices: [hourly("2026-09-17T13:00:00.000Z", 2), ...tomorrow.slice(0, 23)],
+    remainingEnergyKwh: 12,
   });
   assert(
     !incompleteTomorrow.available && incompleteTomorrow.reason === "tomorrow_prices_incomplete",
@@ -241,6 +271,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 12,
   });
   assert(
     !noFutureHeat.available && noFutureHeat.reason === "no_future_heating_to_displace",
@@ -258,6 +289,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 15,
   });
   assert(oneHourHeadroom.maxPreheatHoursByHeadroom === 1, "expected exactly one whole heater-hour to fit in 3 kWh soft headroom");
   assert(oneHourHeadroom.marginalCost.pairs.length === 1, "expected one whole-hour pair under exact headroom cap");
@@ -275,6 +307,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices: expensiveTodayPrices,
+    remainingEnergyKwh: 12,
   });
   assert(
     !cheaperTomorrow.available && cheaperTomorrow.reason === "no_positive_savings",
@@ -289,6 +322,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     maxPreheatHours: 4,
     now,
     prices,
+    remainingEnergyKwh: 12,
   });
   assert(!invalidBaseline.available && invalidBaseline.reason === "baseline_plan_invalid", "expected invalid safety baseline to fail closed");
 }
