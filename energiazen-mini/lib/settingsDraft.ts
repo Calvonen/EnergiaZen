@@ -1,9 +1,10 @@
-import type { EditableSettingKey, EnergiaZenSettings } from "./settings";
+import type { EditableSettingKey, EnergiaZenSettings } from "./settingsDefaults";
 import {
   maxV2SafetyReservePercent,
   maxV2TargetReservePercent,
   minV2TargetReservePercent,
 } from "./energyModelV2/energyReservePercent";
+import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline";
 
 export type SettingsValidationField =
   | EditableSettingKey
@@ -365,6 +366,11 @@ export async function persistSettingsDraft({
   } catch {
     throw new SettingsDraftLocalSaveError();
   }
+
+  // Preserve whether the recommendation was actually edited in this draft.
+  // The remote writer uses this loaded baseline to decide whether it may
+  // merge the authoritative backend recommendation before a full-row upsert.
+  setLoadedV2TargetReservePercent(savedSettings.v2TargetReservePercent);
 
   try {
     await saveRemote(draftSettings);
