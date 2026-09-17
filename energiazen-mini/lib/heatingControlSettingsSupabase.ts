@@ -4,6 +4,7 @@ import { normalizeV2ReservePercents } from "./energyModelV2/energyReservePercent
 import {
   getLoadedV2TargetReservePercent,
   persistEffectiveSettingsLocally,
+  persistPendingV2Recommendation,
   setLoadedV2TargetReservePercent,
 } from "./v2RecommendationSaveBaseline";
 
@@ -112,6 +113,23 @@ export async function upsertHeatingControlSettings(
 
   if (error) {
     throw error;
+  }
+
+  // A successful explicit recommendation edit is immediately authoritative in
+  // heating_control_settings, but the last-good shadow row can still contain
+  // the previous value for up to its freshness window. Persist a marker so all
+  // Home consumers (and a remounted/restarted app) prefer the new setting until
+  // a later shadow run confirms the same value.
+  if (recommendationWasEdited) {
+    try {
+      await persistPendingV2Recommendation({
+        savedAt: new Date().toISOString(),
+        value: effectiveSettings.v2TargetReservePercent,
+      });
+    } catch {
+      // The remote save has already succeeded. Do not turn a marker-storage
+      // failure into a false settings-save failure or roll local settings back.
+    }
   }
 
   setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
