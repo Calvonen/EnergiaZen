@@ -3,6 +3,10 @@ import {
   V2_RECOMMENDED_PREHEAT_PERCENT,
   type V2HomeReserveSnapshot,
 } from "../../lib/v2HomeReservePresentation";
+import {
+  hydratePendingV2Recommendation,
+  setLoadedV2TargetReservePercent,
+} from "../../lib/v2RecommendationSaveBaseline";
 
 export function runV2HomeReservePresentationUnitTests() {
   const now = Date.parse("2026-09-16T09:00:00Z");
@@ -21,6 +25,9 @@ export function runV2HomeReservePresentationUnitTests() {
     latest_run_available: true,
     latest_unavailable_reason: null,
   };
+
+  hydratePendingV2Recommendation(null);
+  setLoadedV2TargetReservePercent(null);
 
   const current = buildV2HomeReservePresentation(base, now);
   if (!current.available || current.percent === null || Math.abs(current.percent - 63.28) >= 0.05) {
@@ -74,6 +81,38 @@ export function runV2HomeReservePresentationUnitTests() {
   if (pendingSavedRecommendationOverridesOldTelemetry.recommendedPreheatPercent !== 90) {
     throw new Error("expected a newly saved local recommendation to win while older shadow telemetry catches up");
   }
+
+  // Regression: callers such as WarmWaterCard do not pass an explicit
+  // configured value or transient flag. The persisted pending-save marker and
+  // loaded recommendation must therefore apply implicitly across every Home
+  // presentation, including after a remount/restart.
+  setLoadedV2TargetReservePercent(90);
+  hydratePendingV2Recommendation({
+    savedAt: "2026-09-16T08:58:00Z",
+    value: 90,
+  });
+  const implicitPendingOverride = buildV2HomeReservePresentation(
+    { ...base, recommended_preheat_percent: 80 },
+    now,
+  );
+  if (implicitPendingOverride.recommendedPreheatPercent !== 90) {
+    throw new Error("expected persisted pending-save precedence to apply to Home callers without explicit flags");
+  }
+
+  const acknowledgedPending = buildV2HomeReservePresentation(
+    {
+      ...base,
+      run_at: "2026-09-16T08:59:00Z",
+      recommended_preheat_percent: 90,
+    },
+    now,
+  );
+  if (acknowledgedPending.recommendedPreheatPercent !== 90) {
+    throw new Error("expected newer matching shadow telemetry to acknowledge the pending recommendation");
+  }
+
+  hydratePendingV2Recommendation(null);
+  setLoadedV2TargetReservePercent(null);
 
   const configuredFallbackWithoutTelemetry = buildV2HomeReservePresentation(
     { ...base, recommended_preheat_percent: null },
