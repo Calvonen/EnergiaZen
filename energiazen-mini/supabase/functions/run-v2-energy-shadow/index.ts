@@ -152,12 +152,28 @@ Deno.serve(async (request) => {
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
     });
 
+    const publicationSelectedHeatingHourIds =
+      preheatAdvisory.available && preheatAdvisory.reason === "recommended"
+        ? [...new Set([
+            ...preheatAdvisory.retainedBaselineHeatingHourIds,
+            ...preheatAdvisory.recommendedPreheatHourIds,
+          ])].sort((left, right) => Date.parse(left) - Date.parse(right))
+        : [...plan.selectedHeatingHourIds];
+
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
     const latestPublishableReadingAt = deriveLatestPublishableReadingAt(readings);
-    const publicationCandidate = captureV2PublicationCandidate(plan);
+    // Staged publication composes the validated hard-safety baseline with the
+    // economic preheat advisory. Production cutover remains disabled here;
+    // this only keeps the shadow/staged candidate faithful to the configured
+    // soft recommendation for a later explicit cutover decision.
+    const publicationCandidate = captureV2PublicationCandidate(
+      plan,
+      publicationSelectedHeatingHourIds,
+    );
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2StagedPublicationEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
       plan,
@@ -165,6 +181,7 @@ Deno.serve(async (request) => {
     });
     const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
       plan,
