@@ -173,10 +173,18 @@ function evaluateSelection({
 }
 
 function compareValidPlans(left: EvaluatedPlan, right: EvaluatedPlan) {
+  // Once both plans satisfy the current safety + target validity rules, the
+  // primary optimization objective is what the electricity actually costs.
+  // Previously we minimized selected kWh first, which let an expensive partial
+  // current hour beat a much cheaper full future hour merely because it
+  // delivered a little less energy. Energy amount is now only a tie-breaker
+  // after equal cost; later PRs will separately change target into soft preheat.
+  if (left.totalCostCents !== right.totalCostCents) {
+    return left.totalCostCents - right.totalCostCents;
+  }
   if (left.selectedHeatingEnergyKwh !== right.selectedHeatingEnergyKwh) {
     return left.selectedHeatingEnergyKwh - right.selectedHeatingEnergyKwh;
   }
-  if (left.totalCostCents !== right.totalCostCents) return left.totalCostCents - right.totalCostCents;
   return left.selectedHeatingHourIds.join("|").localeCompare(right.selectedHeatingHourIds.join("|"));
 }
 
