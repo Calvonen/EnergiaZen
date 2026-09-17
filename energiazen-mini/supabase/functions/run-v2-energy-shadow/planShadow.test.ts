@@ -83,11 +83,11 @@ export function runLivePlanShadowUnitTests() {
   assertEqual(needsHeat.selectedHeatingHourIds.length, 1, "one segment is enough to restore target");
   assertEqual(
     needsHeat.selectedHeatingHourIds[0],
-    "2026-09-15T06:00:00.000Z",
-    "cheaper full future hour beats a more expensive partial current hour",
+    "2026-09-15T05:00:00.000Z",
+    "billed tariff keeps the shorter 10 c/kWh partial interval cheaper than a full 2 c/kWh hour",
   );
-  assertEqual(needsHeat.selectedHeatingEnergyKwh, 3, "cost-first ranking may intentionally buy the cheaper full 3 kWh segment");
-  assertEqual(needsHeat.totalCostCents, 6, "selected valid plan minimizes electricity cost before delivered energy");
+  assertEqual(needsHeat.selectedHeatingEnergyKwh, 1.5, "billed cost ranking preserves the cheaper partial 1.5 kWh segment");
+  assertEqual(needsHeat.totalCostCents, 27.93, "plan cost includes spot margin plus grid and tax");
 
   const winterSpike = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
@@ -108,7 +108,28 @@ export function runLivePlanShadowUnitTests() {
     "2026-09-15T06:00:00.000Z",
     "100 c/kWh partial current segment must never beat a 1 c/kWh valid future hour",
   );
-  assertEqual(winterSpike.totalCostCents, 3, "winter spike test chooses the 1 c/kWh full future hour");
+  assertEqual(winterSpike.totalCostCents, 28.86, "winter spike comparison uses the billed 9.62 c/kWh future tariff");
+
+  const moderatelyNegative = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: [
+      price("2026-09-15T05:00:00.000Z", -5),
+      price("2026-09-15T06:00:00.000Z", -4),
+      price("2026-09-15T07:00:00.000Z", 10),
+    ],
+    reserve: reserve(5.4),
+  });
+  assert(moderatelyNegative.valid === true, "moderately negative spot scenario remains valid");
+  assertEqual(
+    moderatelyNegative.selectedHeatingHourIds[0],
+    "2026-09-15T05:00:00.000Z",
+    "negative spot must not be treated as free when the billed tariff remains positive",
+  );
+  assertEqual(moderatelyNegative.totalCostCents, 5.43, "-5 c/kWh spot still bills 3.62 c/kWh after tariff additions");
 
   const missingCurrent = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
