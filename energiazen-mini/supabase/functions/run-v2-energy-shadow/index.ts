@@ -96,6 +96,11 @@ Deno.serve(async (request) => {
       targetPercent: Number(settingsResult.data.v2_target_reserve_percent),
       safetyPercent: Number(settingsResult.data.v2_safety_reserve_percent),
     });
+    const recommendedPreheatPercent = reservePercents.targetPercent;
+    // The ordered reserve-threshold model now represents hard safety only.
+    // Keep its target equal to the safety floor and carry the configurable
+    // economic preheat recommendation separately into advisory telemetry.
+    const hardTargetPercent = reservePercents.safetyPercent;
     const priceCeilingSetting = buildV2PriceCeilingSettingTelemetry(
       settingsResult.data.v2_max_billed_price_cents_kwh,
     );
@@ -106,7 +111,7 @@ Deno.serve(async (request) => {
       maxTankTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.targetPercent, energyCapacityKwh);
+    const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
     const safetyEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
 
     const baseResult = runLiveReserveShadow({
@@ -143,7 +148,7 @@ Deno.serve(async (request) => {
       maxPreheatHours: automaticMaxHeatingHours,
       now,
       prices,
-      recommendedPreheatPercent: reservePercents.targetPercent,
+      recommendedPreheatPercent,
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
     });
 
@@ -205,7 +210,8 @@ Deno.serve(async (request) => {
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       conservative_energy_kwh: result.conservativeEnergyKwh, energy_capacity_kwh: energyCapacityKwh,
-      safety_reserve_percent: reservePercents.safetyPercent, target_reserve_percent: reservePercents.targetPercent,
+      safety_reserve_percent: reservePercents.safetyPercent, target_reserve_percent: hardTargetPercent,
+      recommended_preheat_percent: recommendedPreheatPercent,
       safety_energy_kwh: result.safetyEnergyKwh, target_energy_kwh: result.targetEnergyKwh,
       v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
       v1_shadow_run_id: v1Shadow?.id ?? null, v1_run_at: v1Shadow?.run_at ?? null,
@@ -230,7 +236,8 @@ Deno.serve(async (request) => {
     return jsonResponse({
       status: "ok", available: result.available, comparison: "v1_unavailable",
       energy_capacity_kwh: energyCapacityKwh, safety_reserve_percent: reservePercents.safetyPercent,
-      target_reserve_percent: reservePercents.targetPercent, safety_energy_kwh: result.safetyEnergyKwh,
+      target_reserve_percent: hardTargetPercent, recommended_preheat_percent: recommendedPreheatPercent,
+      safety_energy_kwh: result.safetyEnergyKwh,
       target_energy_kwh: result.targetEnergyKwh, remaining_energy_kwh: result.remainingEnergyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
