@@ -81,8 +81,34 @@ export function runLivePlanShadowUnitTests() {
   assert(needsHeat.available, "recoverable reserve still has a plan shadow");
   assert(needsHeat.valid === true, "optimizer finds a valid recovery plan");
   assertEqual(needsHeat.selectedHeatingHourIds.length, 1, "one segment is enough to restore target");
-  assertEqual(needsHeat.selectedHeatingHourIds[0], "2026-09-15T05:00:00.000Z", "partial current hour wins when it delivers the least sufficient energy");
-  assert(needsHeat.selectedHeatingEnergyKwh !== null && needsHeat.selectedHeatingEnergyKwh < 3, "partial current hour credits less than a full 3 kWh");
+  assertEqual(
+    needsHeat.selectedHeatingHourIds[0],
+    "2026-09-15T06:00:00.000Z",
+    "cheaper full future hour beats a more expensive partial current hour",
+  );
+  assertEqual(needsHeat.selectedHeatingEnergyKwh, 3, "cost-first ranking may intentionally buy the cheaper full 3 kWh segment");
+  assertEqual(needsHeat.totalCostCents, 6, "selected valid plan minimizes electricity cost before delivered energy");
+
+  const winterSpike = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: [
+      price("2026-09-15T05:00:00.000Z", 100),
+      price("2026-09-15T06:00:00.000Z", 1),
+      price("2026-09-15T07:00:00.000Z", 50),
+    ],
+    reserve: reserve(5.4),
+  });
+  assert(winterSpike.valid === true, "100 c/kWh spike scenario still finds a valid plan");
+  assertEqual(
+    winterSpike.selectedHeatingHourIds[0],
+    "2026-09-15T06:00:00.000Z",
+    "100 c/kWh partial current segment must never beat a 1 c/kWh valid future hour",
+  );
+  assertEqual(winterSpike.totalCostCents, 3, "winter spike test chooses the 1 c/kWh full future hour");
 
   const missingCurrent = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
