@@ -251,8 +251,12 @@ function buildSoftFillFallback({
     immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh,
     0,
   );
+  const remainingConfiguredHourCap = Math.max(
+    configuredHourCap - retainedBaselineHeatingHourIds.length,
+    0,
+  );
   const maxPreheatHoursByHeadroom = Math.min(
-    configuredHourCap,
+    remainingConfiguredHourCap,
     Math.floor((availableHeadroomKwh + 1e-9) / heaterPowerKw),
   );
   const marginalCost: V2MarginalPreheatCostResult = {
