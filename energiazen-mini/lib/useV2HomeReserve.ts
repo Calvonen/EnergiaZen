@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import {
   buildV2HomeReservePresentation,
+  V2_RECOMMENDED_PREHEAT_PERCENT,
   type V2HomeReservePresentation,
   type V2HomeReserveSnapshot,
 } from "./v2HomeReservePresentation";
@@ -17,6 +18,7 @@ const unavailablePresentation: V2HomeReservePresentation = {
   capacityKwh: null,
   safetyReservePercent: null,
   targetReservePercent: null,
+  recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
   forecastMinimumEnergyKwh: null,
   forecastMinimumPercent: null,
   forecastFinalEnergyKwh: null,

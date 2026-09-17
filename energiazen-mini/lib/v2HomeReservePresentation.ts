@@ -1,4 +1,5 @@
 export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
+export const V2_RECOMMENDED_PREHEAT_PERCENT = 90;
 
 export type V2HomeReserveSnapshot = {
   run_at: string | null;
@@ -23,6 +24,7 @@ export type V2HomeReservePresentation = {
   capacityKwh: number | null;
   safetyReservePercent: number | null;
   targetReservePercent: number | null;
+  recommendedPreheatPercent: number;
   forecastMinimumEnergyKwh: number | null;
   forecastMinimumPercent: number | null;
   forecastFinalEnergyKwh: number | null;
@@ -71,10 +73,6 @@ export function buildV2HomeReservePresentation(
     Number.isFinite(safetyReservePercent) &&
     safetyReservePercent >= 0 &&
     safetyReservePercent <= 100 &&
-    typeof targetReservePercent === "number" &&
-    Number.isFinite(targetReservePercent) &&
-    targetReservePercent >= 0 &&
-    targetReservePercent <= 100 &&
     typeof forecastMinimumEnergy === "number" &&
     Number.isFinite(forecastMinimumEnergy) &&
     forecastMinimumEnergy >= 0 &&
@@ -93,6 +91,7 @@ export function buildV2HomeReservePresentation(
       capacityKwh: null,
       safetyReservePercent: null,
       targetReservePercent: null,
+      recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
       forecastMinimumEnergyKwh: null,
       forecastMinimumPercent: null,
       forecastFinalEnergyKwh: null,
@@ -119,7 +118,11 @@ export function buildV2HomeReservePresentation(
     energyKwh: energy,
     capacityKwh: capacity,
     safetyReservePercent,
-    targetReservePercent,
+    targetReservePercent:
+      typeof targetReservePercent === "number" && Number.isFinite(targetReservePercent)
+        ? targetReservePercent
+        : null,
+    recommendedPreheatPercent: V2_RECOMMENDED_PREHEAT_PERCENT,
     forecastMinimumEnergyKwh: forecastMinimumEnergy,
     forecastMinimumPercent,
     forecastFinalEnergyKwh: forecastFinalEnergy,

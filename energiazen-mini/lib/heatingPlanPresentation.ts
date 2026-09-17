@@ -12,6 +12,7 @@ import {
   type HourlyHeatingForecast,
 } from "./heatingOptimizer";
 import type { HourlyTemperatureDropProfile } from "./tankTemperatureForecast";
+import { V2_RECOMMENDED_PREHEAT_PERCENT } from "./v2HomeReservePresentation";
 
 export type HeatingPlanReasonKind =
   | "early-for-safety"
@@ -35,19 +36,8 @@ export type HeatingPlanPresentation = {
   forecastSectionLabel: string;
   forecastSummary: string;
   heatingSummary: string | null;
-  // Rajat-osion otsikko. Tallennetulle backend-suunnitelmalle rikastettu
-  // "Nykyiset rajat" kertoo etta kyseessa ovat nykyiset paikalliset
-  // tavoite-/turvarajat, ei valttamatta ne joilla tallennettu suunnitelma
-  // alun perin optimoitiin (rajat itse eivat kuitenkaan riipu valituista
-  // tunneista, joten arvot ovat oikeat niin kauan kuin asetukset eivat ole
-  // muuttuneet suunnitelman tallentamisen jalkeen).
   limitsSectionLabel: string;
   limitsSummary: string;
-  // Sama lahde kuin limitsSummaryn tavoite-/turvaraja-arvot: normaalitilassa
-  // tallennettu asetus, skenaariotilassa luonnoksen arvo - ei koskaan
-  // heating_plans-datasta laskettu. Null vain silloin kun limitsSummarykaan
-  // ei sisalla rajatietoa (buildStoredHeatingPlanPresentation ilman
-  // currentOptimizerPresentation-rikastusta).
   priceToleranceSummary: string | null;
   reason: string;
   reasonKind: HeatingPlanReasonKind;
@@ -69,18 +59,12 @@ function formatFinnishCurrency(value: number) {
 }
 
 function formatHeatingHourPrice(price: number | null | undefined) {
-  if (typeof price !== "number" || !Number.isFinite(price)) {
-    return null;
-  }
-
+  if (typeof price !== "number" || !Number.isFinite(price)) return null;
   return `${formatFinnishDecimal(price)} c/kWh`;
 }
 
 function formatEstimatedCost(costEuros: number | null | undefined) {
-  if (typeof costEuros !== "number" || !Number.isFinite(costEuros)) {
-    return null;
-  }
-
+  if (typeof costEuros !== "number" || !Number.isFinite(costEuros)) return null;
   return `n. ${formatFinnishCurrency(costEuros)} €`;
 }
 
@@ -90,14 +74,6 @@ function formatPriceToleranceSummary(priceToleranceCents: number) {
     : "Hintatoleranssi pois käytöstä";
 }
 
-// "Alimmillaan"-lukeman pitaa kuvata lahiaikaista pohjaa - alinta
-// ennustettua suihkumaaraa ennen SEURAAVAA suunniteltua lammitysta - eika
-// koko ennustejakson minimia. Koko jakson minimi osuu usein jakson
-// viimeiseen tuntiin (nayttaen samalta kuin "lopussa"-rivi), varsinkin
-// kun tulevaisuudessa ei viela ole toista lammityskertaa naissa. Siksi
-// haku pysahtyy ensimmaiseen valittuun lammitystuntiin: sen showersLeftBefore
-// otetaan viela mukaan (pohja juuri ennen lammityksen alkua), mutta
-// showersLeftAfter (lammityksen jalkeinen, jo noussut arvo) ei enaa.
 export function findMinimumShowersBeforeNextHeating(
   forecast: Pick<
     HourlyHeatingForecast,
@@ -109,28 +85,19 @@ export function findMinimumShowersBeforeNextHeating(
   >[],
 ): { date: Date; value: number } | null {
   let minimum: { date: Date; value: number } | null = null;
-
   const updateMinimum = (value: number, date: Date) => {
-    if (!minimum || value < minimum.value) {
-      minimum = { date, value };
-    }
+    if (!minimum || value < minimum.value) minimum = { date, value };
   };
 
   for (const hour of forecast) {
     const startDate = new Date(hour.startDate);
-
     updateMinimum(hour.showersLeftBefore, startDate);
-
-    if (hour.isHeatingSelected) {
-      break;
-    }
-
+    if (hour.isHeatingSelected) break;
     updateMinimum(
       hour.showersLeftAfter,
       new Date(startDate.getTime() + hour.segmentHours * 60 * 60 * 1000),
     );
   }
-
   return minimum;
 }
 
@@ -152,7 +119,6 @@ export function buildHeatingPlanForecastFields({
 } {
   const currentShowersLabel =
     currentShowers === null ? "--" : formatFinnishDecimal(currentShowers);
-
   return {
     forecastDetails: {
       currentShowersLabel,
@@ -165,12 +131,6 @@ export function buildHeatingPlanForecastFields({
   };
 }
 
-// Simuloi ennusteen (simulateHeatingPlan - sama helper jota aktiivinen
-// optimoija itse kayttaa) BACKENDIN tallennetuilla selectedHeatingHourIds-
-// tunneilla nykyisen optimoinnin lahtotilaa, asetuksia ja ennustemallia
-// (heatingGainPerHour, spikes, hourlyDrops, settings) vasten. Kutsujan
-// vastuulla on antaa samat nama arvot kuin aktiivinen optimointiajo kaytti,
-// jotta ainoa ero optimoijan omaan ennusteeseen on valittu tuntijoukko.
 export function simulateStoredHeatingPlanForecast({
   currentBottomTemperature,
   currentTopTemperature,
@@ -219,16 +179,12 @@ export function simulateStoredHeatingPlanForecast({
   const finalShowers =
     result.forecast[result.forecast.length - 1]?.showersLeftAfter ??
     result.minimumPredictedShowersLeft;
-  const minimumBeforeNextHeating = findMinimumShowersBeforeNextHeating(
-    result.forecast,
-  );
-
+  const minimumBeforeNextHeating = findMinimumShowersBeforeNextHeating(result.forecast);
   return {
     finalShowers,
     minimumShowersBeforeNextHeating:
       minimumBeforeNextHeating?.value ?? result.minimumPredictedShowersLeft,
-    minimumShowersBeforeNextHeatingDate:
-      minimumBeforeNextHeating?.date ?? null,
+    minimumShowersBeforeNextHeatingDate: minimumBeforeNextHeating?.date ?? null,
   };
 }
 
@@ -259,32 +215,13 @@ export function buildHeatingPlanPresentation({
   fixedHeatingHoursPerDay: number;
   forecastEndLabel: string;
   heatingNeedMode: "automatic" | "fixed";
-  // Koko ennustejakson minimi - kaytetaan turvarajan tayttymisen
-  // (statusSummary) laskentaan, joka koskee koko jaksoa.
   minimumShowers: number;
-  // Alin ennustettu suihkumaara ennen seuraavaa suunniteltua lammitysta -
-  // nain "Alimmillaan"-lukema nayttaa kayttajalle merkityksellisen,
-  // lahiaikaisen pohjan sen sijaan etta se toistaisi koko jakson minimin
-  // (joka voi osua esim. seuraavan paivan loppuun eika kerro mitaan
-  // seuraavaa lammityskertaa edeltavasta pohjasta).
   minimumShowersBeforeNextHeating?: number;
   minimumShowersTimeLabel?: string | null;
   planValid: boolean;
-  // Sama asetuslahde kuin safetyShowerReserve/targetShowerReserve - kutsuja
-  // antaa kaytossa olevan (normaalitila) tai luonnoksen (skenaariotila)
-  // priceToleranceCentsin, ei koskaan heating_plans-datasta laskettua arvoa.
   priceToleranceCents: number;
   safetyShowerReserve: number;
   selectedHours: HeatingPlanPresentation["selectedHours"];
-  // Suihkumaara heti viimeisen valitun lammitystunnin jalkeen - tama on se
-  // hetki jota optimoija (simulateHeatingPlan) itse kayttaa tavoitteen
-  // tayttymisen tarkistukseen, ei koko (jopa ~30h) ennustejakson loppua.
-  // "statusSummary" kaytetaan tata finalShowersin sijaan, jottei kortti
-  // vaita tavoitteen jaavan saavuttamatta pelkastaan siksi etta suunnitelma
-  // ei kata viela lammittamatonta myohaisiltaa/-yota, jota se ei koskaan
-  // luvannutkaan kattaa. Oletuksena finalShowers, jos tata ei anneta
-  // (esim. buildStoredHeatingPlanPresentation, jolla ei ole erillista
-  // tarkistuspistetta).
   targetCheckShowersLeft?: number;
   targetShowerReserve: number;
 }): HeatingPlanPresentation {
@@ -293,8 +230,7 @@ export function buildHeatingPlanPresentation({
 
   if (fallbackInUse) {
     reasonKind = "fallback";
-    reason =
-      "Pörssisähköohjaus ei voinut muodostaa kelvollista suunnitelmaa, joten käytetään valittuja varakäyttötunteja.";
+    reason = "Pörssisähköohjaus ei voinut muodostaa kelvollista suunnitelmaa, joten käytetään valittuja varakäyttötunteja.";
   } else if (heatingNeedMode === "fixed") {
     reasonKind = "fixed";
     reason = `Kiinteä lämmitys ${fixedHeatingHoursPerDay} h/vrk vuorokauden halvimmilla tunneilla.`;
@@ -303,16 +239,13 @@ export function buildHeatingPlanPresentation({
     reason = `Tavoitevarausta ei saavuteta asetetulla enintään ${automaticMaxHeatingHours} tunnin lämmityksellä. Valittu suunnitelma on paras mahdollinen käytettävissä olevilla tunneilla.`;
   } else if (selectedHours.length === 0) {
     reasonKind = "no-heating";
-    reason =
-      "Nykyinen lämminvesivaraus riittää turvarajan yläpuolella pysymiseen ja tavoite saavutetaan ilman lisälämmitystä.";
+    reason = "Nykyinen lämminvesivaraus riittää turvarajan yläpuolella pysymiseen ja tavoite saavutetaan ilman lisälämmitystä.";
   } else if (cheaperPlanRejectedForSafety) {
     reasonKind = "early-for-safety";
-    reason =
-      "Lämmitys aloitetaan aikaisemmin, koska myöhempään odottaminen alittaisi turvarajan.";
+    reason = "Lämmitys aloitetaan aikaisemmin, koska myöhempään odottaminen alittaisi turvarajan.";
   } else {
     reasonKind = "standard";
-    reason =
-      "Halvin suunnitelma, jolla turvaraja säilyy ja tavoite saavutetaan.";
+    reason = "Halvin suunnitelma, jolla turvaraja säilyy ja tavoite saavutetaan.";
   }
 
   const safetyReserveMet = minimumShowers >= safetyShowerReserve;
@@ -335,8 +268,7 @@ export function buildHeatingPlanPresentation({
   });
 
   return {
-    emptyPlanLabel:
-      selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
+    emptyPlanLabel: selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
     forecastDetails,
     forecastSectionLabel: "Ennuste",
     forecastSummary,
@@ -349,17 +281,7 @@ export function buildHeatingPlanPresentation({
     priceToleranceSummary: formatPriceToleranceSummary(priceToleranceCents),
     reason,
     reasonKind,
-    selectedHours: selectedHours.map((hour) => {
-      const priceLabel = formatHeatingHourPrice(hour.price);
-      const costLabel = formatEstimatedCost(hour.estimatedCostEuros);
-
-      return {
-        ...hour,
-        label: [hour.label, priceLabel, costLabel]
-          .filter((label): label is string => Boolean(label))
-          .join(" · "),
-      };
-    }),
+    selectedHours: selectedHours.map(formatSelectedHour),
     statusSummary,
   };
 }
@@ -370,16 +292,7 @@ export function buildStoredHeatingPlanPresentation({
   selectedHours,
   v2EnergyReserve = null,
 }: {
-  // Nykyinen paikallinen optimointiesitys (esim. activeOptimizerPresentation),
-  // jolla rikastetaan vain Käytetyt rajat -tiedot. targetShowerReserve/
-  // safetyShowerReserve tulevat suoraan asetuksista eivatka riipu valituista
-  // tunneista, joten ne pysyvat oikeina vaikka esitys on eri optimointiajosta.
   currentOptimizerPresentation?: HeatingPlanPresentation | null;
-  // Ennuste (forecastDetails/forecastSummary) BACKENDIN tallennetuille
-  // tunneille - kutsujan on laskettava tama simulateStoredHeatingPlanForecast-
-  // funktiolla (tai vastaavalla) juuri backendin selectedHours-tunteja
-  // vasten, ei paikallisen optimoijan omilla valituilla tunneilla. Jos jatetaan
-  // pois (null), ennuste jaa neutraaliksi tekstiksi.
   forecast?: {
     forecastDetails: HeatingPlanForecastDetails;
     forecastSummary: string;
@@ -396,78 +309,93 @@ export function buildStoredHeatingPlanPresentation({
     percent: number | null;
     safetyReservePercent: number | null;
     targetReservePercent: number | null;
+    recommendedPreheatPercent?: number;
     isFallback?: boolean;
   } | null;
 }): HeatingPlanPresentation {
+  if (!v2EnergyReserve) {
+    return {
+      emptyPlanLabel:
+        selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
+      forecastDetails: forecast?.forecastDetails ?? null,
+      forecastSectionLabel: "Ennuste",
+      forecastSummary:
+        forecast?.forecastSummary ??
+        "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",
+      heatingSummary:
+        selectedHours.length === 0
+          ? null
+          : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
+      limitsSectionLabel: currentOptimizerPresentation
+        ? "Nykyiset rajat"
+        : "Käytetyt rajat",
+      limitsSummary: currentOptimizerPresentation
+        ? currentOptimizerPresentation.limitsSummary
+        : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
+      priceToleranceSummary: currentOptimizerPresentation
+        ? currentOptimizerPresentation.priceToleranceSummary
+        : null,
+      reason: "Näytetään viimeksi tallennetut lämmitystunnit.",
+      reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
+      selectedHours: selectedHours.map(formatSelectedHour),
+      statusSummary: "Viimeksi tallennettu suunnitelma",
+    };
+  }
+
+  const recommendedPreheatPercent =
+    v2EnergyReserve.recommendedPreheatPercent ?? V2_RECOMMENDED_PREHEAT_PERCENT;
   const v2ForecastAvailable =
-    v2EnergyReserve?.available === true &&
+    v2EnergyReserve.available === true &&
     v2EnergyReserve.percent !== null &&
     v2EnergyReserve.energyKwh !== null &&
     v2EnergyReserve.capacityKwh !== null &&
     v2EnergyReserve.forecastMinimumPercent !== null &&
     v2EnergyReserve.forecastFinalEnergyKwh !== null &&
     v2EnergyReserve.forecastFinalPercent !== null &&
-    v2EnergyReserve.targetReservePercent !== null &&
     v2EnergyReserve.safetyReservePercent !== null;
   const v2ForecastSummary = v2ForecastAvailable
     ? v2EnergyReserve.isFallback
       ? `Viimeisin varma arvio ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
       : `Nyt ${formatFinnishDecimal(v2EnergyReserve.percent as number)} % (${formatFinnishDecimal(v2EnergyReserve.energyKwh as number)} kWh) · huomenna lopussa ${formatFinnishDecimal(v2EnergyReserve.forecastFinalPercent as number)} % (${formatFinnishDecimal(v2EnergyReserve.forecastFinalEnergyKwh as number)} kWh) · ennusteen alin ${formatFinnishDecimal(v2EnergyReserve.forecastMinimumPercent as number)} %`
-    : "V2-energiavaraennuste ei ole juuri nyt saatavilla.";
+    : "V2-energiavara ei ole juuri nyt saatavilla. Vanhaa suihkuennustetta ei enää käytetä.";
+  const safetyReservePercent = v2EnergyReserve.safetyReservePercent;
+  const limitsSummary =
+    typeof safetyReservePercent === "number" && Number.isFinite(safetyReservePercent)
+      ? `Suositus ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja ${formatFinnishDecimal(safetyReservePercent)} %`
+      : `Pehmeä esilämmityssuositus ${formatFinnishDecimal(recommendedPreheatPercent)} %. Turvaraja ei ole juuri nyt saatavilla.`;
 
   return {
     emptyPlanLabel:
-      selectedHours.length === 0 ? "Ei lämmitystarvetta" : null,
-    forecastDetails: v2EnergyReserve ? null : forecast?.forecastDetails ?? null,
-    forecastSectionLabel: v2EnergyReserve ? "V2-energiavara" : "Ennuste",
-    forecastSummary: v2EnergyReserve
-      ? v2ForecastSummary
-      : forecast?.forecastSummary ??
-        "Tallennetulle suunnitelmalle ei ole saatavilla luotettavaa ennustetta.",
+      selectedHours.length === 0 ? "Ei valittuja lämmitystunteja" : null,
+    forecastDetails: null,
+    forecastSectionLabel: "V2-energiavara",
+    forecastSummary: v2ForecastSummary,
     heatingSummary:
       selectedHours.length === 0
         ? null
         : `Lämmitystä ${selectedHours.length} ${selectedHours.length === 1 ? "tunti" : "tuntia"}`,
-    limitsSectionLabel: v2EnergyReserve
-      ? "V2-rajat"
-      : currentOptimizerPresentation
-        ? "Nykyiset rajat"
-        : "Käytetyt rajat",
-    limitsSummary:
-      v2EnergyReserve &&
-      v2EnergyReserve.targetReservePercent !== null &&
-      v2EnergyReserve.safetyReservePercent !== null
-        ? `Tavoite ${formatFinnishDecimal(v2EnergyReserve.targetReservePercent)} % · turvaraja ${formatFinnishDecimal(v2EnergyReserve.safetyReservePercent)} %`
-        : currentOptimizerPresentation
-          ? currentOptimizerPresentation.limitsSummary
-          : "Tavoite- ja turvarajat eivät sisälly tallennettuun suunnitelmaan.",
-    priceToleranceSummary: v2EnergyReserve
-      ? null
-      : currentOptimizerPresentation
-        ? currentOptimizerPresentation.priceToleranceSummary
-        : null,
-    reason: v2EnergyReserve
-      ? "V2 optimoi lämmitystunnit energiavaran ja hinnan perusteella."
-      : "Näytetään viimeksi tallennetut lämmitystunnit.",
+    limitsSectionLabel: "V2-rajat",
+    limitsSummary,
+    priceToleranceSummary: null,
+    reason: "V2 optimoi energiavaran turvallisuusrajan ja hinnan perusteella; 90 % on pehmeä esilämmityssuositus.",
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
-    selectedHours: selectedHours.map((hour) => {
-      const priceLabel = formatHeatingHourPrice(hour.price);
-      const costLabel = formatEstimatedCost(hour.estimatedCostEuros);
+    selectedHours: selectedHours.map(formatSelectedHour),
+    statusSummary: v2ForecastAvailable
+      ? v2EnergyReserve.isFallback
+        ? "V2-energiavara · viimeisin varma arvio"
+        : "V2-energiavara"
+      : "V2-energiavara · ennuste ei saatavilla",
+  };
+}
 
-      return {
-        ...hour,
-        label: [hour.label, priceLabel, costLabel]
-          .filter((label): label is string => Boolean(label))
-          .join(" · "),
-      };
-    }),
-    statusSummary: v2EnergyReserve
-      ? v2ForecastAvailable
-        ? v2EnergyReserve.isFallback
-          ? "V2-suunnitelma käytössä · viimeisin varma arvio"
-          : "V2-suunnitelma käytössä"
-        : "V2-suunnitelma käytössä · ennuste ei saatavilla"
-      : "Viimeksi tallennettu suunnitelma",
+function formatSelectedHour(hour: HeatingPlanPresentation["selectedHours"][number]) {
+  const priceLabel = formatHeatingHourPrice(hour.price);
+  const costLabel = formatEstimatedCost(hour.estimatedCostEuros);
+  return {
+    ...hour,
+    label: [hour.label, priceLabel, costLabel]
+      .filter((label): label is string => Boolean(label))
+      .join(" · "),
   };
 }
 
@@ -476,10 +404,7 @@ export function selectActiveHeatingPlanPresentation(
   storedPresentation: HeatingPlanPresentation | null,
   storedPlanIsAuthoritative = false,
 ) {
-  if (storedPlanIsAuthoritative) {
-    return storedPresentation ?? freshOptimizerPresentation;
-  }
-
+  if (storedPlanIsAuthoritative) return storedPresentation ?? freshOptimizerPresentation;
   return freshOptimizerPresentation ?? storedPresentation;
 }
 
@@ -491,19 +416,16 @@ export function hasAmbiguousStoredHeatingPlanHour({
   storedPlans: { plan_date?: string | null; planned_hours?: unknown }[];
 }) {
   const priceIntervalsByDateHour = new Map<string, Set<number>>();
-
   for (const price of hourlyPrices) {
     const dateHour = `${getFinnishDateKey(price.startDate)}:${getHelsinkiHourNumber(price.date)}`;
     const intervalStarts = priceIntervalsByDateHour.get(dateHour) ?? new Set();
     intervalStarts.add(price.date.getTime());
     priceIntervalsByDateHour.set(dateHour, intervalStarts);
   }
-
   return storedPlans.some((plan) =>
     normalizeStoredHeatingPlanHours(plan.planned_hours).some(
       (hour) =>
-        (priceIntervalsByDateHour.get(`${plan.plan_date}:${hour}`)?.size ?? 0) >
-        1,
+        (priceIntervalsByDateHour.get(`${plan.plan_date}:${hour}`)?.size ?? 0) > 1,
     ),
   );
 }
