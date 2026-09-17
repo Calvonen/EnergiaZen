@@ -7,6 +7,7 @@ import {
 import type { EnergiaZenSettings } from "./settingsDefaults";
 import {
   currentSettingsStorageMigrationVersion,
+  mergeSettingsForStorage,
   migrateStoredSettings,
 } from "./settingsStorageMigration";
 import { registerEffectiveSettingsPersister } from "./v2RecommendationSaveBaseline";
@@ -22,6 +23,7 @@ export const settingsStorageMigrationVersionKey =
   "energiazen:settings:migration-version";
 
 let loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
+let loadedRawSettingsPayload: unknown = null;
 
 export async function loadSettings() {
   try {
@@ -32,6 +34,7 @@ export async function loadSettings() {
 
     if (!storedSettings) {
       loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
+      loadedRawSettingsPayload = null;
       return defaultSettings;
     }
 
@@ -46,6 +49,7 @@ export async function loadSettings() {
     );
     const normalizedSettings = normalizeSettings(migration.settings);
     loadedSettingsMigrationVersion = migration.migrationVersion;
+    loadedRawSettingsPayload = parsedSettings;
 
     const isFutureVersion =
       previousMigrationVersion !== null &&
@@ -68,6 +72,7 @@ export async function loadSettings() {
             String(migration.migrationVersion),
           ],
         ]);
+        loadedRawSettingsPayload = normalizedSettings;
       } catch {
         // The migrated in-memory value is still safer than falling back to
         // defaults. A later successful save/load can persist the marker.
@@ -77,23 +82,30 @@ export async function loadSettings() {
     return normalizedSettings;
   } catch {
     loadedSettingsMigrationVersion = currentSettingsStorageMigrationVersion;
+    loadedRawSettingsPayload = null;
     return defaultSettings;
   }
 }
 
 export async function saveSettings(settings: EnergiaZenSettings) {
+  const normalizedSettings = normalizeSettings(settings);
+  const migrationVersion = Math.max(
+    loadedSettingsMigrationVersion,
+    currentSettingsStorageMigrationVersion,
+  );
+  const settingsForStorage = mergeSettingsForStorage({
+    migrationVersion,
+    normalizedSettings,
+    rawStoredSettings: loadedRawSettingsPayload,
+  });
+
   await AsyncStorage.multiSet([
-    [settingsStorageKey, JSON.stringify(normalizeSettings(settings))],
-    [
-      settingsStorageMigrationVersionKey,
-      String(
-        Math.max(
-          loadedSettingsMigrationVersion,
-          currentSettingsStorageMigrationVersion,
-        ),
-      ),
-    ],
+    [settingsStorageKey, JSON.stringify(settingsForStorage)],
+    [settingsStorageMigrationVersionKey, String(migrationVersion)],
   ]);
+
+  loadedSettingsMigrationVersion = migrationVersion;
+  loadedRawSettingsPayload = settingsForStorage;
 }
 
 registerEffectiveSettingsPersister(saveSettings);
