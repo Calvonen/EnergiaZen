@@ -146,6 +146,11 @@ import {
 // check has resolved even once (Codex P2 follow-up).
 const BACKEND_PRIMARY_HEATING_PLAN_ENABLED = true;
 
+// Presentation-only staged rollout. This intentionally does not change the
+// authoritative heating plan, publication, or Shelly control path. Disable
+// this flag to restore the legacy stored-plan card during a UI rollback.
+const V2_HOME_SHADOW_PRESENTATION_ENABLED = true;
+
 // Sama arvo kuin useHeatingOptimizationRun.ts kayttaa aktiivisen optimoijan
 // ajossa - tallennetun backend-suunnitelman ennuste (simulateStoredHeatingPlanForecast)
 // kayttaa tata, jotta ennustemalli pysyy identtisena aktiivisen optimoijan kanssa.
@@ -1518,6 +1523,8 @@ export default function HomeScreen() {
     const isV2EnergyPlan = storedPlans.some(
       (plan) => plan.reason === "V2 energy plan",
     );
+    const useV2HomePresentation =
+      V2_HOME_SHADOW_PRESENTATION_ENABLED || isV2EnergyPlan;
 
     if (hasAmbiguousStoredHeatingPlanHour({ hourlyPrices, storedPlans })) {
       return null;
@@ -1633,7 +1640,7 @@ export default function HomeScreen() {
     );
 
     const forecast =
-      !isV2EnergyPlan &&
+      !useV2HomePresentation &&
       storedSelectedHeatingHourIds.length === storedPlannedHourCount
         ? buildStoredHeatingPlanForecastFields({
             currentBottomTemperature: bottomTemp,
@@ -1652,12 +1659,12 @@ export default function HomeScreen() {
         : null;
 
     return buildStoredHeatingPlanPresentation({
-      currentOptimizerPresentation: isV2EnergyPlan
+      currentOptimizerPresentation: useV2HomePresentation
         ? null
         : activeOptimizerPresentation,
       forecast,
       selectedHours,
-      v2EnergyReserve: isV2EnergyPlan ? v2HomeReserve : null,
+      v2EnergyReserve: useV2HomePresentation ? v2HomeReserve : null,
     });
   }, [
     activeOptimizationRun,
