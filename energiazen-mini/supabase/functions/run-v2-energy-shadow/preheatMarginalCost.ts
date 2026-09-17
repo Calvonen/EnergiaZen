@@ -51,33 +51,33 @@ export function evaluateV2MarginalPreheatCost({
     return unavailable("price_data_missing");
   }
 
-  const candidates = pricedPreheat
-    .sort((left, right) =>
-      left.billedPriceCentsPerKwh - right.billedPriceCentsPerKwh ||
-      Date.parse(left.hourId) - Date.parse(right.hourId)
-    )
-    .slice(0, maxHours);
-  const displaced = pricedFuture.sort((left, right) =>
-    right.billedPriceCentsPerKwh - left.billedPriceCentsPerKwh ||
-    Date.parse(left.hourId) - Date.parse(right.hourId)
+  const feasiblePairs = pricedPreheat.flatMap((candidate) =>
+    pricedFuture.flatMap((future) => {
+      if (Date.parse(candidate.hourId) >= Date.parse(future.hourId)) return [];
+      const savings = future.billedPriceCentsPerKwh - candidate.billedPriceCentsPerKwh;
+      if (savings <= 0) return [];
+      return [{ candidate, future, savings }];
+    })
+  ).sort((left, right) =>
+    right.savings - left.savings ||
+    Date.parse(left.candidate.hourId) - Date.parse(right.candidate.hourId) ||
+    Date.parse(left.future.hourId) - Date.parse(right.future.hourId)
   );
 
+  const usedPreheat = new Set<string>();
+  const usedFuture = new Set<string>();
   const pairs: V2MarginalPreheatPair[] = [];
-  const pairCount = Math.min(candidates.length, displaced.length);
-  for (let index = 0; index < pairCount; index += 1) {
-    const candidate = candidates[index];
-    const future = displaced[index];
-    if (candidate.billedPriceCentsPerKwh >= future.billedPriceCentsPerKwh) {
-      continue;
-    }
+  for (const { candidate, future, savings } of feasiblePairs) {
+    if (pairs.length >= maxHours) break;
+    if (usedPreheat.has(candidate.hourId) || usedFuture.has(future.hourId)) continue;
+    usedPreheat.add(candidate.hourId);
+    usedFuture.add(future.hourId);
     pairs.push({
       displacedFutureHourId: future.hourId,
       displacedFuturePriceCentsPerKwh: round(future.billedPriceCentsPerKwh),
       preheatHourId: candidate.hourId,
       preheatPriceCentsPerKwh: round(candidate.billedPriceCentsPerKwh),
-      savingsCentsPerKwh: round(
-        future.billedPriceCentsPerKwh - candidate.billedPriceCentsPerKwh,
-      ),
+      savingsCentsPerKwh: round(savings),
     });
   }
 
