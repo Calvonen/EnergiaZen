@@ -1,5 +1,6 @@
 import type { EnergiaZenSettings } from "./settingsDefaults";
 import { buildHeatingControlSettingsPayload } from "./heatingControlSettingsPayload";
+import { normalizeV2ReservePercents } from "./energyModelV2/energyReservePercent";
 import {
   getLoadedV2TargetReservePercent,
   persistEffectiveSettingsLocally,
@@ -41,6 +42,10 @@ function isPersistedReservePercent(value: unknown): value is number {
   );
 }
 
+function normalizeRemoteRecommendation(value: number) {
+  return normalizeV2ReservePercents({ targetPercent: value }).targetPercent;
+}
+
 export async function upsertHeatingControlSettings(
   client: HeatingControlSettingsClient,
   settings: EnergiaZenSettings,
@@ -70,9 +75,17 @@ export async function upsertHeatingControlSettings(
     }
 
     if (isPersistedReservePercent(data?.v2_target_reserve_percent)) {
+      // The database intentionally keeps accepting legacy 5–65% values while
+      // older clients are deployed. New clients must normalize that compatible
+      // storage value at the consumer boundary before it reaches local state or
+      // is written back, otherwise Settings can commit a value below its 70%
+      // UI/validation minimum for the current session.
+      const normalizedRecommendation = normalizeRemoteRecommendation(
+        data.v2_target_reserve_percent,
+      );
       effectiveSettings = {
         ...settings,
-        v2TargetReservePercent: data.v2_target_reserve_percent,
+        v2TargetReservePercent: normalizedRecommendation,
       };
     }
   }
