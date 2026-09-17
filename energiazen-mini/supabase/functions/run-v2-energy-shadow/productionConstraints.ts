@@ -35,7 +35,7 @@ export function resolveV2HeatingConstraints({
 }): V2HeatingConstraints {
   const empty = { forbiddenHeatingHourIds: [], requiredHeatingHourIds: [] };
   const latest = readings[readings.length - 1];
-  if (!latest || typeof latest.top_temp !== "number" || latest.top_temp < safetyTopTemperatureC) {
+  if (!latest || typeof latest.top_temp !== "number") {
     return empty;
   }
 
@@ -62,7 +62,11 @@ export function resolveV2HeatingConstraints({
   };
 
   const currentId = ordered[currentIndex];
-  if (latest.heating === true && isStoredAutomaticHour(currentId)) {
+  if (
+    latest.top_temp >= safetyTopTemperatureC &&
+    latest.heating === true &&
+    isStoredAutomaticHour(currentId)
+  ) {
     const requiredHeatingHourIds: string[] = [];
     let expectedStart = Date.parse(currentId);
     let index = currentIndex;
@@ -81,22 +85,20 @@ export function resolveV2HeatingConstraints({
     };
   }
 
-  // A current hour already present in the authoritative automatic plan is
-  // never cooldown-blocked. This preserves an intentionally consecutive
-  // planned block even if the relay toggled at the hour boundary.
+  // A current hour may only remain selectable if it was already committed in
+  // the authoritative automatic plan before the hour began. This preserves an
+  // intentionally consecutive planned block (and allows a low-temperature
+  // safety release to stop requiring the block) without letting a later V2
+  // rerun opportunistically start a NEW partial current-hour interval.
   if (isStoredAutomaticHour(currentId)) return empty;
 
-  const currentStart = Date.parse(currentId);
-  const previousStart = currentStart - 60 * 60 * 1000;
-  const previousIntervalActuallyHeated = readings.some((reading) => {
-    if (reading.heating !== true || !reading.created_at) return false;
-    const at = Date.parse(reading.created_at);
-    return Number.isFinite(at) && at >= previousStart && at < currentStart;
-  });
-
-  return previousIntervalActuallyHeated
-    ? { forbiddenHeatingHourIds: [currentId], requiredHeatingHourIds: [] }
-    : empty;
+  // Never create a new heating commitment after the price hour has started.
+  // The optimizer runs every five minutes, so treating the current price hour
+  // as an ordinary candidate lets a 20:04 rerun buy only 56 minutes of a
+  // suddenly-expensive hour and prefer it over a cheaper full future hour.
+  // Future interval/emergency policy can add an explicit override, but there
+  // must be no implicit mid-interval start path.
+  return { forbiddenHeatingHourIds: [currentId], requiredHeatingHourIds: [] };
 }
 
 function normalizeHours(value: unknown): number[] | null {
