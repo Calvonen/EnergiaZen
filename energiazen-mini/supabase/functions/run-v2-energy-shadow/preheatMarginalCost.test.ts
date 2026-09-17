@@ -38,11 +38,13 @@ export function runV2MarginalPreheatCostUnitTests() {
   assert(result.available, "expected marginal preheat recommendation");
   assert(result.pairs.length === 2, "expected two profitable displacement pairs");
   assert(
-    result.pairs[0].preheatHourId === "2026-09-17T17:00:00.000Z" &&
-      result.pairs[0].displacedFutureHourId === "2026-09-17T23:00:00.000Z",
-    "expected cheapest preheat to displace most expensive future heat first",
+    result.pairs.every((pair) => Date.parse(pair.preheatHourId) < Date.parse(pair.displacedFutureHourId)),
+    "expected every recommended preheat interval to precede displaced heating",
   );
-  assert(result.pairs[0].savingsCentsPerKwh === 11, "expected billed adders to cancel in marginal savings");
+  assert(
+    result.pairs.reduce((sum, pair) => sum + pair.savingsCentsPerKwh, 0) === 16,
+    "expected globally optimal aggregate savings",
+  );
 
   const capped = evaluateV2MarginalPreheatCost({
     displacedFutureHeatingHourIds: [
@@ -57,6 +59,7 @@ export function runV2MarginalPreheatCostUnitTests() {
     prices,
   });
   assert(capped.pairs.length === 1, "expected max preheat hour cap to limit pairing");
+  assert(capped.pairs[0].savingsCentsPerKwh === 11, "expected best one-hour savings under cap");
 
   const noSavings = evaluateV2MarginalPreheatCost({
     displacedFutureHeatingHourIds: ["2026-09-17T17:00:00.000Z"],
@@ -79,6 +82,41 @@ export function runV2MarginalPreheatCostUnitTests() {
   assert(
     !impossibleLatePreheat.available && impossibleLatePreheat.reason === "no_positive_savings",
     "expected cheaper but later preheat to be rejected as temporally impossible",
+  );
+
+  const globallyOptimalPrices = [
+    hourly("2026-09-17T16:00:00.000Z", 0),
+    hourly("2026-09-17T17:00:00.000Z", 9),
+    hourly("2026-09-17T18:00:00.000Z", 2),
+    hourly("2026-09-17T19:00:00.000Z", 10),
+  ];
+  const globallyOptimal = evaluateV2MarginalPreheatCost({
+    displacedFutureHeatingHourIds: [
+      "2026-09-17T17:00:00.000Z",
+      "2026-09-17T19:00:00.000Z",
+    ],
+    maxPreheatHours: 2,
+    preheatCandidateHourIds: [
+      "2026-09-17T16:00:00.000Z",
+      "2026-09-17T18:00:00.000Z",
+    ],
+    prices: globallyOptimalPrices,
+  });
+  assert(globallyOptimal.available, "expected globally feasible recommendation");
+  assert(globallyOptimal.pairs.length === 2, "expected matching to preserve two feasible pairs");
+  assert(
+    globallyOptimal.pairs.reduce((sum, pair) => sum + pair.savingsCentsPerKwh, 0) === 17,
+    "expected global matching to beat greedy 16->19 choice",
+  );
+  assert(
+    globallyOptimal.pairs.some((pair) =>
+      pair.preheatHourId === "2026-09-17T16:00:00.000Z" &&
+      pair.displacedFutureHourId === "2026-09-17T17:00:00.000Z"
+    ) && globallyOptimal.pairs.some((pair) =>
+      pair.preheatHourId === "2026-09-17T18:00:00.000Z" &&
+      pair.displacedFutureHourId === "2026-09-17T19:00:00.000Z"
+    ),
+    "expected globally optimal temporal matching",
   );
 
   const mixedOrderPrices = [
