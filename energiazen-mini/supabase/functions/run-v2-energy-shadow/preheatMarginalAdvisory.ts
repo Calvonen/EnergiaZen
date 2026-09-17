@@ -94,11 +94,16 @@ export function buildV2MarginalPreheatAdvisory({
   const nowMs = now.getTime();
   const baselineSelectedHourIds = new Set(baselinePlan.selectedHeatingHourIds);
   const forbiddenHeatingHourIds = new Set(constraints.forbiddenHeatingHourIds);
+  const requiredHeatingHourIds = new Set(constraints.requiredHeatingHourIds);
   const displacedFutureHeatingHourIds = [...baselineSelectedHourIds]
+    .filter((hourId) => !requiredHeatingHourIds.has(hourId))
     .filter((hourId) => Number.isFinite(Date.parse(hourId)) && Date.parse(hourId) > nowMs)
     .sort((left, right) => Date.parse(left) - Date.parse(right));
   const candidatePreheatHourIds = horizon.futureTodayHourIds.filter(
-    (hourId) => !baselineSelectedHourIds.has(hourId) && !forbiddenHeatingHourIds.has(hourId),
+    (hourId) =>
+      !baselineSelectedHourIds.has(hourId) &&
+      !forbiddenHeatingHourIds.has(hourId) &&
+      !requiredHeatingHourIds.has(hourId),
   );
 
   const configuredHourCap = Math.floor(maxPreheatHours);
