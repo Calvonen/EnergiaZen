@@ -19,11 +19,21 @@ export function runV2SoftPreheatLevelUnitTests() {
     energyCapacityKwh: 20,
   });
   assert(belowRecommendation.available, "valid energy inputs expose soft preheat metadata");
-  assertEqual(recommendedV2PreheatPercent, 90, "recommended preheat level is 90 percent");
+  assertEqual(recommendedV2PreheatPercent, 90, "default recommended preheat level is 90 percent");
   assertEqual(belowRecommendation.currentConservativePercent, 50, "current conservative reserve is reported as a percentage");
   assertEqual(belowRecommendation.recommendedPreheatTargetKwh, 18, "90 percent target converts to physical kWh");
   assertEqual(belowRecommendation.recommendedPreheatEnergyKwh, 8, "only the energy needed to reach the recommendation is advisory preheat");
   assertEqual(belowRecommendation.preheatHeadroomKwh, 8, "preheat headroom matches the advisory energy gap");
+
+  const configuredRecommendation = evaluateV2SoftPreheatLevel({
+    conservativeEnergyKwh: 14,
+    energyCapacityKwh: 20,
+    recommendedPreheatPercent: 80,
+  });
+  assert(configuredRecommendation.available, "configured preheat recommendation remains available");
+  assertEqual(configuredRecommendation.recommendedPreheatPercent, 80, "configured recommendation is retained in telemetry");
+  assertEqual(configuredRecommendation.recommendedPreheatTargetKwh, 16, "configured 80 percent recommendation converts to physical kWh");
+  assertEqual(configuredRecommendation.recommendedPreheatEnergyKwh, 2, "configured recommendation controls advisory headroom");
 
   const alreadyAboveRecommendation = evaluateV2SoftPreheatLevel({
     conservativeEnergyKwh: 18.4,
