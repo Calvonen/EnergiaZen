@@ -17,6 +17,8 @@
     "supabase/functions/run-v2-energy-shadow/preheatLevel.test.ts",
     "supabase/functions/run-v2-energy-shadow/preheatPlan.ts",
     "supabase/functions/run-v2-energy-shadow/preheatPlan.test.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatAdvisory.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatAdvisory.test.ts",
     "supabase/functions/run-v2-energy-shadow/productionConstraints.ts",
     "supabase/functions/run-v2-energy-shadow/productionConstraints.test.ts",
     "supabase/functions/run-v2-energy-shadow/publicationGuard.ts",
