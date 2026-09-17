@@ -21,6 +21,8 @@
     "supabase/functions/run-v2-energy-shadow/preheatAdvisory.test.ts",
     "supabase/functions/run-v2-energy-shadow/preheatMarginalCost.ts",
     "supabase/functions/run-v2-energy-shadow/preheatMarginalCost.test.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatMarginalAdvisory.ts",
+    "supabase/functions/run-v2-energy-shadow/preheatMarginalAdvisory.test.ts",
     "supabase/functions/run-v2-energy-shadow/priceCeilingPolicy.ts",
     "supabase/functions/run-v2-energy-shadow/priceCeilingPolicy.test.ts",
     "supabase/functions/run-v2-energy-shadow/priceCeilingSetting.ts",
