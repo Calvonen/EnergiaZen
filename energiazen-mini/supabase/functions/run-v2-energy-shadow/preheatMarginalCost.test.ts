@@ -119,6 +119,33 @@ export function runV2MarginalPreheatCostUnitTests() {
     "expected globally optimal temporal matching",
   );
 
+  const savingsFirstPrices = [
+    hourly("2026-09-17T16:00:00.000Z", 0),
+    hourly("2026-09-17T17:00:00.000Z", 1),
+    hourly("2026-09-17T18:00:00.000Z", 99),
+    hourly("2026-09-17T19:00:00.000Z", 100),
+  ];
+  const savingsFirst = evaluateV2MarginalPreheatCost({
+    displacedFutureHeatingHourIds: [
+      "2026-09-17T17:00:00.000Z",
+      "2026-09-17T19:00:00.000Z",
+    ],
+    maxPreheatHours: 2,
+    preheatCandidateHourIds: [
+      "2026-09-17T16:00:00.000Z",
+      "2026-09-17T18:00:00.000Z",
+    ],
+    prices: savingsFirstPrices,
+  });
+  assert(savingsFirst.available, "expected a profitable recommendation");
+  assert(savingsFirst.pairs.length === 1, "expected cap to remain optional rather than force two pairs");
+  assert(
+    savingsFirst.pairs[0].preheatHourId === "2026-09-17T16:00:00.000Z" &&
+      savingsFirst.pairs[0].displacedFutureHourId === "2026-09-17T19:00:00.000Z" &&
+      savingsFirst.pairs[0].savingsCentsPerKwh === 100,
+    "expected highest aggregate savings across all permitted pair counts",
+  );
+
   const mixedOrderPrices = [
     hourly("2026-09-17T16:00:00.000Z", 2),
     hourly("2026-09-17T17:00:00.000Z", 20),
