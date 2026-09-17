@@ -105,7 +105,6 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   const retainedBaseline = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline([
       "2026-09-17T13:00:00.000Z",
-      "2026-09-17T22:00:00.000Z",
       "2026-09-17T23:00:00.000Z",
     ]),
     conservativeEnergyKwh: 12,
