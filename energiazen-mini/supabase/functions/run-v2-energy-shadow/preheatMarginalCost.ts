@@ -133,16 +133,27 @@ function findBestMatching(
     }
   }
 
-  for (let pairCount = pairLimit; pairCount >= 1; pairCount -= 1) {
-    const state = dp[candidates.length][displaced.length][pairCount];
-    if (Number.isFinite(state.savings)) return state.pairs;
+  let bestOverall: MatchingState = { pairs: [], savings: Number.NEGATIVE_INFINITY };
+  for (let pairCount = 1; pairCount <= pairLimit; pairCount += 1) {
+    bestOverall = betterFinalState(
+      bestOverall,
+      dp[candidates.length][displaced.length][pairCount],
+    );
   }
-  return [];
+  return Number.isFinite(bestOverall.savings) ? bestOverall.pairs : [];
 }
 
 function betterState(left: MatchingState, right: MatchingState) {
   if (right.savings > left.savings) return right;
   if (right.savings < left.savings) return left;
+  return comparePairs(right.pairs, left.pairs) < 0 ? right : left;
+}
+
+function betterFinalState(left: MatchingState, right: MatchingState) {
+  if (right.savings > left.savings) return right;
+  if (right.savings < left.savings) return left;
+  if (right.pairs.length > left.pairs.length) return right;
+  if (right.pairs.length < left.pairs.length) return left;
   return comparePairs(right.pairs, left.pairs) < 0 ? right : left;
 }
 
