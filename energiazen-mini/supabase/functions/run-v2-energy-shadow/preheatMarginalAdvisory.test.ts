@@ -65,8 +65,10 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     remainingEnergyKwh: 12,
   });
   assert(recommended.available && recommended.reason === "recommended", "expected marginal preheat recommendation");
+  assert(recommended.strategy === "marginal_displacement", "expected baseline displacement to remain the primary strategy");
   assert(recommended.maxPreheatHoursByHeadroom === 2, "expected 6 kWh soft headroom to cap preheat at two hours");
   assert(recommended.marginalCost.pairs.length === 2, "expected two displaced future heating hours");
+  assert(recommended.recommendedPreheatHourIds.length === 2, "expected explicit recommended preheat hour telemetry");
   assert(
     recommended.marginalCost.pairs.every((pair) =>
       Date.parse(pair.preheatHourId) < Date.parse(pair.displacedFutureHourId)
@@ -274,8 +276,20 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     remainingEnergyKwh: 12,
   });
   assert(
-    !noFutureHeat.available && noFutureHeat.reason === "no_future_heating_to_displace",
-    "expected no speculative preheat without baseline future heating",
+    noFutureHeat.available && noFutureHeat.reason === "recommended",
+    "expected economic soft fill when no baseline heating exists but today is cheaper than tomorrow",
+  );
+  assert(noFutureHeat.strategy === "soft_fill", "expected standalone 90% fill to be identified separately from marginal displacement");
+  assert(
+    JSON.stringify(noFutureHeat.recommendedPreheatHourIds) === JSON.stringify([
+      "2026-09-17T13:00:00.000Z",
+      "2026-09-17T14:00:00.000Z",
+    ]),
+    "expected soft fill to choose the two cheap future-today hours allowed by 6 kWh headroom",
+  );
+  assert(
+    noFutureHeat.marginalCost.reason === "no_future_heating_to_displace",
+    "expected soft fill telemetry to keep marginal displacement unavailable rather than inventing a fake pair",
   );
 
   const oneHourHeadroom = buildV2MarginalPreheatAdvisory({
@@ -313,6 +327,22 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     !cheaperTomorrow.available && cheaperTomorrow.reason === "no_positive_savings",
     "expected expensive today preheat to defer to cheaper future heating",
   );
+
+  const noBaselineAndCheaperTomorrow = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices: expensiveTodayPrices,
+    remainingEnergyKwh: 12,
+  });
+  assert(
+    !noBaselineAndCheaperTomorrow.available && noBaselineAndCheaperTomorrow.reason === "no_cheaper_preheat_interval",
+    "expected soft fill to stay off when tomorrow is cheaper than every remaining hour today",
+  );
+  assert(noBaselineAndCheaperTomorrow.recommendedPreheatHourIds.length === 0, "expected no standalone fill hours when there is no economic advantage");
 
   const invalidBaseline = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"], false),

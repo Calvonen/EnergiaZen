@@ -7,7 +7,12 @@ import {
   type V2MarginalPreheatCostResult,
   type V2MarginalPreheatPair,
 } from "./preheatMarginalCost.ts";
-import { evaluateV2PreheatHorizon, type V2PreheatHorizon } from "./preheatPolicy.ts";
+import {
+  evaluateV2PreheatHorizon,
+  evaluateV2PreheatOpportunity,
+  type V2PreheatHorizon,
+  type V2PreheatOpportunity,
+} from "./preheatPolicy.ts";
 import type { V2HeatingConstraints } from "./productionConstraints.ts";
 
 export type V2MarginalPreheatAdvisory = {
@@ -17,8 +22,10 @@ export type V2MarginalPreheatAdvisory = {
   level: V2SoftPreheatLevel;
   marginalCost: V2MarginalPreheatCostResult;
   maxPreheatHoursByHeadroom: number;
+  recommendedPreheatHourIds: string[];
   retainedBaselineHeatingEnergyKwh: number;
   retainedBaselineHeatingHourIds: string[];
+  strategy: "marginal_displacement" | "soft_fill" | null;
   reason:
     | "recommended"
     | "preheat_level_unavailable"
@@ -27,6 +34,7 @@ export type V2MarginalPreheatAdvisory = {
     | "baseline_plan_invalid"
     | "insufficient_whole_hour_headroom"
     | V2PreheatHorizon["reason"]
+    | Exclude<V2PreheatOpportunity["reason"], "recommended">
     | Exclude<V2MarginalPreheatCostResult["reason"], "recommended">;
 };
 
@@ -127,8 +135,24 @@ export function buildV2MarginalPreheatAdvisory({
       marginalCost: { available: false, pairs: [], reason: "no_preheat_candidates" },
       maxPreheatHoursByHeadroom: 0,
       reason: "insufficient_whole_hour_headroom",
+      recommendedPreheatHourIds: [],
       retainedBaselineHeatingEnergyKwh: 0,
       retainedBaselineHeatingHourIds: [],
+      strategy: null,
+    });
+  }
+
+  if (displacedFutureHeatingHourIds.length === 0) {
+    return buildSoftFillFallback({
+      baselineSelectedHourIds,
+      candidatePreheatHourIds,
+      configuredHourCap,
+      heaterPowerKw,
+      immediateWholeHourHeadroomKwh,
+      level,
+      now,
+      nowMs,
+      prices,
     });
   }
 
@@ -158,8 +182,12 @@ export function buildV2MarginalPreheatAdvisory({
         level,
         marginalCost: safeMatching.marginalCost,
         maxPreheatHoursByHeadroom: safeMatching.maxPreheatHoursByHeadroom,
+        recommendedPreheatHourIds: safeMatching.marginalCost.pairs
+          .map((pair) => pair.preheatHourId)
+          .sort((left, right) => Date.parse(left) - Date.parse(right)),
         retainedBaselineHeatingEnergyKwh: safeMatching.retainedBaselineHeatingEnergyKwh,
         retainedBaselineHeatingHourIds: safeMatching.retainedBaselineHeatingHourIds,
+        strategy: "marginal_displacement",
         reason: "recommended",
       };
     }
@@ -183,9 +211,130 @@ export function buildV2MarginalPreheatAdvisory({
     reason: lastMarginalCost.available
       ? "insufficient_whole_hour_headroom"
       : lastMarginalCost.reason,
+    recommendedPreheatHourIds: [],
     retainedBaselineHeatingEnergyKwh: 0,
     retainedBaselineHeatingHourIds: [],
+    strategy: null,
   });
+}
+
+function buildSoftFillFallback({
+  baselineSelectedHourIds,
+  candidatePreheatHourIds,
+  configuredHourCap,
+  heaterPowerKw,
+  immediateWholeHourHeadroomKwh,
+  level,
+  now,
+  nowMs,
+  prices,
+}: {
+  baselineSelectedHourIds: Set<string>;
+  candidatePreheatHourIds: string[];
+  configuredHourCap: number;
+  heaterPowerKw: number;
+  immediateWholeHourHeadroomKwh: number;
+  level: V2SoftPreheatLevel;
+  now: Date;
+  nowMs: number;
+  prices: ShadowElectricityPrice[];
+}): V2MarginalPreheatAdvisory {
+  const opportunity = evaluateV2PreheatOpportunity({ now, prices });
+  const retainedBaselineHeatingHourIds = [...baselineSelectedHourIds]
+    .filter((hourId) => isStillActiveHour(hourId, nowMs, prices))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  const retainedBaselineHeatingEnergyKwh = round(retainedBaselineHeatingHourIds.reduce(
+    (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+    0,
+  ));
+  const availableHeadroomKwh = Math.max(
+    immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh,
+    0,
+  );
+  const remainingConfiguredHourCap = Math.max(
+    configuredHourCap - retainedBaselineHeatingHourIds.length,
+    0,
+  );
+  const maxPreheatHoursByHeadroom = Math.min(
+    remainingConfiguredHourCap,
+    Math.floor((availableHeadroomKwh + 1e-9) / heaterPowerKw),
+  );
+  const marginalCost: V2MarginalPreheatCostResult = {
+    available: false,
+    pairs: [],
+    reason: "no_future_heating_to_displace",
+  };
+
+  if (maxPreheatHoursByHeadroom <= 0) {
+    return advisoryUnavailable({
+      candidatePreheatHourIds,
+      displacedFutureHeatingHourIds: [],
+      level,
+      marginalCost,
+      maxPreheatHoursByHeadroom: 0,
+      reason: "insufficient_whole_hour_headroom",
+      recommendedPreheatHourIds: [],
+      retainedBaselineHeatingEnergyKwh,
+      retainedBaselineHeatingHourIds,
+      strategy: null,
+    });
+  }
+  if (!opportunity.available) {
+    return advisoryUnavailable({
+      candidatePreheatHourIds,
+      displacedFutureHeatingHourIds: [],
+      level,
+      marginalCost,
+      maxPreheatHoursByHeadroom,
+      reason: opportunity.reason,
+      recommendedPreheatHourIds: [],
+      retainedBaselineHeatingEnergyKwh,
+      retainedBaselineHeatingHourIds,
+      strategy: null,
+    });
+  }
+
+  const eligible = new Set(opportunity.eligiblePreheatHourIds);
+  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const recommendedPreheatHourIds = candidatePreheatHourIds
+    .filter((hourId) => eligible.has(hourId))
+    .sort((left, right) => {
+      const leftPrice = billedPrice(left, priceById) ?? Number.POSITIVE_INFINITY;
+      const rightPrice = billedPrice(right, priceById) ?? Number.POSITIVE_INFINITY;
+      if (leftPrice !== rightPrice) return leftPrice - rightPrice;
+      return Date.parse(left) - Date.parse(right);
+    })
+    .slice(0, maxPreheatHoursByHeadroom)
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+
+  if (!recommendedPreheatHourIds.length) {
+    return advisoryUnavailable({
+      candidatePreheatHourIds,
+      displacedFutureHeatingHourIds: [],
+      level,
+      marginalCost,
+      maxPreheatHoursByHeadroom,
+      reason: "no_cheaper_preheat_interval",
+      recommendedPreheatHourIds: [],
+      retainedBaselineHeatingEnergyKwh,
+      retainedBaselineHeatingHourIds,
+      strategy: null,
+    });
+  }
+
+  return {
+    available: true,
+    candidatePreheatHourIds,
+    displacedFutureHeatingHourIds: [],
+    level,
+    marginalCost,
+    maxPreheatHoursByHeadroom,
+    recommendedPreheatHourIds,
+    retainedBaselineHeatingEnergyKwh,
+    retainedBaselineHeatingHourIds,
+    strategy: "soft_fill",
+    reason: "recommended",
+  };
 }
 
 function findBestSafeMatching({
@@ -515,8 +664,10 @@ function advisoryUnavailable({
   marginalCost,
   maxPreheatHoursByHeadroom,
   reason,
+  recommendedPreheatHourIds,
   retainedBaselineHeatingEnergyKwh,
   retainedBaselineHeatingHourIds,
+  strategy,
 }: Omit<V2MarginalPreheatAdvisory, "available">): V2MarginalPreheatAdvisory {
   return {
     available: false,
@@ -525,8 +676,10 @@ function advisoryUnavailable({
     level,
     marginalCost,
     maxPreheatHoursByHeadroom,
+    recommendedPreheatHourIds,
     retainedBaselineHeatingEnergyKwh,
     retainedBaselineHeatingHourIds,
+    strategy,
     reason,
   };
 }
@@ -578,8 +731,10 @@ function unavailable(
             : "no_preheat_candidates",
     },
     maxPreheatHoursByHeadroom: 0,
+    recommendedPreheatHourIds: [],
     retainedBaselineHeatingEnergyKwh: 0,
     retainedBaselineHeatingHourIds: [],
+    strategy: null,
     reason,
   };
 }
