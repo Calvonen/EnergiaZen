@@ -28,6 +28,10 @@ function baseline(selectedHeatingHourIds: string[]): LiveEnergyPlanShadowResult 
     standingLossKwhPerHour: 0.1,
     totalCostCents: 0,
     valid: true,
+    learnedDropProfileUsed: false,
+    learnedDropProfileDate: null,
+    learnedDropProfileAgeDays: null,
+    maximumModeledLossKwhPerHour: 0.1,
   };
 }
 
