@@ -26,7 +26,12 @@ export function getLoadedV2TargetReservePercent() {
 }
 
 export function setLoadedV2TargetReservePercent(value: number | null) {
+  if (loadedV2TargetReservePercent === value) {
+    return;
+  }
+
   loadedV2TargetReservePercent = value;
+  notifyPendingRecommendationListeners();
 }
 
 export function getPendingV2Recommendation() {
