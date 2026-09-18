@@ -48,7 +48,10 @@ set search_path = pg_catalog, public
 as $$
 begin
   if new.heating_need_mode = 'automatic'
-     and old.heating_need_mode is distinct from 'automatic'
+     and (
+       tg_op = 'INSERT'
+       or old.heating_need_mode is distinct from 'automatic'
+     )
      and not public.is_v2_automatic_control_plane_ready() then
     raise exception
       using
@@ -69,11 +72,11 @@ drop trigger if exists guard_heating_control_mode_transition
   on public.heating_control_settings;
 
 create trigger guard_heating_control_mode_transition
-before update of heating_need_mode
+before insert or update of heating_need_mode
 on public.heating_control_settings
 for each row
 execute function public.guard_heating_control_mode_transition();
 
 comment on trigger guard_heating_control_mode_transition
 on public.heating_control_settings is
-  'Fail-closed guard for fixed-to-automatic transitions. Requires active V2 mirror, inactive V1 optimizer cron, and active V2 producer cron.';
+  'Fail-closed guard for inserts or transitions into automatic mode. Requires active V2 mirror, inactive V1 optimizer cron, and active V2 producer cron.';
