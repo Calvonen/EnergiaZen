@@ -122,7 +122,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [readings, draws, pricesResult, heatingPlansResult, temperatureDropProfileResult] =
+    const [readings, draws, pricesResult, heatingPlansResult, temperatureDropProfileResult, coldInletBaselineResult] =
       await Promise.all([
         fetchTankReadings(supabase, replayStart.toISOString(), now.toISOString()),
         fetchWaterDraws(supabase, replayStart.toISOString(), now.toISOString()),
@@ -146,6 +146,10 @@ Deno.serve(async (request) => {
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
+        supabase.rpc("get_confirmed_cold_inlet_baseline", {
+          p_since: new Date(now.getTime() - 7 * 24 * 3_600_000).toISOString(),
+          p_until: now.toISOString(),
+        }),
       ]);
 
     if (pricesResult.error) {
@@ -156,6 +160,9 @@ Deno.serve(async (request) => {
     }
     if (temperatureDropProfileResult.error) {
       throw new Error(`Failed to fetch learned profile: ${temperatureDropProfileResult.error.message}`);
+    }
+    if (coldInletBaselineResult.error) {
+      throw new Error(`Failed to fetch confirmed cold inlet baseline: ${coldInletBaselineResult.error.message}`);
     }
 
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
@@ -186,6 +193,10 @@ Deno.serve(async (request) => {
         : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
 
     const baseReserve = runLiveReserveShadow({
+      coldInletDrawBaselineC:
+        typeof coldInletBaselineResult.data === "number"
+          ? coldInletBaselineResult.data
+          : null,
       maxTankTemperatureC,
       now,
       readings,
