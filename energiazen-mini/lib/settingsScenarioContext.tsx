@@ -39,7 +39,8 @@ import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline"
 // publisher active (see app/(tabs)/index.tsx), so nothing is left without
 // working automatic publication while this keeps retrying in the
 // background.
-const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;\nconst recommendationHydrationTimeoutMs = 15_000;
+const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;
+const recommendationHydrationTimeoutMs = 15_000;
 
 type DraftSettingsUpdate =
   | EnergiaZenSettings
