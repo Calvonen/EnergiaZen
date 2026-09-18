@@ -24,6 +24,8 @@ export type LiveDrawReanchorResolution = {
 // does not guess removed kWh for an unlabeled draw. It waits for inlet
 // recovery plus a quiet tank period, then re-anchors the physical balance to
 // the measured post-draw state.
+const INLET_DRAW_CONFIRM_MARGIN_C = 1;
+const MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES = 1;
 const INLET_RECOVERY_MARGIN_C = 4;
 const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
 const MIN_TANK_STABILIZATION_MINUTES = 15;
@@ -71,7 +73,11 @@ export function resolveLiveDrawReanchors({
     // the measured tank state instead of estimating how much energy the draw
     // removed. This handles both a real draw and a heater-induced inlet probe
     // oscillation without ever crediting uncertain energy to the live ledger.
-    const drawDetected = currentSampleHasDrawSignal(readings, index);
+    const drawDetected = currentSampleHasDrawSignal(
+      readings,
+      index,
+      coldInletBaselineC,
+    );
     const matchedReliableDraw = drawDetected && isMatchedByReliableDraw(currentMs, reliableDraws);
     const unmatchedDraw = drawDetected && !matchedReliableDraw;
 
@@ -156,7 +162,11 @@ export function resolveLiveDrawReanchors({
   };
 }
 
-function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) {
+function currentSampleHasDrawSignal(
+  readings: LiveDrawReading[],
+  index: number,
+  coldInletBaselineC: number,
+) {
   const currentTime = Date.parse(readings[index].created_at);
   const windowStartMs = currentTime - 5 * 60_000;
   const window = readings
@@ -171,12 +181,64 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
     return false;
   }
 
+  // A relative inlet drop is only a candidate. Confirm a real draw only after
+  // the inlet has reached the learned cold-water level and stayed there for at
+  // least one minute. This prevents normal probe drift (for example 20 -> 14 C)
+  // from blocking V2 when true mains-water draws are observed around the
+  // confirmed minimum inlet baseline.
+  if (!hasConfirmedColdInletDwell(window, coldInletBaselineC)) {
+    return false;
+  }
+
   // During a continuous heating response the inlet probe can cool sharply even
   // though both tank sensors keep rising. Treat that production-shaped pattern
   // as heater-induced probe oscillation, not a draw. Any relay interruption,
   // sampling gap, missing tank value or material tank-temperature drop keeps the
   // original fail-closed draw classification.
   return !isHeaterOnlyInletOscillation(window);
+}
+
+function hasConfirmedColdInletDwell(
+  window: LiveDrawReading[],
+  coldInletBaselineC: number,
+) {
+  const maxConfirmedColdC = coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
+  let coldStartMs: number | null = null;
+  let previousMs: number | null = null;
+
+  for (const reading of window) {
+    const currentMs = Date.parse(reading.created_at);
+    const inletC = reading.inlet_temp;
+    const gapMinutes =
+      previousMs === null ? 0 : (currentMs - previousMs) / 60_000;
+    const isContinuous =
+      previousMs === null ||
+      (Number.isFinite(gapMinutes) &&
+        gapMinutes > 0 &&
+        gapMinutes <= MAX_SEGMENT_MINUTES);
+    const isCold =
+      typeof inletC === "number" &&
+      Number.isFinite(inletC) &&
+      inletC <= maxConfirmedColdC;
+
+    if (!Number.isFinite(currentMs) || !isContinuous || !isCold) {
+      coldStartMs = null;
+      previousMs = Number.isFinite(currentMs) ? currentMs : null;
+      continue;
+    }
+
+    coldStartMs ??= currentMs;
+    previousMs = currentMs;
+
+    if (
+      currentMs - coldStartMs >=
+      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {
