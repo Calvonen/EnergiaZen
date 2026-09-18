@@ -121,8 +121,8 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
           .from("heating_control_settings")
           .select("v2_target_reserve_percent")
           .eq("id", 1)
-          .maybeSingle()
-          .abortSignal(hydrationController.signal);
+          .abortSignal(hydrationController.signal)
+          .maybeSingle();
 
         if (error) {
           throw error;
