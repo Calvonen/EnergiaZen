@@ -32,6 +32,7 @@ export type V2ScenarioPreviewState = {
 };
 
 const PREVIEW_DEBOUNCE_MS = 300;
+const PREVIEW_REFRESH_MS = 60_000;
 
 export function useV2ScenarioPreview({
   enabled,
@@ -53,54 +54,73 @@ export function useV2ScenarioPreview({
     }
 
     let active = true;
-    const timer = setTimeout(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleRefresh = () => {
+      if (!active) return;
+      refreshTimer = setTimeout(() => {
+        void loadPreview();
+      }, PREVIEW_REFRESH_MS);
+    };
+
+    const loadPreview = async () => {
       setState((current) => ({
         data: current.data,
         error: null,
         loading: true,
       }));
 
-      void supabase.functions
-        .invoke("preview-v2-energy-plan", {
-          body: {
-            automaticMaxHeatingHours: settings.automaticMaxHeatingHours,
-            maxTankTemperature: settings.maxTankTemperature,
-            v2SafetyReservePercent: settings.v2SafetyReservePercent,
-            v2TargetReservePercent: settings.v2TargetReservePercent,
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "preview-v2-energy-plan",
+          {
+            body: {
+              automaticMaxHeatingHours: settings.automaticMaxHeatingHours,
+              maxTankTemperature: settings.maxTankTemperature,
+              v2SafetyReservePercent: settings.v2SafetyReservePercent,
+              v2TargetReservePercent: settings.v2TargetReservePercent,
+            },
           },
-        })
-        .then(({ data, error }) => {
-          if (!active) return;
-          if (error) {
-            setState({
-              data: null,
-              error: error.message || "V2-skenaarion laskenta epäonnistui",
-              loading: false,
-            });
-            return;
-          }
-          setState({
-            data: (data ?? null) as V2ScenarioPreview | null,
-            error: null,
-            loading: false,
-          });
-        })
-        .catch((error: unknown) => {
-          if (!active) return;
+        );
+
+        if (!active) return;
+        if (error) {
           setState({
             data: null,
-            error:
-              error instanceof Error
-                ? error.message
-                : "V2-skenaarion laskenta epäonnistui",
+            error: error.message || "V2-skenaarion laskenta epäonnistui",
             loading: false,
           });
+          return;
+        }
+
+        setState({
+          data: (data ?? null) as V2ScenarioPreview | null,
+          error: null,
+          loading: false,
         });
+      } catch (error: unknown) {
+        if (!active) return;
+        setState({
+          data: null,
+          error:
+            error instanceof Error
+              ? error.message
+              : "V2-skenaarion laskenta epäonnistui",
+          loading: false,
+        });
+      } finally {
+        scheduleRefresh();
+      }
+    };
+
+    const debounceTimer = setTimeout(() => {
+      void loadPreview();
     }, PREVIEW_DEBOUNCE_MS);
 
     return () => {
       active = false;
-      clearTimeout(timer);
+      clearTimeout(debounceTimer);
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
     };
   }, [
     enabled,
