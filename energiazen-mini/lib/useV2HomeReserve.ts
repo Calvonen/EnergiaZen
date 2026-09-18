@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useSettingsScenario } from "./settingsScenarioContext";
 import { supabase } from "./supabase";
@@ -13,29 +13,78 @@ import {
 } from "./v2RecommendationSaveBaseline";
 
 const refreshIntervalMs = 60_000;
+const requestTimeoutMs = 15_000;
+const clockTickMs = 60_000;
 
 export function useV2HomeReserve() {
   const { persistedSettings } = useSettingsScenario();
   const recommendedPreheatPercent = persistedSettings.v2TargetReservePercent;
   const [snapshot, setSnapshot] = useState<V2HomeReserveSnapshot | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [, setPendingRevision] = useState(0);
-  const requestGenerationRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    const requestGeneration = ++requestGenerationRef.current;
-    const { data, error } = await supabase.rpc("get_v2_energy_reserve_home");
+  // Poll serially: schedule the next request only after the current one settles.
+  // This prevents a slow RPC from being invalidated forever by a fixed interval.
+  // A bounded request lifetime also ensures a hung request cannot stop polling.
+  useEffect(() => {
+    let active = true;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeRequestController: AbortController | null = null;
 
-    if (requestGeneration !== requestGenerationRef.current) {
-      return;
-    }
+    const scheduleNext = () => {
+      if (!active) return;
+      refreshTimer = setTimeout(() => {
+        void loadReserve();
+      }, refreshIntervalMs);
+    };
 
-    if (error) {
-      setSnapshot(null);
-      return;
-    }
+    const loadReserve = async () => {
+      const controller = new AbortController();
+      activeRequestController = controller;
+      const requestTimeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
-    const row = Array.isArray(data) ? data[0] ?? null : data;
-    setSnapshot((row ?? null) as V2HomeReserveSnapshot | null);
+      try {
+        const { data, error } = await supabase
+          .rpc("get_v2_energy_reserve_home")
+          .abortSignal(controller.signal);
+
+        if (!active) return;
+
+        setNowMs(Date.now());
+        if (error) {
+          setSnapshot(null);
+        } else {
+          const row = Array.isArray(data) ? data[0] ?? null : data;
+          setSnapshot((row ?? null) as V2HomeReserveSnapshot | null);
+        }
+      } catch {
+        if (active) {
+          setNowMs(Date.now());
+          setSnapshot(null);
+        }
+      } finally {
+        clearTimeout(requestTimeout);
+        if (activeRequestController === controller) {
+          activeRequestController = null;
+        }
+        scheduleNext();
+      }
+    };
+
+    void loadReserve();
+
+    return () => {
+      active = false;
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      activeRequestController?.abort();
+      activeRequestController = null;
+    };
+  }, [recommendedPreheatPercent]);
+
+  // Freshness must advance even when the RPC result itself does not change.
+  useEffect(() => {
+    const clockTimer = setInterval(() => setNowMs(Date.now()), clockTickMs);
+    return () => clearInterval(clockTimer);
   }, []);
 
   // A successful Settings save persists a pending recommendation marker that
@@ -63,27 +112,13 @@ export function useV2HomeReserve() {
       .finally(() => setPendingRevision((revision) => revision + 1));
   }, [snapshot]);
 
-  useEffect(() => {
-    void refresh();
-  }, [recommendedPreheatPercent, refresh]);
-
-  useEffect(() => {
-    const intervalId = setInterval(() => void refresh(), refreshIntervalMs);
-
-    return () => {
-      clearInterval(intervalId);
-      // Invalidate any request that belongs to the unmounted/obsolete effect.
-      requestGenerationRef.current += 1;
-    };
-  }, [refresh]);
-
   return useMemo(
     () =>
       buildV2HomeReservePresentation(
         snapshot,
-        Date.now(),
+        nowMs,
         recommendedPreheatPercent,
       ),
-    [recommendedPreheatPercent, snapshot],
+    [nowMs, recommendedPreheatPercent, snapshot],
   );
 }
