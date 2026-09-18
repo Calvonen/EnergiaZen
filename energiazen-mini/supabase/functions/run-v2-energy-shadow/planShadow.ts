@@ -180,9 +180,9 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
     const endMs = Date.parse(price.ends_at);
     const segmentHours = Math.max(0, Math.min((endMs - startMs) / 3_600_000, 1));
     const learnedLossKwhPerHour = learnedDropProfile
-      ? learnedDropToKwhPerHour(
-          learnedDropProfile.hourlyDrops[helsinkiHour(new Date(price.starts_at))],
-        )
+      ? learnedDropProfile.hourlyEnergyLossesKwh[
+          helsinkiHour(new Date(price.starts_at))
+        ] ?? 0
       : 0;
     const modeledLossKwhPerHour = Math.max(
       standingLossKwhPerHour,
@@ -219,17 +219,6 @@ function worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC }
   const before = layerEnergy(topMassKg, maxTankTemperatureC, inletBaselineC) + layerEnergy(bottomMassKg, maxTankTemperatureC, inletBaselineC);
   const after = layerEnergy(topMassKg, topAfter, inletBaselineC) + layerEnergy(bottomMassKg, bottomAfter, inletBaselineC);
   return Math.max(before - after, 0);
-}
-
-function learnedDropToKwhPerHour(dropCPerHour: number | undefined) {
-  if (typeof dropCPerHour !== "number" || !Number.isFinite(dropCPerHour) || dropCPerHour < 0) {
-    return 0;
-  }
-  return (
-    sensorGeometryV2.tank.nominalVolumeLiters *
-    liveReserveShadowConfig.specificHeatKwhPerKgC *
-    dropCPerHour
-  );
 }
 
 const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
