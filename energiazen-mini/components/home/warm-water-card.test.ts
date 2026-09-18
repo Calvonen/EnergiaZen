@@ -145,6 +145,40 @@ export function runV2HomeReservePresentationUnitTests() {
     throw new Error("expected a recent last-good V2 snapshot to remain displayable as fallback");
   }
 
+  const longWaterDrawFallback = buildV2HomeReservePresentation(
+    {
+      ...base,
+      run_at: "2026-09-16T07:00:00Z",
+      latest_run_at: "2026-09-16T08:59:00Z",
+      latest_run_available: false,
+      latest_unavailable_reason: "unresolved_water_draw_detected",
+    },
+    now,
+  );
+  if (
+    !longWaterDrawFallback.available ||
+    !longWaterDrawFallback.isFallback ||
+    longWaterDrawFallback.percent === null ||
+    longWaterDrawFallback.sourceAgeMinutes === null ||
+    longWaterDrawFallback.sourceAgeMinutes < 119
+  ) {
+    throw new Error("expected a two-hour-old last-good reserve to remain displayable only during an unresolved water draw");
+  }
+
+  const tooOldWaterDrawFallback = buildV2HomeReservePresentation(
+    {
+      ...base,
+      run_at: "2026-09-15T08:59:00Z",
+      latest_run_at: "2026-09-16T08:59:00Z",
+      latest_run_available: false,
+      latest_unavailable_reason: "unresolved_water_draw_detected",
+    },
+    now,
+  );
+  if (tooOldWaterDrawFallback.available || tooOldWaterDrawFallback.percent !== null) {
+    throw new Error("expected a last-good reserve older than 24 hours to fail closed even during an unresolved water draw");
+  }
+
   const stale = buildV2HomeReservePresentation(
     { ...base, run_at: "2026-09-16T08:29:00Z", recommended_preheat_percent: null },
     now,
