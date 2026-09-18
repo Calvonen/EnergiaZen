@@ -82,7 +82,7 @@ Deno.serve(async (request) => {
         .in("plan_date", [today, tomorrow]),
       supabase.rpc("get_heating_control_plane_state"),
       supabase.from("temperature_drop_profiles")
-        .select("id,profile_date,timezone,source_start,source_end,source_days,hourly_drops,observation_days_by_hour,general_fallback,algorithm_version,created_at")
+        .select("id,profile_date,timezone,source_start,source_end,source_days,hourly_drops,observation_days_by_hour,general_fallback,hourly_energy_losses_kwh,general_energy_loss_kwh,algorithm_version,created_at")
         .eq("timezone", "Europe/Helsinki")
         .order("profile_date", { ascending: false })
         .order("created_at", { ascending: false })
