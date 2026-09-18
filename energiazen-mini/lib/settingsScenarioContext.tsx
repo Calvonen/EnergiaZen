@@ -39,7 +39,7 @@ import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline"
 // publisher active (see app/(tabs)/index.tsx), so nothing is left without
 // working automatic publication while this keeps retrying in the
 // background.
-const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;
+const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;\nconst recommendationHydrationTimeoutMs = 15_000;
 
 type DraftSettingsUpdate =
   | EnergiaZenSettings
@@ -110,12 +110,19 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
       // already using a preserved 75/80/85% backend value. A transient remote
       // read failure keeps the local value for this mount; the full-save path
       // still performs its own fail-closed pre-read before any upsert.
+      const hydrationController = new AbortController();
+      const hydrationTimeout = setTimeout(
+        () => hydrationController.abort(),
+        recommendationHydrationTimeoutMs,
+      );
+
       try {
         const { data, error } = await supabase
           .from("heating_control_settings")
           .select("v2_target_reserve_percent")
           .eq("id", 1)
-          .maybeSingle();
+          .maybeSingle()
+          .abortSignal(hydrationController.signal);
 
         if (error) {
           throw error;
@@ -135,9 +142,12 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
           }
         }
       } catch {
-        // Settings remain usable offline. A later save re-reads the backend
-        // recommendation before writing, so this fallback cannot overwrite an
-        // authoritative remote value merely because startup hydration failed.
+        // Settings remain usable offline or after a bounded hydration timeout.
+        // A later save re-reads the backend recommendation before writing, so
+        // this fallback cannot overwrite an authoritative remote value merely
+        // because startup hydration failed.
+      } finally {
+        clearTimeout(hydrationTimeout);
       }
 
       setLoadedV2TargetReservePercent(settings.v2TargetReservePercent);
