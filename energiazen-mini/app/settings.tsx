@@ -22,6 +22,10 @@ import {
 } from "@/lib/settings";
 import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
 import {
+  fetchAutomaticModeReadiness,
+  getAutomaticModeReadinessMessage,
+} from "@/lib/automaticModeReadiness";
+import {
   areSettingsEqual,
   persistSettingsDraft,
   SettingsDraftLocalSaveError,
@@ -621,6 +625,33 @@ export default function SettingsScreen() {
     setSaveFeedback(null);
 
     try {
+      if (
+        savedSettings.heatingNeedMode !== "automatic" &&
+        settingsToSave.heatingNeedMode === "automatic"
+      ) {
+        let readiness;
+
+        try {
+          readiness = await fetchAutomaticModeReadiness(supabase);
+        } catch (error) {
+          console.warn("Failed to verify automatic mode readiness", error);
+          const message =
+            "Automaattiohjauksen valmiutta ei voitu varmistaa. Asetuksia ei tallennettu.";
+          setSaveFeedback({ kind: "error", message });
+          Alert.alert("Automaattiohjaus ei ole valmis", message);
+          return;
+        }
+
+        if (!readiness.ready) {
+          const message =
+            getAutomaticModeReadinessMessage(readiness) ||
+            "Automaattiohjaus ei ole vielä valmis. Asetuksia ei tallennettu.";
+          setSaveFeedback({ kind: "error", message });
+          Alert.alert("Automaattiohjaus ei ole valmis", message);
+          return;
+        }
+      }
+
       const persistedSettings = await persistSettingsDraft({
         draftSettings: settingsToSave,
         savedSettings,
