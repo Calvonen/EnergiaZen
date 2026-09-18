@@ -8,6 +8,8 @@ export type LearnedTemperatureDropProfileRow = {
   hourly_drops: unknown;
   observation_days_by_hour: unknown;
   general_fallback: number;
+  hourly_energy_losses_kwh: unknown;
+  general_energy_loss_kwh: number | null;
   algorithm_version: string;
   created_at: string;
 };
@@ -17,6 +19,7 @@ export type LearnedTemperatureDropProfile = Omit<
   "hourly_drops" | "observation_days_by_hour"
 > & {
   hourlyDrops: Record<number, number>;
+  hourlyEnergyLossesKwh: Record<number, number>;
   observationDaysByHour: Record<number, number>;
 };
 
@@ -48,6 +51,7 @@ export function parseLearnedTemperatureDropProfile(
   row: LearnedTemperatureDropProfileRow,
 ): LearnedTemperatureDropProfile | null {
   const hourlyDrops = parseHourRecord(row.hourly_drops, false);
+  const hourlyEnergyLossesKwh = parseHourRecord(row.hourly_energy_losses_kwh, false);
   const observationDaysByHour = parseHourRecord(row.observation_days_by_hour, true);
 
   if (
@@ -58,7 +62,11 @@ export function parseLearnedTemperatureDropProfile(
     !Number.isFinite(Date.parse(row.created_at)) ||
     !Number.isFinite(row.general_fallback) ||
     row.general_fallback < 0 ||
+    row.general_energy_loss_kwh === null ||
+    !Number.isFinite(row.general_energy_loss_kwh) ||
+    row.general_energy_loss_kwh < 0 ||
     !hourlyDrops ||
+    !hourlyEnergyLossesKwh ||
     !observationDaysByHour
   ) {
     return null;
@@ -67,6 +75,7 @@ export function parseLearnedTemperatureDropProfile(
   return {
     ...row,
     hourlyDrops,
+    hourlyEnergyLossesKwh,
     observationDaysByHour,
   };
 }
@@ -105,7 +114,11 @@ export function buildLearnedTemperatureDropProfileSnapshot(
     observation_days_by_hour: Object.fromEntries(
       Array.from({ length: 24 }, (_, hour) => [String(hour), profile.observationDaysByHour[hour]]),
     ),
+    hourly_energy_losses_kwh: Object.fromEntries(
+      Array.from({ length: 24 }, (_, hour) => [String(hour), profile.hourlyEnergyLossesKwh[hour]]),
+    ),
     general_fallback: profile.general_fallback,
+    general_energy_loss_kwh: profile.general_energy_loss_kwh,
     algorithm_version: profile.algorithm_version,
     created_at: profile.created_at,
   };
