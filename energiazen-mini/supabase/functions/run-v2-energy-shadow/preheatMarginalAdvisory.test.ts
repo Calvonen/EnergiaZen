@@ -348,6 +348,119 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   );
   assert(noBaselineAndCheaperTomorrow.recommendedPreheatHourIds.length === 0, "expected no standalone fill hours when there is no economic advantage");
 
+
+  const longTodayStart = Date.parse("2026-09-17T01:00:00.000Z");
+  const longHorizonPrices = [
+    ...Array.from({ length: 20 }, (_, index) =>
+      hourly(new Date(longTodayStart + index * 3_600_000).toISOString(), 5 + index / 10),
+    ),
+    ...completeTomorrow("2026-09-17T21:00:00.000Z", 1),
+  ];
+  let boundedEvaluations = 0;
+  const boundedSearch = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now: new Date("2026-09-17T00:15:00.000Z"),
+    prices: longHorizonPrices,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => {
+      boundedEvaluations += 1;
+      return {
+        ...baseline(selectedHourIds),
+        finalConservativeEnergyKwh: 12 + selectedHourIds.length,
+        totalCostCents: selectedHourIds.length,
+      };
+    },
+  });
+  assert(
+    boundedSearch.available && boundedSearch.strategy === "horizon_soft_fill",
+    "expected bounded horizon search to return the best partial fill when the 90% target cannot be reached",
+  );
+  assert(
+    boundedEvaluations <= 3000,
+    `expected bounded horizon search to cap forecast evaluations, got ${boundedEvaluations}`,
+  );
+  assert(
+    boundedSearch.recommendedPreheatHourIds.length === 4,
+    "expected unreachable target to use the configured four-hour cap",
+  );
+
+
+  let baselineOnlyEvaluations = 0;
+  const requiredBaselineAlreadyReachesTarget = buildV2MarginalPreheatAdvisory({
+    baselinePlan: {
+      ...baseline(["2026-09-17T13:00:00.000Z"]),
+      finalConservativeEnergyKwh: 18.5,
+    },
+    conservativeEnergyKwh: 12,
+    constraints: {
+      forbiddenHeatingHourIds: [],
+      requiredHeatingHourIds: ["2026-09-17T13:00:00.000Z"],
+    },
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now,
+    prices,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => {
+      baselineOnlyEvaluations += 1;
+      return {
+        ...baseline(selectedHourIds),
+        finalConservativeEnergyKwh: 18.5,
+      };
+    },
+  });
+  assert(
+    !requiredBaselineAlreadyReachesTarget.available &&
+      requiredBaselineAlreadyReachesTarget.reason === "preheat_not_needed",
+    "expected required baseline heat that already reaches the soft target to suppress additive soft fill",
+  );
+  assert(
+    baselineOnlyEvaluations === 0,
+    "expected baseline target check to avoid any additive forecast search",
+  );
+
+  const lateEveningNow = new Date("2026-09-17T20:30:00.000Z");
+  let tomorrowOnlyEvaluations = 0;
+  const tomorrowOnlySoftFill = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now: lateEveningNow,
+    prices: completeTomorrow("2026-09-17T21:00:00.000Z", 1),
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => {
+      tomorrowOnlyEvaluations += 1;
+      return {
+        ...baseline(selectedHourIds),
+        finalConservativeEnergyKwh: 12 + selectedHourIds.length * 3,
+        totalCostCents: selectedHourIds.length,
+      };
+    },
+  });
+  assert(
+    tomorrowOnlySoftFill.available &&
+      tomorrowOnlySoftFill.strategy === "horizon_soft_fill",
+    "expected complete tomorrow prices to support soft fill after today's final price-hour start",
+  );
+  assert(
+    tomorrowOnlySoftFill.recommendedPreheatHourIds.length === 2 &&
+      tomorrowOnlySoftFill.recommendedPreheatHourIds.every(
+        (hourId) => Date.parse(hourId) >= Date.parse("2026-09-17T21:00:00.000Z"),
+      ),
+    "expected tomorrow-only soft fill to select tomorrow hours needed to reach 90%",
+  );
+  assert(
+    tomorrowOnlyEvaluations > 0,
+    "expected tomorrow-only horizon to run bounded forecast evaluation",
+  );
+
   const invalidBaseline = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"], false),
     conservativeEnergyKwh: 12,

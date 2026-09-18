@@ -194,6 +194,25 @@ Deno.serve(async (request) => {
       prices,
       recommendedPreheatPercent,
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
+      evaluateHourSelection: (selectedHourIds) => {
+        const selected = new Set(selectedHourIds);
+        return runLiveEnergyPlanShadow({
+          automaticMaxHeatingHours,
+          constraints: {
+            requiredHeatingHourIds: selectedHourIds,
+            forbiddenHeatingHourIds: prices
+              .map((price) => price.starts_at)
+              .filter((hourId) => !selected.has(hourId)),
+          },
+          energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+          inletBaselineC,
+          maxTankTemperatureC,
+          now,
+          prices,
+          reserve: result,
+          learnedDropProfile,
+        });
+      },
     });
 
     const publicationSelectedHeatingHourIds = (() => {
