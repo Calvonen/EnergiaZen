@@ -151,6 +151,26 @@ export function runLiveWaterDrawReanchorUnitTests() {
   });
   assert(!isolatedColdDipResult.unresolved, "single cold sample does not block V2");
 
+  // A cold dwell that happened before a later unrelated warm drop must not
+  // confirm that later candidate. This is the regression called out in review:
+  // 12.5, 12.5, 20, 14 has a valid old cold dwell and a new 20 -> 14 drop,
+  // but the later drop never reaches the cold baseline.
+  const oldColdDwellThenWarmDrop = [
+    reading(36, 35, 12.5, false),
+    reading(37, 35, 12.5, false),
+    reading(38, 35, 20, false),
+    reading(39, 34.9, 14, false),
+  ];
+  const oldColdDwellThenWarmDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: oldColdDwellThenWarmDrop,
+    reliableDraws: [],
+  });
+  assert(
+    !oldColdDwellThenWarmDropResult.unresolved,
+    "cold dwell before a later warm drop cannot confirm that later candidate",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
