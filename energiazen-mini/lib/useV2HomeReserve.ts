@@ -21,7 +21,7 @@ export function useV2HomeReserve() {
   const recommendedPreheatPercent = persistedSettings.v2TargetReservePercent;
   const [snapshot, setSnapshot] = useState<V2HomeReserveSnapshot | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [, setPendingRevision] = useState(0);
+  const [pendingRevision, setPendingRevision] = useState(0);
 
   // Poll serially: schedule the next request only after the current one settles.
   // This prevents a slow RPC from being invalidated forever by a fixed interval.
@@ -109,7 +109,7 @@ export function useV2HomeReserve() {
         // The in-memory marker is already cleared; a later successful settings
         // load/save can clean up a stale durable marker.
       })
-      .finally(() => setPendingRevision((revision) => revision + 1));
+      .catch(() => {\n        // The in-memory marker is already cleared; a later successful settings\n        // load/save can clean up a stale durable marker.\n      });
   }, [snapshot]);
 
   return useMemo(
@@ -119,6 +119,6 @@ export function useV2HomeReserve() {
         nowMs,
         recommendedPreheatPercent,
       ),
-    [nowMs, recommendedPreheatPercent, snapshot],
+    [nowMs, pendingRevision, recommendedPreheatPercent, snapshot],
   );
 }
