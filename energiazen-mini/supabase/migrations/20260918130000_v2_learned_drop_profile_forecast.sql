@@ -111,9 +111,11 @@ begin
     select
       row.helsinki_date,
       row.helsinki_hour,
-      sum(row.physical_energy_drop_kwh)::double precision as daily_energy_loss_kwh
+      greatest(
+        sum(row.physical_energy_drop_kwh)::double precision,
+        0::double precision
+      ) as daily_energy_loss_kwh
     from valid_intervals row
-    where row.physical_energy_drop_kwh > 0
     group by row.helsinki_date, row.helsinki_hour
   ),
   temperature_statistics as (
