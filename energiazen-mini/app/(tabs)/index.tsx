@@ -1698,7 +1698,7 @@ export default function HomeScreen() {
   );
   const isV2AutomaticScenario =
     BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
-    activeSettings.heatingNeedMode === "automatic" &&
+    scenarioSettings.heatingNeedMode === "automatic" &&
     hasUnsavedChanges &&
     planView === "scenario";
   const scenarioPlanPresentation =
