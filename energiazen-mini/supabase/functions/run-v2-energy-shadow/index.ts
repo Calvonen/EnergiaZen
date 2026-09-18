@@ -97,6 +97,7 @@ Deno.serve(async (request) => {
             heating_need_mode?: unknown;
             v2_mirror_trigger_active?: unknown;
             v1_optimizer_cron_active?: unknown;
+            v2_producer_cron_active?: unknown;
             owner?: unknown;
             healthy?: unknown;
           }
@@ -105,6 +106,7 @@ Deno.serve(async (request) => {
       !controlPlaneState ||
       typeof controlPlaneState.v2_mirror_trigger_active !== "boolean" ||
       typeof controlPlaneState.v1_optimizer_cron_active !== "boolean" ||
+      typeof controlPlaneState.v2_producer_cron_active !== "boolean" ||
       typeof controlPlaneState.owner !== "string" ||
       typeof controlPlaneState.healthy !== "boolean"
     ) {
