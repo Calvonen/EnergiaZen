@@ -10,6 +10,7 @@ import {
   getPendingV2Recommendation,
   isPendingV2RecommendationAcknowledged,
   persistPendingV2Recommendation,
+  subscribePendingV2Recommendation,
 } from "./v2RecommendationSaveBaseline";
 
 const refreshIntervalMs = 60_000;
@@ -23,9 +24,14 @@ export function useV2HomeReserve() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRevision, setPendingRevision] = useState(0);
 
-  // Poll serially: schedule the next request only after the current one settles.
-  // This prevents a slow RPC from being invalidated forever by a fixed interval.
-  // A bounded request lifetime also ensures a hung request cannot stop polling.
+  useEffect(
+    () =>
+      subscribePendingV2Recommendation(() =>
+        setPendingRevision((revision) => revision + 1),
+      ),
+    [],
+  );
+
   useEffect(() => {
     let active = true;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,16 +87,11 @@ export function useV2HomeReserve() {
     };
   }, [recommendedPreheatPercent]);
 
-  // Freshness must advance even when the RPC result itself does not change.
   useEffect(() => {
     const clockTimer = setInterval(() => setNowMs(Date.now()), clockTickMs);
     return () => clearInterval(clockTimer);
   }, []);
 
-  // A successful Settings save persists a pending recommendation marker that
-  // survives component remounts and app restarts. Clear it only when a shadow
-  // row created after that save confirms the same recommendation. Until then,
-  // buildV2HomeReservePresentation applies the same precedence to every caller.
   useEffect(() => {
     const pending = getPendingV2Recommendation();
     if (
@@ -104,12 +105,10 @@ export function useV2HomeReserve() {
       return;
     }
 
-    void persistPendingV2Recommendation(null)
-      .catch(() => {
-        // The in-memory marker is already cleared; a later successful settings
-        // load/save can clean up a stale durable marker.
-      })
-      .catch(() => {\n        // The in-memory marker is already cleared; a later successful settings\n        // load/save can clean up a stale durable marker.\n      });
+    void persistPendingV2Recommendation(null).catch(() => {
+      // The in-memory marker is already cleared; a later successful settings
+      // load/save can clean up a stale durable marker.
+    });
   }, [snapshot]);
 
   return useMemo(
