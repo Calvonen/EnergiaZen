@@ -3559,7 +3559,7 @@ export default function HomeScreen() {
                           V2-rajat
                         </Text>
                         <Text style={styles.heatingPlanLimitsText}>
-                          Suositus {formatFinnishDecimal(v2HomeReserve.recommendedPreheatPercent)} % · turvaraja {v2HomeReserve.safetyReservePercent === null ? "—" : formatFinnishDecimal(v2HomeReserve.safetyReservePercent) + " %"}
+                          Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
                         </Text>
                       </>
                     ) : (
