@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { supabase } from "@/lib/supabase";
+import { subscribePendingV2Recommendation } from "@/lib/v2RecommendationSaveBaseline";
 import {
   buildV2HomeReservePresentation,
   type V2HomeReserveSnapshot,
@@ -50,7 +51,16 @@ export type WarmWaterCardProps = {
 export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
   const [reserve, setReserve] = useState<V2HomeReserveSnapshot | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());\n  const [pendingRevision, setPendingRevision] = useState(0);\n\n  useEffect(() =>\n    subscribePendingV2Recommendation(() =>\n      setPendingRevision((revision) => revision + 1),\n    ),\n  []);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pendingRevision, setPendingRevision] = useState(0);
+
+  useEffect(
+    () =>
+      subscribePendingV2Recommendation(() =>
+        setPendingRevision((revision) => revision + 1),
+      ),
+    [],
+  );
 
   useEffect(() => {
     let active = true;
