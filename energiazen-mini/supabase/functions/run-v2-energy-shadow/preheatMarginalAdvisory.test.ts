@@ -348,6 +348,46 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   );
   assert(noBaselineAndCheaperTomorrow.recommendedPreheatHourIds.length === 0, "expected no standalone fill hours when there is no economic advantage");
 
+
+  const longTodayStart = Date.parse("2026-09-17T01:00:00.000Z");
+  const longHorizonPrices = [
+    ...Array.from({ length: 20 }, (_, index) =>
+      hourly(new Date(longTodayStart + index * 3_600_000).toISOString(), 5 + index / 10),
+    ),
+    ...completeTomorrow("2026-09-17T21:00:00.000Z", 1),
+  ];
+  let boundedEvaluations = 0;
+  const boundedSearch = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now: new Date("2026-09-17T00:15:00.000Z"),
+    prices: longHorizonPrices,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => {
+      boundedEvaluations += 1;
+      return {
+        ...baseline(selectedHourIds),
+        finalConservativeEnergyKwh: 12 + selectedHourIds.length,
+        totalCostCents: selectedHourIds.length,
+      };
+    },
+  });
+  assert(
+    boundedSearch.available && boundedSearch.strategy === "horizon_soft_fill",
+    "expected bounded horizon search to return the best partial fill when the 90% target cannot be reached",
+  );
+  assert(
+    boundedEvaluations <= 3000,
+    `expected bounded horizon search to cap forecast evaluations, got ${boundedEvaluations}`,
+  );
+  assert(
+    boundedSearch.recommendedPreheatHourIds.length === 4,
+    "expected unreachable target to use the configured four-hour cap",
+  );
+
   const invalidBaseline = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline(["2026-09-17T22:00:00.000Z"], false),
     conservativeEnergyKwh: 12,
