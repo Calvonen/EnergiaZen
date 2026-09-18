@@ -115,11 +115,16 @@ export async function upsertHeatingControlSettings(
     throw error;
   }
 
+  // Publish the newly loaded value before notifying Home through the pending
+  // marker. Subscribers recompute synchronously from module state, so they must
+  // already observe the new recommendation on that first notification.
+  setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
+
   // A successful explicit recommendation edit is immediately authoritative in
   // heating_control_settings, but the last-good shadow row can still contain
   // the previous value for up to its freshness window. Persist a marker so all
   // Home consumers (and a remounted/restarted app) prefer the new setting until
-  // a later shadow run confirms the same value.
+  // a later shadow run confirms or supersedes it.
   if (recommendationWasEdited) {
     try {
       await persistPendingV2Recommendation({
@@ -132,6 +137,5 @@ export async function upsertHeatingControlSettings(
     }
   }
 
-  setLoadedV2TargetReservePercent(effectiveSettings.v2TargetReservePercent);
   return payload;
 }
