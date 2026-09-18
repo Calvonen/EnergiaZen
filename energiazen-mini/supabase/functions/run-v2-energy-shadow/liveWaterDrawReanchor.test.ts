@@ -121,16 +121,48 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(heatingWithSampleGapResult.unresolved, "heating inlet drop across a polling gap remains fail-closed");
   assert(heatingWithSampleGapResult.detectedUnlabeledDrawCount === 1, "gapped heating signal is counted once");
 
-  // Outside heating, the original inlet-only fail-closed detector is unchanged.
-  const idleDraw = [
+  // A relative idle inlet drop that never reaches the confirmed cold-water
+  // baseline is probe drift, not enough evidence to block V2.
+  const idleWarmDrift = [
     reading(36, 35, 20, false),
     reading(37, 35, 20, false),
     reading(38, 34.9, 14, false),
+    reading(39, 34.9, 14.1, false),
   ];
-  const idleDrawResult = resolveLiveDrawReanchors({
+  const idleWarmDriftResult = resolveLiveDrawReanchors({
     coldInletBaselineC: 12.6,
-    readings: idleDraw,
+    readings: idleWarmDrift,
     reliableDraws: [],
   });
-  assert(idleDrawResult.unresolved, "idle inlet draw signal remains fail-closed");
+  assert(!idleWarmDriftResult.unresolved, "warm inlet drift above cold baseline does not block V2");
+  assert(idleWarmDriftResult.detectedUnlabeledDrawCount === 0, "warm drift is not counted as a draw");
+
+  // One isolated cold sample is not enough either: require the inlet to remain
+  // at the cold-water level for about one minute.
+  const isolatedColdDip = [
+    reading(36, 35, 20, false),
+    reading(37, 35, 12.5, false),
+    reading(38, 35, 16.5, false),
+  ];
+  const isolatedColdDipResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: isolatedColdDip,
+    reliableDraws: [],
+  });
+  assert(!isolatedColdDipResult.unresolved, "single cold sample does not block V2");
+
+  // Real shower-shaped inlet behavior reaches the cold baseline and stays
+  // there across two one-minute samples, so it remains fail-closed.
+  const confirmedIdleDraw = [
+    reading(36, 35, 20, false),
+    reading(37, 34.9, 12.5, false),
+    reading(38, 34.6, 12.4, false),
+  ];
+  const confirmedIdleDrawResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: confirmedIdleDraw,
+    reliableDraws: [],
+  });
+  assert(confirmedIdleDrawResult.unresolved, "one-minute cold inlet dwell confirms a real draw");
+  assert(confirmedIdleDrawResult.detectedUnlabeledDrawCount === 1, "confirmed cold draw is counted once");
 }
