@@ -184,7 +184,7 @@ function currentSampleHasDrawSignal(
     return false;
   }
 
-  const drawCandidateIndex = findLatestDrawCandidateIndex(inletSamples);
+  const drawCandidateIndex = findFirstDrawCandidateIndex(inletSamples);
   if (drawCandidateIndex === null) {
     return false;
   }
@@ -211,11 +211,9 @@ function currentSampleHasDrawSignal(
   return !isHeaterOnlyInletOscillation(window);
 }
 
-function findLatestDrawCandidateIndex(
+function findFirstDrawCandidateIndex(
   samples: { inletTemperatureC: number | null; time: number }[],
 ) {
-  let latestCandidateIndex: number | null = null;
-
   for (let laterIndex = 1; laterIndex < samples.length; laterIndex += 1) {
     const later = samples[laterIndex];
     if (
@@ -244,13 +242,12 @@ function findLatestDrawCandidateIndex(
         earlier.inletTemperatureC - later.inletTemperatureC >=
         waterDrawDetectionLimits.minDropCelsius
       ) {
-        latestCandidateIndex = laterIndex;
-        break;
+        return laterIndex;
       }
     }
   }
 
-  return latestCandidateIndex;
+  return null;
 }
 
 function hasConfirmedColdInletDwell(
