@@ -209,21 +209,36 @@ function hasConfirmedColdInletDwell(
   for (const reading of window) {
     const currentMs = Date.parse(reading.created_at);
     const inletC = reading.inlet_temp;
-    const gapMinutes =
-      previousMs === null ? 0 : (currentMs - previousMs) / 60_000;
-    const isContinuous =
-      previousMs === null ||
-      (Number.isFinite(gapMinutes) &&
-        gapMinutes > 0 &&
-        gapMinutes <= MAX_SEGMENT_MINUTES);
+
+    if (!Number.isFinite(currentMs)) {
+      coldStartMs = null;
+      previousMs = null;
+      continue;
+    }
+
     const isCold =
       typeof inletC === "number" &&
       Number.isFinite(inletC) &&
       inletC <= maxConfirmedColdC;
+    const gapMinutes =
+      previousMs === null ? null : (currentMs - previousMs) / 60_000;
+    const contiguousWithPrevious =
+      gapMinutes !== null &&
+      Number.isFinite(gapMinutes) &&
+      gapMinutes > 0 &&
+      gapMinutes <= MAX_SEGMENT_MINUTES;
 
-    if (!Number.isFinite(currentMs) || !isContinuous || !isCold) {
+    if (!isCold) {
       coldStartMs = null;
-      previousMs = Number.isFinite(currentMs) ? currentMs : null;
+      previousMs = currentMs;
+      continue;
+    }
+
+    // A gap breaks the old dwell, but the first valid cold sample after the
+    // gap is itself the start of a new dwell interval.
+    if (!contiguousWithPrevious) {
+      coldStartMs = currentMs;
+      previousMs = currentMs;
       continue;
     }
 
