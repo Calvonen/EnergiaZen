@@ -161,3 +161,80 @@ grant execute on function public.get_automatic_mode_readiness()
 
 comment on function public.get_automatic_mode_readiness() is
   'Returns read-only automatic-mode readiness including V2 current-day staged-plan freshness for authenticated app preflight and service diagnostics.';
+
+
+create or replace function public.activate_v2_plan_on_automatic_transition()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v2_mirror_active boolean;
+  v1_optimizer_active boolean;
+  refreshed_count integer;
+begin
+  if new.heating_need_mode is distinct from 'automatic'
+     or (
+       tg_op = 'UPDATE'
+       and old.heating_need_mode is not distinct from 'automatic'
+     ) then
+    return new;
+  end if;
+
+  v2_mirror_active := public.get_v2_publication_cutover_enabled();
+
+  select exists (
+    select 1
+    from cron.job
+    where jobname = 'run-heating-optimizer-shadow-hourly'
+      and active
+  ) into v1_optimizer_active;
+
+  -- The documented V1 rollback owns automatic mode when the V2 mirror is
+  -- disabled and V1 is active. Nothing needs to be replayed in that state.
+  if not v2_mirror_active or v1_optimizer_active then
+    return new;
+  end if;
+
+  -- The BEFORE readiness guard has already required a fresh current-day staged
+  -- publication. Re-touch exactly that row now that the settings row is
+  -- automatic. This fires mirror_v2_heating_plan_to_production() in the same
+  -- transaction, so production plan + Shelly heartbeat become authoritative
+  -- before the mode transition can commit.
+  update public.v2_heating_plan_publications
+  set updated_at = updated_at
+  where plan_date = (now() at time zone 'Europe/Helsinki')::date
+    and published_at <= now()
+    and published_at >= now() - interval '15 minutes';
+
+  get diagnostics refreshed_count = row_count;
+
+  if refreshed_count <> 1 then
+    raise exception
+      using
+        errcode = 'check_violation',
+        message = 'Fresh V2 staged plan disappeared during automatic-mode transition';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.activate_v2_plan_on_automatic_transition()
+  from public, anon, authenticated;
+grant execute on function public.activate_v2_plan_on_automatic_transition()
+  to service_role;
+
+drop trigger if exists activate_v2_plan_on_automatic_transition
+  on public.heating_control_settings;
+
+create trigger activate_v2_plan_on_automatic_transition
+after insert or update of heating_need_mode
+on public.heating_control_settings
+for each row
+execute function public.activate_v2_plan_on_automatic_transition();
+
+comment on trigger activate_v2_plan_on_automatic_transition
+on public.heating_control_settings is
+  'Atomically replays the fresh current-day V2 staged plan after entering automatic mode so heating_plans and Shelly trust are updated before commit.';
