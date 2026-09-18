@@ -26,9 +26,14 @@ begin
       and active
   ) into v2_producer_active;
 
-  return v2_mirror_active
+  return (
+    v2_mirror_active
     and not v1_optimizer_active
-    and v2_producer_active;
+    and v2_producer_active
+  ) or (
+    not v2_mirror_active
+    and v1_optimizer_active
+  );
 end;
 $$;
 
@@ -38,7 +43,7 @@ grant execute on function public.is_v2_automatic_control_plane_ready()
   to service_role;
 
 comment on function public.is_v2_automatic_control_plane_ready() is
-  'Returns whether automatic heating can be handed to V2 without a dual-writer or missing-producer condition. Read-only.';
+  'Returns whether automatic heating has exactly one viable production owner: healthy V2, or V1 after the documented rollback. Read-only.';
 
 create or replace function public.guard_heating_control_mode_transition()
 returns trigger
@@ -56,7 +61,7 @@ begin
     raise exception
       using
         errcode = 'check_violation',
-        message = 'V2 automatic control plane is not ready';
+        message = 'Automatic heating control plane is not ready';
   end if;
 
   return new;
@@ -79,4 +84,4 @@ execute function public.guard_heating_control_mode_transition();
 
 comment on trigger guard_heating_control_mode_transition
 on public.heating_control_settings is
-  'Fail-closed guard for inserts or transitions into automatic mode. Requires active V2 mirror, inactive V1 optimizer cron, and active V2 producer cron.';
+  'Fail-closed guard for inserts or transitions into automatic mode. Accepts healthy V2 ownership or the documented V1 rollback ownership, and rejects conflicts/unowned states.';
