@@ -61,7 +61,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, cutoverStateResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -76,7 +76,7 @@ Deno.serve(async (request) => {
         .in("plan_date", [today, tomorrow]),
       supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
         .in("plan_date", [today, tomorrow]),
-      supabase.rpc("get_v2_publication_cutover_enabled"),
+      supabase.rpc("get_heating_control_plane_state"),
     ]);
 
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
@@ -84,14 +84,35 @@ Deno.serve(async (request) => {
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
-    if (cutoverStateResult.error) throw new Error(`Failed to resolve V2 production cutover state: ${cutoverStateResult.error.message}`);
+    if (controlPlaneStateResult.error) throw new Error(`Failed to resolve heating control-plane state: ${controlPlaneStateResult.error.message}`);
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
-    let v2PublicationCutoverEnabled = cutoverStateResult.data === true;
+    const controlPlaneState =
+      controlPlaneStateResult.data && typeof controlPlaneStateResult.data === "object" && !Array.isArray(controlPlaneStateResult.data)
+        ? controlPlaneStateResult.data as {
+            heating_need_mode?: unknown;
+            v2_mirror_trigger_active?: unknown;
+            v1_optimizer_cron_active?: unknown;
+            v2_producer_cron_active?: unknown;
+            owner?: unknown;
+            healthy?: unknown;
+          }
+        : null;
+    if (
+      !controlPlaneState ||
+      typeof controlPlaneState.v2_mirror_trigger_active !== "boolean" ||
+      typeof controlPlaneState.v1_optimizer_cron_active !== "boolean" ||
+      typeof controlPlaneState.v2_producer_cron_active !== "boolean" ||
+      typeof controlPlaneState.owner !== "string" ||
+      typeof controlPlaneState.healthy !== "boolean"
+    ) {
+      throw new Error("Heating control-plane state payload is invalid");
+    }
+    let v2PublicationCutoverEnabled = controlPlaneState.v2_mirror_trigger_active;
     const maxTankTemperatureC = Number(settingsResult.data.max_tank_temperature);
     const automaticMaxHeatingHours = Number(settingsResult.data.automatic_max_heating_hours);
     const reservePercents = normalizeV2ReservePercents({
@@ -306,6 +327,7 @@ Deno.serve(async (request) => {
       publication_ready: cutoverPublicationReadiness.ready,
       publication_ready_reason: cutoverPublicationReadiness.reason,
       publication_latest_publishable_tank_reading_at: latestPublishableReadingAt,
+      control_plane_state: controlPlaneState,
       source: "v2_energy_reserve_live_shadow",
     });
     if (insertError) throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
@@ -340,6 +362,7 @@ Deno.serve(async (request) => {
       publication_ready_reason: cutoverPublicationReadiness.reason,
       publication_latest_usable_tank_reading_at: latestUsableReadingAt,
       publication_latest_publishable_tank_reading_at: latestPublishableReadingAt,
+      control_plane_state: controlPlaneState,
       wrote_to_heating_plans: false,
     });
   } catch (error) {
