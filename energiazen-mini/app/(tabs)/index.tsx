@@ -3591,9 +3591,10 @@ export default function HomeScreen() {
                       <Text style={styles.heatingPlanInfoText}>
                         V2-skenaarion laskenta epäonnistui: {v2ScenarioPreview.error}
                       </Text>
-                    ) : !v2ScenarioPreview.data?.available ? (
+                    ) : !v2ScenarioPreview.data?.available ||
+                      v2ScenarioPreview.data.plan_valid === false ? (
                       <Text style={styles.heatingPlanInfoText}>
-                        V2-skenaariota ei voida laskea juuri nyt
+                        V2-skenaario ei muodosta julkaistavaa suunnitelmaa
                         {v2ScenarioPreview.data?.reason
                           ? `: ${v2ScenarioPreview.data.reason}`
                           : "."}
