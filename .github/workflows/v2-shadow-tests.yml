@@ -5,6 +5,8 @@ on:
     paths:
       - "energiazen-mini/lib/energyModelV2/**"
       - "energiazen-mini/supabase/functions/run-v2-energy-shadow/**"
+      - "energiazen-mini/supabase/functions/preview-v2-energy-plan/**"
+      - "energiazen-mini/lib/useV2ScenarioPreview.ts"
       - "energiazen-mini/supabase/functions/_shared/energyModelV2/**"
       - "energiazen-mini/supabase/functions/_shared/settingsDefaults.ts"
       - "energiazen-mini/lib/heatingControlSettingsPayload.ts"
