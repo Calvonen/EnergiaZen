@@ -105,7 +105,12 @@ export function buildV2MarginalPreheatAdvisory({
   }
 
   const horizon = evaluateV2PreheatHorizon({ now, prices });
-  if (!horizon.available) {
+  const tomorrowOnlySoftFill =
+    !horizon.available &&
+    horizon.reason === "no_future_today_prices" &&
+    Boolean(evaluateHourSelection) &&
+    horizon.tomorrowHourIds.length > 0;
+  if (!horizon.available && !tomorrowOnlySoftFill) {
     return unavailable(horizon.reason, level);
   }
 
@@ -137,6 +142,7 @@ export function buildV2MarginalPreheatAdvisory({
 
   if (displacedFutureHeatingHourIds.length === 0 && evaluateHourSelection) {
     return buildHorizonSoftFillFallback({
+      baselinePlan,
       baselineSelectedHourIds,
       configuredHourCap,
       constraints,
@@ -240,6 +246,7 @@ export function buildV2MarginalPreheatAdvisory({
 
 
 function buildHorizonSoftFillFallback({
+  baselinePlan,
   baselineSelectedHourIds,
   configuredHourCap,
   constraints,
@@ -248,17 +255,25 @@ function buildHorizonSoftFillFallback({
   level,
   prices,
 }: {
+  baselinePlan: LiveEnergyPlanShadowResult;
   baselineSelectedHourIds: Set<string>;
   configuredHourCap: number;
   constraints: V2HeatingConstraints;
   evaluateHourSelection: (selectedHourIds: string[]) => LiveEnergyPlanShadowResult;
-  horizon: Extract<V2PreheatHorizon, { available: true }>;
+  horizon: V2PreheatHorizon;
   level: V2SoftPreheatLevel;
   prices: ShadowElectricityPrice[];
 }): V2MarginalPreheatAdvisory {
   const targetKwh = level.recommendedPreheatTargetKwh;
   if (targetKwh === null || configuredHourCap <= 0) {
     return unavailable("insufficient_whole_hour_headroom", level);
+  }
+
+  if (
+    baselinePlan.finalConservativeEnergyKwh !== null &&
+    baselinePlan.finalConservativeEnergyKwh + 1e-9 >= targetKwh
+  ) {
+    return unavailable("preheat_not_needed", level);
   }
 
   const forbidden = new Set(constraints.forbiddenHeatingHourIds);
