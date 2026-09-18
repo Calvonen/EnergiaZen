@@ -280,6 +280,13 @@ Deno.serve(async (request) => {
       plan_total_cost_cents: publicationPlan.totalCostCents, plan_candidate_count: publicationPlan.candidateCount,
       plan_evaluated_combination_count: publicationPlan.evaluatedCombinationCount,
       preheat_advisory: preheatAdvisory,
+      staged_publication_ready: stagedPublicationReadiness.ready,
+      staged_publication_ready_reason: stagedPublicationReadiness.reason,
+      staged_publication_result: stagedPublicationResult,
+      publication_cutover_enabled: v2PublicationCutoverEnabled,
+      publication_ready: cutoverPublicationReadiness.ready,
+      publication_ready_reason: cutoverPublicationReadiness.reason,
+      publication_latest_publishable_tank_reading_at: latestPublishableReadingAt,
       source: "v2_energy_reserve_live_shadow",
     });
     if (insertError) throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
