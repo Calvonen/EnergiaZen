@@ -33,6 +33,7 @@ export type V2ScenarioPreviewState = {
 
 const PREVIEW_DEBOUNCE_MS = 300;
 const PREVIEW_REFRESH_MS = 60_000;
+const PREVIEW_REQUEST_TIMEOUT_MS = 15_000;
 
 export function useV2ScenarioPreview({
   enabled,
@@ -76,7 +77,7 @@ export function useV2ScenarioPreview({
       }));
 
       try {
-        const { data, error } = await supabase.functions.invoke(
+        const invokePromise = supabase.functions.invoke(
           "preview-v2-energy-plan",
           {
             body: {
@@ -87,6 +88,18 @@ export function useV2ScenarioPreview({
             },
           },
         );
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("V2-skenaarion laskenta aikakatkaistiin")),
+            PREVIEW_REQUEST_TIMEOUT_MS,
+          );
+        });
+        const { data, error } = await Promise.race([
+          invokePromise,
+          timeoutPromise,
+        ]);
+        if (timeoutId !== null) clearTimeout(timeoutId);
 
         if (!active) return;
         if (error) {
