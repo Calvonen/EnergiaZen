@@ -13,6 +13,13 @@ let effectiveSettingsPersister:
 let pendingRecommendationPersister:
   | ((pending: PendingV2Recommendation | null) => Promise<void>)
   | null = null;
+const pendingRecommendationListeners = new Set<() => void>();
+
+function notifyPendingRecommendationListeners() {
+  for (const listener of pendingRecommendationListeners) {
+    listener();
+  }
+}
 
 export function getLoadedV2TargetReservePercent() {
   return loadedV2TargetReservePercent;
@@ -30,6 +37,14 @@ export function hydratePendingV2Recommendation(
   pending: PendingV2Recommendation | null,
 ) {
   pendingV2Recommendation = pending;
+  notifyPendingRecommendationListeners();
+}
+
+export function subscribePendingV2Recommendation(listener: () => void) {
+  pendingRecommendationListeners.add(listener);
+  return () => {
+    pendingRecommendationListeners.delete(listener);
+  };
 }
 
 export function registerPendingV2RecommendationPersister(
@@ -42,6 +57,7 @@ export async function persistPendingV2Recommendation(
   pending: PendingV2Recommendation | null,
 ) {
   pendingV2Recommendation = pending;
+  notifyPendingRecommendationListeners();
 
   if (!pendingRecommendationPersister) {
     return false;
@@ -54,7 +70,6 @@ export async function persistPendingV2Recommendation(
 export function isPendingV2RecommendationAcknowledged({
   pending,
   runAt,
-  telemetryRecommendation,
 }: {
   pending: PendingV2Recommendation;
   runAt: string | null | undefined;
@@ -63,11 +78,13 @@ export function isPendingV2RecommendationAcknowledged({
   const savedAtMs = Date.parse(pending.savedAt);
   const runAtMs = Date.parse(runAt ?? "");
 
+  // Any shadow run created after the save settles the pending write. A matching
+  // value confirms this device's save; a different value means a later write
+  // from another client superseded it and telemetry becomes authoritative.
   return (
     Number.isFinite(savedAtMs) &&
     Number.isFinite(runAtMs) &&
-    runAtMs > savedAtMs &&
-    telemetryRecommendation === pending.value
+    runAtMs > savedAtMs
   );
 }
 
