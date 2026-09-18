@@ -76,7 +76,7 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
 
   assertSource(
     dailyEnergyLossesSource.includes(
-      "sum(row.physical_energy_drop_kwh)::double precision",
+      "sum(interval_row.physical_energy_drop_kwh)::double precision",
     ),
     "fyysiset energiadeltat pitaa summata ensin etumerkkeineen tuntitasolle",
   );
