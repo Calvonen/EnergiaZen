@@ -3556,18 +3556,18 @@ export default function HomeScreen() {
                         <Text style={styles.heatingPlanForecastText}>
                           {formatFinnishDecimal(v2HomeReserve.percent)} % · {formatFinnishDecimal(v2HomeReserve.energyKwh)} / {formatFinnishDecimal(v2HomeReserve.capacityKwh)} kWh
                         </Text>
-                        <Text style={styles.heatingPlanLimitsSubtitle}>
-                          V2-rajat
-                        </Text>
-                        <Text style={styles.heatingPlanLimitsText}>
-                          Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
-                        </Text>
                       </>
                     ) : (
                       <Text style={styles.heatingPlanForecastText}>
                         V2-energiavara ei ole juuri nyt saatavilla.
                       </Text>
                     )}
+                    <Text style={styles.heatingPlanLimitsSubtitle}>
+                      V2-rajat
+                    </Text>
+                    <Text style={styles.heatingPlanLimitsText}>
+                      Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
+                    </Text>
                     <Text style={styles.heatingPlanInfoReason}>
                       Tallentamattomien asetusten V2-suunnitelma lasketaan vasta, kun asetukset tallennetaan.
                     </Text>
