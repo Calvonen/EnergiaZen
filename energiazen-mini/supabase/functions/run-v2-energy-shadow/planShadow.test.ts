@@ -130,6 +130,27 @@ export function runLivePlanShadowUnitTests() {
     "stale profile falls back to physical standing-loss forecast",
   );
 
+
+  const frontLoadedDemandCannotBeHiddenBySameHourHeat = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: contiguous,
+    reserve: reserve(4.2),
+    learnedDropProfile: learnedProfile("2026-09-13T01:30:00.000Z", 2),
+  });
+  assert(
+    frontLoadedDemandCannotBeHiddenBySameHourHeat.valid === false,
+    "front-loaded learned demand must expose a safety violation before same-hour heater credit",
+  );
+  assertEqual(
+    frontLoadedDemandCannotBeHiddenBySameHourHeat.firstSafetyViolationAt,
+    now.toISOString(),
+    "partial current-hour learned demand is checked at the remaining segment start",
+  );
+
   const belowTargetButSafe = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
     energyCapacityKwh: 16.864,
