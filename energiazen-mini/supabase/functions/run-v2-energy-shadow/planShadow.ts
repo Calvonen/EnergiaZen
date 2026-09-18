@@ -2,6 +2,11 @@ import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import { optimizeEnergyPlan } from "../_shared/energyModelV2/energyPlanOptimizer.ts";
 import { liveReserveShadowConfig, type LiveReserveShadowResult } from "./logic.ts";
 import type { V2HeatingConstraints } from "./productionConstraints.ts";
+import {
+  isLearnedTemperatureDropProfileFresh,
+  learnedTemperatureDropProfileAgeDays,
+  type LearnedTemperatureDropProfile,
+} from "./learnedDropProfile.ts";
 
 export type ShadowElectricityPrice = {
   ends_at: string;
@@ -26,6 +31,10 @@ export type LiveEnergyPlanShadowResult = {
   standingLossKwhPerHour: number | null;
   totalCostCents: number | null;
   valid: boolean | null;
+  learnedDropProfileUsed: boolean;
+  learnedDropProfileDate: string | null;
+  learnedDropProfileAgeDays: number | null;
+  maximumModeledLossKwhPerHour: number | null;
 };
 
 const assumption = "standing_loss_only_no_future_draws" as const;
@@ -46,6 +55,7 @@ export function runLiveEnergyPlanShadow({
   now,
   prices,
   reserve,
+  learnedDropProfile = null,
 }: {
   automaticMaxHeatingHours: number;
   constraints?: V2HeatingConstraints;
@@ -55,6 +65,7 @@ export function runLiveEnergyPlanShadow({
   now: Date;
   prices: ShadowElectricityPrice[];
   reserve: LiveReserveShadowResult;
+  learnedDropProfile?: LearnedTemperatureDropProfile | null;
 }): LiveEnergyPlanShadowResult {
   if (!reserve.available || reserve.remainingEnergyKwh === null || !Number.isFinite(reserve.remainingEnergyKwh)) {
     return unavailable("reserve_state_unavailable");
@@ -70,7 +81,19 @@ export function runLiveEnergyPlanShadow({
   }
 
   const standingLossKwhPerHour = worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC });
-  const horizon = buildPriceHorizon({ now, prices, standingLossKwhPerHour });
+  const learnedDropProfileUsed =
+    learnedDropProfile !== null &&
+    isLearnedTemperatureDropProfileFresh(learnedDropProfile, now);
+  const learnedDropProfileAgeDays =
+    learnedDropProfile === null
+      ? null
+      : learnedTemperatureDropProfileAgeDays(learnedDropProfile, now);
+  const horizon = buildPriceHorizon({
+    now,
+    prices,
+    standingLossKwhPerHour,
+    learnedDropProfile: learnedDropProfileUsed ? learnedDropProfile : null,
+  });
   if (!horizon.ok) return unavailable(horizon.reason, standingLossKwhPerHour);
 
   // A production-locked active block is authoritative even if it is longer than
@@ -113,15 +136,20 @@ export function runLiveEnergyPlanShadow({
     standingLossKwhPerHour: round(standingLossKwhPerHour),
     totalCostCents: plan.totalCostCents,
     valid: plan.valid,
+    learnedDropProfileUsed,
+    learnedDropProfileDate: learnedDropProfileUsed ? learnedDropProfile?.profile_date ?? null : null,
+    learnedDropProfileAgeDays,
+    maximumModeledLossKwhPerHour: horizon.maximumModeledLossKwhPerHour,
   };
 }
 
-function buildPriceHorizon({ now, prices, standingLossKwhPerHour }: {
+function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropProfile }: {
   now: Date;
   prices: ShadowElectricityPrice[];
   standingLossKwhPerHour: number;
+  learnedDropProfile: LearnedTemperatureDropProfile | null;
 }):
-  | { ok: true; horizonEndAt: string; segments: Array<{ id: string; modeledHeatLossKwh: number; priceCentsPerKwh: number; segmentHours: number; startDate: string }> }
+  | { ok: true; horizonEndAt: string; maximumModeledLossKwhPerHour: number; segments: Array<{ id: string; frontLoadedDemandKwh: number; modeledHeatLossKwh: number; priceCentsPerKwh: number; segmentHours: number; startDate: string }> }
   | { ok: false; reason: string } {
   const today = helsinkiDateKey(now);
   const tomorrow = helsinkiDateKeyOffset(now, 1);
@@ -146,19 +174,42 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour }: {
     }
   }
 
+  let maximumModeledLossKwhPerHour = standingLossKwhPerHour;
   const segments = ordered.map((price) => {
     const startMs = Math.max(Date.parse(price.starts_at), nowMs);
     const endMs = Date.parse(price.ends_at);
     const segmentHours = Math.max(0, Math.min((endMs - startMs) / 3_600_000, 1));
+    const learnedLossKwhPerHour = learnedDropProfile
+      ? learnedDropProfile.hourlyEnergyLossesKwh[
+          helsinkiHour(new Date(price.starts_at))
+        ] ?? 0
+      : 0;
+    const learnedDemandKwh = Math.max(
+      learnedLossKwhPerHour - standingLossKwhPerHour,
+      0,
+    );
+    maximumModeledLossKwhPerHour = Math.max(
+      maximumModeledLossKwhPerHour,
+      standingLossKwhPerHour + learnedDemandKwh,
+    );
     return {
       id: price.starts_at,
+      // Passive loss is continuous and may be prorated. Learned excess demand
+      // is a whole-hour bucket that can contain discrete draws, so keep the full
+      // bucket and let the forecast apply it before any same-hour heater credit.
+      frontLoadedDemandKwh: learnedDemandKwh,
       modeledHeatLossKwh: standingLossKwhPerHour * segmentHours,
       priceCentsPerKwh: price.spot_price_cents_kwh,
       segmentHours,
       startDate: new Date(startMs).toISOString(),
     };
   });
-  return { ok: true, horizonEndAt: ordered[ordered.length - 1].ends_at, segments };
+  return {
+    ok: true,
+    horizonEndAt: ordered[ordered.length - 1].ends_at,
+    maximumModeledLossKwhPerHour: round(maximumModeledLossKwhPerHour),
+    segments,
+  };
 }
 
 function worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC }: { inletBaselineC: number; maxTankTemperatureC: number }) {
@@ -172,6 +223,19 @@ function worstCaseStandingLossKwhPerHour({ inletBaselineC, maxTankTemperatureC }
   const before = layerEnergy(topMassKg, maxTankTemperatureC, inletBaselineC) + layerEnergy(bottomMassKg, maxTankTemperatureC, inletBaselineC);
   const after = layerEnergy(topMassKg, topAfter, inletBaselineC) + layerEnergy(bottomMassKg, bottomAfter, inletBaselineC);
   return Math.max(before - after, 0);
+}
+
+const helsinkiHourFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  hour12: false,
+  timeZone: "Europe/Helsinki",
+});
+
+function helsinkiHour(date: Date) {
+  const hour = Number(
+    helsinkiHourFormatter.formatToParts(date).find((part) => part.type === "hour")?.value,
+  );
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 0;
 }
 
 function applyNewtonCooling(temperatureC: number, timeConstantHours: number) {
@@ -214,6 +278,10 @@ function unavailable(reason: string, standingLossKwhPerHour: number | null = nul
     standingLossKwhPerHour: standingLossKwhPerHour === null ? null : round(standingLossKwhPerHour),
     totalCostCents: null,
     valid: null,
+    learnedDropProfileUsed: false,
+    learnedDropProfileDate: null,
+    learnedDropProfileAgeDays: null,
+    maximumModeledLossKwhPerHour: standingLossKwhPerHour === null ? null : round(standingLossKwhPerHour),
   };
 }
 

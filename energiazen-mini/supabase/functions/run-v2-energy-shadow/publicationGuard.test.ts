@@ -22,6 +22,10 @@ function plan(overrides: Partial<LiveEnergyPlanShadowResult> = {}): LiveEnergyPl
     standingLossKwhPerHour: 0.1,
     totalCostCents: 10,
     valid: true,
+    learnedDropProfileUsed: false,
+    learnedDropProfileDate: null,
+    learnedDropProfileAgeDays: null,
+    maximumModeledLossKwhPerHour: 0.1,
     ...overrides,
   };
 }

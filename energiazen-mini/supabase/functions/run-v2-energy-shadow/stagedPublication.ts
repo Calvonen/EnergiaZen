@@ -8,6 +8,10 @@ import {
   buildV2StagedPlans,
   buildV2TankSnapshot,
 } from "./publicationPayload.ts";
+import {
+  buildLearnedTemperatureDropProfileSnapshot,
+  type LearnedTemperatureDropProfile,
+} from "./learnedDropProfile.ts";
 
 export type StagedPublicationSettings = {
   max_tank_temperature: number;
@@ -31,6 +35,7 @@ export function buildV2StagedPublicationArgs({
   replayStart,
   settings,
   storedStagedVersions,
+  temperatureDropProfile,
   today,
   tomorrow,
 }: {
@@ -46,6 +51,7 @@ export function buildV2StagedPublicationArgs({
   replayStart: Date;
   settings: StagedPublicationSettings;
   storedStagedVersions: StoredStagedPlanVersion[];
+  temperatureDropProfile: LearnedTemperatureDropProfile | null;
   today: string;
   tomorrow: string;
 }) {
@@ -83,7 +89,13 @@ export function buildV2StagedPublicationArgs({
       energy_reliable: draw.energy_reliable,
       energy_quality_reason: draw.energy_quality_reason,
     })),
-    p_expected_settings_snapshot: { id: 1, ...settings },
+    p_expected_settings_snapshot: {
+      id: 1,
+      ...settings,
+      temperature_drop_profile: buildLearnedTemperatureDropProfileSnapshot(
+        temperatureDropProfile,
+      ),
+    },
     p_constraint_plan_dates: [today, tomorrow],
     p_expected_constraint_plans: constraintPlans.map((stored) => ({
       plan_date: stored.plan_date,

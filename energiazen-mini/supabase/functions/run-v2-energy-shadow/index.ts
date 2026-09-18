@@ -18,6 +18,10 @@ import {
 } from "./productionConstraints.ts";
 import { captureV2PublicationCandidate, evaluateV2PublicationGuard } from "./publicationGuard.ts";
 import { buildV2StagedPublicationArgs, type StoredStagedPlanVersion } from "./stagedPublication.ts";
+import {
+  parseLearnedTemperatureDropProfile,
+  type LearnedTemperatureDropProfileRow,
+} from "./learnedDropProfile.ts";
 import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
 import {
   calculateV2EnergyCapacityKwh,
@@ -61,7 +65,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult, temperatureDropProfileResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -77,6 +81,13 @@ Deno.serve(async (request) => {
       supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
         .in("plan_date", [today, tomorrow]),
       supabase.rpc("get_heating_control_plane_state"),
+      supabase.from("temperature_drop_profiles")
+        .select("id,profile_date,timezone,source_start,source_end,source_days,hourly_drops,observation_days_by_hour,general_fallback,hourly_energy_losses_kwh,general_energy_loss_kwh,algorithm_version,created_at")
+        .eq("timezone", "Europe/Helsinki")
+        .order("profile_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
 
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
@@ -85,12 +96,21 @@ Deno.serve(async (request) => {
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
     if (controlPlaneStateResult.error) throw new Error(`Failed to resolve heating control-plane state: ${controlPlaneStateResult.error.message}`);
+    if (temperatureDropProfileResult.error) throw new Error(`Failed to fetch learned temperature drop profile: ${temperatureDropProfileResult.error.message}`);
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
+    const learnedDropProfile = temperatureDropProfileResult.data
+      ? parseLearnedTemperatureDropProfile(
+          temperatureDropProfileResult.data as unknown as LearnedTemperatureDropProfileRow,
+        )
+      : null;
+    if (temperatureDropProfileResult.data && !learnedDropProfile) {
+      throw new Error("Latest learned temperature drop profile is invalid");
+    }
     const controlPlaneState =
       controlPlaneStateResult.data && typeof controlPlaneStateResult.data === "object" && !Array.isArray(controlPlaneStateResult.data)
         ? controlPlaneStateResult.data as {
@@ -161,6 +181,7 @@ Deno.serve(async (request) => {
       now,
       prices,
       reserve: result,
+      learnedDropProfile,
     });
     const preheatAdvisory = buildV2MarginalPreheatAdvisory({
       baselinePlan: plan,
@@ -215,6 +236,7 @@ Deno.serve(async (request) => {
       now,
       prices,
       reserve: result,
+      learnedDropProfile,
     });
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
@@ -256,6 +278,7 @@ Deno.serve(async (request) => {
           v2_safety_reserve_percent: Number(settingsResult.data.v2_safety_reserve_percent),
         },
         storedStagedVersions,
+        temperatureDropProfile: learnedDropProfile,
         today,
         tomorrow,
       });
@@ -354,6 +377,10 @@ Deno.serve(async (request) => {
       plan_selected_heating_energy_kwh: publicationPlan.selectedHeatingEnergyKwh,
       plan_total_cost_cents: publicationPlan.totalCostCents, plan_candidate_count: publicationPlan.candidateCount,
       plan_evaluated_combination_count: publicationPlan.evaluatedCombinationCount,
+      learned_drop_profile_used: publicationPlan.learnedDropProfileUsed,
+      learned_drop_profile_date: publicationPlan.learnedDropProfileDate,
+      learned_drop_profile_age_days: publicationPlan.learnedDropProfileAgeDays,
+      maximum_modeled_loss_kwh_per_hour: publicationPlan.maximumModeledLossKwhPerHour,
       preheat_advisory: preheatAdvisory,
       staged_publication_ready: stagedPublicationReadiness.ready,
       staged_publication_ready_reason: stagedPublicationReadiness.reason,
@@ -387,6 +414,10 @@ Deno.serve(async (request) => {
       forecast_final_conservative_energy_kwh: publicationPlan.finalConservativeEnergyKwh,
       forecast_min_conservative_energy_kwh: publicationPlan.minimumConservativeEnergyKwh,
       preheat_advisory: preheatAdvisory,
+      learned_drop_profile_used: publicationPlan.learnedDropProfileUsed,
+      learned_drop_profile_date: publicationPlan.learnedDropProfileDate,
+      learned_drop_profile_age_days: publicationPlan.learnedDropProfileAgeDays,
+      maximum_modeled_loss_kwh_per_hour: publicationPlan.maximumModeledLossKwhPerHour,
       price_ceiling_setting: priceCeilingSetting,
       staged_publication_enabled: v2StagedPublicationEnabled,
       staged_publication_ready: stagedPublicationReadiness.ready,
