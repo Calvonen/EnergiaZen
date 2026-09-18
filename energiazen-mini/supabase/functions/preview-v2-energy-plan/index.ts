@@ -91,7 +91,7 @@ Deno.serve(async (request) => {
       reservePercents.safetyPercent !== safetyPercent ||
       !Number.isInteger(automaticMaxHeatingHours) ||
       automaticMaxHeatingHours < 1 ||
-      automaticMaxHeatingHours > 4 ||
+      automaticMaxHeatingHours > 6 ||
       maxTankTemperatureC < 40 ||
       maxTankTemperatureC > 90
     ) {
@@ -258,8 +258,14 @@ Deno.serve(async (request) => {
     });
 
     return jsonResponse({
-      available: reserve.available && previewPlan.available,
-      reason: reserve.reason ?? previewPlan.reason,
+      available:
+        reserve.available &&
+        previewPlan.available &&
+        previewPlan.valid === true,
+      reason:
+        reserve.reason ??
+        previewPlan.reason ??
+        (previewPlan.valid === false ? "plan_invalid" : null),
       current_conservative_energy_kwh: reserve.conservativeEnergyKwh,
       energy_capacity_kwh: energyCapacityKwh,
       current_percent:
