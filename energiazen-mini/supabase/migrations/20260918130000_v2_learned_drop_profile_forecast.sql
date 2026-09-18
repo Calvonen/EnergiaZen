@@ -78,6 +78,8 @@ begin
       )::integer as helsinki_hour,
       ordered.previous_weighted_temperature - ordered.weighted_temperature
         as temperature_drop,
+      extract(epoch from (ordered.created_at - ordered.previous_created_at)) / 60.0
+        as valid_interval_minutes,
       (
         v_top_mass_kg * v_specific_heat_kwh_per_kg_c *
           (ordered.previous_top_temp - ordered.top_temp)
@@ -100,23 +102,29 @@ begin
   ),
   daily_temperature_drops as (
     select
-      row.helsinki_date,
-      row.helsinki_hour,
-      sum(row.temperature_drop)::double precision as daily_drop
-    from valid_intervals row
-    where row.temperature_drop > 0
-    group by row.helsinki_date, row.helsinki_hour
+      interval_row.helsinki_date,
+      interval_row.helsinki_hour,
+      sum(interval_row.temperature_drop)::double precision as daily_drop
+    from valid_intervals interval_row
+    where interval_row.temperature_drop > 0
+    group by interval_row.helsinki_date, interval_row.helsinki_hour
   ),
   daily_energy_losses as (
     select
-      row.helsinki_date,
-      row.helsinki_hour,
+      interval_row.helsinki_date,
+      interval_row.helsinki_hour,
       greatest(
-        sum(row.physical_energy_drop_kwh)::double precision,
+        sum(interval_row.physical_energy_drop_kwh)::double precision,
         0::double precision
-      ) as daily_energy_loss_kwh
-    from valid_intervals row
-    group by row.helsinki_date, row.helsinki_hour
+      ) * (
+        60.0 /
+        sum(interval_row.valid_interval_minutes)::double precision
+      ) as daily_energy_loss_kwh,
+      sum(interval_row.valid_interval_minutes)::double precision
+        as valid_minutes
+    from valid_intervals interval_row
+    group by interval_row.helsinki_date, interval_row.helsinki_hour
+    having sum(interval_row.valid_interval_minutes) >= 55
   ),
   temperature_statistics as (
     select
@@ -158,8 +166,7 @@ begin
   ),
   previous_profile as (
     select
-      profile.hourly_drops,
-      profile.hourly_energy_losses_kwh
+      profile.hourly_drops
     from public.temperature_drop_profiles profile
     where profile.timezone = 'Europe/Helsinki'
       and profile.profile_date <= v_profile_date
@@ -193,7 +200,6 @@ begin
               >= v_minimum_observation_days
             then energy.median_energy_loss_kwh
             else coalesce(
-              (previous.hourly_energy_losses_kwh ->> hour_number::text)::double precision,
               energy_fallback.general_energy_loss_kwh,
               v_energy_fallback
             )
@@ -244,7 +250,7 @@ begin
     complete.general_fallback,
     complete.hourly_energy_losses_kwh,
     complete.general_energy_loss_kwh,
-    'weighted-70-30-v1+physical-kwh-v2'
+    'weighted-70-30-v1+physical-kwh-v3'
   from complete_profile complete
   on conflict (profile_date, timezone) do update
   set
