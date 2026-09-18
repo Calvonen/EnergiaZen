@@ -299,7 +299,10 @@ function buildHorizonSoftFillFallback({
   let forecastEvaluations = 0;
   let beam: Candidate[] = [{
     addedHourIds: [],
-    finalConservativeEnergyKwh: level.currentConservativeEnergyKwh ?? 0,
+    finalConservativeEnergyKwh: Math.max(
+      targetKwh - (level.recommendedPreheatEnergyKwh ?? 0),
+      0,
+    ),
     lastCandidateIndex: -1,
     totalCostCents: baselineIds.reduce((sum, hourId) => {
       const price = billedPrice(hourId, priceById);
