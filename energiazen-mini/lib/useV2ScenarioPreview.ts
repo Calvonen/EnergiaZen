@@ -61,6 +61,7 @@ export function useV2ScenarioPreview({
 
     let active = true;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeRequestController: AbortController | null = null;
 
     const scheduleRefresh = () => {
       if (!active) return;
@@ -76,8 +77,15 @@ export function useV2ScenarioPreview({
         loading: true,
       }));
 
+      const controller = new AbortController();
+      activeRequestController = controller;
+      const requestTimeout = setTimeout(
+        () => controller.abort(),
+        PREVIEW_REQUEST_TIMEOUT_MS,
+      );
+
       try {
-        const invokePromise = supabase.functions.invoke(
+        const { data, error } = await supabase.functions.invoke(
           "preview-v2-energy-plan",
           {
             body: {
@@ -86,20 +94,9 @@ export function useV2ScenarioPreview({
               v2SafetyReservePercent: settings.v2SafetyReservePercent,
               v2TargetReservePercent: settings.v2TargetReservePercent,
             },
+            signal: controller.signal,
           },
         );
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(
-            () => reject(new Error("V2-skenaarion laskenta aikakatkaistiin")),
-            PREVIEW_REQUEST_TIMEOUT_MS,
-          );
-        });
-        const { data, error } = await Promise.race([
-          invokePromise,
-          timeoutPromise,
-        ]);
-        if (timeoutId !== null) clearTimeout(timeoutId);
 
         if (!active) return;
         if (error) {
@@ -127,6 +124,10 @@ export function useV2ScenarioPreview({
           loading: false,
         });
       } finally {
+        clearTimeout(requestTimeout);
+        if (activeRequestController === controller) {
+          activeRequestController = null;
+        }
         scheduleRefresh();
       }
     };
@@ -139,6 +140,8 @@ export function useV2ScenarioPreview({
       active = false;
       clearTimeout(debounceTimer);
       if (refreshTimer !== null) clearTimeout(refreshTimer);
+      activeRequestController?.abort();
+      activeRequestController = null;
     };
   }, [
     enabled,
