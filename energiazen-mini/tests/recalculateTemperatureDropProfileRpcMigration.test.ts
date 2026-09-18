@@ -47,6 +47,37 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
     !validDropsSource.includes("is not true"),
     "vanha is not true -ehto (hyvaksyy myos nullin Postgresin kolmiarvoisessa logiikassa) ei saa enaa esiintya",
   );
+
+  const dailyEnergyLossesStart = migrationSource.indexOf("daily_energy_losses as (");
+  const temperatureStatisticsStart = migrationSource.indexOf(
+    "temperature_statistics as (",
+  );
+
+  assertSource(
+    dailyEnergyLossesStart !== -1 &&
+      temperatureStatisticsStart > dailyEnergyLossesStart,
+    "daily_energy_losses-CTE:n pitaa loytya ennen temperature_statistics-CTE:ta",
+  );
+
+  const dailyEnergyLossesSource = migrationSource.slice(
+    dailyEnergyLossesStart,
+    temperatureStatisticsStart,
+  );
+
+  assertSource(
+    dailyEnergyLossesSource.includes(
+      "sum(row.physical_energy_drop_kwh)::double precision",
+    ),
+    "fyysiset energiadeltat pitaa summata ensin etumerkkeineen tuntitasolle",
+  );
+  assertSource(
+    dailyEnergyLossesSource.includes("greatest("),
+    "negatiivinen tuntitason nettoenergia pitaa leikata nollaan vasta aggregoinnin jalkeen",
+  );
+  assertSource(
+    !dailyEnergyLossesSource.includes("physical_energy_drop_kwh > 0"),
+    "yksittaisia negatiivisia intervalleja ei saa suodattaa ennen tuntisummaa",
+  );
   assertSource(
     migrationSource.includes(
       "v_top_sensor_moved_at constant timestamptz := '2026-08-05T14:00:00.000Z'",
