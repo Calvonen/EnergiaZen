@@ -16,7 +16,7 @@ as $$
       and relation.relname = 'v2_heating_plan_publications'
       and trigger.tgname = 'mirror_v2_heating_plan_to_production'
       and not trigger.tgisinternal
-      and trigger.tgenabled <> 'D'
+      and trigger.tgenabled in ('O', 'A')
   );
 $$;
 
