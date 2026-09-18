@@ -22,6 +22,10 @@ import {
 } from "@/lib/settings";
 import { upsertHeatingControlSettings } from "@/lib/heatingControlSettingsSupabase";
 import {
+  fetchAutomaticModeReadiness,
+  getAutomaticModeReadinessMessage,
+} from "@/lib/automaticModeReadiness";
+import {
   areSettingsEqual,
   persistSettingsDraft,
   SettingsDraftLocalSaveError,
@@ -621,6 +625,61 @@ export default function SettingsScreen() {
     setSaveFeedback(null);
 
     try {
+      if (settingsToSave.heatingNeedMode === "automatic") {
+        let remoteHeatingNeedMode: HeatingNeedMode | null = null;
+
+        try {
+          const { data: remoteSettings, error: remoteModeError } = await supabase
+            .from("heating_control_settings")
+            .select("heating_need_mode")
+            .eq("id", 1)
+            .maybeSingle();
+
+          if (remoteModeError) {
+            throw remoteModeError;
+          }
+
+          remoteHeatingNeedMode =
+            remoteSettings?.heating_need_mode === "automatic" ||
+            remoteSettings?.heating_need_mode === "fixed"
+              ? remoteSettings.heating_need_mode
+              : null;
+        } catch (error) {
+          console.warn("Failed to verify remote heating mode", error);
+          const message =
+            "Automaattiohjauksen nykyistä tilaa ei voitu varmistaa. Asetuksia ei tallennettu.";
+          setSaveFeedback({ kind: "error", message });
+          Alert.alert("Automaattiohjaus ei ole valmis", message);
+          return;
+        }
+
+        // The backend row is authoritative. A missing row is also a transition
+        // because the following upsert would INSERT automatic mode.
+        if (remoteHeatingNeedMode !== "automatic") {
+          let readiness;
+
+          try {
+            readiness = await fetchAutomaticModeReadiness(supabase);
+          } catch (error) {
+            console.warn("Failed to verify automatic mode readiness", error);
+            const message =
+              "Automaattiohjauksen valmiutta ei voitu varmistaa. Asetuksia ei tallennettu.";
+            setSaveFeedback({ kind: "error", message });
+            Alert.alert("Automaattiohjaus ei ole valmis", message);
+            return;
+          }
+
+          if (!readiness.ready) {
+            const message =
+              getAutomaticModeReadinessMessage(readiness) ||
+              "Automaattiohjaus ei ole vielä valmis. Asetuksia ei tallennettu.";
+            setSaveFeedback({ kind: "error", message });
+            Alert.alert("Automaattiohjaus ei ole valmis", message);
+            return;
+          }
+        }
+      }
+
       const persistedSettings = await persistSettingsDraft({
         draftSettings: settingsToSave,
         savedSettings,
