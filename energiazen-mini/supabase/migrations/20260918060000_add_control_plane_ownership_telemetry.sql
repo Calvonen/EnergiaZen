@@ -15,6 +15,7 @@ declare
   configured_mode text;
   v2_active boolean;
   v1_active boolean;
+  v2_producer_active boolean;
   owner text;
   healthy boolean;
 begin
@@ -32,13 +33,20 @@ begin
       and active
   ) into v1_active;
 
+  select exists (
+    select 1
+    from cron.job
+    where jobname = 'run-v2-energy-reserve-shadow'
+      and active
+  ) into v2_producer_active;
+
   if configured_mode = 'fixed' then
     owner := 'fixed';
     healthy := true;
   elsif configured_mode = 'automatic' then
     if v2_active and not v1_active then
       owner := 'v2';
-      healthy := true;
+      healthy := v2_producer_active;
     elsif v1_active and not v2_active then
       owner := 'v1';
       healthy := true;
@@ -58,6 +66,7 @@ begin
     'heating_need_mode', configured_mode,
     'v2_mirror_trigger_active', v2_active,
     'v1_optimizer_cron_active', v1_active,
+    'v2_producer_cron_active', v2_producer_active,
     'owner', owner,
     'healthy', healthy
   );
@@ -68,4 +77,4 @@ revoke all on function public.get_heating_control_plane_state() from public, ano
 grant execute on function public.get_heating_control_plane_state() to service_role;
 
 comment on function public.get_heating_control_plane_state() is
-  'Returns the effective heating control-plane owner: fixed, v2, v1, conflict, or unowned. Read-only readiness telemetry.';
+  'Returns the effective heating control-plane owner and scheduler health: fixed, v2, v1, conflict, or unowned. Read-only readiness telemetry.';
