@@ -286,66 +286,105 @@ function buildHorizonSoftFillFallback({
   type Candidate = {
     addedHourIds: string[];
     finalConservativeEnergyKwh: number;
+    lastCandidateIndex: number;
     totalCostCents: number;
   };
 
-  let bestReached: Candidate | null = null;
-  let bestPartial: Candidate | null = null;
   const maxAdditionalHours = Math.min(
     configuredHourCap,
     Math.max(configuredHourCap - baselineIds.length, 0),
   );
+  const beamWidth = 24;
+  const maxForecastEvaluations = 3000;
+  let forecastEvaluations = 0;
+  let beam: Candidate[] = [{
+    addedHourIds: [],
+    finalConservativeEnergyKwh: level.currentConservativeEnergyKwh ?? 0,
+    lastCandidateIndex: -1,
+    totalCostCents: baselineIds.reduce((sum, hourId) => {
+      const price = billedPrice(hourId, priceById);
+      return sum + (price ?? 0);
+    }, 0),
+  }];
+  let bestReached: Candidate | null = null;
+  let bestPartial: Candidate | null = null;
 
   for (let count = 1; count <= maxAdditionalHours; count += 1) {
-    for (const addedHourIds of combinations(candidatePreheatHourIds, count)) {
-      const selectedHourIds = [...new Set([...baselineIds, ...addedHourIds])].sort(
-        (left, right) => Date.parse(left) - Date.parse(right),
-      );
-      if (selectedHourIds.length > configuredHourCap) continue;
+    const expanded: Candidate[] = [];
+    const seen = new Set<string>();
 
-      const simulated = evaluateHourSelection(selectedHourIds);
-      if (
-        !simulated.available ||
-        simulated.valid !== true ||
-        simulated.finalConservativeEnergyKwh === null ||
-        simulated.totalCostCents === null
+    for (const state of beam) {
+      for (
+        let candidateIndex = state.lastCandidateIndex + 1;
+        candidateIndex < candidatePreheatHourIds.length;
+        candidateIndex += 1
       ) {
-        continue;
-      }
+        if (forecastEvaluations >= maxForecastEvaluations) break;
 
-      const candidate: Candidate = {
-        addedHourIds,
-        finalConservativeEnergyKwh: simulated.finalConservativeEnergyKwh,
-        totalCostCents: simulated.totalCostCents,
-      };
+        const addedHourIds = [
+          ...state.addedHourIds,
+          candidatePreheatHourIds[candidateIndex],
+        ];
+        const key = addedHourIds.join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-      if (candidate.finalConservativeEnergyKwh + 1e-9 >= targetKwh) {
+        const selectedHourIds = [...new Set([...baselineIds, ...addedHourIds])].sort(
+          (left, right) => Date.parse(left) - Date.parse(right),
+        );
+        if (selectedHourIds.length > configuredHourCap) continue;
+
+        forecastEvaluations += 1;
+        const simulated = evaluateHourSelection(selectedHourIds);
         if (
-          !bestReached ||
-          candidate.addedHourIds.length < bestReached.addedHourIds.length ||
+          !simulated.available ||
+          simulated.valid !== true ||
+          simulated.finalConservativeEnergyKwh === null ||
+          simulated.totalCostCents === null
+        ) {
+          continue;
+        }
+
+        const candidate: Candidate = {
+          addedHourIds,
+          finalConservativeEnergyKwh: simulated.finalConservativeEnergyKwh,
+          lastCandidateIndex: candidateIndex,
+          totalCostCents: simulated.totalCostCents,
+        };
+        expanded.push(candidate);
+
+        if (candidate.finalConservativeEnergyKwh + 1e-9 >= targetKwh) {
+          if (
+            !bestReached ||
+            candidate.totalCostCents < bestReached.totalCostCents ||
+            (
+              candidate.totalCostCents === bestReached.totalCostCents &&
+              candidate.addedHourIds.join("|") < bestReached.addedHourIds.join("|")
+            )
+          ) {
+            bestReached = candidate;
+          }
+        } else if (
+          !bestPartial ||
+          candidate.finalConservativeEnergyKwh > bestPartial.finalConservativeEnergyKwh + 1e-9 ||
           (
-            candidate.addedHourIds.length === bestReached.addedHourIds.length &&
-            candidate.totalCostCents < bestReached.totalCostCents
+            Math.abs(
+              candidate.finalConservativeEnergyKwh -
+                bestPartial.finalConservativeEnergyKwh,
+            ) <= 1e-9 &&
+            candidate.totalCostCents < bestPartial.totalCostCents
           )
         ) {
-          bestReached = candidate;
+          bestPartial = candidate;
         }
-      } else if (
-        !bestPartial ||
-        candidate.finalConservativeEnergyKwh > bestPartial.finalConservativeEnergyKwh + 1e-9 ||
-        (
-          Math.abs(
-            candidate.finalConservativeEnergyKwh -
-              bestPartial.finalConservativeEnergyKwh,
-          ) <= 1e-9 &&
-          candidate.totalCostCents < bestPartial.totalCostCents
-        )
-      ) {
-        bestPartial = candidate;
       }
+      if (forecastEvaluations >= maxForecastEvaluations) break;
     }
 
     if (bestReached) break;
+    if (!expanded.length || forecastEvaluations >= maxForecastEvaluations) break;
+
+    beam = selectDiverseBeam(expanded, beamWidth);
   }
 
   const winner = bestReached ?? bestPartial;
@@ -379,6 +418,37 @@ function buildHorizonSoftFillFallback({
     strategy: "horizon_soft_fill",
     reason: "recommended",
   };
+}
+
+function selectDiverseBeam<T extends {
+  addedHourIds: string[];
+  finalConservativeEnergyKwh: number;
+  totalCostCents: number;
+}>(candidates: T[], width: number): T[] {
+  if (candidates.length <= width) return candidates;
+
+  const half = Math.max(1, Math.floor(width / 2));
+  const byEnergy = [...candidates].sort((left, right) =>
+    right.finalConservativeEnergyKwh - left.finalConservativeEnergyKwh ||
+    left.totalCostCents - right.totalCostCents ||
+    left.addedHourIds.join("|").localeCompare(right.addedHourIds.join("|"))
+  );
+  const byCost = [...candidates].sort((left, right) =>
+    left.totalCostCents - right.totalCostCents ||
+    right.finalConservativeEnergyKwh - left.finalConservativeEnergyKwh ||
+    left.addedHourIds.join("|").localeCompare(right.addedHourIds.join("|"))
+  );
+
+  const selected: T[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [...byEnergy.slice(0, half), ...byCost]) {
+    const key = candidate.addedHourIds.join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(candidate);
+    if (selected.length >= width) break;
+  }
+  return selected;
 }
 
 function buildSoftFillFallback({
