@@ -60,8 +60,10 @@ export function runV2StagedPublicationUnitTests() {
   assertEqual(args.p_replay_end_at, "2026-09-15T20:15:00.000Z", "captured planning clock preserved");
   assertEqual(args.p_price_fetch_end_at, "2026-09-17T20:15:00.000Z", "48-hour query end preserved");
   assertDeepEqual(args.p_constraint_plan_dates, ["2026-09-15", "2026-09-16"], "constraint scope covers both dates");
+  const profileSnapshot = args.p_expected_settings_snapshot.temperature_drop_profile;
+  if (!profileSnapshot) throw new Error("expected learned profile snapshot");
   assertEqual(
-    args.p_expected_settings_snapshot.temperature_drop_profile.profile_date,
+    profileSnapshot.profile_date,
     "2026-09-13",
     "publication settings snapshot binds the learned drop profile",
   );
