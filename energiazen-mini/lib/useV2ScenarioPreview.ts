@@ -53,6 +53,11 @@ export function useV2ScenarioPreview({
       return;
     }
 
+    // Draft inputs changed: never keep showing a plan calculated with the
+    // previous draft while a replacement request is in flight. Periodic
+    // refreshes inside this same effect may retain the current data.
+    setState({ data: null, error: null, loading: true });
+
     let active = true;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
