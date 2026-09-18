@@ -291,6 +291,41 @@ Deno.serve(async (request) => {
       publicationCandidate,
     });
 
+    // Once V2 owns automatic production, a later reserve/plan-unavailable run
+    // must invalidate Shelly's trust in an older validated plan. Otherwise a
+    // previously healthy empty (or otherwise stale) plan can remain trusted for
+    // MAX_BACKEND_VALIDATION_AGE_SECONDS even though V2 has just lost the
+    // physical state needed to validate it. Preserve the last validated plan
+    // fields for diagnostics/recovery, but mark the control plane unhealthy
+    // with a non-optimizer_invalid outcome so Shelly's existing trust logic
+    // debounces into backup_hours instead of continuing to execute the old plan.
+    if (
+      v2PublicationCutoverEnabled &&
+      controlPlaneState.heating_need_mode === "automatic" &&
+      (!result.available || !publicationPlan.available)
+    ) {
+      const unavailableReason =
+        result.reason ??
+        publicationPlan.reason ??
+        "plan_unavailable";
+      const { error: heartbeatError } = await supabase
+        .from("backend_heating_optimizer_state")
+        .update({
+          last_run_attempt_at: now.toISOString(),
+          health_status: "unhealthy",
+          last_outcome: "deferred",
+          reason: `v2_${unavailableReason}`,
+          updated_at: now.toISOString(),
+        })
+        .eq("id", 1);
+
+      if (heartbeatError) {
+        throw new Error(
+          `Failed to invalidate V2 backend heartbeat: ${heartbeatError.message}`,
+        );
+      }
+    }
+
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
       run_at: now.toISOString(), replay_start_at: replayStart.toISOString(), replay_end_at: now.toISOString(),
       latest_tank_reading_at: latestRawReadingAt, reading_count: result.readingCount,
