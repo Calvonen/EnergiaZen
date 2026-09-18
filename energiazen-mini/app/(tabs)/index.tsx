@@ -116,6 +116,7 @@ import {
 import { validateSettingsDraft } from "@/lib/settingsDraft";
 import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { useV2HomeReserve } from "@/lib/useV2HomeReserve";
+import { useV2ScenarioPreview } from "@/lib/useV2ScenarioPreview";
 import { supabase } from "@/lib/supabase";
 import {
   buildHourlyTemperatureDropProfileResult,
@@ -1702,6 +1703,46 @@ export default function HomeScreen() {
     scenarioSettings.heatingNeedMode === "automatic" &&
     hasUnsavedChanges &&
     planView === "scenario";
+  const v2ScenarioPreview = useV2ScenarioPreview({
+    enabled:
+      isV2AutomaticScenario &&
+      scenarioValidation.errors.length === 0,
+    settings: scenarioSettings,
+  });
+  const v2ScenarioSelectedHours = useMemo(
+    () =>
+      (v2ScenarioPreview.data?.selected_heating_hour_ids ?? []).map((hourId) => {
+        const date = new Date(hourId);
+        const priceHour = hourlyPrices.find(
+          (item) => item.startDate === hourId,
+        );
+        const cost = priceHour
+          ? calculatePlannedHeatingHourCostEuros({
+              spotPriceCentsPerKwh: priceHour.price,
+            })
+          : null;
+        return {
+          id: hourId,
+          period:
+            getFinnishDateKey(hourId) === todayPlanDate
+              ? "Tänään"
+              : getFinnishDateKey(hourId) === tomorrowPlanDate
+                ? "Huomenna"
+                : "",
+          timeLabel: formatHeatingHourRange(date),
+          priceLabel:
+            priceHour ? `${formatFinnishDecimal(priceHour.price)} c/kWh` : null,
+          costLabel:
+            cost === null ? null : `n. ${cost.toFixed(2).replace(".", ",")} €`,
+        };
+      }),
+    [
+      hourlyPrices,
+      todayPlanDate,
+      tomorrowPlanDate,
+      v2ScenarioPreview.data?.selected_heating_hour_ids,
+    ],
+  );
   const scenarioPlanPresentation =
     hasUnsavedChanges &&
     scenarioValidation.errors.length === 0 &&
@@ -3496,7 +3537,7 @@ export default function HomeScreen() {
                     </Text>
                     <Text style={styles.scenarioBannerText}>
                       {isV2AutomaticScenario
-                        ? "Automaattiohjaus käyttää V2-energiamallia. Tallentamattomista asetuksista ei näytetä vanhan suihkumallin ennustetta; uusi V2-suunnitelma lasketaan tallennuksen jälkeen."
+                        ? "Näytettävä V2-suunnitelma perustuu tallentamattomiin asetuksiin. Shelly käyttää edelleen viimeksi tallennettuja asetuksia ja käytössä olevaa lämmityssuunnitelmaa."
                         : "Näytettävä suunnitelma perustuu tallentamattomiin asetuksiin. Shelly käyttää edelleen viimeksi tallennettuja asetuksia ja käytössä olevaa lämmityssuunnitelmaa."}
                     </Text>
                     <View style={styles.scenarioViewToggle}>
@@ -3540,28 +3581,92 @@ export default function HomeScreen() {
                 ) : isV2AutomaticScenario ? (
                   <View style={styles.heatingPlanInfo}>
                     <Text style={styles.heatingPlanInfoTitle}>
-                      V2-skenaario
+                      Lämmityssuunnitelma · Skenaario
                     </Text>
-                    <Text style={styles.heatingPlanInfoText}>
-                      V2 käyttää energiavarausta (kWh / %), ei vanhaa suihkulaskentaa.
-                    </Text>
-                    {v2HomeReserve.available &&
-                    v2HomeReserve.percent !== null &&
-                    v2HomeReserve.energyKwh !== null &&
-                    v2HomeReserve.capacityKwh !== null ? (
+                    {v2ScenarioPreview.loading && !v2ScenarioPreview.data ? (
+                      <Text style={styles.heatingPlanInfoText}>
+                        Lasketaan V2-skenaariota…
+                      </Text>
+                    ) : v2ScenarioPreview.error ? (
+                      <Text style={styles.heatingPlanInfoText}>
+                        V2-skenaarion laskenta epäonnistui: {v2ScenarioPreview.error}
+                      </Text>
+                    ) : !v2ScenarioPreview.data?.available ? (
+                      <Text style={styles.heatingPlanInfoText}>
+                        V2-skenaariota ei voida laskea juuri nyt
+                        {v2ScenarioPreview.data?.reason
+                          ? `: ${v2ScenarioPreview.data.reason}`
+                          : "."}
+                      </Text>
+                    ) : (
                       <>
+                        {v2ScenarioSelectedHours.length > 0 ? (
+                          <View style={styles.heatingPlanHourList}>
+                            {v2ScenarioSelectedHours.map((hour) => (
+                              <Text
+                                key={hour.id}
+                                style={styles.heatingPlanHourText}
+                              >
+                                ⭐ {hour.period} {hour.timeLabel}
+                                {hour.priceLabel ? (
+                                  <>
+                                    {" · "}
+                                    <Text style={styles.heatingPlanHourPrice}>
+                                      {hour.priceLabel}
+                                    </Text>
+                                  </>
+                                ) : null}
+                                {hour.costLabel ? (
+                                  <>
+                                    {" · "}
+                                    <Text style={styles.heatingPlanHourPrice}>
+                                      {hour.costLabel}
+                                    </Text>
+                                  </>
+                                ) : null}
+                              </Text>
+                            ))}
+                          </View>
+                        ) : (
+                          <Text style={styles.heatingPlanInfoText}>
+                            Ei lämmitystunteja tällä skenaariolla.
+                          </Text>
+                        )}
+
                         <Text style={styles.heatingPlanForecastSubtitle}>
-                          Nykyinen energiavara
+                          Ennuste
                         </Text>
                         <Text style={styles.heatingPlanForecastText}>
-                          {formatFinnishDecimal(v2HomeReserve.percent)} % · {formatFinnishDecimal(v2HomeReserve.energyKwh)} / {formatFinnishDecimal(v2HomeReserve.capacityKwh)} kWh
+                          Nyt{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {v2ScenarioPreview.data.current_percent === null
+                              ? "—"
+                              : `${formatFinnishDecimal(v2ScenarioPreview.data.current_percent)} %`}
+                          </Text>
+                          {v2ScenarioPreview.data.current_conservative_energy_kwh !== null &&
+                          v2ScenarioPreview.data.energy_capacity_kwh !== null
+                            ? ` · ${formatFinnishDecimal(v2ScenarioPreview.data.current_conservative_energy_kwh)} / ${formatFinnishDecimal(v2ScenarioPreview.data.energy_capacity_kwh)} kWh`
+                            : ""}
+                        </Text>
+                        <Text style={styles.heatingPlanForecastText}>
+                          Alimmillaan{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {v2ScenarioPreview.data.forecast_min_percent === null
+                              ? "—"
+                              : `${formatFinnishDecimal(v2ScenarioPreview.data.forecast_min_percent)} %`}
+                          </Text>
+                        </Text>
+                        <Text style={styles.heatingPlanForecastText}>
+                          Jakson lopussa{" "}
+                          <Text style={styles.heatingPlanForecastValue}>
+                            {v2ScenarioPreview.data.forecast_final_percent === null
+                              ? "—"
+                              : `${formatFinnishDecimal(v2ScenarioPreview.data.forecast_final_percent)} %`}
+                          </Text>
                         </Text>
                       </>
-                    ) : (
-                      <Text style={styles.heatingPlanForecastText}>
-                        V2-energiavara ei ole juuri nyt saatavilla.
-                      </Text>
                     )}
+
                     <Text style={styles.heatingPlanLimitsSubtitle}>
                       V2-rajat
                     </Text>
@@ -3569,7 +3674,7 @@ export default function HomeScreen() {
                       Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
-                      Tallentamattomien asetusten V2-suunnitelma lasketaan vasta, kun asetukset tallennetaan.
+                      Esikatselu ei tallenna asetuksia eikä muuta Shellyn käytössä olevaa suunnitelmaa.
                     </Text>
                   </View>
                 ) : hasUnsavedChanges &&
