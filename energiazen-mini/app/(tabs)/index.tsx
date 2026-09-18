@@ -1696,8 +1696,16 @@ export default function HomeScreen() {
     storedHeatingPlanPresentation,
     storedHeatingPlanIsAuthoritative,
   );
+  const isV2AutomaticScenario =
+    BACKEND_PRIMARY_HEATING_PLAN_ENABLED &&
+    heatingControlSettingsSyncStatus !== "unsynced" &&
+    scenarioSettings.heatingNeedMode === "automatic" &&
+    hasUnsavedChanges &&
+    planView === "scenario";
   const scenarioPlanPresentation =
-    hasUnsavedChanges && scenarioValidation.errors.length === 0
+    hasUnsavedChanges &&
+    scenarioValidation.errors.length === 0 &&
+    !isV2AutomaticScenario
       ? scenarioOptimizerPresentation
       : null;
   const heatingPlanPresentation = hasUnsavedChanges
@@ -3487,7 +3495,9 @@ export default function HomeScreen() {
                       Skenaariotila käytössä
                     </Text>
                     <Text style={styles.scenarioBannerText}>
-                      Näytettävä suunnitelma perustuu tallentamattomiin asetuksiin. Shelly käyttää edelleen viimeksi tallennettuja asetuksia ja käytössä olevaa lämmityssuunnitelmaa.
+                      {isV2AutomaticScenario
+                        ? "Automaattiohjaus käyttää V2-energiamallia. Tallentamattomista asetuksista ei näytetä vanhan suihkumallin ennustetta; uusi V2-suunnitelma lasketaan tallennuksen jälkeen."
+                        : "Näytettävä suunnitelma perustuu tallentamattomiin asetuksiin. Shelly käyttää edelleen viimeksi tallennettuja asetuksia ja käytössä olevaa lämmityssuunnitelmaa."}
                     </Text>
                     <View style={styles.scenarioViewToggle}>
                       <Pressable
@@ -3526,6 +3536,41 @@ export default function HomeScreen() {
                         {issue.message}
                       </Text>
                     ))}
+                  </View>
+                ) : isV2AutomaticScenario ? (
+                  <View style={styles.heatingPlanInfo}>
+                    <Text style={styles.heatingPlanInfoTitle}>
+                      V2-skenaario
+                    </Text>
+                    <Text style={styles.heatingPlanInfoText}>
+                      V2 käyttää energiavarausta (kWh / %), ei vanhaa suihkulaskentaa.
+                    </Text>
+                    {v2HomeReserve.available &&
+                    v2HomeReserve.percent !== null &&
+                    v2HomeReserve.energyKwh !== null &&
+                    v2HomeReserve.capacityKwh !== null ? (
+                      <>
+                        <Text style={styles.heatingPlanForecastSubtitle}>
+                          Nykyinen energiavara
+                        </Text>
+                        <Text style={styles.heatingPlanForecastText}>
+                          {formatFinnishDecimal(v2HomeReserve.percent)} % · {formatFinnishDecimal(v2HomeReserve.energyKwh)} / {formatFinnishDecimal(v2HomeReserve.capacityKwh)} kWh
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={styles.heatingPlanForecastText}>
+                        V2-energiavara ei ole juuri nyt saatavilla.
+                      </Text>
+                    )}
+                    <Text style={styles.heatingPlanLimitsSubtitle}>
+                      V2-rajat
+                    </Text>
+                    <Text style={styles.heatingPlanLimitsText}>
+                      Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
+                    </Text>
+                    <Text style={styles.heatingPlanInfoReason}>
+                      Tallentamattomien asetusten V2-suunnitelma lasketaan vasta, kun asetukset tallennetaan.
+                    </Text>
                   </View>
                 ) : hasUnsavedChanges &&
                   planView === "scenario" &&
