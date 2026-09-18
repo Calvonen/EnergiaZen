@@ -301,7 +301,15 @@ Deno.serve(async (request) => {
       energy_capacity_kwh: energyCapacityKwh,
       current_percent:
         reserve.conservativeEnergyKwh !== null && energyCapacityKwh
-          ? round((reserve.conservativeEnergyKwh / energyCapacityKwh) * 100)
+          ? round(
+              Math.min(
+                Math.max(
+                  (reserve.conservativeEnergyKwh / energyCapacityKwh) * 100,
+                  0,
+                ),
+                100,
+              ),
+            )
           : null,
       safety_reserve_percent: reservePercents.safetyPercent,
       recommended_preheat_percent: reservePercents.targetPercent,
