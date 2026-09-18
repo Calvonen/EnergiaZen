@@ -173,6 +173,10 @@ declare
   v2_mirror_active boolean;
   v1_optimizer_active boolean;
   refreshed_count integer;
+  staged_hours smallint[];
+  production_hours smallint[];
+  production_mode text;
+  production_reason text;
 begin
   if new.heating_need_mode is distinct from 'automatic'
      or (
@@ -197,11 +201,28 @@ begin
     return new;
   end if;
 
-  -- The BEFORE readiness guard has already required a fresh current-day staged
-  -- publication. Re-touch exactly that row now that the settings row is
-  -- automatic. This fires mirror_v2_heating_plan_to_production() in the same
-  -- transaction, so production plan + Shelly heartbeat become authoritative
-  -- before the mode transition can commit.
+  select planned_hours
+    into staged_hours
+  from public.v2_heating_plan_publications
+  where plan_date = (now() at time zone 'Europe/Helsinki')::date
+    and published_at <= now()
+    and published_at >= now() - interval '15 minutes';
+
+  if staged_hours is null then
+    raise exception
+      using
+        errcode = 'check_violation',
+        message = 'Fresh V2 staged plan disappeared during automatic-mode transition';
+  end if;
+
+  -- The old production mirror deliberately refuses to overwrite a fixed row.
+  -- During a verified fixed-to-automatic handoff, remove only today's fixed
+  -- production row inside this same transaction so the staged replay can
+  -- insert the authoritative V2 automatic row.
+  delete from public.heating_plans
+  where plan_date = (now() at time zone 'Europe/Helsinki')::date
+    and mode = 'fixed';
+
   update public.v2_heating_plan_publications
   set updated_at = updated_at
   where plan_date = (now() at time zone 'Europe/Helsinki')::date
@@ -215,6 +236,20 @@ begin
       using
         errcode = 'check_violation',
         message = 'Fresh V2 staged plan disappeared during automatic-mode transition';
+  end if;
+
+  select planned_hours, mode, reason
+    into production_hours, production_mode, production_reason
+  from public.heating_plans
+  where plan_date = (now() at time zone 'Europe/Helsinki')::date;
+
+  if production_mode is distinct from 'automatic'
+     or production_reason is distinct from 'V2 energy plan'
+     or production_hours is distinct from staged_hours then
+    raise exception
+      using
+        errcode = 'check_violation',
+        message = 'V2 production plan was not activated during automatic-mode transition';
   end if;
 
   return new;
@@ -237,4 +272,4 @@ execute function public.activate_v2_plan_on_automatic_transition();
 
 comment on trigger activate_v2_plan_on_automatic_transition
 on public.heating_control_settings is
-  'Atomically replays the fresh current-day V2 staged plan after entering automatic mode so heating_plans and Shelly trust are updated before commit.';
+  'Atomically replaces today''s fixed production row with the fresh current-day V2 staged plan after entering automatic mode, then verifies the mirrored automatic row before commit.';
