@@ -37,7 +37,7 @@ function reserve(
   };
 }
 
-function learnedProfile(createdAt: string, dropCPerHour: number): LearnedTemperatureDropProfile {
+function learnedProfile(createdAt: string, energyLossKwhPerHour: number): LearnedTemperatureDropProfile {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     profile_date: createdAt.slice(0, 10),
@@ -45,10 +45,17 @@ function learnedProfile(createdAt: string, dropCPerHour: number): LearnedTempera
     source_start: new Date(Date.parse(createdAt) - 30 * 24 * 60 * 60 * 1000).toISOString(),
     source_end: createdAt,
     source_days: 30,
-    hourlyDrops: Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, dropCPerHour])),
+    hourlyDrops: Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, 0.5])),
+    hourlyEnergyLossesKwh: Object.fromEntries(
+      Array.from({ length: 24 }, (_, hour) => [hour, energyLossKwhPerHour]),
+    ),
     observationDaysByHour: Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, 30])),
-    general_fallback: dropCPerHour,
-    algorithm_version: "weighted-70-30-v1",
+    general_fallback: 0.5,
+    general_energy_loss_kwh: energyLossKwhPerHour,
+    hourly_energy_losses_kwh: Object.fromEntries(
+      Array.from({ length: 24 }, (_, hour) => [String(hour), energyLossKwhPerHour]),
+    ),
+    algorithm_version: "weighted-70-30-v1+physical-kwh-v2",
     created_at: createdAt,
   };
 }
