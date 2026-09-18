@@ -1,3 +1,9 @@
+import {
+  maxV2TargetReservePercent,
+  minV2TargetReservePercent,
+  recommendedV2PreheatPercent,
+} from "../_shared/energyModelV2/energyReservePercent.ts";
+
 export type V2SoftPreheatLevel = {
   available: boolean;
   currentConservativePercent: number | null;
@@ -8,23 +14,33 @@ export type V2SoftPreheatLevel = {
   reason: "available" | "invalid_energy_capacity" | "invalid_conservative_energy";
 };
 
-export const recommendedV2PreheatPercent = 90;
+export { recommendedV2PreheatPercent };
 
 export function evaluateV2SoftPreheatLevel({
   conservativeEnergyKwh,
   energyCapacityKwh,
+  recommendedPreheatPercent = recommendedV2PreheatPercent,
 }: {
   conservativeEnergyKwh: number;
   energyCapacityKwh: number;
+  recommendedPreheatPercent?: number;
 }): V2SoftPreheatLevel {
+  const configuredPreheatPercent = Number.isFinite(recommendedPreheatPercent)
+    ? clamp(
+        recommendedPreheatPercent,
+        minV2TargetReservePercent,
+        maxV2TargetReservePercent,
+      )
+    : recommendedV2PreheatPercent;
+
   if (!Number.isFinite(energyCapacityKwh) || energyCapacityKwh <= 0) {
-    return unavailable("invalid_energy_capacity");
+    return unavailable("invalid_energy_capacity", configuredPreheatPercent);
   }
   if (!Number.isFinite(conservativeEnergyKwh) || conservativeEnergyKwh < 0) {
-    return unavailable("invalid_conservative_energy");
+    return unavailable("invalid_conservative_energy", configuredPreheatPercent);
   }
 
-  const targetKwh = energyCapacityKwh * recommendedV2PreheatPercent / 100;
+  const targetKwh = energyCapacityKwh * configuredPreheatPercent / 100;
   const currentPercent = clamp(conservativeEnergyKwh / energyCapacityKwh * 100, 0, 100);
   const headroomKwh = Math.max(targetKwh - conservativeEnergyKwh, 0);
 
@@ -33,7 +49,7 @@ export function evaluateV2SoftPreheatLevel({
     currentConservativePercent: round(currentPercent),
     preheatHeadroomKwh: round(headroomKwh),
     recommendedPreheatEnergyKwh: round(headroomKwh),
-    recommendedPreheatPercent: recommendedV2PreheatPercent,
+    recommendedPreheatPercent: configuredPreheatPercent,
     recommendedPreheatTargetKwh: round(targetKwh),
     reason: "available",
   };
@@ -41,13 +57,14 @@ export function evaluateV2SoftPreheatLevel({
 
 function unavailable(
   reason: Exclude<V2SoftPreheatLevel["reason"], "available">,
+  recommendedPreheatPercent: number,
 ): V2SoftPreheatLevel {
   return {
     available: false,
     currentConservativePercent: null,
     preheatHeadroomKwh: null,
     recommendedPreheatEnergyKwh: null,
-    recommendedPreheatPercent: recommendedV2PreheatPercent,
+    recommendedPreheatPercent,
     recommendedPreheatTargetKwh: null,
     reason,
   };

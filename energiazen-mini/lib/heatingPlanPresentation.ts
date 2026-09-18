@@ -377,7 +377,7 @@ export function buildStoredHeatingPlanPresentation({
     limitsSectionLabel: "V2-rajat",
     limitsSummary,
     priceToleranceSummary: null,
-    reason: "V2 optimoi energiavaran turvallisuusrajan ja hinnan perusteella; 90 % on pehmeä esilämmityssuositus.",
+    reason: `V2 optimoi energiavaran turvallisuusrajan ja hinnan perusteella; ${formatFinnishDecimal(recommendedPreheatPercent)} % on pehmeä esilämmityssuositus.`,
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
     selectedHours: selectedHours.map(formatSelectedHour),
     statusSummary: v2ForecastAvailable

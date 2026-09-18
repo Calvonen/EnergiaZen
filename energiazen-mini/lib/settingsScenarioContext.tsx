@@ -9,7 +9,12 @@ import {
   useState,
 } from "react";
 
-import { defaultSettings, EnergiaZenSettings, loadSettings } from "./settings";
+import {
+  defaultSettings,
+  EnergiaZenSettings,
+  loadSettings,
+  saveSettings,
+} from "./settings";
 import {
   SettingsScenarioState,
   commitSettingsScenario,
@@ -25,6 +30,8 @@ import {
   mergeHeatingControlSettingsBackfillPayload,
   type HeatingControlSettingsCompletenessRow,
 } from "./heatingControlSettingsBackfill";
+import { normalizeV2ReservePercents } from "./energyModelV2/energyReservePercent";
+import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline";
 
 // Retry cadence for a failed backfill check (network error, remote write
 // error, etc.) - deliberately not aggressive: while unsynced,
@@ -32,7 +39,7 @@ import {
 // publisher active (see app/(tabs)/index.tsx), so nothing is left without
 // working automatic publication while this keeps retrying in the
 // background.
-const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;
+const heatingControlSettingsSyncRetryIntervalMs = 5 * 60 * 1000;\nconst recommendationHydrationTimeoutMs = 15_000;
 
 type DraftSettingsUpdate =
   | EnergiaZenSettings
@@ -75,6 +82,16 @@ const SettingsScenarioContext = createContext<SettingsScenarioContextValue | nul
   null,
 );
 
+function isPersistedV2Recommendation(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 5 &&
+    value <= 95 &&
+    value % 5 === 0
+  );
+}
+
 export function SettingsScenarioProvider({ children }: PropsWithChildren) {
   const [scenarioState, setScenarioState] = useState(() =>
     createSettingsScenarioState(defaultSettings),
@@ -84,14 +101,66 @@ export function SettingsScenarioProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let isMounted = true;
 
-    void loadSettings().then((settings) => {
+    async function loadAuthoritativeSettings() {
+      let settings = await loadSettings();
+
+      // The backend recommendation is authoritative across installs. Hydrate
+      // it before exposing Settings as loaded so a fresh install/second device
+      // cannot render the local 90% default while Home and the optimizer are
+      // already using a preserved 75/80/85% backend value. A transient remote
+      // read failure keeps the local value for this mount; the full-save path
+      // still performs its own fail-closed pre-read before any upsert.
+      const hydrationController = new AbortController();
+      const hydrationTimeout = setTimeout(
+        () => hydrationController.abort(),
+        recommendationHydrationTimeoutMs,
+      );
+
+      try {
+        const { data, error } = await supabase
+          .from("heating_control_settings")
+          .select("v2_target_reserve_percent")
+          .eq("id", 1)
+          .abortSignal(hydrationController.signal)
+          .maybeSingle();
+
+        if (error) {
+          throw error;
+        }
+
+        if (isPersistedV2Recommendation(data?.v2_target_reserve_percent)) {
+          const normalizedRecommendation = normalizeV2ReservePercents({
+            targetPercent: data.v2_target_reserve_percent,
+          }).targetPercent;
+
+          if (settings.v2TargetReservePercent !== normalizedRecommendation) {
+            settings = {
+              ...settings,
+              v2TargetReservePercent: normalizedRecommendation,
+            };
+            await saveSettings(settings);
+          }
+        }
+      } catch {
+        // Settings remain usable offline or after a bounded hydration timeout.
+        // A later save re-reads the backend recommendation before writing, so
+        // this fallback cannot overwrite an authoritative remote value merely
+        // because startup hydration failed.
+      } finally {
+        clearTimeout(hydrationTimeout);
+      }
+
+      setLoadedV2TargetReservePercent(settings.v2TargetReservePercent);
+
       if (!isMounted) {
         return;
       }
 
       setScenarioState(createSettingsScenarioState(settings));
       setAreSettingsLoaded(true);
-    });
+    }
+
+    void loadAuthoritativeSettings();
 
     return () => {
       isMounted = false;

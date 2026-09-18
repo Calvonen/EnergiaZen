@@ -50,7 +50,7 @@ export type WarmWaterCardProps = {
 export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
   const theme = getWarmWaterCardTheme();
   const [reserve, setReserve] = useState<V2HomeReserveSnapshot | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());\n  const [pendingRevision, setPendingRevision] = useState(0);\n\n  useEffect(() =>\n    subscribePendingV2Recommendation(() =>\n      setPendingRevision((revision) => revision + 1),\n    ),\n  []);
 
   useEffect(() => {
     let active = true;
@@ -109,7 +109,7 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
 
   const reservePresentation = useMemo(
     () => buildV2HomeReservePresentation(reserve, nowMs),
-    [nowMs, reserve],
+    [nowMs, pendingRevision, reserve],
   );
 
   const presentation = useMemo(() => {

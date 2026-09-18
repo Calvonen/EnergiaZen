@@ -96,6 +96,11 @@ Deno.serve(async (request) => {
       targetPercent: Number(settingsResult.data.v2_target_reserve_percent),
       safetyPercent: Number(settingsResult.data.v2_safety_reserve_percent),
     });
+    const recommendedPreheatPercent = reservePercents.targetPercent;
+    // The ordered reserve-threshold model now represents hard safety only.
+    // Keep its target equal to the safety floor and carry the configurable
+    // economic preheat recommendation separately into advisory telemetry.
+    const hardTargetPercent = reservePercents.safetyPercent;
     const priceCeilingSetting = buildV2PriceCeilingSettingTelemetry(
       settingsResult.data.v2_max_billed_price_cents_kwh,
     );
@@ -106,7 +111,7 @@ Deno.serve(async (request) => {
       maxTankTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.targetPercent, energyCapacityKwh);
+    const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
     const safetyEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
 
     const baseResult = runLiveReserveShadow({
@@ -143,25 +148,77 @@ Deno.serve(async (request) => {
       maxPreheatHours: automaticMaxHeatingHours,
       now,
       prices,
+      recommendedPreheatPercent,
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
+    });
+
+    const publicationSelectedHeatingHourIds = (() => {
+      if (!preheatAdvisory.available || preheatAdvisory.reason !== "recommended") {
+        return [...plan.selectedHeatingHourIds];
+      }
+
+      const actuallyDisplacedBaselineHourIds = new Set(
+        preheatAdvisory.strategy === "marginal_displacement" && preheatAdvisory.marginalCost.available
+          ? preheatAdvisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
+          : [],
+      );
+      const preservedBaselineHourIds = plan.selectedHeatingHourIds.filter(
+        (hourId) => !actuallyDisplacedBaselineHourIds.has(hourId),
+      );
+
+      return [...new Set([
+        ...preservedBaselineHourIds,
+        ...preheatAdvisory.recommendedPreheatHourIds,
+      ])].sort((left, right) => Date.parse(left) - Date.parse(right));
+    })();
+
+    // Re-run the forecast with the exact composed publication hours forced as
+    // required and every other priced hour forbidden. This makes validation,
+    // persisted shadow telemetry, Home forecast and the staged candidate all
+    // describe the same plan instead of mixing the safety baseline forecast
+    // with a different advisory-composed publication schedule.
+    const publicationHourIdSet = new Set(publicationSelectedHeatingHourIds);
+    const publicationPlan = runLiveEnergyPlanShadow({
+      automaticMaxHeatingHours,
+      constraints: {
+        requiredHeatingHourIds: publicationSelectedHeatingHourIds,
+        forbiddenHeatingHourIds: prices
+          .map((price) => price.starts_at)
+          .filter((hourId) => !publicationHourIdSet.has(hourId)),
+      },
+      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      inletBaselineC,
+      maxTankTemperatureC,
+      now,
+      prices,
+      reserve: result,
     });
 
     const latestRawReadingAt = readings.length ? readings[readings.length - 1].created_at : null;
     const latestUsableReadingAt = deriveLatestUsableReadingAt(readings);
     const latestPublishableReadingAt = deriveLatestPublishableReadingAt(readings);
-    const publicationCandidate = captureV2PublicationCandidate(plan);
+    // Staged publication composes the validated hard-safety baseline with the
+    // economic preheat advisory. Only baseline hours that the advisory actually
+    // pairs for displacement may be removed; every unmatched safety hour is
+    // preserved. Production cutover remains disabled here.
+    const publicationCandidate = captureV2PublicationCandidate(
+      publicationPlan,
+      publicationSelectedHeatingHourIds,
+    );
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2StagedPublicationEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan,
+      plan: publicationPlan,
       publicationCandidate,
     });
     const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan,
+      plan: publicationPlan,
       publicationCandidate,
     });
 
@@ -173,7 +230,7 @@ Deno.serve(async (request) => {
         draws,
         latestUsableReadingAt: latestPublishableReadingAt,
         now,
-        plan,
+        plan: publicationPlan,
         prices,
         priceFetchEnd,
         readings,
@@ -204,23 +261,24 @@ Deno.serve(async (request) => {
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       conservative_energy_kwh: result.conservativeEnergyKwh, energy_capacity_kwh: energyCapacityKwh,
-      safety_reserve_percent: reservePercents.safetyPercent, target_reserve_percent: reservePercents.targetPercent,
+      safety_reserve_percent: reservePercents.safetyPercent, target_reserve_percent: hardTargetPercent,
+      recommended_preheat_percent: recommendedPreheatPercent,
       safety_energy_kwh: result.safetyEnergyKwh, target_energy_kwh: result.targetEnergyKwh,
       v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
       v1_shadow_run_id: v1Shadow?.id ?? null, v1_run_at: v1Shadow?.run_at ?? null,
       v1_target_hours: v1Shadow?.target_hours ?? null, v1_needs_energy_recovery: null,
-      comparison: "v1_unavailable", plan_available: plan.available, plan_valid: plan.valid,
-      plan_unavailable_reason: plan.available ? null : plan.reason, plan_assumption: plan.assumption,
-      forecast_horizon_end_at: plan.forecastHorizonEndAt,
-      forecast_standing_loss_kwh_per_hour: plan.standingLossKwhPerHour,
-      forecast_final_conservative_energy_kwh: plan.finalConservativeEnergyKwh,
-      forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
-      forecast_first_target_miss_at: plan.firstTargetMissAt,
-      forecast_first_safety_violation_at: plan.firstSafetyViolationAt,
-      plan_selected_heating_hour_ids: plan.selectedHeatingHourIds,
-      plan_selected_heating_energy_kwh: plan.selectedHeatingEnergyKwh,
-      plan_total_cost_cents: plan.totalCostCents, plan_candidate_count: plan.candidateCount,
-      plan_evaluated_combination_count: plan.evaluatedCombinationCount,
+      comparison: "v1_unavailable", plan_available: publicationPlan.available, plan_valid: publicationPlan.valid,
+      plan_unavailable_reason: publicationPlan.available ? null : publicationPlan.reason, plan_assumption: publicationPlan.assumption,
+      forecast_horizon_end_at: publicationPlan.forecastHorizonEndAt,
+      forecast_standing_loss_kwh_per_hour: publicationPlan.standingLossKwhPerHour,
+      forecast_final_conservative_energy_kwh: publicationPlan.finalConservativeEnergyKwh,
+      forecast_min_conservative_energy_kwh: publicationPlan.minimumConservativeEnergyKwh,
+      forecast_first_target_miss_at: publicationPlan.firstTargetMissAt,
+      forecast_first_safety_violation_at: publicationPlan.firstSafetyViolationAt,
+      plan_selected_heating_hour_ids: publicationPlan.selectedHeatingHourIds,
+      plan_selected_heating_energy_kwh: publicationPlan.selectedHeatingEnergyKwh,
+      plan_total_cost_cents: publicationPlan.totalCostCents, plan_candidate_count: publicationPlan.candidateCount,
+      plan_evaluated_combination_count: publicationPlan.evaluatedCombinationCount,
       preheat_advisory: preheatAdvisory,
       source: "v2_energy_reserve_live_shadow",
     });
@@ -229,21 +287,22 @@ Deno.serve(async (request) => {
     return jsonResponse({
       status: "ok", available: result.available, comparison: "v1_unavailable",
       energy_capacity_kwh: energyCapacityKwh, safety_reserve_percent: reservePercents.safetyPercent,
-      target_reserve_percent: reservePercents.targetPercent, safety_energy_kwh: result.safetyEnergyKwh,
+      target_reserve_percent: hardTargetPercent, recommended_preheat_percent: recommendedPreheatPercent,
+      safety_energy_kwh: result.safetyEnergyKwh,
       target_energy_kwh: result.targetEnergyKwh, remaining_energy_kwh: result.remainingEnergyKwh,
       conservative_energy_kwh: result.conservativeEnergyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
-      v1_needs_energy_recovery: null, reason: result.reason, plan_available: plan.available,
-      plan_valid: plan.valid, plan_reason: plan.reason,
+      v1_needs_energy_recovery: null, reason: result.reason, plan_available: publicationPlan.available,
+      plan_valid: publicationPlan.valid, plan_reason: publicationPlan.reason,
       plan_required_heating_hour_ids: constraints.requiredHeatingHourIds,
       plan_forbidden_heating_hour_ids: constraints.forbiddenHeatingHourIds,
-      plan_selected_heating_hour_ids: plan.selectedHeatingHourIds,
-      plan_selected_heating_energy_kwh: plan.selectedHeatingEnergyKwh,
-      plan_total_cost_cents: plan.totalCostCents, forecast_horizon_end_at: plan.forecastHorizonEndAt,
-      forecast_final_conservative_energy_kwh: plan.finalConservativeEnergyKwh,
-      forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
+      plan_selected_heating_hour_ids: publicationPlan.selectedHeatingHourIds,
+      plan_selected_heating_energy_kwh: publicationPlan.selectedHeatingEnergyKwh,
+      plan_total_cost_cents: publicationPlan.totalCostCents, forecast_horizon_end_at: publicationPlan.forecastHorizonEndAt,
+      forecast_final_conservative_energy_kwh: publicationPlan.finalConservativeEnergyKwh,
+      forecast_min_conservative_energy_kwh: publicationPlan.minimumConservativeEnergyKwh,
       preheat_advisory: preheatAdvisory,
       price_ceiling_setting: priceCeilingSetting,
       staged_publication_enabled: v2StagedPublicationEnabled,

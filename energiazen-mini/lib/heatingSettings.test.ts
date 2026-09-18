@@ -2,6 +2,11 @@ import { selectRemainingFixedHeatingHours } from "./fixedHeatingPlan";
 import { normalizeStoredHeatingHours } from "./heatingHourSettings";
 import { getHeatingModeSettingKeys } from "./heatingModeSettings";
 import { createHeatingOptimizationSettings } from "./heatingOptimizer";
+import {
+  currentSettingsStorageMigrationVersion,
+  mergeSettingsForStorage,
+  migrateStoredSettings,
+} from "./settingsStorageMigration";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -23,6 +28,90 @@ function hour(id: string, start: string, price: number) {
 }
 
 export function runHeatingSettingsUnitTests() {
+  const preservedLegacySeventyFive = migrateStoredSettings(
+    { v2TargetReservePercent: 75 },
+    null,
+  );
+  assertEqual(
+    {
+      changed: preservedLegacySeventyFive.changed,
+      migrationVersion: preservedLegacySeventyFive.migrationVersion,
+      value: preservedLegacySeventyFive.settings.v2TargetReservePercent,
+    },
+    {
+      changed: false,
+      migrationVersion: currentSettingsStorageMigrationVersion,
+      value: 75,
+    },
+    "vanha 75 prosentin arvo sailyy koska sen alkuperaa oletuksena tai kayttajavalintana ei voida erottaa",
+  );
+
+  const alreadyVersionedUserChoice = migrateStoredSettings(
+    { v2TargetReservePercent: 75 },
+    currentSettingsStorageMigrationVersion,
+  );
+  assertEqual(
+    {
+      changed: alreadyVersionedUserChoice.changed,
+      value: alreadyVersionedUserChoice.settings.v2TargetReservePercent,
+    },
+    { changed: false, value: 75 },
+    "versionoidun migraation jalkeen kayttajan 75 prosenttia sailyy",
+  );
+
+  const existingCustomRecommendation = migrateStoredSettings(
+    { v2TargetReservePercent: 80 },
+    null,
+  );
+  assertEqual(
+    {
+      changed: existingCustomRecommendation.changed,
+      value: existingCustomRecommendation.settings.v2TargetReservePercent,
+    },
+    { changed: false, value: 80 },
+    "vanha ei-oletusarvoinen kayttajavalinta sailyy migraatiossa",
+  );
+
+  assertEqual(
+    mergeSettingsForStorage({
+      migrationVersion: currentSettingsStorageMigrationVersion + 1,
+      normalizedSettings: {
+        heatingNeedMode: "fixed",
+        v2TargetReservePercent: 80,
+      },
+      rawStoredSettings: {
+        futureOnlySetting: "preserve-me",
+        heatingNeedMode: "automatic",
+        v2TargetReservePercent: 90,
+      },
+    }),
+    {
+      futureOnlySetting: "preserve-me",
+      heatingNeedMode: "fixed",
+      v2TargetReservePercent: 80,
+    },
+    "rollback-tallennus sailyttaa tulevan version tuntemattomat kentat ja paivittaa tunnetut kentat",
+  );
+
+  assertEqual(
+    mergeSettingsForStorage({
+      migrationVersion: currentSettingsStorageMigrationVersion,
+      normalizedSettings: {
+        heatingNeedMode: "fixed",
+        v2TargetReservePercent: 80,
+      },
+      rawStoredSettings: {
+        futureOnlySetting: "drop-on-current-schema",
+        heatingNeedMode: "automatic",
+      },
+    }),
+    {
+      heatingNeedMode: "fixed",
+      v2TargetReservePercent: 80,
+    },
+    "nykyisen skeemaversion tallennus ei kanna tuntemattomia kenttia eteenpain",
+  );
+
   assertEqual(
     normalizeStoredHeatingHours({ heatingHoursPerDay: 4 }),
     { automaticMaxHeatingHours: 4, fixedHeatingHoursPerDay: 4 },

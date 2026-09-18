@@ -49,6 +49,7 @@ import {
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
 import { reservePercentToKwh } from "@/lib/energyModelV2/energyReservePercent";
+import { V2_RECOMMENDED_PREHEAT_PERCENT } from "@/lib/v2HomeReservePresentation";
 
 type SettingsRow = {
   accent: string;
@@ -167,7 +168,7 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
   },
   v2TargetReservePercent: {
     max: 95,
-    min: 5,
+    min: 70,
     step: 5,
     unit: "%",
   },
@@ -450,16 +451,16 @@ export default function SettingsScreen() {
                 {
                   accent: "#36f4d4",
                   description:
-                    "V2-shadow pyrkii pitämään varaajan mallinnetusta energiakapasiteetista vähintään tämän osuuden. Tämä asetus ei vielä ohjaa Shellyä.",
+                    `Pehmeä esilämmityssuositus. V2 voi nostaa energiavaraa tätä tasoa kohti, kun halpa tunti voidaan hyödyntää taloudellisesti. Tämä ei ole kova vähimmäisraja. Oletus on ${V2_RECOMMENDED_PREHEAT_PERCENT} %.`,
                   key: "v2TargetReservePercent",
-                  label: "Tavoitevaraus",
+                  label: "Esilämmityssuositus",
                   secondaryValue: formatV2ReserveKwh(settings.v2TargetReservePercent),
                   value: `${settings.v2TargetReservePercent} %`,
                 },
                 {
                   accent: "#ffcf5a",
                   description:
-                    "V2-shadown konservatiivinen energiamäärä ei saa laskea tämän osuuden alle. Tämä asetus vaikuttaa vain rinnakkaiseen V2-laskentaan.",
+                    "V2:n kova turvaraja: konservatiivisen energiamäärän ei saa ennusteessa laskea tämän osuuden alle. Shadow-vaiheessa tämä ei vielä ohjaa Shellyä.",
                   key: "v2SafetyReservePercent",
                   label: "Turvaraja",
                   secondaryValue: formatV2ReserveKwh(settings.v2SafetyReservePercent),

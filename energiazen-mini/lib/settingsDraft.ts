@@ -1,4 +1,10 @@
-import type { EditableSettingKey, EnergiaZenSettings } from "./settings";
+import type { EditableSettingKey, EnergiaZenSettings } from "./settingsDefaults";
+import {
+  maxV2SafetyReservePercent,
+  maxV2TargetReservePercent,
+  minV2TargetReservePercent,
+} from "./energyModelV2/energyReservePercent";
+import { setLoadedV2TargetReservePercent } from "./v2RecommendationSaveBaseline";
 
 export type SettingsValidationField =
   | EditableSettingKey
@@ -129,32 +135,23 @@ export function validateSettingsDraft(
 
   if (
     isFiniteNumber(v2TargetReservePercent) &&
-    (v2TargetReservePercent < 5 || v2TargetReservePercent > 95)
+    (v2TargetReservePercent < minV2TargetReservePercent ||
+      v2TargetReservePercent > maxV2TargetReservePercent)
   ) {
     errors.push({
       field: "v2TargetReservePercent",
-      message: "V2-tavoitevarauksen pitää olla välillä 5–95 %.",
+      message: `Esilämmityssuosituksen pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
     });
   }
 
   if (
     isFiniteNumber(v2SafetyReservePercent) &&
-    (v2SafetyReservePercent < 0 || v2SafetyReservePercent > 95)
+    (v2SafetyReservePercent < 0 ||
+      v2SafetyReservePercent > maxV2SafetyReservePercent)
   ) {
     errors.push({
       field: "v2SafetyReservePercent",
-      message: "V2-turvarajan pitää olla välillä 0–95 %.",
-    });
-  }
-
-  if (
-    isFiniteNumber(v2SafetyReservePercent) &&
-    isFiniteNumber(v2TargetReservePercent) &&
-    v2SafetyReservePercent > v2TargetReservePercent
-  ) {
-    errors.push({
-      field: "v2SafetyReservePercent",
-      message: "V2-turvaraja ei voi ylittää tavoitevarausta.",
+      message: `V2-turvarajan pitää olla välillä 0–${maxV2SafetyReservePercent} %.`,
     });
   }
 
@@ -266,23 +263,13 @@ export function validateSettingsDraft(
   }
 
   if (
-    isFiniteNumber(v2TargetReservePercent) &&
-    v2TargetReservePercent >= 90
-  ) {
-    warnings.push({
-      field: "v2TargetReservePercent",
-      message: "Korkea V2-tavoite voi lisätä lämmityskertoja.",
-    });
-  }
-
-  if (
     isFiniteNumber(v2SafetyReservePercent) &&
     isFiniteNumber(v2TargetReservePercent) &&
-    v2TargetReservePercent - v2SafetyReservePercent <= 10
+    Math.abs(v2TargetReservePercent - v2SafetyReservePercent) <= 10
   ) {
     warnings.push({
       field: "v2SafetyReservePercent",
-      message: "V2-turvaraja on lähellä tavoitevarausta.",
+      message: "V2-turvaraja on hyvin lähellä esilämmityssuositusta.",
     });
   }
 
@@ -379,6 +366,11 @@ export async function persistSettingsDraft({
   } catch {
     throw new SettingsDraftLocalSaveError();
   }
+
+  // Preserve whether the recommendation was actually edited in this draft.
+  // The remote writer uses this loaded baseline to decide whether it may
+  // merge the authoritative backend recommendation before a full-row upsert.
+  setLoadedV2TargetReservePercent(savedSettings.v2TargetReservePercent);
 
   try {
     await saveRemote(draftSettings);
