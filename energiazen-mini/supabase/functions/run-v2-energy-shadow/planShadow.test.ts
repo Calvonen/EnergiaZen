@@ -1,5 +1,6 @@
 import { runLiveEnergyPlanShadow, type ShadowElectricityPrice } from "./planShadow";
 import type { LiveReserveShadowResult } from "./logic";
+import type { LearnedTemperatureDropProfile } from "./learnedDropProfile";
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);
@@ -36,6 +37,22 @@ function reserve(
   };
 }
 
+function learnedProfile(createdAt: string, dropCPerHour: number): LearnedTemperatureDropProfile {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    profile_date: createdAt.slice(0, 10),
+    timezone: "Europe/Helsinki",
+    source_start: new Date(Date.parse(createdAt) - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    source_end: createdAt,
+    source_days: 30,
+    hourlyDrops: Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, dropCPerHour])),
+    observationDaysByHour: Object.fromEntries(Array.from({ length: 24 }, (_, hour) => [hour, 30])),
+    general_fallback: dropCPerHour,
+    algorithm_version: "weighted-70-30-v1",
+    created_at: createdAt,
+  };
+}
+
 function price(startsAt: string, cents: number): ShadowElectricityPrice {
   const start = Date.parse(startsAt);
   return {
@@ -68,6 +85,43 @@ export function runLivePlanShadowUnitTests() {
   assertEqual(healthy.selectedHeatingHourIds.length, 0, "healthy horizon does not add heating");
   assert(healthy.standingLossKwhPerHour !== null && healthy.standingLossKwhPerHour > 0, "worst-case standing loss is explicit");
   assertEqual(healthy.forecastHorizonEndAt, "2026-09-15T08:00:00.000Z", "horizon end is persisted");
+
+
+  const learned = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: contiguous,
+    reserve: reserve(13),
+    learnedDropProfile: learnedProfile("2026-09-13T01:30:00.000Z", 2),
+  });
+  assert(learned.learnedDropProfileUsed, "fresh learned 30-day profile is used");
+  assertEqual(learned.learnedDropProfileDate, "2026-09-13", "used profile date is exposed");
+  assert(
+    learned.maximumModeledLossKwhPerHour !== null &&
+      learned.standingLossKwhPerHour !== null &&
+      learned.maximumModeledLossKwhPerHour > learned.standingLossKwhPerHour,
+    "learned hourly drop can raise modeled loss above the physical standing-loss floor",
+  );
+
+  const staleLearned = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: contiguous,
+    reserve: reserve(13),
+    learnedDropProfile: learnedProfile("2026-08-01T01:30:00.000Z", 2),
+  });
+  assert(!staleLearned.learnedDropProfileUsed, "stale learned profile is ignored");
+  assertEqual(
+    staleLearned.maximumModeledLossKwhPerHour,
+    staleLearned.standingLossKwhPerHour,
+    "stale profile falls back to physical standing-loss forecast",
+  );
 
   const belowTargetButSafe = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
