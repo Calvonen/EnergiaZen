@@ -114,12 +114,14 @@ export function applyReserveThresholds(
 }
 
 export function runLiveReserveShadow({
+  coldInletDrawBaselineC,
   maxTankTemperatureC,
   now,
   readings,
   reliableDraws,
   v1Shadow,
 }: {
+  coldInletDrawBaselineC?: number | null;
   maxTankTemperatureC: number;
   now: Date;
   readings: ShadowTankReading[];
@@ -179,9 +181,14 @@ export function runLiveReserveShadow({
   // `ordered` is the authoritative replay input. Derive the baseline from it so
   // reserve energy and percentage capacity always use identical observations.
   const inletBaseline = deriveUsableReadingInletBaselineC(ordered) as number;
+  const drawBaselineC =
+    typeof coldInletDrawBaselineC === "number" &&
+      Number.isFinite(coldInletDrawBaselineC)
+      ? coldInletDrawBaselineC
+      : inletBaseline;
   const draws = reliableDraws.filter(isReliableDraw);
   const drawResolution = resolveLiveDrawReanchors({
-    coldInletBaselineC: inletBaseline,
+    coldInletBaselineC: drawBaselineC,
     readings: ordered,
     reliableDraws: draws,
   });
