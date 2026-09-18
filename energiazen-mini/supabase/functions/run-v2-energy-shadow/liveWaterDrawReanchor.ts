@@ -1,4 +1,7 @@
-import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
+import {
+  detectsWaterDraw,
+  waterDrawDetectionLimits,
+} from "../_shared/waterDrawDetection.ts";
 
 export type LiveDrawReading = {
   created_at: string;
@@ -181,12 +184,22 @@ function currentSampleHasDrawSignal(
     return false;
   }
 
+  const drawCandidateIndex = findLatestDrawCandidateIndex(inletSamples);
+  if (drawCandidateIndex === null) {
+    return false;
+  }
+
   // A relative inlet drop is only a candidate. Confirm a real draw only after
-  // the inlet has reached the learned cold-water level and stayed there for at
-  // least one minute. This prevents normal probe drift (for example 20 -> 14 C)
-  // from blocking V2 when true mains-water draws are observed around the
-  // confirmed minimum inlet baseline.
-  if (!hasConfirmedColdInletDwell(window, coldInletBaselineC)) {
+  // that candidate has occurred and the inlet has then reached the learned
+  // cold-water level for at least one minute. Cold samples that happened
+  // earlier in the trailing window cannot validate a later unrelated warm
+  // drift.
+  if (
+    !hasConfirmedColdInletDwell(
+      window.slice(drawCandidateIndex),
+      coldInletBaselineC,
+    )
+  ) {
     return false;
   }
 
@@ -196,6 +209,48 @@ function currentSampleHasDrawSignal(
   // sampling gap, missing tank value or material tank-temperature drop keeps the
   // original fail-closed draw classification.
   return !isHeaterOnlyInletOscillation(window);
+}
+
+function findLatestDrawCandidateIndex(
+  samples: { inletTemperatureC: number | null; time: number }[],
+) {
+  let latestCandidateIndex: number | null = null;
+
+  for (let laterIndex = 1; laterIndex < samples.length; laterIndex += 1) {
+    const later = samples[laterIndex];
+    if (
+      later.inletTemperatureC === null ||
+      !Number.isFinite(later.inletTemperatureC) ||
+      !Number.isFinite(later.time)
+    ) {
+      continue;
+    }
+
+    for (let earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex -= 1) {
+      const earlier = samples[earlierIndex];
+      const minutesApart = (later.time - earlier.time) / 60_000;
+
+      if (minutesApart > waterDrawDetectionLimits.windowMinutes) {
+        break;
+      }
+      if (
+        earlier.inletTemperatureC === null ||
+        !Number.isFinite(earlier.inletTemperatureC) ||
+        !Number.isFinite(earlier.time)
+      ) {
+        continue;
+      }
+      if (
+        earlier.inletTemperatureC - later.inletTemperatureC >=
+        waterDrawDetectionLimits.minDropCelsius
+      ) {
+        latestCandidateIndex = laterIndex;
+        break;
+      }
+    }
+  }
+
+  return latestCandidateIndex;
 }
 
 function hasConfirmedColdInletDwell(
