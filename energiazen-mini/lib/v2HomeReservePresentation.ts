@@ -10,6 +10,7 @@ import {
 } from "./v2RecommendationSaveBaseline";
 
 export const HOME_RESERVE_MAX_AGE_MS = 30 * 60_000;
+export const HOME_RESERVE_WATER_DRAW_FALLBACK_MAX_AGE_MS = 24 * 60 * 60_000;
 export const V2_RECOMMENDED_PREHEAT_PERCENT = recommendedV2PreheatPercent;
 
 export type V2HomeReserveSnapshot = {
@@ -124,9 +125,19 @@ export function buildV2HomeReservePresentation(
   const forecastMinimumEnergy = reserve?.forecast_min_conservative_energy_kwh;
   const forecastFinalEnergy = reserve?.forecast_final_conservative_energy_kwh;
   const forecastHorizonEndAt = reserve?.forecast_horizon_end_at;
+  const runAtMs = Date.parse(reserve?.run_at ?? "");
+  const sourceAgeMs = Number.isFinite(runAtMs) ? nowMs - runAtMs : Number.NaN;
+  const fresh = isV2HomeReserveSnapshotFresh(reserve?.run_at, nowMs);
+  const waterDrawFallback =
+    reserve?.available === true &&
+    reserve?.latest_run_available === false &&
+    reserve?.latest_unavailable_reason === "unresolved_water_draw_detected" &&
+    Number.isFinite(sourceAgeMs) &&
+    sourceAgeMs >= 0 &&
+    sourceAgeMs <= HOME_RESERVE_WATER_DRAW_FALLBACK_MAX_AGE_MS;
   const valid =
     reserve?.available === true &&
-    isV2HomeReserveSnapshotFresh(reserve.run_at, nowMs) &&
+    (fresh || waterDrawFallback) &&
     typeof capacity === "number" &&
     Number.isFinite(capacity) &&
     capacity > 0 &&
@@ -169,7 +180,6 @@ export function buildV2HomeReservePresentation(
   const percent = clamp((energy / capacity) * 100, 0, 100);
   const forecastMinimumPercent = clamp((forecastMinimumEnergy / capacity) * 100, 0, 100);
   const forecastFinalPercent = clamp((forecastFinalEnergy / capacity) * 100, 0, 100);
-  const runAtMs = Date.parse(reserve?.run_at ?? "");
   const latestRunAtMs = Date.parse(reserve?.latest_run_at ?? "");
   const sourceAgeMinutes = Number.isFinite(runAtMs) ? Math.max(0, (nowMs - runAtMs) / 60_000) : null;
   const isFallback = reserve?.latest_run_available === false ||
