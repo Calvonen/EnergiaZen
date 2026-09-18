@@ -31,7 +31,6 @@ const priceFetchWindowHours = 48;
 const pageSize = 1000;
 const activeBlockSafetyTopTemperatureC = 50;
 const v2StagedPublicationEnabled = true;
-const v2PublicationCutoverEnabled = false;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
 });
@@ -62,7 +61,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, cutoverStateResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -77,6 +76,7 @@ Deno.serve(async (request) => {
         .in("plan_date", [today, tomorrow]),
       supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
         .in("plan_date", [today, tomorrow]),
+      supabase.rpc("get_v2_publication_cutover_enabled"),
     ]);
 
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
@@ -84,12 +84,14 @@ Deno.serve(async (request) => {
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
+    if (cutoverStateResult.error) throw new Error(`Failed to resolve V2 production cutover state: ${cutoverStateResult.error.message}`);
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
+    const v2PublicationCutoverEnabled = cutoverStateResult.data === true;
     const maxTankTemperatureC = Number(settingsResult.data.max_tank_temperature);
     const automaticMaxHeatingHours = Number(settingsResult.data.automatic_max_heating_hours);
     const reservePercents = normalizeV2ReservePercents({
