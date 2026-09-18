@@ -18,10 +18,19 @@ begin
     where id = 1;
 
     if configured_mode = 'automatic' then
-      delete from public.heating_plans
-      where plan_date = old.plan_date
-        and mode = 'automatic'
-        and reason = 'V2 energy plan';
+      select exists (
+        select 1
+        from cron.job
+        where jobname = 'run-heating-optimizer-shadow-hourly'
+          and active
+      ) into v1_optimizer_active;
+
+      if not v1_optimizer_active then
+        delete from public.heating_plans
+        where plan_date = old.plan_date
+          and mode = 'automatic'
+          and reason = 'V2 energy plan';
+      end if;
     end if;
 
     return old;
