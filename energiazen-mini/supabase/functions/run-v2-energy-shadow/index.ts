@@ -91,7 +91,7 @@ Deno.serve(async (request) => {
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
-    const v2PublicationCutoverEnabled = cutoverStateResult.data === true;
+    let v2PublicationCutoverEnabled = cutoverStateResult.data === true;
     const maxTankTemperatureC = Number(settingsResult.data.max_tank_temperature);
     const automaticMaxHeatingHours = Number(settingsResult.data.automatic_max_heating_hours);
     const reservePercents = normalizeV2ReservePercents({
@@ -215,15 +215,6 @@ Deno.serve(async (request) => {
       plan: publicationPlan,
       publicationCandidate,
     });
-    const cutoverPublicationReadiness = evaluateV2PublicationGuard({
-      enabled: v2PublicationCutoverEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
-      latestTankReadingAt: latestPublishableReadingAt,
-      now,
-      plan: publicationPlan,
-      publicationCandidate,
-    });
-
     let stagedPublicationResult: string | null = null;
     if (stagedPublicationReadiness.ready && latestPublishableReadingAt) {
       const rpcArgs = buildV2StagedPublicationArgs({
@@ -247,11 +238,37 @@ Deno.serve(async (request) => {
         today,
         tomorrow,
       });
-      const { data: publishResult, error: publishError } = await supabase.rpc("publish_v2_heating_plans_staged", rpcArgs);
+      const { data: publishOutcome, error: publishError } = await supabase.rpc(
+        "publish_v2_heating_plans_staged_with_cutover_state",
+        rpcArgs,
+      );
       if (publishError) throw new Error(`Failed to publish V2 staged plan: ${publishError.message}`);
-      stagedPublicationResult = typeof publishResult === "string" ? publishResult : String(publishResult);
+
+      const outcome = publishOutcome && typeof publishOutcome === "object" && !Array.isArray(publishOutcome)
+        ? publishOutcome as { result?: unknown; cutover_enabled?: unknown }
+        : null;
+      stagedPublicationResult = typeof outcome?.result === "string"
+        ? outcome.result
+        : String(outcome?.result ?? "");
+      if (typeof outcome?.cutover_enabled !== "boolean") {
+        throw new Error("V2 staged publication did not return cutover state");
+      }
+      // The wrapper reads the trigger state in the same DB transaction after
+      // publication. The inner publication lock remains held until transaction
+      // end, so this value describes the control-plane state of this publication
+      // rather than an earlier snapshot.
+      v2PublicationCutoverEnabled = outcome.cutover_enabled;
       if (stagedPublicationResult !== "published") console.warn("V2 staged publication rejected", stagedPublicationResult);
     }
+
+    const cutoverPublicationReadiness = evaluateV2PublicationGuard({
+      enabled: v2PublicationCutoverEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      latestTankReadingAt: latestPublishableReadingAt,
+      now,
+      plan: publicationPlan,
+      publicationCandidate,
+    });
 
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
       run_at: now.toISOString(), replay_start_at: replayStart.toISOString(), replay_end_at: now.toISOString(),
