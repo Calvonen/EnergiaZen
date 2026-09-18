@@ -48,8 +48,18 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
     "vanha is not true -ehto (hyvaksyy myos nullin Postgresin kolmiarvoisessa logiikassa) ei saa enaa esiintya",
   );
 
-  const dailyEnergyLossesStart = migrationSource.indexOf("daily_energy_losses as (");
-  const temperatureStatisticsStart = migrationSource.indexOf(
+  const v2LearningMigrationSource = readFileSync(
+    join(
+      process.cwd(),
+      "supabase/migrations/20260918130000_v2_learned_drop_profile_forecast.sql",
+    ),
+    "utf8",
+  );
+
+  const dailyEnergyLossesStart = v2LearningMigrationSource.indexOf(
+    "daily_energy_losses as (",
+  );
+  const temperatureStatisticsStart = v2LearningMigrationSource.indexOf(
     "temperature_statistics as (",
   );
 
@@ -59,7 +69,7 @@ export function runRecalculateTemperatureDropProfileRpcMigrationTests() {
     "daily_energy_losses-CTE:n pitaa loytya ennen temperature_statistics-CTE:ta",
   );
 
-  const dailyEnergyLossesSource = migrationSource.slice(
+  const dailyEnergyLossesSource = v2LearningMigrationSource.slice(
     dailyEnergyLossesStart,
     temperatureStatisticsStart,
   );
