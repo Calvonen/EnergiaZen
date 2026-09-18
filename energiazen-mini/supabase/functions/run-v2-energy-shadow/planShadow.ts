@@ -149,7 +149,7 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
   standingLossKwhPerHour: number;
   learnedDropProfile: LearnedTemperatureDropProfile | null;
 }):
-  | { ok: true; horizonEndAt: string; maximumModeledLossKwhPerHour: number; segments: Array<{ id: string; modeledHeatLossKwh: number; priceCentsPerKwh: number; segmentHours: number; startDate: string }> }
+  | { ok: true; horizonEndAt: string; maximumModeledLossKwhPerHour: number; segments: Array<{ id: string; frontLoadedDemandKwh: number; modeledHeatLossKwh: number; priceCentsPerKwh: number; segmentHours: number; startDate: string }> }
   | { ok: false; reason: string } {
   const today = helsinkiDateKey(now);
   const tomorrow = helsinkiDateKeyOffset(now, 1);
@@ -184,17 +184,21 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
           helsinkiHour(new Date(price.starts_at))
         ] ?? 0
       : 0;
-    const modeledLossKwhPerHour = Math.max(
-      standingLossKwhPerHour,
-      learnedLossKwhPerHour,
+    const learnedDemandKwh = Math.max(
+      learnedLossKwhPerHour - standingLossKwhPerHour,
+      0,
     );
     maximumModeledLossKwhPerHour = Math.max(
       maximumModeledLossKwhPerHour,
-      modeledLossKwhPerHour,
+      standingLossKwhPerHour + learnedDemandKwh,
     );
     return {
       id: price.starts_at,
-      modeledHeatLossKwh: modeledLossKwhPerHour * segmentHours,
+      // Passive loss is continuous and may be prorated. Learned excess demand
+      // is a whole-hour bucket that can contain discrete draws, so keep the full
+      // bucket and let the forecast apply it before any same-hour heater credit.
+      frontLoadedDemandKwh: learnedDemandKwh,
+      modeledHeatLossKwh: standingLossKwhPerHour * segmentHours,
       priceCentsPerKwh: price.spot_price_cents_kwh,
       segmentHours,
       startDate: new Date(startMs).toISOString(),
