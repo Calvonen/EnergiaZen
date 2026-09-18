@@ -31,7 +31,6 @@ const priceFetchWindowHours = 48;
 const pageSize = 1000;
 const activeBlockSafetyTopTemperatureC = 50;
 const v2StagedPublicationEnabled = true;
-const v2PublicationCutoverEnabled = false;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
 });
@@ -62,7 +61,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, cutoverStateResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -77,6 +76,7 @@ Deno.serve(async (request) => {
         .in("plan_date", [today, tomorrow]),
       supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
         .in("plan_date", [today, tomorrow]),
+      supabase.rpc("get_v2_publication_cutover_enabled"),
     ]);
 
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
@@ -84,12 +84,14 @@ Deno.serve(async (request) => {
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
+    if (cutoverStateResult.error) throw new Error(`Failed to resolve V2 production cutover state: ${cutoverStateResult.error.message}`);
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
+    let v2PublicationCutoverEnabled = cutoverStateResult.data === true;
     const maxTankTemperatureC = Number(settingsResult.data.max_tank_temperature);
     const automaticMaxHeatingHours = Number(settingsResult.data.automatic_max_heating_hours);
     const reservePercents = normalizeV2ReservePercents({
@@ -213,15 +215,6 @@ Deno.serve(async (request) => {
       plan: publicationPlan,
       publicationCandidate,
     });
-    const cutoverPublicationReadiness = evaluateV2PublicationGuard({
-      enabled: v2PublicationCutoverEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
-      latestTankReadingAt: latestPublishableReadingAt,
-      now,
-      plan: publicationPlan,
-      publicationCandidate,
-    });
-
     let stagedPublicationResult: string | null = null;
     if (stagedPublicationReadiness.ready && latestPublishableReadingAt) {
       const rpcArgs = buildV2StagedPublicationArgs({
@@ -245,11 +238,37 @@ Deno.serve(async (request) => {
         today,
         tomorrow,
       });
-      const { data: publishResult, error: publishError } = await supabase.rpc("publish_v2_heating_plans_staged", rpcArgs);
+      const { data: publishOutcome, error: publishError } = await supabase.rpc(
+        "publish_v2_heating_plans_staged_with_cutover_state",
+        rpcArgs,
+      );
       if (publishError) throw new Error(`Failed to publish V2 staged plan: ${publishError.message}`);
-      stagedPublicationResult = typeof publishResult === "string" ? publishResult : String(publishResult);
+
+      const outcome = publishOutcome && typeof publishOutcome === "object" && !Array.isArray(publishOutcome)
+        ? publishOutcome as { result?: unknown; cutover_enabled?: unknown }
+        : null;
+      stagedPublicationResult = typeof outcome?.result === "string"
+        ? outcome.result
+        : String(outcome?.result ?? "");
+      if (typeof outcome?.cutover_enabled !== "boolean") {
+        throw new Error("V2 staged publication did not return cutover state");
+      }
+      // The wrapper reads the trigger state in the same DB transaction after
+      // publication. The inner publication lock remains held until transaction
+      // end, so this value describes the control-plane state of this publication
+      // rather than an earlier snapshot.
+      v2PublicationCutoverEnabled = outcome.cutover_enabled;
       if (stagedPublicationResult !== "published") console.warn("V2 staged publication rejected", stagedPublicationResult);
     }
+
+    const cutoverPublicationReadiness = evaluateV2PublicationGuard({
+      enabled: v2PublicationCutoverEnabled,
+      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      latestTankReadingAt: latestPublishableReadingAt,
+      now,
+      plan: publicationPlan,
+      publicationCandidate,
+    });
 
     const { error: insertError } = await supabase.from("v2_energy_reserve_shadow_runs").insert({
       run_at: now.toISOString(), replay_start_at: replayStart.toISOString(), replay_end_at: now.toISOString(),
@@ -280,6 +299,13 @@ Deno.serve(async (request) => {
       plan_total_cost_cents: publicationPlan.totalCostCents, plan_candidate_count: publicationPlan.candidateCount,
       plan_evaluated_combination_count: publicationPlan.evaluatedCombinationCount,
       preheat_advisory: preheatAdvisory,
+      staged_publication_ready: stagedPublicationReadiness.ready,
+      staged_publication_ready_reason: stagedPublicationReadiness.reason,
+      staged_publication_result: stagedPublicationResult,
+      publication_cutover_enabled: v2PublicationCutoverEnabled,
+      publication_ready: cutoverPublicationReadiness.ready,
+      publication_ready_reason: cutoverPublicationReadiness.reason,
+      publication_latest_publishable_tank_reading_at: latestPublishableReadingAt,
       source: "v2_energy_reserve_live_shadow",
     });
     if (insertError) throw new Error(`Failed to persist V2 energy shadow: ${insertError.message}`);
