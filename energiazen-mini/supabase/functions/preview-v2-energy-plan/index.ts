@@ -18,6 +18,10 @@ import {
   type ShadowStoredHeatingPlan,
 } from "../run-v2-energy-shadow/productionConstraints.ts";
 import {
+  captureV2PublicationCandidate,
+  evaluateV2PublicationGuard,
+} from "../run-v2-energy-shadow/publicationGuard.ts";
+import {
   parseLearnedTemperatureDropProfile,
   type LearnedTemperatureDropProfileRow,
 } from "../run-v2-energy-shadow/learnedDropProfile.ts";
@@ -28,7 +32,15 @@ import {
   reservePercentToKwh,
 } from "../_shared/energyModelV2/energyReservePercent.ts";
 
-const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
+const corsHeaders = {
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Origin": "*",
+};
+const jsonHeaders = {
+  ...corsHeaders,
+  "Content-Type": "application/json; charset=utf-8",
+};
 const replayWindowHours = 6;
 const priceFetchWindowHours = 48;
 const pageSize = 1000;
@@ -56,6 +68,9 @@ function finiteNumber(value: unknown) {
 }
 
 Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
   if (request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -257,15 +272,31 @@ Deno.serve(async (request) => {
       learnedDropProfile,
     });
 
+    const latestPublishableReadingAt = deriveLatestPublishableReadingAt(readings);
+    const publicationCandidate = captureV2PublicationCandidate(
+      previewPlan,
+      selectedHeatingHourIds,
+    );
+    const publicationReadiness = evaluateV2PublicationGuard({
+      enabled: true,
+      expectedSelectedHeatingHourIds: selectedHeatingHourIds,
+      latestTankReadingAt: latestPublishableReadingAt,
+      now,
+      plan: previewPlan,
+      publicationCandidate,
+    });
+
     return jsonResponse({
       available:
         reserve.available &&
         previewPlan.available &&
-        previewPlan.valid === true,
+        previewPlan.valid === true &&
+        publicationReadiness.ready,
       reason:
         reserve.reason ??
         previewPlan.reason ??
-        (previewPlan.valid === false ? "plan_invalid" : null),
+        (previewPlan.valid === false ? "plan_invalid" : null) ??
+        (publicationReadiness.ready ? null : publicationReadiness.reason),
       current_conservative_energy_kwh: reserve.conservativeEnergyKwh,
       energy_capacity_kwh: energyCapacityKwh,
       current_percent:
@@ -291,6 +322,9 @@ Deno.serve(async (request) => {
       strategy: preheatAdvisory.strategy,
       plan_valid: previewPlan.valid,
       learned_drop_profile_used: previewPlan.learnedDropProfileUsed,
+      publication_ready: publicationReadiness.ready,
+      publication_ready_reason: publicationReadiness.reason,
+      latest_publishable_tank_reading_at: latestPublishableReadingAt,
       preview_only: true,
     });
   } catch (error) {
@@ -369,6 +403,28 @@ async function fetchWaterDraws(
     if (page.length < pageSize) break;
   }
   return rows;
+}
+
+function deriveLatestPublishableReadingAt(readings: ShadowTankReading[]) {
+  let latestAt: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+
+  for (const reading of readings) {
+    const createdMs = Date.parse(reading.created_at);
+    if (
+      Number.isFinite(createdMs) &&
+      Number.isFinite(reading.top_temp) &&
+      Number.isFinite(reading.bottom_temp) &&
+      Number.isFinite(reading.inlet_temp) &&
+      typeof reading.heating === "boolean" &&
+      createdMs > latestMs
+    ) {
+      latestMs = createdMs;
+      latestAt = reading.created_at;
+    }
+  }
+
+  return latestAt;
 }
 
 function helsinkiDateKey(date: Date) {
