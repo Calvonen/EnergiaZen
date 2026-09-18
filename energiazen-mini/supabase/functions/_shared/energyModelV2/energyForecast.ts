@@ -7,6 +7,7 @@ import {
 
 export type EnergyForecastSegment = {
   acceptedRemovalKwh?: number;
+  frontLoadedDemandKwh?: number;
   additionalUncertaintyKwh?: number;
   heatingSelected: boolean;
   id: string;
@@ -17,6 +18,7 @@ export type EnergyForecastSegment = {
 
 export type EnergyForecastPoint = {
   acceptedRemovalKwh: number;
+  frontLoadedDemandKwh: number;
   bandAfter: EnergyReserveBand;
   conservativeEnergyAfterKwh: number;
   deliveredHeatingEnergyKwh: number;
@@ -80,7 +82,37 @@ export function forecastEnergyHorizon({
       : 0;
     const modeledHeatLossKwh = nonNegative(segment.modeledHeatLossKwh);
     const acceptedRemovalKwh = nonNegative(segment.acceptedRemovalKwh ?? 0);
+    const frontLoadedDemandKwh = nonNegative(segment.frontLoadedDemandKwh ?? 0);
     const remainingEnergyBeforeKwh = remainingEnergyKwh;
+
+    // Learned hourly demand may contain discrete water draws. Apply that demand
+    // before any same-segment heater credit and evaluate the hard reserve at
+    // this intermediate point so later heat cannot hide a temporary violation.
+    if (frontLoadedDemandKwh > 0) {
+      remainingEnergyKwh = clamp(
+        remainingEnergyKwh - frontLoadedDemandKwh,
+        0,
+        physicalCapacityKwh,
+      );
+      const preHeatingReserve = evaluateEnergyReserve(
+        {
+          quality: "valid",
+          remainingEnergyKwh,
+          uncertaintyKwh,
+        },
+        thresholds,
+      );
+      minimumConservativeEnergyKwh = Math.min(
+        minimumConservativeEnergyKwh,
+        preHeatingReserve.conservativeEnergyKwh,
+      );
+      if (!preHeatingReserve.safetySatisfied && firstSafetyViolationAt === null) {
+        firstSafetyViolationAt = segment.startDate;
+      }
+      if (!preHeatingReserve.targetSatisfied && firstTargetMissAt === null) {
+        firstTargetMissAt = segment.startDate;
+      }
+    }
 
     const energyDeltaKwh =
       deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh;
@@ -130,6 +162,7 @@ export function forecastEnergyHorizon({
 
     return {
       acceptedRemovalKwh: round(acceptedRemovalKwh),
+      frontLoadedDemandKwh: round(frontLoadedDemandKwh),
       bandAfter: reserve.band,
       conservativeEnergyAfterKwh: round(reserve.conservativeEnergyKwh),
       deliveredHeatingEnergyKwh: round(deliveredHeatingEnergyKwh),
