@@ -6,7 +6,10 @@ export type AutomaticModeReadiness = {
     | "ready_v2"
     | "dual_writer_conflict"
     | "v2_producer_inactive"
+    | "v2_plan_stale_or_missing"
     | "no_automatic_owner";
+  v2_latest_current_plan_published_at: string | null;
+  v2_plan_fresh: boolean;
   v1_optimizer_cron_active: boolean;
   v2_mirror_trigger_active: boolean;
   v2_producer_cron_active: boolean;
@@ -32,11 +35,15 @@ function isAutomaticModeReadiness(value: unknown): value is AutomaticModeReadine
       "ready_v2",
       "dual_writer_conflict",
       "v2_producer_inactive",
+      "v2_plan_stale_or_missing",
       "no_automatic_owner",
     ].includes(String(candidate.reason)) &&
     typeof candidate.v1_optimizer_cron_active === "boolean" &&
     typeof candidate.v2_mirror_trigger_active === "boolean" &&
-    typeof candidate.v2_producer_cron_active === "boolean"
+    typeof candidate.v2_producer_cron_active === "boolean" &&
+    typeof candidate.v2_plan_fresh === "boolean" &&
+    (candidate.v2_latest_current_plan_published_at === null ||
+      typeof candidate.v2_latest_current_plan_published_at === "string")
   );
 }
 
@@ -63,6 +70,8 @@ export function getAutomaticModeReadinessMessage(
       return "Automaattiohjausta ei voi ottaa käyttöön, koska V1- ja V2-ohjaimet ovat yhtä aikaa aktiivisia.";
     case "v2_producer_inactive":
       return "Automaattiohjausta ei voi ottaa käyttöön, koska V2-suunnitelmien tuottaja ei ole käynnissä.";
+    case "v2_plan_stale_or_missing":
+      return "Automaattiohjausta ei voi ottaa käyttöön, koska V2:lla ei ole tuoretta tämän päivän lämmityssuunnitelmaa.";
     case "no_automatic_owner":
       return "Automaattiohjausta ei voi ottaa käyttöön, koska aktiivista automaattiohjainta ei ole.";
     default:
