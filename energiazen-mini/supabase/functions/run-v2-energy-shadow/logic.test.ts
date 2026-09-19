@@ -119,16 +119,39 @@ export function runLiveV2EnergyShadowUnitTests() {
     "heater delivery uncertainty is added to the 0.25 kWh baseline",
   );
 
-  const unresolvedDraw = runLiveReserveShadow({
+  const nuisancePlateauWithoutIndependentBaseline = runLiveReserveShadow({
     maxTankTemperatureC,
-    now: new Date("2026-09-09T10:06:00.000Z"),
+    now: new Date("2026-09-09T09:34:00.000Z"),
+    readings: [
+      reading("2026-09-09T09:30:00.000Z", 55, 40, 20, false),
+      reading("2026-09-09T09:31:00.000Z", 55, 40, 20, false),
+      reading("2026-09-09T09:32:00.000Z", 55, 40, 14, false),
+      reading("2026-09-09T09:33:00.000Z", 55, 40, 14.1, false),
+    ],
+    reliableDraws: [],
+    v1Shadow: null,
+  });
+  assert(
+    nuisancePlateauWithoutIndependentBaseline.available,
+    "missing historical draw baseline must not let the active replay self-confirm a nuisance plateau",
+  );
+  assert(
+    !nuisancePlateauWithoutIndependentBaseline.unresolvedDrawDetected,
+    "active replay minimum is never reused as the draw-confirmation baseline",
+  );
+
+  const unresolvedDraw = runLiveReserveShadow({
+    coldInletDrawBaselineC: 12.2,
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T10:07:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 25, false),
       reading("2026-09-09T10:04:00.000Z", 55, 39.8, 25, false),
-      reading("2026-09-09T10:05:00.000Z", 54, 35, 15, false),
+      reading("2026-09-09T10:05:00.000Z", 54.5, 37, 12.5, false),
+      reading("2026-09-09T10:06:00.000Z", 54, 35, 12.4, false),
     ],
     reliableDraws: [],
-    v1Shadow: { id: "v1", run_at: "2026-09-09T10:05:00.000Z", target_hours: 0 },
+    v1Shadow: { id: "v1", run_at: "2026-09-09T10:06:00.000Z", target_hours: 0 },
   });
   assert(!unresolvedDraw.available, "active inlet draw fails closed");
   assert(unresolvedDraw.reason === "unresolved_water_draw_detected", "active draw explains shadow unavailability");
@@ -139,12 +162,13 @@ export function runLiveV2EnergyShadowUnitTests() {
     const timestamp = new Date(Date.UTC(2026, 8, 9, 11, minute, 0)).toISOString();
     const beforeDraw = minute <= 4;
     const duringDraw = minute >= 5 && minute <= 8;
-    const inletTemp = beforeDraw ? 21 : duringDraw ? 14 : 20;
+    const inletTemp = beforeDraw ? 21 : duringDraw ? 12.5 : 20;
     const topTemp = beforeDraw ? 55 : 52;
     const bottomTemp = beforeDraw ? 40 : 35;
     stabilizedUnlabeledReadings.push(reading(timestamp, topTemp, bottomTemp, inletTemp, false));
   }
   const stabilizedUnlabeledDraw = runLiveReserveShadow({
+    coldInletDrawBaselineC: 12.2,
     maxTankTemperatureC,
     now: new Date("2026-09-09T11:31:00.000Z"),
     readings: stabilizedUnlabeledReadings,

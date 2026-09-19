@@ -121,16 +121,228 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(heatingWithSampleGapResult.unresolved, "heating inlet drop across a polling gap remains fail-closed");
   assert(heatingWithSampleGapResult.detectedUnlabeledDrawCount === 1, "gapped heating signal is counted once");
 
-  // Outside heating, the original inlet-only fail-closed detector is unchanged.
-  const idleDraw = [
+  // A relative idle inlet drop that never reaches the confirmed cold-water
+  // baseline is probe drift, not enough evidence to block V2.
+  const idleWarmDrift = [
     reading(36, 35, 20, false),
     reading(37, 35, 20, false),
     reading(38, 34.9, 14, false),
+    reading(39, 34.9, 14.1, false),
   ];
-  const idleDrawResult = resolveLiveDrawReanchors({
+  const idleWarmDriftResult = resolveLiveDrawReanchors({
     coldInletBaselineC: 12.6,
-    readings: idleDraw,
+    readings: idleWarmDrift,
     reliableDraws: [],
   });
-  assert(idleDrawResult.unresolved, "idle inlet draw signal remains fail-closed");
+  assert(!idleWarmDriftResult.unresolved, "warm inlet drift above cold baseline does not block V2");
+  assert(idleWarmDriftResult.detectedUnlabeledDrawCount === 0, "warm drift is not counted as a draw");
+
+  // One isolated cold sample is not enough either: require the inlet to remain
+  // at the cold-water level for about one minute.
+  const isolatedColdDip = [
+    reading(36, 35, 20, false),
+    reading(37, 35, 12.5, false),
+    reading(38, 35, 16.5, false),
+  ];
+  const isolatedColdDipResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: isolatedColdDip,
+    reliableDraws: [],
+  });
+  assert(!isolatedColdDipResult.unresolved, "single cold sample does not block V2");
+
+  // A cold dwell that happened before a later unrelated warm drop must not
+  // confirm that later candidate. This is the regression called out in review:
+  // 12.5, 12.5, 20, 14 has a valid old cold dwell and a new 20 -> 14 drop,
+  // but the later drop never reaches the cold baseline.
+  const oldColdDwellThenWarmDrop = [
+    reading(36, 35, 12.5, false),
+    reading(37, 35, 12.5, false),
+    reading(38, 35, 20, false),
+    reading(39, 34.9, 14, false),
+  ];
+  const oldColdDwellThenWarmDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: oldColdDwellThenWarmDrop,
+    reliableDraws: [],
+  });
+  assert(
+    !oldColdDwellThenWarmDropResult.unresolved,
+    "cold dwell before a later warm drop cannot confirm that later candidate",
+  );
+
+  // A draw candidate at the exact five-minute detector boundary must survive
+  // long enough for the one-minute confirmation dwell to complete.
+  const boundaryCandidateThenColdDwell = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(36, 34.6, 12.4, false),
+  ];
+  const boundaryCandidateThenColdDwellResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: boundaryCandidateThenColdDwell,
+    reliableDraws: [],
+  });
+  assert(
+    boundaryCandidateThenColdDwellResult.unresolved,
+    "five-minute drop candidate remains available through one-minute cold dwell",
+  );
+
+  // An older valid cold dwell cannot validate a later isolated cold sample.
+  // Pattern: 20, 12, 12, 20, 20, 20, 12. The first dwell is heater-only and
+  // suppressed; the final isolated cold dip has no one-minute dwell of its own.
+  const oldDwellThenIsolatedCold = [
+    reading(30, 35.0, 20, true),
+    reading(31, 35.2, 12, true),
+    reading(32, 35.4, 12, true),
+    reading(33, 35.6, 20, true),
+    reading(34, 35.8, 20, true),
+    reading(35, 36.0, 20, true),
+    reading(36, 36.0, 12, false),
+  ];
+  const oldDwellThenIsolatedColdResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: oldDwellThenIsolatedCold,
+    reliableDraws: [],
+  });
+  assert(
+    !oldDwellThenIsolatedColdResult.unresolved,
+    "historical cold dwell cannot confirm a later isolated cold sample",
+  );
+
+  // The confirmation helper accepts up to a two-minute poll gap, so retain the
+  // original five-minute drop candidate for that full interval as well.
+  const maxGapBoundaryCandidate = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(37, 34.6, 12.4, false),
+  ];
+  const maxGapBoundaryCandidateResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: maxGapBoundaryCandidate,
+    reliableDraws: [],
+  });
+  assert(
+    maxGapBoundaryCandidateResult.unresolved,
+    "five-minute drop candidate survives the full two-minute confirmation poll gap",
+  );
+
+  // Reliable draw matching must use the original drop candidate timestamp,
+  // not the later confirmation sample. The event ends at t0, the inlet drop is
+  // at the +5 minute match boundary, and confirmation completes two minutes
+  // later. This remains a trusted labeled draw, not an unresolved unlabeled one.
+  const labeledBoundaryDraw = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(37, 34.6, 12.4, false),
+  ];
+  const labeledBoundaryDrawResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: labeledBoundaryDraw,
+    reliableDraws: [{
+      event_started_at: reading(29, 35, 20, false).created_at,
+      event_ended_at: reading(30, 35, 20, false).created_at,
+    }],
+  });
+  assert(
+    !labeledBoundaryDrawResult.unresolved,
+    "reliable draw at match boundary uses drop candidate timestamp",
+  );
+  assert(
+    labeledBoundaryDrawResult.detectedUnlabeledDrawCount === 0,
+    "matched reliable draw is never reclassified as unlabeled after dwell confirmation",
+  );
+
+  // An unrelated pre-heating sample retained only for candidate lookup must
+  // not disable heater-only suppression for the actual comparator-to-dwell
+  // interval.
+  const preHeatingSampleThenHeaterOnlyDrop = [
+    reading(29, 34.8, 19.9, false),
+    reading(30, 35.0, 20, true),
+    reading(31, 35.1, 20, true),
+    reading(32, 35.2, 20, true),
+    reading(33, 35.3, 20, true),
+    reading(34, 35.4, 20, true),
+    reading(35, 35.5, 12.5, true),
+    reading(36, 35.7, 12.4, true),
+  ];
+  const preHeatingSampleThenHeaterOnlyDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: preHeatingSampleThenHeaterOnlyDrop,
+    reliableDraws: [],
+  });
+  assert(
+    !preHeatingSampleThenHeaterOnlyDropResult.unresolved,
+    "heater-only suppression is scoped to the selected drop comparator interval",
+  );
+  assert(
+    preHeatingSampleThenHeaterOnlyDropResult.detectedUnlabeledDrawCount === 0,
+    "irrelevant pre-heating sample cannot turn heater-only oscillation into an unlabeled draw",
+  );
+
+  // An older labeled draw retained in the lookup window must not hide a newer
+  // unlabeled drop whose own cold dwell is what reaches the current sample.
+  const labeledOldThenUnlabeledNew = [
+    reading(30, 35.0, 20, false),
+    reading(31, 34.8, 12.4, false),
+    reading(32, 34.7, 12.3, false),
+    reading(33, 34.7, 20, false),
+    reading(34, 34.7, 20, false),
+    reading(35, 34.7, 20, false),
+    reading(36, 34.5, 12.4, false),
+    reading(37, 34.4, 12.3, false),
+  ];
+  const labeledOldThenUnlabeledNewResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: labeledOldThenUnlabeledNew,
+    reliableDraws: [{
+      event_started_at: reading(26, 35, 20, false).created_at,
+      event_ended_at: reading(26, 35, 20, false).created_at,
+    }],
+  });
+  assert(
+    labeledOldThenUnlabeledNewResult.unresolved,
+    "newer unlabeled draw cannot inherit the older labeled candidate",
+  );
+  assert(
+    labeledOldThenUnlabeledNewResult.detectedUnlabeledDrawCount === 1,
+    "newer trailing dwell is counted as its own unlabeled draw",
+  );
+
+  // A real relative drop can begin while the inlet is already inside the cold
+  // band. The current trailing dwell must still bind to that later drop.
+  const alreadyColdThenDeeperDrop = [
+    reading(30, 35, 13, false),
+    reading(31, 35, 13, false),
+    reading(32, 34.6, 7, false),
+    reading(33, 34.4, 7, false),
+  ];
+  const alreadyColdThenDeeperDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12,
+    readings: alreadyColdThenDeeperDrop,
+    reliableDraws: [],
+  });
+  assert(
+    alreadyColdThenDeeperDropResult.unresolved,
+    "drop inside an already-cold dwell remains a real unlabeled draw",
+  );
+  assert(
+    alreadyColdThenDeeperDropResult.detectedUnlabeledDrawCount === 1,
+    "already-cold deeper drop is counted once",
+  );
+
+  // Real shower-shaped inlet behavior reaches the cold baseline and stays
+  // there across two one-minute samples, so it remains fail-closed.
+  const confirmedIdleDraw = [
+    reading(36, 35, 20, false),
+    reading(37, 34.9, 12.5, false),
+    reading(38, 34.6, 12.4, false),
+  ];
+  const confirmedIdleDrawResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.6,
+    readings: confirmedIdleDraw,
+    reliableDraws: [],
+  });
+  assert(confirmedIdleDrawResult.unresolved, "one-minute cold inlet dwell confirms a real draw");
+  assert(confirmedIdleDrawResult.detectedUnlabeledDrawCount === 1, "confirmed cold draw is counted once");
 }

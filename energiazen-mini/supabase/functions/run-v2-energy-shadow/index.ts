@@ -65,7 +65,7 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult, temperatureDropProfileResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult, temperatureDropProfileResult, coldInletBaselineResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
@@ -88,6 +88,10 @@ Deno.serve(async (request) => {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase.rpc("get_confirmed_cold_inlet_baseline", {
+        p_since: new Date(replayStart.getTime() - 56 * 24 * 3_600_000).toISOString(),
+        p_until: replayStart.toISOString(),
+      }),
     ]);
 
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
@@ -97,6 +101,7 @@ Deno.serve(async (request) => {
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
     if (controlPlaneStateResult.error) throw new Error(`Failed to resolve heating control-plane state: ${controlPlaneStateResult.error.message}`);
     if (temperatureDropProfileResult.error) throw new Error(`Failed to fetch learned temperature drop profile: ${temperatureDropProfileResult.error.message}`);
+    if (coldInletBaselineResult.error) throw new Error(`Failed to fetch confirmed cold inlet baseline: ${coldInletBaselineResult.error.message}`);
     if (!settingsResult.data) throw new Error("Heating settings row is missing");
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
@@ -158,6 +163,10 @@ Deno.serve(async (request) => {
     const safetyEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
 
     const baseResult = runLiveReserveShadow({
+      coldInletDrawBaselineC:
+        typeof coldInletBaselineResult.data === "number"
+          ? coldInletBaselineResult.data
+          : null,
       maxTankTemperatureC,
       now,
       readings,

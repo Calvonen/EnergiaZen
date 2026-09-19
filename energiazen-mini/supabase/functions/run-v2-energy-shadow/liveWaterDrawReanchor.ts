@@ -1,4 +1,7 @@
-import { detectsWaterDraw } from "../_shared/waterDrawDetection.ts";
+import {
+  detectsWaterDraw,
+  waterDrawDetectionLimits,
+} from "../_shared/waterDrawDetection.ts";
 
 export type LiveDrawReading = {
   created_at: string;
@@ -24,6 +27,8 @@ export type LiveDrawReanchorResolution = {
 // does not guess removed kWh for an unlabeled draw. It waits for inlet
 // recovery plus a quiet tank period, then re-anchors the physical balance to
 // the measured post-draw state.
+const INLET_DRAW_CONFIRM_MARGIN_C = 1;
+const MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES = 1;
 const INLET_RECOVERY_MARGIN_C = 4;
 const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
 const MIN_TANK_STABILIZATION_MINUTES = 15;
@@ -71,8 +76,15 @@ export function resolveLiveDrawReanchors({
     // the measured tank state instead of estimating how much energy the draw
     // removed. This handles both a real draw and a heater-induced inlet probe
     // oscillation without ever crediting uncertain energy to the live ledger.
-    const drawDetected = currentSampleHasDrawSignal(readings, index);
-    const matchedReliableDraw = drawDetected && isMatchedByReliableDraw(currentMs, reliableDraws);
+    const drawCandidateMs = currentSampleDrawCandidateMs(
+      readings,
+      index,
+      coldInletBaselineC,
+    );
+    const drawDetected = drawCandidateMs !== null;
+    const matchedReliableDraw =
+      drawCandidateMs !== null &&
+      isMatchedByReliableDraw(drawCandidateMs, reliableDraws);
     const unmatchedDraw = drawDetected && !matchedReliableDraw;
 
     if (mode === "normal") {
@@ -156,9 +168,21 @@ export function resolveLiveDrawReanchors({
   };
 }
 
-function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) {
+function currentSampleDrawCandidateMs(
+  readings: LiveDrawReading[],
+  index: number,
+  coldInletBaselineC: number,
+): number | null {
   const currentTime = Date.parse(readings[index].created_at);
-  const windowStartMs = currentTime - 5 * 60_000;
+  // Keep the original relative-drop candidate in scope while the required cold
+  // dwell completes. A drop can occur at the very edge of the 5-minute detector
+  // window and only become confirmable one minute later.
+  const windowStartMs =
+    currentTime -
+    (
+      waterDrawDetectionLimits.windowMinutes +
+      MAX_SEGMENT_MINUTES
+    ) * 60_000;
   const window = readings
     .slice(0, index + 1)
     .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
@@ -166,9 +190,43 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
     inletTemperatureC: reading.inlet_temp,
     time: Date.parse(reading.created_at),
   }));
+  const currentInletC = readings[index].inlet_temp;
+  const currentIsCold =
+    typeof currentInletC === "number" &&
+    Number.isFinite(currentInletC) &&
+    currentInletC <= coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
 
-  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {
-    return false;
+  // Emit a draw signal only while the current sample is itself in the confirmed
+  // cold band. The historical window may retain the candidate long enough to
+  // finish its dwell, but once the inlet warms the same old candidate must not
+  // keep retriggering recovery on every later sample.
+  if (
+    !currentIsCold ||
+    inletSamples.length < 2 ||
+    !detectsWaterDraw(inletSamples)
+  ) {
+    return null;
+  }
+
+  const coldDwellStartIndex = confirmedColdInletDwellStartIndex(
+    window,
+    coldInletBaselineC,
+  );
+  if (coldDwellStartIndex === null) {
+    return null;
+  }
+
+  // Bind the trailing cold dwell to the first qualifying drop in the current
+  // draw episode. Start one sample before the dwell so a warm 20 -> 14 C drop
+  // can still lead into a later 12 C cold dwell, while any older draw separated
+  // by warm recovery stays out of scope. A new drop may also happen after the
+  // inlet is already inside the cold band (for example 13 -> 7 C).
+  const drawCandidate = findAssociatedDrawCandidate(
+    inletSamples,
+    Math.max(1, coldDwellStartIndex - 1),
+  );
+  if (drawCandidate === null) {
+    return null;
   }
 
   // During a continuous heating response the inlet probe can cool sharply even
@@ -176,7 +234,111 @@ function currentSampleHasDrawSignal(readings: LiveDrawReading[], index: number) 
   // as heater-induced probe oscillation, not a draw. Any relay interruption,
   // sampling gap, missing tank value or material tank-temperature drop keeps the
   // original fail-closed draw classification.
-  return !isHeaterOnlyInletOscillation(window);
+  const candidateWindow = window.slice(drawCandidate.comparatorIndex);
+  return isHeaterOnlyInletOscillation(candidateWindow)
+    ? null
+    : inletSamples[drawCandidate.dropIndex].time;
+}
+
+function findAssociatedDrawCandidate(
+  samples: { inletTemperatureC: number | null; time: number }[],
+  minDropIndex: number,
+): { dropIndex: number; comparatorIndex: number } | null {
+  for (
+    let laterIndex = Math.max(1, minDropIndex);
+    laterIndex < samples.length;
+    laterIndex += 1
+  ) {
+    const later = samples[laterIndex];
+    if (
+      later.inletTemperatureC === null ||
+      !Number.isFinite(later.inletTemperatureC) ||
+      !Number.isFinite(later.time)
+    ) {
+      continue;
+    }
+
+    for (let earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex -= 1) {
+      const earlier = samples[earlierIndex];
+      const minutesApart = (later.time - earlier.time) / 60_000;
+
+      if (minutesApart > waterDrawDetectionLimits.windowMinutes) {
+        break;
+      }
+      if (
+        earlier.inletTemperatureC === null ||
+        !Number.isFinite(earlier.inletTemperatureC) ||
+        !Number.isFinite(earlier.time)
+      ) {
+        continue;
+      }
+      if (
+        earlier.inletTemperatureC - later.inletTemperatureC >=
+        waterDrawDetectionLimits.minDropCelsius
+      ) {
+        return { dropIndex: laterIndex, comparatorIndex: earlierIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
+function confirmedColdInletDwellStartIndex(
+  window: LiveDrawReading[],
+  coldInletBaselineC: number,
+): number | null {
+  if (window.length < 2) {
+    return null;
+  }
+
+  const maxConfirmedColdC = coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
+  const currentIndex = window.length - 1;
+  const current = window[currentIndex];
+  const currentMs = Date.parse(current.created_at);
+  const currentInletC = current.inlet_temp;
+
+  if (
+    !Number.isFinite(currentMs) ||
+    typeof currentInletC !== "number" ||
+    !Number.isFinite(currentInletC) ||
+    currentInletC > maxConfirmedColdC
+  ) {
+    return null;
+  }
+
+  let dwellStartIndex = currentIndex;
+  let dwellStartMs = currentMs;
+  let laterMs = currentMs;
+
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const reading = window[index];
+    const readingMs = Date.parse(reading.created_at);
+    const inletC = reading.inlet_temp;
+    const gapMinutes = (laterMs - readingMs) / 60_000;
+
+    const isContiguousCold =
+      Number.isFinite(readingMs) &&
+      typeof inletC === "number" &&
+      Number.isFinite(inletC) &&
+      inletC <= maxConfirmedColdC &&
+      Number.isFinite(gapMinutes) &&
+      gapMinutes > 0 &&
+      gapMinutes <= MAX_SEGMENT_MINUTES;
+
+    if (!isContiguousCold) {
+      break;
+    }
+
+    dwellStartIndex = index;
+    dwellStartMs = readingMs;
+    laterMs = readingMs;
+  }
+
+  return currentMs - dwellStartMs >=
+      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
+    ? dwellStartIndex
+    : null;
 }
 
 function isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {
