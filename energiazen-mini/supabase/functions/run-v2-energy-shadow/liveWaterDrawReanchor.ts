@@ -187,8 +187,21 @@ function currentSampleHasDrawSignal(
     inletTemperatureC: reading.inlet_temp,
     time: Date.parse(reading.created_at),
   }));
+  const currentInletC = readings[index].inlet_temp;
+  const currentIsCold =
+    typeof currentInletC === "number" &&
+    Number.isFinite(currentInletC) &&
+    currentInletC <= coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
 
-  if (inletSamples.length < 2 || !detectsWaterDraw(inletSamples)) {
+  // Emit a draw signal only while the current sample is itself in the confirmed
+  // cold band. The historical window may retain the candidate long enough to
+  // finish its dwell, but once the inlet warms the same old candidate must not
+  // keep retriggering recovery on every later sample.
+  if (
+    !currentIsCold ||
+    inletSamples.length < 2 ||
+    !detectsWaterDraw(inletSamples)
+  ) {
     return false;
   }
 
