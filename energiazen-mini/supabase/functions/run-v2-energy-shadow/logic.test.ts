@@ -119,6 +119,27 @@ export function runLiveV2EnergyShadowUnitTests() {
     "heater delivery uncertainty is added to the 0.25 kWh baseline",
   );
 
+  const nuisancePlateauWithoutIndependentBaseline = runLiveReserveShadow({
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T09:34:00.000Z"),
+    readings: [
+      reading("2026-09-09T09:30:00.000Z", 55, 40, 20, false),
+      reading("2026-09-09T09:31:00.000Z", 55, 40, 20, false),
+      reading("2026-09-09T09:32:00.000Z", 55, 40, 14, false),
+      reading("2026-09-09T09:33:00.000Z", 55, 40, 14.1, false),
+    ],
+    reliableDraws: [],
+    v1Shadow: null,
+  });
+  assert(
+    nuisancePlateauWithoutIndependentBaseline.available,
+    "missing historical draw baseline must not let the active replay self-confirm a nuisance plateau",
+  );
+  assert(
+    !nuisancePlateauWithoutIndependentBaseline.unresolvedDrawDetected,
+    "active replay minimum is never reused as the draw-confirmation baseline",
+  );
+
   const unresolvedDraw = runLiveReserveShadow({
     coldInletDrawBaselineC: 12.2,
     maxTankTemperatureC,
