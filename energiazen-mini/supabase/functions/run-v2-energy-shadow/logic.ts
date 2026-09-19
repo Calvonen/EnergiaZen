@@ -181,17 +181,21 @@ export function runLiveReserveShadow({
   // `ordered` is the authoritative replay input. Derive the baseline from it so
   // reserve energy and percentage capacity always use identical observations.
   const inletBaseline = deriveUsableReadingInletBaselineC(ordered) as number;
-  const drawBaselineC =
+  const hasIndependentDrawBaseline =
     typeof coldInletDrawBaselineC === "number" &&
-      Number.isFinite(coldInletDrawBaselineC)
-      ? coldInletDrawBaselineC
-      : inletBaseline;
+    Number.isFinite(coldInletDrawBaselineC);
   const draws = reliableDraws.filter(isReliableDraw);
-  const drawResolution = resolveLiveDrawReanchors({
-    coldInletBaselineC: drawBaselineC,
-    readings: ordered,
-    reliableDraws: draws,
-  });
+  const drawResolution = hasIndependentDrawBaseline
+    ? resolveLiveDrawReanchors({
+        coldInletBaselineC: coldInletDrawBaselineC,
+        readings: ordered,
+        reliableDraws: draws,
+      })
+    : {
+        detectedUnlabeledDrawCount: 0,
+        reanchorIndexes: [],
+        unresolved: false,
+      };
 
   if (drawResolution.unresolved) {
     return unavailable(
