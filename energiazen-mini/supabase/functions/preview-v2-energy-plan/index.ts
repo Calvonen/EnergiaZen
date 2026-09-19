@@ -86,14 +86,16 @@ Deno.serve(async (request) => {
     const body = await request.json() as PreviewRequest;
     const automaticMaxHeatingHours = finiteNumber(body.automaticMaxHeatingHours);
     const maxTankTemperatureC = finiteNumber(body.maxTankTemperature);
-    const fullTankAverageTemperatureC = finiteNumber(body.fullTankAverageTemperature);
+    const fullTankAverageTemperatureC =
+      body.fullTankAverageTemperature === undefined
+        ? null
+        : finiteNumber(body.fullTankAverageTemperature);
     const targetPercent = finiteNumber(body.v2TargetReservePercent);
     const safetyPercent = finiteNumber(body.v2SafetyReservePercent);
 
     if (
       automaticMaxHeatingHours === null ||
       maxTankTemperatureC === null ||
-      fullTankAverageTemperatureC === null ||
       targetPercent === null ||
       safetyPercent === null
     ) {
@@ -112,8 +114,9 @@ Deno.serve(async (request) => {
       automaticMaxHeatingHours > 6 ||
       maxTankTemperatureC < 40 ||
       maxTankTemperatureC > 90 ||
-      fullTankAverageTemperatureC <= 0 ||
-      fullTankAverageTemperatureC > maxTankTemperatureC
+      (fullTankAverageTemperatureC !== null &&
+        (fullTankAverageTemperatureC <= 0 ||
+          fullTankAverageTemperatureC > maxTankTemperatureC))
     ) {
       return jsonResponse({ error: "Preview settings outside supported V2 range" }, 400);
     }
@@ -182,21 +185,26 @@ Deno.serve(async (request) => {
     }
 
     const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
-    const energyCapacityKwh = calculateV2EnergyCapacityKwh({
+    const reserveCapacityKwh = calculateV2EnergyCapacityKwh({
       inletTemperatureC: inletBaselineC,
       maxTankTemperatureC,
       fullTankAverageTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
+    const physicalEnergyCapacityKwh = calculateV2EnergyCapacityKwh({
+      inletTemperatureC: inletBaselineC,
+      maxTankTemperatureC,
+      tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
+    });
     const hardTargetPercent = reservePercents.safetyPercent;
     const safetyEnergyKwh =
-      energyCapacityKwh === null
+      reserveCapacityKwh === null
         ? null
-        : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
+        : reservePercentToKwh(reservePercents.safetyPercent, reserveCapacityKwh);
     const targetEnergyKwh =
-      energyCapacityKwh === null
+      reserveCapacityKwh === null
         ? null
-        : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
+        : reservePercentToKwh(hardTargetPercent, reserveCapacityKwh);
 
     const baseReserve = runLiveReserveShadow({
       coldInletDrawBaselineC:
@@ -226,7 +234,7 @@ Deno.serve(async (request) => {
     const baselinePlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraints,
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -239,7 +247,8 @@ Deno.serve(async (request) => {
       baselinePlan,
       conservativeEnergyKwh: reserve.conservativeEnergyKwh ?? Number.NaN,
       constraints,
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
       maxPreheatHours: automaticMaxHeatingHours,
       now,
@@ -256,7 +265,7 @@ Deno.serve(async (request) => {
               .map((price) => price.starts_at)
               .filter((hourId) => !selected.has(hourId)),
           },
-          energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+          energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
           inletBaselineC,
           maxTankTemperatureC,
           now,
@@ -280,7 +289,7 @@ Deno.serve(async (request) => {
           .map((price) => price.starts_at)
           .filter((hourId) => !selected.has(hourId)),
       },
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -315,13 +324,13 @@ Deno.serve(async (request) => {
         (previewPlan.valid === false ? "plan_invalid" : null) ??
         (publicationReadiness.ready ? null : publicationReadiness.reason),
       current_conservative_energy_kwh: reserve.conservativeEnergyKwh,
-      energy_capacity_kwh: energyCapacityKwh,
+      energy_capacity_kwh: reserveCapacityKwh,
       current_percent:
-        reserve.conservativeEnergyKwh !== null && energyCapacityKwh
+        reserve.conservativeEnergyKwh !== null && reserveCapacityKwh
           ? round(
               Math.min(
                 Math.max(
-                  (reserve.conservativeEnergyKwh / energyCapacityKwh) * 100,
+                  (reserve.conservativeEnergyKwh / reserveCapacityKwh) * 100,
                   0,
                 ),
                 100,
@@ -337,12 +346,12 @@ Deno.serve(async (request) => {
       forecast_final_conservative_energy_kwh: previewPlan.finalConservativeEnergyKwh,
       forecast_horizon_end_at: previewPlan.forecastHorizonEndAt,
       forecast_min_percent:
-        previewPlan.minimumConservativeEnergyKwh !== null && energyCapacityKwh
-          ? round((previewPlan.minimumConservativeEnergyKwh / energyCapacityKwh) * 100)
+        previewPlan.minimumConservativeEnergyKwh !== null && reserveCapacityKwh
+          ? round((previewPlan.minimumConservativeEnergyKwh / reserveCapacityKwh) * 100)
           : null,
       forecast_final_percent:
-        previewPlan.finalConservativeEnergyKwh !== null && energyCapacityKwh
-          ? round((previewPlan.finalConservativeEnergyKwh / energyCapacityKwh) * 100)
+        previewPlan.finalConservativeEnergyKwh !== null && reserveCapacityKwh
+          ? round((previewPlan.finalConservativeEnergyKwh / reserveCapacityKwh) * 100)
           : null,
       strategy: preheatAdvisory.strategy,
       plan_valid: previewPlan.valid,
