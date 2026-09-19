@@ -1,6 +1,8 @@
 import {
   areTimestampsInSameSensorGeometryEpoch,
+  calculateSensorGeometryWeightedTemperature,
   createSensorGeometryEpochs,
+  getSensorGeometryLayerMassFractions,
   filterToLatestSensorGeometryEpoch,
   resolveSensorGeometryForTimestamp,
   sensorGeometryV1,
@@ -29,6 +31,27 @@ export function runSensorGeometryUnitTests() {
   assertEqual(sensorGeometryV2.topSensorDistanceFromTopCm, 16, "V2 top sensor distance");
   assertEqual(sensorGeometryV1.bottomSensorHeightFromBottomCm, 22, "V1 bottom sensor height");
   assertEqual(sensorGeometryV2.bottomSensorHeightFromBottomCm, 22, "V2 bottom sensor height");
+
+  const { bottomFraction, topFraction } =
+    getSensorGeometryLayerMassFractions(sensorGeometryV2);
+  assert(
+    Math.abs(bottomFraction - 75.5 / 145) < 1e-9,
+    "V2 bottom-layer mass fraction follows the sensor midpoint geometry",
+  );
+  assert(
+    Math.abs(topFraction + bottomFraction - 1) < 1e-9,
+    "V2 layer mass fractions cover the whole tank",
+  );
+  const weightedFullTemperature = calculateSensorGeometryWeightedTemperature({
+    topTempC: 65,
+    bottomTempC: 45,
+    geometry: sensorGeometryV2,
+  });
+  assert(
+    weightedFullTemperature !== null &&
+      Math.abs(weightedFullTemperature - (65 * topFraction + 45 * bottomFraction)) < 1e-9,
+    "full-tank calibration uses the same V2 mass split as the energy model",
+  );
 
   assertEqual(
     resolveSensorGeometryForTimestamp({
