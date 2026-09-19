@@ -1,4 +1,7 @@
-import { sensorGeometryV2 } from "../_shared/energyModelV2/sensorGeometry.ts";
+import {
+  getSensorGeometryLayerMassFractions,
+  sensorGeometryV2,
+} from "../_shared/energyModelV2/sensorGeometry.ts";
 import {
   defaultEnergyReserveThresholds,
   evaluateEnergyReserve,
@@ -374,10 +377,10 @@ function isReliableDraw(draw: ReliableWaterDraw) {
 
 function observedStoredEnergyKwh(reading: ShadowTankReading, inletTempC: number) {
   const tank = sensorGeometryV2.tank;
-  const topHeight = tank.heightCm - sensorGeometryV2.topSensorDistanceFromTopCm;
-  const boundary = (topHeight + sensorGeometryV2.bottomSensorHeightFromBottomCm) / 2;
-  const bottomMassKg = tank.nominalVolumeLiters * Math.max(0, Math.min(boundary / tank.heightCm, 1));
-  const topMassKg = tank.nominalVolumeLiters - bottomMassKg;
+  const { bottomFraction, topFraction } =
+    getSensorGeometryLayerMassFractions(sensorGeometryV2);
+  const bottomMassKg = tank.nominalVolumeLiters * bottomFraction;
+  const topMassKg = tank.nominalVolumeLiters * topFraction;
   const bottomEnergy = layerEnergy(bottomMassKg, reading.bottom_temp as number, inletTempC);
   const topEnergy = layerEnergy(topMassKg, reading.top_temp as number, inletTempC);
   return bottomEnergy + topEnergy;
