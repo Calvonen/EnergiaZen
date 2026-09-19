@@ -30,6 +30,7 @@ const numericFields: SettingsValidationField[] = [
   "priceToleranceCents",
   "minTankTemperature",
   "maxTankTemperature",
+  "fullTankAverageTemperature",
   "v2TargetReservePercent",
   "v2SafetyReservePercent",
 ];
@@ -80,6 +81,7 @@ export function validateSettingsDraft(
   const v2SafetyReservePercent = draftSettings.v2SafetyReservePercent;
   const minTankTemperature = draftSettings.minTankTemperature;
   const maxTankTemperature = draftSettings.maxTankTemperature;
+  const fullTankAverageTemperature = draftSettings.fullTankAverageTemperature;
 
   if (
     isFiniteNumber(v2TargetReservePercent) &&
@@ -111,6 +113,28 @@ export function validateSettingsDraft(
     errors.push({
       field: "maxTankTemperature",
       message: "Maksimilämpötilan pitää ylittää minimilämpötila.",
+    });
+  }
+
+  if (
+    isFiniteNumber(fullTankAverageTemperature) &&
+    isFiniteNumber(maxTankTemperature) &&
+    fullTankAverageTemperature > maxTankTemperature
+  ) {
+    errors.push({
+      field: "fullTankAverageTemperature",
+      message: "Täyden varaajan kalibrointi ei voi ylittää maksimilämpötilaa.",
+    });
+  }
+
+  if (
+    isFiniteNumber(fullTankAverageTemperature) &&
+    isFiniteNumber(minTankTemperature) &&
+    fullTankAverageTemperature <= minTankTemperature
+  ) {
+    errors.push({
+      field: "fullTankAverageTemperature",
+      message: "Täyden varaajan kalibroinnin pitää ylittää minimilämpötila.",
     });
   }
 
