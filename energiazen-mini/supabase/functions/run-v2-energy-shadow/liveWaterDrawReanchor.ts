@@ -124,7 +124,6 @@ export function resolveLiveDrawReanchors({
       // period. We still fail closed if heating is active, the sample cadence
       // is broken, or either tank sensor is unavailable.
       if (
-        current.heating === true ||
         !finiteTemperature(current.top_temp) ||
         !finiteTemperature(current.bottom_temp)
       ) {
