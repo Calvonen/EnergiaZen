@@ -100,6 +100,38 @@ export function evaluateV2PreheatHorizon({
   };
 }
 
+export function getCompleteHelsinkiDayMinimumBilledPrices(
+  prices: ShadowElectricityPrice[],
+): Map<string, number> {
+  const grouped = new Map<string, ShadowElectricityPrice[]>();
+  for (const price of prices) {
+    if (!isUsableHourlyPrice(price)) continue;
+    const key = helsinkiDateKey(new Date(price.starts_at));
+    if (!key) continue;
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(price);
+    grouped.set(key, bucket);
+  }
+
+  const result = new Map<string, number>();
+  for (const [dateKey, dayPrices] of grouped) {
+    const dayStartMs = helsinkiDateStartMs(dateKey);
+    const nextDayStartMs = helsinkiDateStartMs(dateKeyOffset(dateKey, 1));
+    const ordered = [...dayPrices].sort(
+      (left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at),
+    );
+    if (!hasCompleteCoverage(ordered, dayStartMs, nextDayStartMs)) continue;
+
+    const billed = ordered
+      .map((price) => calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh))
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    if (billed.length === ordered.length && billed.length > 0) {
+      result.set(dateKey, Math.min(...billed));
+    }
+  }
+  return result;
+}
+
 export function evaluateV2PreheatOpportunity({
   now,
   prices,
@@ -183,11 +215,14 @@ function helsinkiDateKey(date: Date) {
   return year && month && day ? `${year}-${month}-${day}` : "";
 }
 
-function helsinkiDateKeyOffset(date: Date, dayOffset: number) {
-  const key = helsinkiDateKey(date);
-  const [year, month, day] = key.split("-").map(Number);
+function dateKeyOffset(dateKey: string, dayOffset: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
   if (![year, month, day].every(Number.isFinite)) return "";
   return new Date(Date.UTC(year, month - 1, day + dayOffset, 12)).toISOString().slice(0, 10);
+}
+
+function helsinkiDateKeyOffset(date: Date, dayOffset: number) {
+  return dateKeyOffset(helsinkiDateKey(date), dayOffset);
 }
 
 function helsinkiDateStartMs(dateKey: string) {
