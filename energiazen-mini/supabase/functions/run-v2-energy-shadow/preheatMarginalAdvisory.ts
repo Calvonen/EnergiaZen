@@ -566,9 +566,9 @@ function compareLaterSchedule(leftHourIds: string[], rightHourIds: string[]) {
   const left = [...leftHourIds].sort((a, b) => Date.parse(a) - Date.parse(b));
   const right = [...rightHourIds].sort((a, b) => Date.parse(a) - Date.parse(b));
   const count = Math.min(left.length, right.length);
-  for (let index = 0; index < count; index += 1) {
-    const leftMs = Date.parse(left[index]);
-    const rightMs = Date.parse(right[index]);
+  for (let offset = 1; offset <= count; offset += 1) {
+    const leftMs = Date.parse(left[left.length - offset]);
+    const rightMs = Date.parse(right[right.length - offset]);
     if (leftMs !== rightMs) return rightMs - leftMs;
   }
   return right.length - left.length;
