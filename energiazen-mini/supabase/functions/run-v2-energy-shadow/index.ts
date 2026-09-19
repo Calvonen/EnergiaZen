@@ -71,7 +71,7 @@ Deno.serve(async (request) => {
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("heating_control_settings")
-        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh,price_tolerance_cents")
+        .select("max_tank_temperature,full_tank_average_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh,price_tolerance_cents")
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
@@ -166,6 +166,7 @@ Deno.serve(async (request) => {
     const energyCapacityKwh = calculateV2EnergyCapacityKwh({
       inletTemperatureC: inletBaselineC,
       maxTankTemperatureC,
+      fullTankAverageTemperatureC: Number(settingsResult.data.full_tank_average_temperature),
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
     const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
