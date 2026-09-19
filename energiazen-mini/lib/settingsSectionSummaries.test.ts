@@ -18,11 +18,10 @@ function assertEqual(actual: unknown, expected: unknown, message: string) {
 export function runSettingsSectionSummaryUnitTests() {
   assertEqual(
     getTankSettingsSummary({
-      fullTankAverageTemperature: 70,
       maxTankTemperature: 70,
       tankSizeLiters: 290,
     }),
-    "290 l · maksimi 70 °C · täysi keskilämpö 70 °C",
+    "290 l · maksimi 70 °C",
     "varaajan perusasetusten yhteenveto muodostetaan nykyarvoista",
   );
   assertEqual(

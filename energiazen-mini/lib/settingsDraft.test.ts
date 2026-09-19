@@ -220,8 +220,7 @@ export async function runSettingsDraftUnitTests() {
   {
     const savedSettings = createSettings();
     const invalidDraft = createSettings({
-      fullTankShowers: 4,
-      targetShowerReserve: 5,
+      v2SafetyReservePercent: 100,
     });
     let localCalls = 0;
     let remoteCalls = 0;
@@ -285,8 +284,8 @@ export async function runSettingsDraftUnitTests() {
   {
     const savedSettings = createSettings();
     const warningDraft = createSettings({
-      safetyShowerReserve: 1,
-      targetShowerReserve: 1,
+      v2SafetyReservePercent: 65,
+      v2TargetReservePercent: 70,
     });
     const validation = validateSettingsDraft(warningDraft, savedSettings);
     let localCalls = 0;
@@ -304,7 +303,7 @@ export async function runSettingsDraftUnitTests() {
     });
 
     assertEqual(validation.errors, [], "varoitus ei ole estava virhe");
-    assertEqual(validation.warnings.length > 0, true, "pieni tavoite antaa varoituksen");
+    assertEqual(validation.warnings.length > 0, true, "lahekkainen V2-turvaraja antaa varoituksen");
     assertEqual(
       { localCalls, remoteCalls },
       { localCalls: 1, remoteCalls: 1 },
@@ -429,7 +428,7 @@ export async function runSettingsDraftUnitTests() {
   {
     const invalidNumbers = {
       ...createSettings(),
-      fullTankShowers: Number.NaN,
+      tankSizeLiters: Number.NaN,
       maxTankTemperature: Number.POSITIVE_INFINITY,
     };
     assertEqual(
@@ -440,22 +439,23 @@ export async function runSettingsDraftUnitTests() {
   }
 
   {
-    const savedSettings = createSettings();
-    const invalidRelations = validateSettingsDraft(
+    const savedSettings = createSettings({
+      fullTankAverageTemperature: 70,
+      maxTankTemperature: 70,
+    });
+    const loweredVisibleMaximum = validateSettingsDraft(
       createSettings({
-        fullTankAverageTemperature: 71,
-        maxTankTemperature: 70,
+        fullTankAverageTemperature: 70,
+        maxTankTemperature: 55,
       }),
       savedSettings,
     );
     assertEqual(
-      invalidRelations.errors.some(
-        (issue) =>
-          issue.field === "fullTankAverageTemperature" &&
-          issue.message.includes("maksimilämpötilaa"),
+      loweredVisibleMaximum.errors.some(
+        (issue) => issue.field === "fullTankAverageTemperature",
       ),
-      true,
-      "tayden varaajan lampotila ei saa ylittaa maksimia",
+      false,
+      "piilotettu legacy-tayden-varaajan lampotila ei esta nakyvan maksimilammon tallennusta",
     );
   }
 }

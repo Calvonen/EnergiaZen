@@ -37,13 +37,9 @@ import {
 import { useSettingsScenario } from "@/lib/settingsScenarioContext";
 import { supabase } from "@/lib/supabase";
 import { getShowerReserveOptions } from "@/lib/showerReserveSettings";
-import { getHeatingModeSettingKeys } from "@/lib/heatingModeSettings";
 import {
   getFallbackSettingsSummary,
-  getShowerCalculationSummary,
   getTankSettingsSummary,
-  getWarmWaterReserveSummary,
-  isWarmWaterReserveSectionVisible,
   toggleExpandedSection,
 } from "@/lib/settingsSectionSummaries";
 import {
@@ -71,7 +67,7 @@ type SettingsSection = {
   title: string;
 };
 
-type CollapsibleSectionKey = "fallback" | "showers" | "tank" | "warmWater";
+type CollapsibleSectionKey = "fallback" | "tank";
 
 function CollapsibleSettingsSection({
   accessibilityLabel,
@@ -299,9 +295,7 @@ export default function SettingsScreen() {
     Record<CollapsibleSectionKey, boolean>
   >({
     fallback: false,
-    showers: false,
     tank: false,
-    warmWater: false,
   });
 
   const loadTemperatureDropProfile = useCallback(async () => {
@@ -358,12 +352,7 @@ export default function SettingsScreen() {
 
   const settingsSections = useMemo(
     (): SettingsSection[] => {
-      const heatingModeSettingKeys = new Set(
-        getHeatingModeSettingKeys(settings.heatingNeedMode),
-      );
-      const showAutomaticSettings =
-        heatingModeSettingKeys.has("targetShowerReserve") &&
-        isWarmWaterReserveSectionVisible(settings.heatingNeedMode);
+      const showAutomaticSettings = settings.heatingNeedMode === "automatic";
 
       return [
       {
@@ -393,44 +382,11 @@ export default function SettingsScreen() {
         title: "Pörssisähkön ohjausasetukset",
         rows: [],
       },
-      {
-        title: "Suihkulaskenta",
-        rows: [
-          {
-            accent: "#ff9b30",
-            key: "fullTankAverageTemperature",
-            label: "Täyden varaajan vertailulämpö",
-            value: `${settings.fullTankAverageTemperature} °C`,
-          },
-          {
-            accent: "#b889ff",
-            key: "fullTankShowers",
-            label: "Täysi varaaja suihkuina",
-            value: `${settings.fullTankShowers} suihkua`,
-          },
-        ],
-      },
       ...(showAutomaticSettings
         ? [
             {
-              title: "Lämminvesivaraus",
+              title: "Automaattinen ohjaus",
               rows: [
-                {
-                  accent: "#36f4d4",
-                  description:
-                    "Nykyinen V1-ohjaus pyrkii pitämään käytettävissä yleensä vähintään tämän määrän suihkuja. Varaus voi hetkellisesti laskea tavoitteen alle, jos edullisia lämmitystunteja on tulossa.",
-                  key: "targetShowerReserve",
-                  label: "Tavoitevaraus suihkuina",
-                  value: `${settings.targetShowerReserve} suihkua`,
-                },
-                {
-                  accent: "#ffcf5a",
-                  description:
-                    "Nykyisen V1-ohjauksen ennustettu varaus ei saa laskea tämän alle. Jos raja uhkaa alittua, lämmitystä aikaistetaan hinnasta riippumatta.",
-                  key: "safetyShowerReserve",
-                  label: "Turvaraja suihkuina",
-                  value: `${settings.safetyShowerReserve} suihkua`,
-                },
                 {
                   accent: "#54eaa0",
                   description:
@@ -497,16 +453,6 @@ export default function SettingsScreen() {
         return {
           key: "tank" as const,
           summary: getTankSettingsSummary(settings),
-        };
-      case "Suihkulaskenta":
-        return {
-          key: "showers" as const,
-          summary: getShowerCalculationSummary(settings.fullTankShowers),
-        };
-      case "Lämminvesivaraus":
-        return {
-          key: "warmWater" as const,
-          summary: getWarmWaterReserveSummary(settings),
         };
       default:
         return null;
