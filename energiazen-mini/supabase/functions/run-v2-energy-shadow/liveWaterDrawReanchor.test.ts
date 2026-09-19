@@ -188,6 +188,28 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "five-minute drop candidate remains available through one-minute cold dwell",
   );
 
+  // An older valid cold dwell cannot validate a later isolated cold sample.
+  // Pattern: 20, 12, 12, 20, 20, 20, 12. The first dwell is heater-only and
+  // suppressed; the final isolated cold dip has no one-minute dwell of its own.
+  const oldDwellThenIsolatedCold = [
+    reading(30, 35.0, 20, true),
+    reading(31, 35.2, 12, true),
+    reading(32, 35.4, 12, true),
+    reading(33, 35.6, 20, true),
+    reading(34, 35.8, 20, true),
+    reading(35, 36.0, 20, true),
+    reading(36, 36.0, 12, false),
+  ];
+  const oldDwellThenIsolatedColdResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: oldDwellThenIsolatedCold,
+    reliableDraws: [],
+  });
+  assert(
+    !oldDwellThenIsolatedColdResult.unresolved,
+    "historical cold dwell cannot confirm a later isolated cold sample",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
