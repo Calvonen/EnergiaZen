@@ -25,14 +25,12 @@ export type LiveDrawReanchorResolution = {
 // Keep these deliberately aligned with the existing V2 heat-loss/water-draw
 // diagnostics. The live shadow is more conservative than the diagnostic: it
 // does not guess removed kWh for an unlabeled draw. It waits for inlet
-// recovery plus a quiet tank period, then re-anchors the physical balance to
-// the measured post-draw state.
+// recovery, then re-anchors the physical balance directly to the measured
+// post-draw tank state.
 const INLET_DRAW_CONFIRM_MARGIN_C = 1;
 const MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES = 1;
 const INLET_RECOVERY_MARGIN_C = 4;
 const MIN_INLET_RECOVERY_DURATION_MINUTES = 3;
-const MIN_TANK_STABILIZATION_MINUTES = 15;
-const MAX_SENSOR_CHANGE_C = 0.75;
 const MAX_SEGMENT_MINUTES = 2;
 const LABEL_MATCH_MARGIN_MINUTES = 5;
 
@@ -51,9 +49,8 @@ export function resolveLiveDrawReanchors({
 
   const reanchorIndexes: number[] = [];
   let detectedUnlabeledDrawCount = 0;
-  let mode: "normal" | "recovery" | "stabilizing" = "normal";
+  let mode: "normal" | "recovery" = "normal";
   let warmRecoveryStartMs: number | null = null;
-  let stableTankStartMs: number | null = null;
 
   for (let index = 1; index < readings.length; index += 1) {
     const current = readings[index];
@@ -63,7 +60,6 @@ export function resolveLiveDrawReanchors({
     if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs) || currentMs <= previousMs) {
       if (mode !== "normal") {
         warmRecoveryStartMs = null;
-        stableTankStartMs = null;
       }
       continue;
     }
@@ -92,16 +88,13 @@ export function resolveLiveDrawReanchors({
         detectedUnlabeledDrawCount += 1;
         mode = "recovery";
         warmRecoveryStartMs = null;
-        stableTankStartMs = null;
       }
       continue;
     }
 
     if (unmatchedDraw) {
-      if (mode !== "recovery") detectedUnlabeledDrawCount += 1;
       mode = "recovery";
       warmRecoveryStartMs = null;
-      stableTankStartMs = null;
       continue;
     }
 
@@ -125,40 +118,23 @@ export function resolveLiveDrawReanchors({
         continue;
       }
 
-      mode = "stabilizing";
-      stableTankStartMs = currentMs;
-      continue;
+      // Once the inlet has stayed clearly above the cold-water band for three
+      // contiguous minutes, the draw is over. Re-anchor immediately to the
+      // measured tank state instead of waiting an additional 15-minute quiet
+      // period. We still fail closed if heating is active, the sample cadence
+      // is broken, or either tank sensor is unavailable.
+      if (
+        !finiteTemperature(current.top_temp) ||
+        !finiteTemperature(current.bottom_temp)
+      ) {
+        warmRecoveryStartMs = null;
+        continue;
+      }
+
+      reanchorIndexes.push(index);
+      mode = "normal";
+      warmRecoveryStartMs = null;
     }
-
-    // Stabilization is intentionally strict. Any heating, sampling gap or
-    // rapid tank-sensor movement resets the quiet-period clock. We stay in
-    // stabilizing mode so the shadow can recover once the tank is quiet again.
-    const gapMinutes = (currentMs - previousMs) / 60_000;
-    const stableTransition =
-      current.heating !== true &&
-      gapMinutes > 0 &&
-      gapMinutes <= MAX_SEGMENT_MINUTES &&
-      finiteTemperature(current.top_temp) &&
-      finiteTemperature(previous.top_temp) &&
-      finiteTemperature(current.bottom_temp) &&
-      finiteTemperature(previous.bottom_temp) &&
-      Math.abs((current.top_temp as number) - (previous.top_temp as number)) <= MAX_SENSOR_CHANGE_C &&
-      Math.abs((current.bottom_temp as number) - (previous.bottom_temp as number)) <= MAX_SENSOR_CHANGE_C;
-
-    if (!stableTransition) {
-      stableTankStartMs = null;
-      continue;
-    }
-
-    stableTankStartMs ??= currentMs;
-    if (currentMs - stableTankStartMs < MIN_TANK_STABILIZATION_MINUTES * 60_000) {
-      continue;
-    }
-
-    reanchorIndexes.push(index);
-    mode = "normal";
-    warmRecoveryStartMs = null;
-    stableTankStartMs = null;
   }
 
   return {
