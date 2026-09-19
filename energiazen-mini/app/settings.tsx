@@ -49,6 +49,7 @@ import {
   TemperatureDropProfile,
 } from "@/lib/temperatureDropProfile";
 import { reservePercentToKwh } from "@/lib/energyModelV2/energyReservePercent";
+import { calculateSensorGeometryWeightedTemperature } from "@/lib/energyModelV2/sensorGeometry";
 import { V2_RECOMMENDED_PREHEAT_PERCENT } from "@/lib/v2HomeReservePresentation";
 
 type SettingsRow = {
@@ -375,6 +376,14 @@ export default function SettingsScreen() {
             key: "maxTankTemperature",
             label: "Maksimilämpö",
             value: `${settings.maxTankTemperature} °C`,
+          },
+          {
+            accent: "#ffcf5a",
+            description:
+              "Täyden varaajan käytännön vertailulämpötila. V2 käyttää tätä 100 % energiavarauksen kalibrointiin. Voit asettaa arvon käsin tai kalibroida sen viimeisen 7 päivän lämpötiladatasta.",
+            key: "fullTankAverageTemperature",
+            label: "Täyden varaajan kalibrointi",
+            value: `${settings.fullTankAverageTemperature} °C`,
           },
         ],
       },
@@ -718,7 +727,7 @@ export default function SettingsScreen() {
     const roundedAverageTemp = Math.round(candidate.weightedTemp);
     const currentAverageTemp = settings.fullTankAverageTemperature;
     const calibrationDetails = [
-      `Löytyi korkein 70/30-lämpö: ${roundedAverageTemp} °C`,
+      `Löytyi korkein V2-geometrialla painotettu lämpö: ${roundedAverageTemp} °C`,
       `Nykyinen asetus: ${currentAverageTemp} °C`,
       `Ylä: ${Math.round(candidate.topTemp)} °C`,
       `Ala: ${Math.round(candidate.bottomTemp)} °C`,
@@ -798,8 +807,13 @@ export default function SettingsScreen() {
             return best;
           }
 
-          const weightedTemp =
-            reading.top_temp * 0.7 + reading.bottom_temp * 0.3;
+          const weightedTemp = calculateSensorGeometryWeightedTemperature({
+            topTempC: reading.top_temp,
+            bottomTempC: reading.bottom_temp,
+          });
+          if (weightedTemp === null) {
+            return best;
+          }
 
           if (!best || weightedTemp > best.weightedTemp) {
             return {

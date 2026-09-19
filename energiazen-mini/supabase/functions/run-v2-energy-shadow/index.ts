@@ -71,7 +71,7 @@ Deno.serve(async (request) => {
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("heating_control_settings")
-        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh,price_tolerance_cents")
+        .select("max_tank_temperature,full_tank_average_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh,price_tolerance_cents")
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
@@ -163,13 +163,19 @@ Deno.serve(async (request) => {
     );
 
     const inletBaselineC = deriveUsableReadingInletBaselineC(readings) ?? Number.NaN;
-    const energyCapacityKwh = calculateV2EnergyCapacityKwh({
+    const reserveCapacityKwh = calculateV2EnergyCapacityKwh({
+      inletTemperatureC: inletBaselineC,
+      maxTankTemperatureC,
+      fullTankAverageTemperatureC: Number(settingsResult.data.full_tank_average_temperature),
+      tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
+    });
+    const physicalEnergyCapacityKwh = calculateV2EnergyCapacityKwh({
       inletTemperatureC: inletBaselineC,
       maxTankTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const targetEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, energyCapacityKwh);
-    const safetyEnergyKwh = energyCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, energyCapacityKwh);
+    const targetEnergyKwh = reserveCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, reserveCapacityKwh);
+    const safetyEnergyKwh = reserveCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, reserveCapacityKwh);
 
     const baseResult = runLiveReserveShadow({
       coldInletDrawBaselineC:
@@ -193,7 +199,7 @@ Deno.serve(async (request) => {
     const plan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraints,
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -205,7 +211,8 @@ Deno.serve(async (request) => {
       baselinePlan: plan,
       conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
       constraints,
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
       maxPreheatHours: automaticMaxHeatingHours,
       now,
@@ -224,7 +231,7 @@ Deno.serve(async (request) => {
               .map((price) => price.starts_at)
               .filter((hourId) => !selected.has(hourId)),
           },
-          energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+          energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
           inletBaselineC,
           maxTankTemperatureC,
           now,
@@ -269,7 +276,7 @@ Deno.serve(async (request) => {
           .map((price) => price.starts_at)
           .filter((hourId) => !publicationHourIdSet.has(hourId)),
       },
-      energyCapacityKwh: energyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -397,7 +404,7 @@ Deno.serve(async (request) => {
       sensor_gap_kwh: result.sensorGapKwh, balance_uncertainty_kwh: result.balanceUncertaintyKwh,
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
-      conservative_energy_kwh: result.conservativeEnergyKwh, energy_capacity_kwh: energyCapacityKwh,
+      conservative_energy_kwh: result.conservativeEnergyKwh, energy_capacity_kwh: reserveCapacityKwh,
       safety_reserve_percent: reservePercents.safetyPercent, target_reserve_percent: hardTargetPercent,
       recommended_preheat_percent: recommendedPreheatPercent,
       safety_energy_kwh: result.safetyEnergyKwh, target_energy_kwh: result.targetEnergyKwh,
@@ -435,7 +442,7 @@ Deno.serve(async (request) => {
 
     return jsonResponse({
       status: "ok", available: result.available, comparison: "v1_unavailable",
-      energy_capacity_kwh: energyCapacityKwh, safety_reserve_percent: reservePercents.safetyPercent,
+      energy_capacity_kwh: reserveCapacityKwh, safety_reserve_percent: reservePercents.safetyPercent,
       target_reserve_percent: hardTargetPercent, recommended_preheat_percent: recommendedPreheatPercent,
       safety_energy_kwh: result.safetyEnergyKwh,
       target_energy_kwh: result.targetEnergyKwh, remaining_energy_kwh: result.remainingEnergyKwh,

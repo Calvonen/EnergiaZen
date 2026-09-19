@@ -48,6 +48,41 @@ export const sensorGeometryV2 = {
 // this instant. Keep this as the single production boundary for every model
 // and learning pipeline; timestamps before it are V1 and timestamps at or
 // after it are V2.
+
+export function getSensorGeometryLayerMassFractions(
+  geometry: SensorGeometry = sensorGeometryV2,
+) {
+  const topHeight =
+    geometry.tank.heightCm - geometry.topSensorDistanceFromTopCm;
+  const boundary =
+    (topHeight + geometry.bottomSensorHeightFromBottomCm) / 2;
+  const bottomFraction = Math.max(
+    0,
+    Math.min(boundary / geometry.tank.heightCm, 1),
+  );
+  return {
+    bottomFraction,
+    topFraction: 1 - bottomFraction,
+  };
+}
+
+export function calculateSensorGeometryWeightedTemperature({
+  bottomTempC,
+  geometry = sensorGeometryV2,
+  topTempC,
+}: {
+  bottomTempC: number;
+  geometry?: SensorGeometry;
+  topTempC: number;
+}) {
+  if (!Number.isFinite(topTempC) || !Number.isFinite(bottomTempC)) {
+    return null;
+  }
+  const { bottomFraction, topFraction } =
+    getSensorGeometryLayerMassFractions(geometry);
+  return topTempC * topFraction + bottomTempC * bottomFraction;
+}
+
 export const topSensorMovedAt = "2026-08-05T14:00:00.000Z";
 
 export type SensorGeometryEpoch = SensorGeometry & {
