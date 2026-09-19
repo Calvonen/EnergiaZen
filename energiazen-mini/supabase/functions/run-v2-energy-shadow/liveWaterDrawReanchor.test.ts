@@ -171,6 +171,23 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "cold dwell before a later warm drop cannot confirm that later candidate",
   );
 
+  // A draw candidate at the exact five-minute detector boundary must survive
+  // long enough for the one-minute confirmation dwell to complete.
+  const boundaryCandidateThenColdDwell = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(36, 34.6, 12.4, false),
+  ];
+  const boundaryCandidateThenColdDwellResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: boundaryCandidateThenColdDwell,
+    reliableDraws: [],
+  });
+  assert(
+    boundaryCandidateThenColdDwellResult.unresolved,
+    "five-minute drop candidate remains available through one-minute cold dwell",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
