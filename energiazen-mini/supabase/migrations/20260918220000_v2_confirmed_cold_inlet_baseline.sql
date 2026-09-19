@@ -1,5 +1,5 @@
 create or replace function public.get_confirmed_cold_inlet_baseline(
-  p_since timestamptz default now() - interval '7 days',
+  p_since timestamptz default now() - interval '56 days',
   p_until timestamptz default now()
 )
 returns double precision
@@ -8,30 +8,21 @@ stable
 security definer
 set search_path = public
 as $$
-  with candidates as materialized (
-    select created_at, inlet_temp
-    from public.tank_readings
-    where created_at >= p_since
-      and created_at <= p_until
-      and inlet_temp between 1 and 30
-  ),
-  confirmed as (
-    select candidate.inlet_temp
-    from candidates candidate
-    where exists (
-      select 1
-      from candidates neighbor
-      where neighbor.created_at <> candidate.created_at
-        and neighbor.created_at between
-          candidate.created_at - interval '3 minutes'
-          and candidate.created_at + interval '3 minutes'
-        and neighbor.inlet_temp >= candidate.inlet_temp
-        and neighbor.inlet_temp <= candidate.inlet_temp + 2
-    )
+  with weekly as (
+    select minimum_inlet_temp
+    from public.get_weekly_minimum_inlet_temperature(p_since, p_until)
+    where minimum_inlet_temp between 1 and 30
   )
-  select min(inlet_temp)::double precision
-  from confirmed;
+  select case
+    when count(*) >= 2
+      then percentile_cont(0.5) within group (order by minimum_inlet_temp)
+    else null
+  end::double precision
+  from weekly;
 $$;
+
+comment on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
+is 'Returns a robust learned cold-water baseline from the median of at least two historical weekly confirmed minima. Uses get_weekly_minimum_inlet_temperature so neighbor confirmation keeps indexed tank_readings timestamp lookups.';
 
 revoke all on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
   from public, anon, authenticated;
