@@ -58,6 +58,7 @@ Deno.serve(async (request) => {
     const now = new Date();
     const replayStart = new Date(now.getTime() - replayWindowHours * 3_600_000);
     const priceFetchEnd = new Date(now.getTime() + priceFetchWindowHours * 3_600_000);
+    const priceReferenceStart = new Date(now.getTime() - 30 * 3_600_000);
     const [readings, draws] = await Promise.all([
       fetchTankReadings(supabase, replayStart.toISOString(), now.toISOString()),
       fetchWaterDraws(supabase, replayStart.toISOString(), now.toISOString()),
@@ -65,17 +66,23 @@ Deno.serve(async (request) => {
     const today = helsinkiDateKey(now);
     const tomorrow = helsinkiDateKeyOffset(now, 1);
 
-    const [v1Result, settingsResult, pricesResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult, temperatureDropProfileResult, coldInletBaselineResult] = await Promise.all([
+    const [v1Result, settingsResult, pricesResult, priceReferenceResult, heatingPlansResult, stagedVersionsResult, controlPlaneStateResult, temperatureDropProfileResult, coldInletBaselineResult] = await Promise.all([
       supabase.from("heating_plan_shadow_runs").select("id,run_at,target_hours")
         .gte("run_at", new Date(now.getTime() - 15 * 60_000).toISOString())
         .order("run_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("heating_control_settings")
-        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh")
+        .select("max_tank_temperature,automatic_max_heating_hours,v2_target_reserve_percent,v2_safety_reserve_percent,v2_max_billed_price_cents_kwh,price_tolerance_cents")
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
         .eq("region", "FI").eq("resolution_minutes", 60).gt("ends_at", now.toISOString())
         .lte("starts_at", priceFetchEnd.toISOString()).order("starts_at", { ascending: true }),
+      supabase.from("electricity_prices")
+        .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
+        .eq("region", "FI").eq("resolution_minutes", 60)
+        .gte("starts_at", priceReferenceStart.toISOString())
+        .lte("starts_at", priceFetchEnd.toISOString())
+        .order("starts_at", { ascending: true }),
       supabase.from("heating_plans").select("plan_date,planned_hours,mode")
         .in("plan_date", [today, tomorrow]),
       supabase.from("v2_heating_plan_publications").select("plan_date,updated_at")
@@ -97,6 +104,7 @@ Deno.serve(async (request) => {
     if (v1Result.error) throw new Error(`Failed to fetch V1 shadow snapshot: ${v1Result.error.message}`);
     if (settingsResult.error) throw new Error(`Failed to fetch heating settings: ${settingsResult.error.message}`);
     if (pricesResult.error) throw new Error(`Failed to fetch electricity prices: ${pricesResult.error.message}`);
+    if (priceReferenceResult.error) throw new Error(`Failed to fetch price tolerance reference prices: ${priceReferenceResult.error.message}`);
     if (heatingPlansResult.error) throw new Error(`Failed to fetch heating plans: ${heatingPlansResult.error.message}`);
     if (stagedVersionsResult.error) throw new Error(`Failed to fetch V2 staged plan versions: ${stagedVersionsResult.error.message}`);
     if (controlPlaneStateResult.error) throw new Error(`Failed to resolve heating control-plane state: ${controlPlaneStateResult.error.message}`);
@@ -106,6 +114,7 @@ Deno.serve(async (request) => {
 
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
+    const priceReferencePrices = (priceReferenceResult.data ?? []) as ShadowElectricityPrice[];
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
     const learnedDropProfile = temperatureDropProfileResult.data
@@ -201,6 +210,8 @@ Deno.serve(async (request) => {
       maxPreheatHours: automaticMaxHeatingHours,
       now,
       prices,
+      priceReferencePrices,
+      priceToleranceCents: Number(settingsResult.data.price_tolerance_cents ?? 0),
       recommendedPreheatPercent,
       remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
       evaluateHourSelection: (selectedHourIds) => {
