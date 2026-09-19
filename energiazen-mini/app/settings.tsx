@@ -376,6 +376,14 @@ export default function SettingsScreen() {
             label: "Maksimilämpö",
             value: `${settings.maxTankTemperature} °C`,
           },
+          {
+            accent: "#ffcf5a",
+            description:
+              "Täyden varaajan käytännön vertailulämpötila. V2 käyttää tätä 100 % energiavarauksen kalibrointiin. Voit asettaa arvon käsin tai kalibroida sen viimeisen 7 päivän lämpötiladatasta.",
+            key: "fullTankAverageTemperature",
+            label: "Täyden varaajan kalibrointi",
+            value: `${settings.fullTankAverageTemperature} °C`,
+          },
         ],
       },
       {
