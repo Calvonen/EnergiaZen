@@ -1,4 +1,4 @@
-import { evaluateV2PreheatOpportunity } from "./preheatPolicy.ts";
+import { evaluateV2PreheatHorizon, evaluateV2PreheatOpportunity } from "./preheatPolicy.ts";
 import type { ShadowElectricityPrice } from "./planShadow.ts";
 
 function assert(condition: boolean, message: string) {
@@ -62,6 +62,22 @@ export function runV2PreheatPolicyUnitTests() {
     missingTomorrowHour.reason,
     "tomorrow_prices_incomplete",
     "incomplete horizon has explicit reason",
+  );
+
+  const missingTomorrowHorizon = evaluateV2PreheatHorizon({
+    now,
+    prices: [price("2026-09-17T13:00:00.000Z", 1), ...tomorrow.slice(0, 23)],
+  });
+  assert(!missingTomorrowHorizon.available, "incomplete tomorrow remains unavailable for cross-day comparison");
+  assertEqual(
+    missingTomorrowHorizon.futureTodayHourIds.length,
+    1,
+    "incomplete tomorrow must preserve known remaining-today hours for bounded soft fill",
+  );
+  assertEqual(
+    missingTomorrowHorizon.futureTodayHourIds[0],
+    "2026-09-17T13:00:00.000Z",
+    "remaining-today horizon survives missing tomorrow prices",
   );
 
   const tomorrowCheaper = evaluateV2PreheatOpportunity({
