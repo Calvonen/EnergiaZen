@@ -23,6 +23,32 @@ export function runEnergyReservePercentUnitTests() {
     tankVolumeLiters: 290,
   });
   assertClose(capacity, 16.864, 0.001, "290 l tank capacity from 15 C to 65 C");
+
+  const calibratedCapacity = calculateV2EnergyCapacityKwh({
+    inletTemperatureC: 15,
+    maxTankTemperatureC: 65,
+    fullTankAverageTemperatureC: 59,
+    tankVolumeLiters: 290,
+  });
+  assertClose(
+    calibratedCapacity,
+    14.841,
+    0.001,
+    "calibrated 59 C full-tank temperature defines practical 100 percent capacity",
+  );
+
+  const invalidCalibrationFallsBack = calculateV2EnergyCapacityKwh({
+    inletTemperatureC: 15,
+    maxTankTemperatureC: 65,
+    fullTankAverageTemperatureC: 70,
+    tankVolumeLiters: 290,
+  });
+  assertClose(
+    invalidCalibrationFallsBack,
+    capacity as number,
+    0.001,
+    "calibration above configured max falls back to theoretical max-temperature capacity",
+  );
   assertClose(reservePercentToKwh(90, capacity as number), 15.178, 0.001, "90 percent preheat recommendation converts to kWh");
   assertClose(reservePercentToKwh(30, capacity as number), 5.059, 0.001, "30 percent safety converts to kWh");
   assertClose(reserveKwhToPercent(12.648, capacity as number), 75, 0.01, "kWh converts back to percent");
