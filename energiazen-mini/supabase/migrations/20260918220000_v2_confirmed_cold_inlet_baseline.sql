@@ -25,17 +25,41 @@ as $$
       and w.estimated_water_draw_net_energy_kwh > 0
       and 'cold_inlet' = any(w.detection_kinds)
   ),
-  draw_minima as (
+  confirmed_draw_readings as (
     select
       d.week_start,
       d.id,
-      min(tr.inlet_temp) as minimum_inlet_temp
+      tr.created_at,
+      tr.inlet_temp
     from reliable_draws d
     join public.tank_readings tr
       on tr.created_at >= d.event_started_at
       and tr.created_at <= d.event_ended_at
       and tr.inlet_temp between 1 and 30
-    group by d.week_start, d.id
+    where exists (
+      select 1
+      from public.tank_readings n
+      where n.created_at >= greatest(
+          d.event_started_at,
+          tr.created_at - interval '3 minutes'
+        )
+        and n.created_at <= least(
+          d.event_ended_at,
+          tr.created_at + interval '3 minutes'
+        )
+        and n.created_at <> tr.created_at
+        and n.inlet_temp is not null
+        and n.inlet_temp >= tr.inlet_temp
+        and n.inlet_temp <= tr.inlet_temp + 2
+    )
+  ),
+  draw_minima as (
+    select
+      week_start,
+      id,
+      min(inlet_temp) as minimum_inlet_temp
+    from confirmed_draw_readings
+    group by week_start, id
   ),
   weekly as (
     select
@@ -59,7 +83,7 @@ as $$
 $$;
 
 comment on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
-is 'Returns a robust cold-water baseline from the median of at least two complete historical Helsinki weeks that contain energy-reliable, positive-energy water-draw labels with cold_inlet evidence. The inlet minimum is measured only inside those independently verified draw intervals, so recurring unlabeled nuisance plateaus cannot teach the baseline. Partial weeks at both history boundaries are excluded and p_until remains before the active replay.';
+is 'Returns a robust cold-water baseline from the median of at least two complete historical Helsinki weeks that contain energy-reliable, positive-energy water-draw labels with cold_inlet evidence. Per-draw inlet minima are accepted only when a nearby reading within the same labeled draw confirms the low value, preventing single-sample sensor glitches from teaching the baseline. Recurring unlabeled nuisance plateaus cannot teach the baseline. Partial weeks at both history boundaries are excluded and p_until remains before the active replay.';
 
 revoke all on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
   from public, anon, authenticated;
