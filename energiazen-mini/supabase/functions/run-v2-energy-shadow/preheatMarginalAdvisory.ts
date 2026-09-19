@@ -10,6 +10,7 @@ import {
 import {
   evaluateV2PreheatHorizon,
   evaluateV2PreheatOpportunity,
+  getCompleteHelsinkiDayMinimumBilledPrices,
   type V2PreheatHorizon,
   type V2PreheatOpportunity,
 } from "./preheatPolicy.ts";
@@ -67,6 +68,8 @@ export function buildV2MarginalPreheatAdvisory({
   recommendedPreheatPercent,
   remainingEnergyKwh,
   evaluateHourSelection,
+  priceReferencePrices = prices,
+  priceToleranceCents = 0,
 }: {
   baselinePlan: LiveEnergyPlanShadowResult;
   conservativeEnergyKwh: number;
@@ -79,6 +82,8 @@ export function buildV2MarginalPreheatAdvisory({
   recommendedPreheatPercent?: number;
   remainingEnergyKwh: number;
   evaluateHourSelection?: (selectedHourIds: string[]) => LiveEnergyPlanShadowResult;
+  priceReferencePrices?: ShadowElectricityPrice[];
+  priceToleranceCents?: number;
 }): V2MarginalPreheatAdvisory {
   const level = evaluateV2SoftPreheatLevel({
     conservativeEnergyKwh,
@@ -156,6 +161,8 @@ export function buildV2MarginalPreheatAdvisory({
       horizon,
       level,
       prices,
+      priceReferencePrices,
+      priceToleranceCents,
     });
   }
 
@@ -260,6 +267,8 @@ function buildHorizonSoftFillFallback({
   horizon,
   level,
   prices,
+  priceReferencePrices,
+  priceToleranceCents,
 }: {
   baselinePlan: LiveEnergyPlanShadowResult;
   baselineSelectedHourIds: Set<string>;
@@ -269,6 +278,8 @@ function buildHorizonSoftFillFallback({
   horizon: V2PreheatHorizon;
   level: V2SoftPreheatLevel;
   prices: ShadowElectricityPrice[];
+  priceReferencePrices: ShadowElectricityPrice[];
+  priceToleranceCents: number;
 }): V2MarginalPreheatAdvisory {
   const targetKwh = level.recommendedPreheatTargetKwh;
   if (targetKwh === null || configuredHourCap <= 0) {
@@ -285,6 +296,12 @@ function buildHorizonSoftFillFallback({
   const forbidden = new Set(constraints.forbiddenHeatingHourIds);
   const required = new Set(constraints.requiredHeatingHourIds);
   const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const dailyMinimumBilledPrices =
+    getCompleteHelsinkiDayMinimumBilledPrices(priceReferencePrices);
+  const normalizedPriceToleranceCents =
+    Number.isFinite(priceToleranceCents) && priceToleranceCents > 0
+      ? priceToleranceCents
+      : 0;
   const candidatePreheatHourIds = [
     ...horizon.futureTodayHourIds,
     ...horizon.tomorrowHourIds,
@@ -306,6 +323,7 @@ function buildHorizonSoftFillFallback({
 
   type Candidate = {
     addedHourIds: string[];
+    effectiveCostCents: number;
     finalConservativeEnergyKwh: number;
     lastCandidateIndex: number;
     totalCostCents: number;
@@ -320,6 +338,7 @@ function buildHorizonSoftFillFallback({
   let forecastEvaluations = 0;
   let beam: Candidate[] = [{
     addedHourIds: [],
+    effectiveCostCents: 0,
     finalConservativeEnergyKwh: Math.max(
       targetKwh - (level.recommendedPreheatEnergyKwh ?? 0),
       0,
@@ -369,8 +388,20 @@ function buildHorizonSoftFillFallback({
           continue;
         }
 
+        const effectiveCostCents = addedHourIds.reduce((sum, hourId) => {
+          const price = effectiveBilledPrice(
+            hourId,
+            priceById,
+            dailyMinimumBilledPrices,
+            normalizedPriceToleranceCents,
+          );
+          return sum + (price ?? Number.POSITIVE_INFINITY);
+        }, 0);
+        if (!Number.isFinite(effectiveCostCents)) continue;
+
         const candidate: Candidate = {
           addedHourIds,
+          effectiveCostCents,
           finalConservativeEnergyKwh: simulated.finalConservativeEnergyKwh,
           lastCandidateIndex: candidateIndex,
           totalCostCents: simulated.totalCostCents,
@@ -380,11 +411,11 @@ function buildHorizonSoftFillFallback({
         if (candidate.finalConservativeEnergyKwh + 1e-9 >= targetKwh) {
           if (
             !bestReached ||
-            candidate.totalCostCents < bestReached.totalCostCents ||
-            (
-              candidate.totalCostCents === bestReached.totalCostCents &&
-              candidate.addedHourIds.join("|") < bestReached.addedHourIds.join("|")
-            )
+            compareHorizonCandidate(
+              candidate,
+              bestReached,
+              normalizedPriceToleranceCents > 0,
+            ) < 0
           ) {
             bestReached = candidate;
           }
@@ -396,7 +427,11 @@ function buildHorizonSoftFillFallback({
               candidate.finalConservativeEnergyKwh -
                 bestPartial.finalConservativeEnergyKwh,
             ) <= 1e-9 &&
-            candidate.totalCostCents < bestPartial.totalCostCents
+            compareHorizonCandidate(
+              candidate,
+              bestPartial,
+              normalizedPriceToleranceCents > 0,
+            ) < 0
           )
         ) {
           bestPartial = candidate;
@@ -408,7 +443,11 @@ function buildHorizonSoftFillFallback({
     if (bestReached) break;
     if (!expanded.length || forecastEvaluations >= maxForecastEvaluations) break;
 
-    beam = selectDiverseBeam(expanded, beamWidth);
+    beam = selectDiverseBeam(
+      expanded,
+      beamWidth,
+      normalizedPriceToleranceCents > 0,
+    );
   }
 
   const winner = bestReached ?? bestPartial;
@@ -446,21 +485,20 @@ function buildHorizonSoftFillFallback({
 
 function selectDiverseBeam<T extends {
   addedHourIds: string[];
+  effectiveCostCents: number;
   finalConservativeEnergyKwh: number;
   totalCostCents: number;
-}>(candidates: T[], width: number): T[] {
+}>(candidates: T[], width: number, preferLaterOnToleranceTie: boolean): T[] {
   if (candidates.length <= width) return candidates;
 
   const half = Math.max(1, Math.floor(width / 2));
   const byEnergy = [...candidates].sort((left, right) =>
     right.finalConservativeEnergyKwh - left.finalConservativeEnergyKwh ||
-    left.totalCostCents - right.totalCostCents ||
-    left.addedHourIds.join("|").localeCompare(right.addedHourIds.join("|"))
+    compareHorizonCandidate(left, right, preferLaterOnToleranceTie)
   );
   const byCost = [...candidates].sort((left, right) =>
-    left.totalCostCents - right.totalCostCents ||
-    right.finalConservativeEnergyKwh - left.finalConservativeEnergyKwh ||
-    left.addedHourIds.join("|").localeCompare(right.addedHourIds.join("|"))
+    compareHorizonCandidate(left, right, preferLaterOnToleranceTie) ||
+    right.finalConservativeEnergyKwh - left.finalConservativeEnergyKwh
   );
 
   const selected: T[] = [];
@@ -473,6 +511,67 @@ function selectDiverseBeam<T extends {
     if (selected.length >= width) break;
   }
   return selected;
+}
+
+const helsinkiPriceDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Europe/Helsinki",
+  year: "numeric",
+});
+
+function effectiveBilledPrice(
+  hourId: string,
+  priceById: Map<string, ShadowElectricityPrice>,
+  dailyMinimumBilledPrices: Map<string, number>,
+  priceToleranceCents: number,
+) {
+  const actual = billedPrice(hourId, priceById);
+  if (actual === null || priceToleranceCents <= 0) return actual;
+  const dateKey = helsinkiPriceDateFormatter.format(new Date(hourId));
+  const dailyMinimum = dailyMinimumBilledPrices.get(dateKey);
+  if (dailyMinimum === undefined) return actual;
+  return actual <= dailyMinimum + priceToleranceCents + 1e-9
+    ? dailyMinimum
+    : actual;
+}
+
+function compareHorizonCandidate(
+  left: {
+    addedHourIds: string[];
+    effectiveCostCents: number;
+    totalCostCents: number;
+  },
+  right: {
+    addedHourIds: string[];
+    effectiveCostCents: number;
+    totalCostCents: number;
+  },
+  preferLaterOnToleranceTie: boolean,
+) {
+  if (Math.abs(left.effectiveCostCents - right.effectiveCostCents) > 1e-9) {
+    return left.effectiveCostCents - right.effectiveCostCents;
+  }
+  if (preferLaterOnToleranceTie) {
+    const later = compareLaterSchedule(left.addedHourIds, right.addedHourIds);
+    if (later !== 0) return later;
+  }
+  if (Math.abs(left.totalCostCents - right.totalCostCents) > 1e-9) {
+    return left.totalCostCents - right.totalCostCents;
+  }
+  return left.addedHourIds.join("|").localeCompare(right.addedHourIds.join("|"));
+}
+
+function compareLaterSchedule(leftHourIds: string[], rightHourIds: string[]) {
+  const left = [...leftHourIds].sort((a, b) => Date.parse(a) - Date.parse(b));
+  const right = [...rightHourIds].sort((a, b) => Date.parse(a) - Date.parse(b));
+  const count = Math.min(left.length, right.length);
+  for (let offset = 1; offset <= count; offset += 1) {
+    const leftMs = Date.parse(left[left.length - offset]);
+    const rightMs = Date.parse(right[right.length - offset]);
+    if (leftMs !== rightMs) return rightMs - leftMs;
+  }
+  return right.length - left.length;
 }
 
 function buildSoftFillFallback({

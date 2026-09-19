@@ -331,6 +331,126 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected the pre-midnight midday plan to survive the date rollover instead of becoming an empty plan",
   );
 
+  const todayStartUtc = Date.parse("2026-09-16T21:00:00.000Z");
+  const completeTodayForTolerance = Array.from({ length: 24 }, (_, index) => {
+    const startsAt = new Date(todayStartUtc + index * 3_600_000).toISOString();
+    const spot =
+      index === 2 ? 1.8 :
+      startsAt === "2026-09-17T13:00:00.000Z" ? 2.0 :
+      startsAt === "2026-09-17T14:00:00.000Z" ? 2.6 :
+      10;
+    return hourly(startsAt, spot);
+  });
+  const toleranceFuturePrices = [
+    hourly("2026-09-17T13:00:00.000Z", 2.0),
+    hourly("2026-09-17T14:00:00.000Z", 2.6),
+    ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+  ];
+  const tolerancePriceById = new Map(
+    toleranceFuturePrices.map((price) => [price.starts_at, price.spot_price_cents_kwh]),
+  );
+  const evaluateToleranceSelection = (selectedHourIds: string[]) => ({
+    ...baseline(selectedHourIds),
+    finalConservativeEnergyKwh: selectedHourIds.length ? 18.5 : 12,
+    totalCostCents: selectedHourIds.reduce(
+      (sum, hourId) => sum + (tolerancePriceById.get(hourId) ?? 0),
+      0,
+    ),
+  });
+
+  const zeroToleranceSoftFill = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 1,
+    now,
+    prices: toleranceFuturePrices,
+    priceReferencePrices: [
+      ...completeTodayForTolerance,
+      ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+    ],
+    priceToleranceCents: 0,
+    recommendedPreheatPercent: 90,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: evaluateToleranceSelection,
+  });
+  assert(
+    zeroToleranceSoftFill.recommendedPreheatHourIds[0] ===
+      "2026-09-17T13:00:00.000Z",
+    "expected zero tolerance to preserve raw-cost ranking",
+  );
+
+  const oneCentToleranceSoftFill = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 1,
+    now,
+    prices: toleranceFuturePrices,
+    priceReferencePrices: [
+      ...completeTodayForTolerance,
+      ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+    ],
+    priceToleranceCents: 1,
+    recommendedPreheatPercent: 90,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: evaluateToleranceSelection,
+  });
+  assert(
+    oneCentToleranceSoftFill.recommendedPreheatHourIds[0] ===
+      "2026-09-17T14:00:00.000Z",
+    "expected one-cent tolerance to treat near-minimum hours as equal and prefer the later schedule",
+  );
+  assert(
+    oneCentToleranceSoftFill.strategy === "horizon_soft_fill",
+    "expected price tolerance to affect only horizon soft-fill ranking",
+  );
+
+  const laterScheduleTiePrices = [
+    hourly("2026-09-17T13:00:00.000Z", 2.0),
+    hourly("2026-09-17T14:00:00.000Z", 2.0),
+    hourly("2026-09-17T15:00:00.000Z", 2.0),
+    hourly("2026-09-17T18:00:00.000Z", 2.0),
+    ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+  ];
+  const laterSchedulePriceById = new Map(
+    laterScheduleTiePrices.map((price) => [price.starts_at, price.spot_price_cents_kwh]),
+  );
+  const laterScheduleTie = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 2,
+    now,
+    prices: laterScheduleTiePrices,
+    priceReferencePrices: [
+      ...completeTodayForTolerance,
+      ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+    ],
+    priceToleranceCents: 1,
+    recommendedPreheatPercent: 90,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => ({
+      ...baseline(selectedHourIds),
+      finalConservativeEnergyKwh: selectedHourIds.length >= 2 ? 18.5 : 14,
+      totalCostCents: selectedHourIds.reduce(
+        (sum, hourId) => sum + (laterSchedulePriceById.get(hourId) ?? 0),
+        0,
+      ),
+    }),
+  });
+  assert(
+    JSON.stringify(laterScheduleTie.recommendedPreheatHourIds) ===
+      JSON.stringify([
+        "2026-09-17T15:00:00.000Z",
+        "2026-09-17T18:00:00.000Z",
+      ]),
+    "expected tolerance tie-break to compare from the latest hour and prefer the latest eligible two-hour schedule",
+  );
+
   const noFutureHeat = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline([]),
     conservativeEnergyKwh: 12,
