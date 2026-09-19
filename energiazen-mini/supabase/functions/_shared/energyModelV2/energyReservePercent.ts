@@ -6,6 +6,7 @@ export type EnergyReservePercentSettings = {
 export type EnergyReserveCapacityInput = {
   inletTemperatureC: number;
   maxTankTemperatureC: number;
+  fullTankAverageTemperatureC?: number | null;
   tankVolumeLiters: number;
   specificHeatKwhPerKgC?: number;
 };
@@ -29,6 +30,7 @@ export const defaultWaterSpecificHeatKwhPerKgC = 0.001163;
 export function calculateV2EnergyCapacityKwh({
   inletTemperatureC,
   maxTankTemperatureC,
+  fullTankAverageTemperatureC,
   tankVolumeLiters,
   specificHeatKwhPerKgC = defaultWaterSpecificHeatKwhPerKgC,
 }: EnergyReserveCapacityInput) {
@@ -44,10 +46,18 @@ export function calculateV2EnergyCapacityKwh({
     return null;
   }
 
+  const calibratedFullTemperatureC =
+    typeof fullTankAverageTemperatureC === "number" &&
+      Number.isFinite(fullTankAverageTemperatureC) &&
+      fullTankAverageTemperatureC > inletTemperatureC &&
+      fullTankAverageTemperatureC <= maxTankTemperatureC
+      ? fullTankAverageTemperatureC
+      : maxTankTemperatureC;
+
   return round(
     tankVolumeLiters *
       specificHeatKwhPerKgC *
-      (maxTankTemperatureC - inletTemperatureC),
+      (calibratedFullTemperatureC - inletTemperatureC),
   );
 }
 
