@@ -309,6 +309,28 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "newer trailing dwell is counted as its own unlabeled draw",
   );
 
+  // A real relative drop can begin while the inlet is already inside the cold
+  // band. The current trailing dwell must still bind to that later drop.
+  const alreadyColdThenDeeperDrop = [
+    reading(30, 35, 13, false),
+    reading(31, 35, 13, false),
+    reading(32, 34.6, 7, false),
+    reading(33, 34.4, 7, false),
+  ];
+  const alreadyColdThenDeeperDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12,
+    readings: alreadyColdThenDeeperDrop,
+    reliableDraws: [],
+  });
+  assert(
+    alreadyColdThenDeeperDropResult.unresolved,
+    "drop inside an already-cold dwell remains a real unlabeled draw",
+  );
+  assert(
+    alreadyColdThenDeeperDropResult.detectedUnlabeledDrawCount === 1,
+    "already-cold deeper drop is counted once",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
