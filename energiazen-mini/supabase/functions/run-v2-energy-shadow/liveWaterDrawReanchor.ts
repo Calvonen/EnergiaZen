@@ -208,8 +208,8 @@ function currentSampleDrawCandidateMs(
     return null;
   }
 
-  const drawCandidateIndex = findFirstDrawCandidateIndex(inletSamples);
-  if (drawCandidateIndex === null) {
+  const drawCandidate = findFirstDrawCandidate(inletSamples);
+  if (drawCandidate === null) {
     return null;
   }
 
@@ -220,7 +220,7 @@ function currentSampleDrawCandidateMs(
   // drift.
   if (
     !hasConfirmedColdInletDwell(
-      window.slice(drawCandidateIndex),
+      window.slice(drawCandidate.dropIndex),
       coldInletBaselineC,
     )
   ) {
@@ -232,14 +232,15 @@ function currentSampleDrawCandidateMs(
   // as heater-induced probe oscillation, not a draw. Any relay interruption,
   // sampling gap, missing tank value or material tank-temperature drop keeps the
   // original fail-closed draw classification.
-  return isHeaterOnlyInletOscillation(window)
+  const candidateWindow = window.slice(drawCandidate.comparatorIndex);
+  return isHeaterOnlyInletOscillation(candidateWindow)
     ? null
-    : inletSamples[drawCandidateIndex].time;
+    : inletSamples[drawCandidate.dropIndex].time;
 }
 
-function findFirstDrawCandidateIndex(
+function findFirstDrawCandidate(
   samples: { inletTemperatureC: number | null; time: number }[],
-) {
+): { dropIndex: number; comparatorIndex: number } | null {
   for (let laterIndex = 1; laterIndex < samples.length; laterIndex += 1) {
     const later = samples[laterIndex];
     if (
@@ -268,7 +269,7 @@ function findFirstDrawCandidateIndex(
         earlier.inletTemperatureC - later.inletTemperatureC >=
         waterDrawDetectionLimits.minDropCelsius
       ) {
-        return laterIndex;
+        return { dropIndex: laterIndex, comparatorIndex: earlierIndex };
       }
     }
   }
