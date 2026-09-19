@@ -67,9 +67,14 @@ export function runLiveV2EnergyShadowUnitTests() {
   assert((laggingSensors.sensorGapKwh ?? 0) > 0, "sensor lag remains a diagnostic gap");
   assertClose(laggingSensors.heaterDeliveryUncertaintyKwh, 0, "ordinary heating below guard has no delivery uncertainty");
   assertClose(
+    laggingSensors.balanceUncertaintyKwh,
+    0.25 + Math.max(laggingSensors.sensorGapKwh ?? 0, 0),
+    "positive sensor gap becomes reserve uncertainty without double-counting heater uncertainty",
+  );
+  assertClose(
     laggingSensors.conservativeEnergyKwh,
-    (laggingSensors.remainingEnergyKwh ?? 0) - 0.25,
-    "reserve safety subtracts balance uncertainty, not the sensor gap",
+    (laggingSensors.observedEnergyKwh ?? 0) - 0.25,
+    "unconfirmed nominal heater credit cannot raise conservative reserve above sensor-supported energy",
   );
   assert(
     laggingSensors.safetyEnergyKwh === 3 && laggingSensors.targetEnergyKwh === 6,
@@ -116,7 +121,25 @@ export function runLiveV2EnergyShadowUnitTests() {
   assertClose(
     thermostatTransition.balanceUncertaintyKwh,
     0.3,
-    "heater delivery uncertainty is added to the 0.25 kWh baseline",
+    "heater delivery uncertainty is added to the 0.25 kWh baseline when it exceeds the sensor gap",
+  );
+
+  const largeSensorGap = runLiveReserveShadow({
+    maxTankTemperatureC,
+    now: new Date("2026-09-09T10:31:00.000Z"),
+    readings: [
+      reading("2026-09-09T10:00:00.000Z", 55, 40, 15, true),
+      reading("2026-09-09T10:30:00.000Z", 55.1, 40.1, 15, true),
+    ],
+    reliableDraws: [],
+    v1Shadow: null,
+  });
+  assert(largeSensorGap.available, "large positive sensor gap remains evaluable");
+  assert((largeSensorGap.sensorGapKwh ?? 0) > 1, "test creates a material positive sensor gap");
+  assertClose(
+    largeSensorGap.conservativeEnergyKwh,
+    (largeSensorGap.observedEnergyKwh ?? 0) - 0.25,
+    "large model-only heater credit is excluded from conservative reserve",
   );
 
   const nuisancePlateauWithoutIndependentBaseline = runLiveReserveShadow({
