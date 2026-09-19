@@ -208,22 +208,23 @@ function currentSampleDrawCandidateMs(
     return null;
   }
 
-  const drawCandidate = findLatestDrawCandidate(inletSamples);
-  if (drawCandidate === null) {
+  const coldDwellStartIndex = confirmedColdInletDwellStartIndex(
+    window,
+    coldInletBaselineC,
+  );
+  if (coldDwellStartIndex === null) {
     return null;
   }
 
-  // A relative inlet drop is only a candidate. Confirm a real draw only after
-  // that candidate has occurred and the inlet has then reached the learned
-  // cold-water level for at least one minute. Cold samples that happened
-  // earlier in the trailing window cannot validate a later unrelated warm
-  // drift.
-  if (
-    !hasConfirmedColdInletDwell(
-      window.slice(drawCandidate.dropIndex),
-      coldInletBaselineC,
-    )
-  ) {
+  // Bind the trailing cold dwell to the most recent qualifying drop that
+  // occurred no later than the start of that dwell. Later cold samples inside
+  // the same dwell can also satisfy the raw relative-drop threshold, but they
+  // are confirmation samples, not new draw candidates.
+  const drawCandidate = findLatestDrawCandidate(
+    inletSamples,
+    coldDwellStartIndex,
+  );
+  if (drawCandidate === null) {
     return null;
   }
 
@@ -240,11 +241,16 @@ function currentSampleDrawCandidateMs(
 
 function findLatestDrawCandidate(
   samples: { inletTemperatureC: number | null; time: number }[],
+  maxDropIndex: number,
 ): { dropIndex: number; comparatorIndex: number } | null {
   // The retained window can contain more than one qualifying inlet drop. The
   // current confirmation dwell belongs to the most recent qualifying drop, not
   // an older already-labeled event that merely remains inside retention.
-  for (let laterIndex = samples.length - 1; laterIndex >= 1; laterIndex -= 1) {
+  for (
+    let laterIndex = Math.min(maxDropIndex, samples.length - 1);
+    laterIndex >= 1;
+    laterIndex -= 1
+  ) {
     const later = samples[laterIndex];
     if (
       later.inletTemperatureC === null ||
@@ -280,16 +286,17 @@ function findLatestDrawCandidate(
   return null;
 }
 
-function hasConfirmedColdInletDwell(
+function confirmedColdInletDwellStartIndex(
   window: LiveDrawReading[],
   coldInletBaselineC: number,
-) {
+): number | null {
   if (window.length < 2) {
-    return false;
+    return null;
   }
 
   const maxConfirmedColdC = coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
-  const current = window[window.length - 1];
+  const currentIndex = window.length - 1;
+  const current = window[currentIndex];
   const currentMs = Date.parse(current.created_at);
   const currentInletC = current.inlet_temp;
 
@@ -299,16 +306,14 @@ function hasConfirmedColdInletDwell(
     !Number.isFinite(currentInletC) ||
     currentInletC > maxConfirmedColdC
   ) {
-    return false;
+    return null;
   }
 
-  // Confirmation must be a contiguous cold dwell that ends at the current
-  // sample. An older completed dwell in the retained candidate window cannot
-  // validate a later isolated cold dip.
+  let dwellStartIndex = currentIndex;
   let dwellStartMs = currentMs;
   let laterMs = currentMs;
 
-  for (let index = window.length - 2; index >= 0; index -= 1) {
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const reading = window[index];
     const readingMs = Date.parse(reading.created_at);
     const inletC = reading.inlet_temp;
@@ -327,14 +332,15 @@ function hasConfirmedColdInletDwell(
       break;
     }
 
+    dwellStartIndex = index;
     dwellStartMs = readingMs;
     laterMs = readingMs;
   }
 
-  return (
-    currentMs - dwellStartMs >=
-    MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
-  );
+  return currentMs - dwellStartMs >=
+      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
+    ? dwellStartIndex
+    : null;
 }
 
 function isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {
