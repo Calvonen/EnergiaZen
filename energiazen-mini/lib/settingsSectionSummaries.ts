@@ -7,15 +7,13 @@ function formatHourRange(hour: number) {
 }
 
 export function getTankSettingsSummary({
-  fullTankAverageTemperature,
   maxTankTemperature,
   tankSizeLiters,
 }: {
-  fullTankAverageTemperature: number;
   maxTankTemperature: number;
   tankSizeLiters: number;
 }) {
-  return `${tankSizeLiters} l · maksimi ${maxTankTemperature} °C · täysi keskilämpö ${fullTankAverageTemperature} °C`;
+  return `${tankSizeLiters} l · maksimi ${maxTankTemperature} °C`;
 }
 
 export function getShowerCalculationSummary(fullTankShowers: number) {
