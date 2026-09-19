@@ -220,8 +220,7 @@ export async function runSettingsDraftUnitTests() {
   {
     const savedSettings = createSettings();
     const invalidDraft = createSettings({
-      fullTankShowers: 4,
-      targetShowerReserve: 5,
+      v2SafetyReservePercent: 100,
     });
     let localCalls = 0;
     let remoteCalls = 0;
