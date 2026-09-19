@@ -129,6 +129,8 @@ export function runLiveV2EnergyShadowUnitTests() {
     now: new Date("2026-09-09T10:31:00.000Z"),
     readings: [
       reading("2026-09-09T10:00:00.000Z", 55, 40, 15, true),
+      reading("2026-09-09T10:10:00.000Z", 55, 40, 15, true),
+      reading("2026-09-09T10:20:00.000Z", 55.1, 40, 15, true),
       reading("2026-09-09T10:30:00.000Z", 55.1, 40.1, 15, true),
     ],
     reliableDraws: [],
