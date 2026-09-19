@@ -51,6 +51,15 @@ export function evaluateV2PreheatHorizon({
   now: Date;
   prices: ShadowElectricityPrice[];
 }): V2PreheatHorizon {
+  const today = helsinkiDateKey(now);
+  const nowMs = now.getTime();
+  const futureTodayPrices = prices
+    .filter((price) => isUsableHourlyPrice(price))
+    .filter((price) =>
+      helsinkiDateKey(new Date(price.starts_at)) === today && Date.parse(price.starts_at) > nowMs
+    )
+    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+
   const tomorrow = helsinkiDateKeyOffset(now, 1);
   const dayAfterTomorrow = helsinkiDateKeyOffset(now, 2);
   const tomorrowStartMs = helsinkiDateStartMs(tomorrow);
@@ -68,20 +77,11 @@ export function evaluateV2PreheatHorizon({
   if (!hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs)) {
     return {
       available: false,
-      futureTodayHourIds: [],
+      futureTodayHourIds: futureTodayPrices.map((price) => price.starts_at),
       reason: "tomorrow_prices_incomplete",
       tomorrowHourIds: [],
     };
   }
-
-  const today = helsinkiDateKey(now);
-  const nowMs = now.getTime();
-  const futureTodayPrices = prices
-    .filter((price) => isUsableHourlyPrice(price))
-    .filter((price) =>
-      helsinkiDateKey(new Date(price.starts_at)) === today && Date.parse(price.starts_at) > nowMs
-    )
-    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
   if (!futureTodayPrices.length) {
     return {

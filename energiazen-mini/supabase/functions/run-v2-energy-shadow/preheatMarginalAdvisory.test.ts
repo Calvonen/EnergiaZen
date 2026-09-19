@@ -269,6 +269,68 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected incomplete tomorrow prices to disable proactive preheat",
   );
 
+  const midnightNow = new Date("2026-09-18T21:34:00.000Z"); // 00:34 Helsinki on Sep 19
+  const remainingTodayAfterMidnight = Array.from({ length: 23 }, (_, index) => {
+    const startsAt = new Date(Date.parse("2026-09-18T22:00:00.000Z") + index * 3_600_000).toISOString();
+    const cheapMidday = ["2026-09-19T09:00:00.000Z", "2026-09-19T10:00:00.000Z", "2026-09-19T11:00:00.000Z"];
+    return hourly(startsAt, cheapMidday.includes(startsAt) ? cheapMidday.indexOf(startsAt) + 1 : 30);
+  });
+  const midnightSoftFill = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 10.909,
+    energyCapacityKwh: 17.605,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now: midnightNow,
+    prices: remainingTodayAfterMidnight,
+    recommendedPreheatPercent: 80,
+    remainingEnergyKwh: 11.159,
+    evaluateHourSelection: (selectedHourIds) => {
+      const priceById = new Map(
+        remainingTodayAfterMidnight.map((price) => [price.starts_at, price.spot_price_cents_kwh]),
+      );
+      return {
+        ...baseline(selectedHourIds),
+        finalConservativeEnergyKwh: 10.909 + selectedHourIds.length * 1.1,
+        totalCostCents: selectedHourIds.reduce((sum, hourId) => sum + (priceById.get(hourId) ?? 0), 0),
+      };
+    },
+  });
+  assert(
+    midnightSoftFill.available && midnightSoftFill.strategy === "horizon_soft_fill",
+    "expected midnight soft fill to keep optimizing remaining current-day prices when next-day prices are missing",
+  );
+
+  const incompleteTomorrowWithBaseline = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline(["2026-09-19T22:00:00.000Z"]),
+    conservativeEnergyKwh: 10.909,
+    energyCapacityKwh: 17.605,
+    heaterPowerKw: 3,
+    maxPreheatHours: 4,
+    now: midnightNow,
+    prices: [
+      ...remainingTodayAfterMidnight,
+      hourly("2026-09-19T21:00:00.000Z", 1),
+      hourly("2026-09-19T22:00:00.000Z", 2),
+    ],
+    recommendedPreheatPercent: 80,
+    remainingEnergyKwh: 11.159,
+    evaluateHourSelection: (selectedHourIds) => baseline(selectedHourIds),
+  });
+  assert(
+    !incompleteTomorrowWithBaseline.available &&
+      incompleteTomorrowWithBaseline.reason === "tomorrow_prices_incomplete",
+    "expected incomplete next-day prices to remain fail-closed when a baseline future hour could be displaced",
+  );
+  assert(
+    JSON.stringify(midnightSoftFill.recommendedPreheatHourIds) === JSON.stringify([
+      "2026-09-19T09:00:00.000Z",
+      "2026-09-19T10:00:00.000Z",
+      "2026-09-19T11:00:00.000Z",
+    ]),
+    "expected the pre-midnight midday plan to survive the date rollover instead of becoming an empty plan",
+  );
+
   const noFutureHeat = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline([]),
     conservativeEnergyKwh: 12,
