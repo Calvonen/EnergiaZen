@@ -208,7 +208,7 @@ function currentSampleDrawCandidateMs(
     return null;
   }
 
-  const drawCandidate = findFirstDrawCandidate(inletSamples);
+  const drawCandidate = findLatestDrawCandidate(inletSamples);
   if (drawCandidate === null) {
     return null;
   }
@@ -238,10 +238,13 @@ function currentSampleDrawCandidateMs(
     : inletSamples[drawCandidate.dropIndex].time;
 }
 
-function findFirstDrawCandidate(
+function findLatestDrawCandidate(
   samples: { inletTemperatureC: number | null; time: number }[],
 ): { dropIndex: number; comparatorIndex: number } | null {
-  for (let laterIndex = 1; laterIndex < samples.length; laterIndex += 1) {
+  // The retained window can contain more than one qualifying inlet drop. The
+  // current confirmation dwell belongs to the most recent qualifying drop, not
+  // an older already-labeled event that merely remains inside retention.
+  for (let laterIndex = samples.length - 1; laterIndex >= 1; laterIndex -= 1) {
     const later = samples[laterIndex];
     if (
       later.inletTemperatureC === null ||
