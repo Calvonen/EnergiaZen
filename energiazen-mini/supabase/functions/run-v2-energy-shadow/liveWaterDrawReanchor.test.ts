@@ -259,6 +259,10 @@ export function runLiveWaterDrawReanchorUnitTests() {
   const preHeatingSampleThenHeaterOnlyDrop = [
     reading(29, 34.8, 19.9, false),
     reading(30, 35.0, 20, true),
+    reading(31, 35.1, 20, true),
+    reading(32, 35.2, 20, true),
+    reading(33, 35.3, 20, true),
+    reading(34, 35.4, 20, true),
     reading(35, 35.5, 12.5, true),
     reading(36, 35.7, 12.4, true),
   ];
