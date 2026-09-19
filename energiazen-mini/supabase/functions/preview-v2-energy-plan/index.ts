@@ -347,11 +347,27 @@ Deno.serve(async (request) => {
       forecast_horizon_end_at: previewPlan.forecastHorizonEndAt,
       forecast_min_percent:
         previewPlan.minimumConservativeEnergyKwh !== null && reserveCapacityKwh
-          ? round((previewPlan.minimumConservativeEnergyKwh / reserveCapacityKwh) * 100)
+          ? round(
+              Math.min(
+                Math.max(
+                  (previewPlan.minimumConservativeEnergyKwh / reserveCapacityKwh) * 100,
+                  0,
+                ),
+                100,
+              ),
+            )
           : null,
       forecast_final_percent:
         previewPlan.finalConservativeEnergyKwh !== null && reserveCapacityKwh
-          ? round((previewPlan.finalConservativeEnergyKwh / reserveCapacityKwh) * 100)
+          ? round(
+              Math.min(
+                Math.max(
+                  (previewPlan.finalConservativeEnergyKwh / reserveCapacityKwh) * 100,
+                  0,
+                ),
+                100,
+              ),
+            )
           : null,
       strategy: preheatAdvisory.strategy,
       plan_valid: previewPlan.valid,
