@@ -76,12 +76,15 @@ export function resolveLiveDrawReanchors({
     // the measured tank state instead of estimating how much energy the draw
     // removed. This handles both a real draw and a heater-induced inlet probe
     // oscillation without ever crediting uncertain energy to the live ledger.
-    const drawDetected = currentSampleHasDrawSignal(
+    const drawCandidateMs = currentSampleDrawCandidateMs(
       readings,
       index,
       coldInletBaselineC,
     );
-    const matchedReliableDraw = drawDetected && isMatchedByReliableDraw(currentMs, reliableDraws);
+    const drawDetected = drawCandidateMs !== null;
+    const matchedReliableDraw =
+      drawCandidateMs !== null &&
+      isMatchedByReliableDraw(drawCandidateMs, reliableDraws);
     const unmatchedDraw = drawDetected && !matchedReliableDraw;
 
     if (mode === "normal") {
@@ -165,11 +168,11 @@ export function resolveLiveDrawReanchors({
   };
 }
 
-function currentSampleHasDrawSignal(
+function currentSampleDrawCandidateMs(
   readings: LiveDrawReading[],
   index: number,
   coldInletBaselineC: number,
-) {
+): number | null {
   const currentTime = Date.parse(readings[index].created_at);
   // Keep the original relative-drop candidate in scope while the required cold
   // dwell completes. A drop can occur at the very edge of the 5-minute detector
@@ -202,12 +205,12 @@ function currentSampleHasDrawSignal(
     inletSamples.length < 2 ||
     !detectsWaterDraw(inletSamples)
   ) {
-    return false;
+    return null;
   }
 
   const drawCandidateIndex = findFirstDrawCandidateIndex(inletSamples);
   if (drawCandidateIndex === null) {
-    return false;
+    return null;
   }
 
   // A relative inlet drop is only a candidate. Confirm a real draw only after
@@ -221,7 +224,7 @@ function currentSampleHasDrawSignal(
       coldInletBaselineC,
     )
   ) {
-    return false;
+    return null;
   }
 
   // During a continuous heating response the inlet probe can cool sharply even
@@ -229,7 +232,9 @@ function currentSampleHasDrawSignal(
   // as heater-induced probe oscillation, not a draw. Any relay interruption,
   // sampling gap, missing tank value or material tank-temperature drop keeps the
   // original fail-closed draw classification.
-  return !isHeaterOnlyInletOscillation(window);
+  return isHeaterOnlyInletOscillation(window)
+    ? null
+    : inletSamples[drawCandidateIndex].time;
 }
 
 function findFirstDrawCandidateIndex(
