@@ -45,10 +45,12 @@ as $$
     select week_start, min(inlet_temp) as minimum_inlet_temp
     from confirmed_readings
     group by week_start
-    having (
-      (week_start::timestamp + interval '7 days')
-      at time zone 'Europe/Helsinki'
-    ) <= p_until
+    having
+      (week_start::timestamp at time zone 'Europe/Helsinki') >= p_since
+      and (
+        (week_start::timestamp + interval '7 days')
+        at time zone 'Europe/Helsinki'
+      ) <= p_until
   )
   select case
     when count(*) >= 2
@@ -59,7 +61,7 @@ as $$
 $$;
 
 comment on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
-is 'Returns a robust learned cold-water baseline from the median of at least two complete historical weekly confirmed minima strictly inside [p_since, p_until). Partial weeks are excluded, and both the candidate and its confirming neighbor are bounded to that interval, so active replay samples cannot influence the baseline. Neighbor lookups query tank_readings directly through created_at ranges so the timestamp index remains usable.';
+is 'Returns a robust learned cold-water baseline from the median of at least two complete historical weekly confirmed minima strictly inside [p_since, p_until). A week is included only when its Helsinki week start is at or after p_since and its week end is at or before p_until, excluding partial weeks at both interval boundaries. Both the candidate and confirming neighbor are bounded to the same interval, so active replay samples cannot influence the baseline. Neighbor lookups query tank_readings directly through created_at ranges so the timestamp index remains usable.';
 
 revoke all on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
   from public, anon, authenticated;
