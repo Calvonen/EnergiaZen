@@ -171,7 +171,15 @@ function currentSampleHasDrawSignal(
   coldInletBaselineC: number,
 ) {
   const currentTime = Date.parse(readings[index].created_at);
-  const windowStartMs = currentTime - 5 * 60_000;
+  // Keep the original relative-drop candidate in scope while the required cold
+  // dwell completes. A drop can occur at the very edge of the 5-minute detector
+  // window and only become confirmable one minute later.
+  const windowStartMs =
+    currentTime -
+    (
+      waterDrawDetectionLimits.windowMinutes +
+      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES
+    ) * 60_000;
   const window = readings
     .slice(0, index + 1)
     .filter((reading) => Date.parse(reading.created_at) >= windowStartMs);
