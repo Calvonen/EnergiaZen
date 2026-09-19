@@ -454,8 +454,8 @@ export async function runSettingsDraftUnitTests() {
       loweredVisibleMaximum.errors.some(
         (issue) => issue.field === "fullTankAverageTemperature",
       ),
-      false,
-      "piilotettu legacy-tayden-varaajan lampotila ei esta nakyvan maksimilammon tallennusta",
+      true,
+      "aktiivinen tayden varaajan kalibrointi ei saa ylittaa maksimilampotilaa",
     );
   }
 }
