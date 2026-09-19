@@ -216,13 +216,14 @@ function currentSampleDrawCandidateMs(
     return null;
   }
 
-  // Bind the trailing cold dwell to the most recent qualifying drop that
-  // occurred no later than the start of that dwell. Later cold samples inside
-  // the same dwell can also satisfy the raw relative-drop threshold, but they
-  // are confirmation samples, not new draw candidates.
-  const drawCandidate = findLatestDrawCandidate(
+  // Bind the trailing cold dwell to the first qualifying drop in the current
+  // draw episode. Start one sample before the dwell so a warm 20 -> 14 C drop
+  // can still lead into a later 12 C cold dwell, while any older draw separated
+  // by warm recovery stays out of scope. A new drop may also happen after the
+  // inlet is already inside the cold band (for example 13 -> 7 C).
+  const drawCandidate = findAssociatedDrawCandidate(
     inletSamples,
-    coldDwellStartIndex,
+    Math.max(1, coldDwellStartIndex - 1),
   );
   if (drawCandidate === null) {
     return null;
@@ -239,17 +240,14 @@ function currentSampleDrawCandidateMs(
     : inletSamples[drawCandidate.dropIndex].time;
 }
 
-function findLatestDrawCandidate(
+function findAssociatedDrawCandidate(
   samples: { inletTemperatureC: number | null; time: number }[],
-  maxDropIndex: number,
+  minDropIndex: number,
 ): { dropIndex: number; comparatorIndex: number } | null {
-  // The retained window can contain more than one qualifying inlet drop. The
-  // current confirmation dwell belongs to the most recent qualifying drop, not
-  // an older already-labeled event that merely remains inside retention.
   for (
-    let laterIndex = Math.min(maxDropIndex, samples.length - 1);
-    laterIndex >= 1;
-    laterIndex -= 1
+    let laterIndex = Math.max(1, minDropIndex);
+    laterIndex < samples.length;
+    laterIndex += 1
   ) {
     const later = samples[laterIndex];
     if (
