@@ -445,10 +445,10 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   assert(
     JSON.stringify(laterScheduleTie.recommendedPreheatHourIds) ===
       JSON.stringify([
-        "2026-09-17T13:00:00.000Z",
+        "2026-09-17T15:00:00.000Z",
         "2026-09-17T18:00:00.000Z",
       ]),
-    "expected tolerance tie-break to compare from the latest hour and prefer the schedule with the later final heating hour",
+    "expected tolerance tie-break to compare from the latest hour and prefer the latest eligible two-hour schedule",
   );
 
   const noFutureHeat = buildV2MarginalPreheatAdvisory({
