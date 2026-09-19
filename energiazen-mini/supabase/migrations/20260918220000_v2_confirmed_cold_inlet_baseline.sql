@@ -8,42 +8,40 @@ stable
 security definer
 set search_path = public
 as $$
-  with valid_readings as (
+  with reliable_draws as (
     select
-      tr.created_at,
-      tr.inlet_temp,
+      w.id,
+      w.event_started_at,
+      w.event_ended_at,
       date_trunc(
         'week',
-        tr.created_at at time zone 'Europe/Helsinki'
+        w.event_started_at at time zone 'Europe/Helsinki'
       )::date as week_start
-    from public.tank_readings tr
-    where tr.created_at >= p_since
-      and tr.created_at < p_until
-      and tr.inlet_temp between 1 and 30
+    from public.water_draw_labels w
+    where w.event_started_at >= p_since
+      and w.event_ended_at < p_until
+      and w.energy_reliable = true
+      and w.energy_quality_reason is null
+      and w.estimated_water_draw_net_energy_kwh > 0
+      and 'cold_inlet' = any(w.detection_kinds)
   ),
-  confirmed_readings as (
-    select v.week_start, v.inlet_temp
-    from valid_readings v
-    where exists (
-      select 1
-      from public.tank_readings n
-      where n.created_at >= greatest(
-          p_since,
-          v.created_at - interval '3 minutes'
-        )
-        and n.created_at < least(
-          p_until,
-          v.created_at + interval '3 minutes' + interval '1 microsecond'
-        )
-        and n.created_at <> v.created_at
-        and n.inlet_temp is not null
-        and n.inlet_temp >= v.inlet_temp
-        and n.inlet_temp <= v.inlet_temp + 2
-    )
+  draw_minima as (
+    select
+      d.week_start,
+      d.id,
+      min(tr.inlet_temp) as minimum_inlet_temp
+    from reliable_draws d
+    join public.tank_readings tr
+      on tr.created_at >= d.event_started_at
+      and tr.created_at <= d.event_ended_at
+      and tr.inlet_temp between 1 and 30
+    group by d.week_start, d.id
   ),
   weekly as (
-    select week_start, min(inlet_temp) as minimum_inlet_temp
-    from confirmed_readings
+    select
+      week_start,
+      min(minimum_inlet_temp) as minimum_inlet_temp
+    from draw_minima
     group by week_start
     having
       (week_start::timestamp at time zone 'Europe/Helsinki') >= p_since
@@ -61,7 +59,7 @@ as $$
 $$;
 
 comment on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
-is 'Returns a robust learned cold-water baseline from the median of at least two complete historical weekly confirmed minima strictly inside [p_since, p_until). A week is included only when its Helsinki week start is at or after p_since and its week end is at or before p_until, excluding partial weeks at both interval boundaries. Both the candidate and confirming neighbor are bounded to the same interval, so active replay samples cannot influence the baseline. Neighbor lookups query tank_readings directly through created_at ranges so the timestamp index remains usable.';
+is 'Returns a robust cold-water baseline from the median of at least two complete historical Helsinki weeks that contain energy-reliable, positive-energy water-draw labels with cold_inlet evidence. The inlet minimum is measured only inside those independently verified draw intervals, so recurring unlabeled nuisance plateaus cannot teach the baseline. Partial weeks at both history boundaries are excluded and p_until remains before the active replay.';
 
 revoke all on function public.get_confirmed_cold_inlet_baseline(timestamptz, timestamptz)
   from public, anon, authenticated;
