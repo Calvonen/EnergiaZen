@@ -54,10 +54,10 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(ambiguousThenIdleColdResult.unresolved, "cold inlet after heater shutoff remains fail-closed");
   assert(ambiguousThenIdleColdResult.detectedUnlabeledDrawCount === 1, "same trailing inlet event is not double-counted");
 
-  // Once the inlet has demonstrably recovered for three contiguous minutes and
-  // the unheated tank has then stayed quiet for 15 minutes, re-anchor to the
-  // measured tank state. This safely resolves both possibilities: a real draw
-  // and a heater-induced inlet-probe oscillation.
+  // Once the inlet has demonstrably recovered for three contiguous minutes,
+  // re-anchor immediately to the measured tank state. No extra 15-minute quiet
+  // period is needed because the reanchor itself discards the uncertain draw
+  // energy and restarts from the measured post-draw state.
   const recoveredAndStable = [
     ...ambiguousThenIdleCold,
     reading(43, 31.0, 17.0, false),
@@ -88,6 +88,35 @@ export function runLiveWaterDrawReanchorUnitTests() {
   assert(!recoveredAndStableResult.unresolved, "recovered inlet plus quiet tank resolves ambiguity by reanchoring");
   assert(recoveredAndStableResult.detectedUnlabeledDrawCount === 1, "ambiguous event remains a single draw candidate");
   assert(recoveredAndStableResult.reanchorIndexes.length === 1, "resolved ambiguity produces exactly one physical reanchor");
+
+  // Production-shaped slow inlet recovery: after a confirmed draw, inlet warms
+  // through the recovery threshold while both tank sensors are already steady.
+  // V2 must recover after the three-minute warm dwell rather than remain blind
+  // for another 15 minutes.
+  const slowWarmRecovery = [
+    reading(36, 34.7, 20.8, false),
+    reading(37, 34.7, 12.5, false),
+    reading(38, 34.6, 12.4, false),
+    reading(39, 34.6, 15.0, false),
+    reading(40, 34.6, 16.4, false),
+    reading(41, 34.6, 16.5, false),
+    reading(42, 34.6, 16.6, false),
+    reading(43, 34.6, 16.7, false),
+  ];
+  const slowWarmRecoveryResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.35,
+    readings: slowWarmRecovery,
+    reliableDraws: [],
+  });
+  assert(
+    !slowWarmRecoveryResult.unresolved,
+    "three-minute warm inlet recovery reanchors without an extra 15-minute stabilization delay",
+  );
+  assert(
+    slowWarmRecoveryResult.reanchorIndexes.length === 1 &&
+      slowWarmRecoveryResult.reanchorIndexes[0] === slowWarmRecovery.length - 1,
+    "slow warm recovery reanchors on the sample that completes the three-minute dwell",
+  );
 
   // A real draw during heating must remain fail-closed even if the heater masks
   // some of its thermal response. A visible bottom drop is still handled too.
