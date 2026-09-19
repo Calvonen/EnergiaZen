@@ -227,6 +227,32 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "five-minute drop candidate survives the full two-minute confirmation poll gap",
   );
 
+  // Reliable draw matching must use the original drop candidate timestamp,
+  // not the later confirmation sample. The event ends at t0, the inlet drop is
+  // at the +5 minute match boundary, and confirmation completes two minutes
+  // later. This remains a trusted labeled draw, not an unresolved unlabeled one.
+  const labeledBoundaryDraw = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(37, 34.6, 12.4, false),
+  ];
+  const labeledBoundaryDrawResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: labeledBoundaryDraw,
+    reliableDraws: [{
+      event_started_at: reading(29, 35, 20, false).created_at,
+      event_ended_at: reading(30, 35, 20, false).created_at,
+    }],
+  });
+  assert(
+    !labeledBoundaryDrawResult.unresolved,
+    "reliable draw at match boundary uses drop candidate timestamp",
+  );
+  assert(
+    labeledBoundaryDrawResult.detectedUnlabeledDrawCount === 0,
+    "matched reliable draw is never reclassified as unlabeled after dwell confirmation",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
