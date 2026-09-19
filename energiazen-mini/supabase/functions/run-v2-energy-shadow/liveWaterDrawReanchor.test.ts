@@ -210,6 +210,23 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "historical cold dwell cannot confirm a later isolated cold sample",
   );
 
+  // The confirmation helper accepts up to a two-minute poll gap, so retain the
+  // original five-minute drop candidate for that full interval as well.
+  const maxGapBoundaryCandidate = [
+    reading(30, 35, 20, false),
+    reading(35, 34.8, 12.5, false),
+    reading(37, 34.6, 12.4, false),
+  ];
+  const maxGapBoundaryCandidateResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: maxGapBoundaryCandidate,
+    reliableDraws: [],
+  });
+  assert(
+    maxGapBoundaryCandidateResult.unresolved,
+    "five-minute drop candidate survives the full two-minute confirmation poll gap",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
