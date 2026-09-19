@@ -147,7 +147,7 @@ Deno.serve(async (request) => {
           .limit(1)
           .maybeSingle(),
         supabase.rpc("get_confirmed_cold_inlet_baseline", {
-          p_since: new Date(now.getTime() - 7 * 24 * 3_600_000).toISOString(),
+          p_since: new Date(now.getTime() - 56 * 24 * 3_600_000).toISOString(),
           p_until: now.toISOString(),
         }),
       ]);
