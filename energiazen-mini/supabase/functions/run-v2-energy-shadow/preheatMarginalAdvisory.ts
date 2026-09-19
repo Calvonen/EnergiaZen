@@ -61,6 +61,7 @@ export function buildV2MarginalPreheatAdvisory({
   conservativeEnergyKwh,
   constraints = emptyConstraints,
   energyCapacityKwh,
+  physicalEnergyCapacityKwh = energyCapacityKwh,
   heaterPowerKw,
   maxPreheatHours,
   now,
@@ -75,6 +76,7 @@ export function buildV2MarginalPreheatAdvisory({
   conservativeEnergyKwh: number;
   constraints?: V2HeatingConstraints;
   energyCapacityKwh: number;
+  physicalEnergyCapacityKwh?: number;
   heaterPowerKw: number;
   maxPreheatHours: number;
   now: Date;
@@ -141,9 +143,12 @@ export function buildV2MarginalPreheatAdvisory({
   );
 
   const configuredHourCap = Math.floor(maxPreheatHours);
-  const physicalHeadroomKwh = Number.isFinite(remainingEnergyKwh)
-    ? Math.max(energyCapacityKwh - remainingEnergyKwh, 0)
-    : 0;
+  const physicalHeadroomKwh =
+    Number.isFinite(remainingEnergyKwh) &&
+      Number.isFinite(physicalEnergyCapacityKwh) &&
+      physicalEnergyCapacityKwh > 0
+      ? Math.max(physicalEnergyCapacityKwh - remainingEnergyKwh, 0)
+      : 0;
   const immediateWholeHourHeadroomKwh = Math.min(
     level.recommendedPreheatEnergyKwh,
     physicalHeadroomKwh,
