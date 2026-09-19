@@ -54,6 +54,7 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
 
 type PreviewRequest = {
   automaticMaxHeatingHours?: unknown;
+  fullTankAverageTemperature?: unknown;
   maxTankTemperature?: unknown;
   v2SafetyReservePercent?: unknown;
   v2TargetReservePercent?: unknown;
@@ -85,12 +86,14 @@ Deno.serve(async (request) => {
     const body = await request.json() as PreviewRequest;
     const automaticMaxHeatingHours = finiteNumber(body.automaticMaxHeatingHours);
     const maxTankTemperatureC = finiteNumber(body.maxTankTemperature);
+    const fullTankAverageTemperatureC = finiteNumber(body.fullTankAverageTemperature);
     const targetPercent = finiteNumber(body.v2TargetReservePercent);
     const safetyPercent = finiteNumber(body.v2SafetyReservePercent);
 
     if (
       automaticMaxHeatingHours === null ||
       maxTankTemperatureC === null ||
+      fullTankAverageTemperatureC === null ||
       targetPercent === null ||
       safetyPercent === null
     ) {
@@ -108,7 +111,9 @@ Deno.serve(async (request) => {
       automaticMaxHeatingHours < 1 ||
       automaticMaxHeatingHours > 6 ||
       maxTankTemperatureC < 40 ||
-      maxTankTemperatureC > 90
+      maxTankTemperatureC > 90 ||
+      fullTankAverageTemperatureC <= 0 ||
+      fullTankAverageTemperatureC > maxTankTemperatureC
     ) {
       return jsonResponse({ error: "Preview settings outside supported V2 range" }, 400);
     }
@@ -180,6 +185,7 @@ Deno.serve(async (request) => {
     const energyCapacityKwh = calculateV2EnergyCapacityKwh({
       inletTemperatureC: inletBaselineC,
       maxTankTemperatureC,
+      fullTankAverageTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
     const hardTargetPercent = reservePercents.safetyPercent;
