@@ -429,7 +429,7 @@ export async function runSettingsDraftUnitTests() {
   {
     const invalidNumbers = {
       ...createSettings(),
-      fullTankShowers: Number.NaN,
+      tankSizeLiters: Number.NaN,
       maxTankTemperature: Number.POSITIVE_INFINITY,
     };
     assertEqual(
@@ -440,22 +440,23 @@ export async function runSettingsDraftUnitTests() {
   }
 
   {
-    const savedSettings = createSettings();
-    const invalidRelations = validateSettingsDraft(
+    const savedSettings = createSettings({
+      fullTankAverageTemperature: 70,
+      maxTankTemperature: 70,
+    });
+    const loweredVisibleMaximum = validateSettingsDraft(
       createSettings({
-        fullTankAverageTemperature: 71,
-        maxTankTemperature: 70,
+        fullTankAverageTemperature: 70,
+        maxTankTemperature: 55,
       }),
       savedSettings,
     );
     assertEqual(
-      invalidRelations.errors.some(
-        (issue) =>
-          issue.field === "fullTankAverageTemperature" &&
-          issue.message.includes("maksimilämpötilaa"),
+      loweredVisibleMaximum.errors.some(
+        (issue) => issue.field === "fullTankAverageTemperature",
       ),
-      true,
-      "tayden varaajan lampotila ei saa ylittaa maksimia",
+      false,
+      "piilotettu legacy-tayden-varaajan lampotila ei esta nakyvan maksimilammon tallennusta",
     );
   }
 }
