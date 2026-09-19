@@ -283,11 +283,15 @@ export function runLiveReserveShadow({
   const observedEnergyKwh = observedStoredEnergyKwh(latest, inletBaseline);
   const sensorGapKwh = remainingEnergyKwh - observedEnergyKwh;
 
-  // Sensor/model disagreement is diagnostic. Safety subtracts only uncertainty
-  // in the physical balance itself: baseline model uncertainty plus heater
-  // energy that cannot be proven from the boolean relay samples.
+  // Positive model-vs-sensor disagreement is not proven usable energy. Treat
+  // it as uncertainty for safety decisions so nominal heater credits cannot
+  // inflate conservative reserve above what the sensors physically support.
+  // Heater-delivery uncertainty and sensor-gap uncertainty can describe the
+  // same missing proof, so use the larger of the two instead of double-counting.
+  const sensorGapUncertaintyKwh = Math.max(sensorGapKwh, 0);
   const balanceUncertaintyKwh =
-    liveReserveShadowConfig.baselineBalanceUncertaintyKwh + heaterDeliveryUncertaintyKwh;
+    liveReserveShadowConfig.baselineBalanceUncertaintyKwh +
+    Math.max(sensorGapUncertaintyKwh, heaterDeliveryUncertaintyKwh);
   const v2Decision = evaluateEnergyReserve({
     quality: "valid",
     remainingEnergyKwh,
