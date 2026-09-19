@@ -178,7 +178,7 @@ function currentSampleHasDrawSignal(
     currentTime -
     (
       waterDrawDetectionLimits.windowMinutes +
-      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES
+      MAX_SEGMENT_MINUTES
     ) * 60_000;
   const window = readings
     .slice(0, index + 1)
