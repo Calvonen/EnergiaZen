@@ -284,8 +284,8 @@ export async function runSettingsDraftUnitTests() {
   {
     const savedSettings = createSettings();
     const warningDraft = createSettings({
-      safetyShowerReserve: 1,
-      targetShowerReserve: 1,
+      v2SafetyReservePercent: 65,
+      v2TargetReservePercent: 70,
     });
     const validation = validateSettingsDraft(warningDraft, savedSettings);
     let localCalls = 0;
@@ -303,7 +303,7 @@ export async function runSettingsDraftUnitTests() {
     });
 
     assertEqual(validation.errors, [], "varoitus ei ole estava virhe");
-    assertEqual(validation.warnings.length > 0, true, "pieni tavoite antaa varoituksen");
+    assertEqual(validation.warnings.length > 0, true, "lahekkainen V2-turvaraja antaa varoituksen");
     assertEqual(
       { localCalls, remoteCalls },
       { localCalls: 1, remoteCalls: 1 },
