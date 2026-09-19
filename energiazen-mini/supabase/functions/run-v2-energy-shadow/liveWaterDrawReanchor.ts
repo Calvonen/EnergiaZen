@@ -275,58 +275,57 @@ function hasConfirmedColdInletDwell(
   window: LiveDrawReading[],
   coldInletBaselineC: number,
 ) {
+  if (window.length < 2) {
+    return false;
+  }
+
   const maxConfirmedColdC = coldInletBaselineC + INLET_DRAW_CONFIRM_MARGIN_C;
-  let coldStartMs: number | null = null;
-  let previousMs: number | null = null;
+  const current = window[window.length - 1];
+  const currentMs = Date.parse(current.created_at);
+  const currentInletC = current.inlet_temp;
 
-  for (const reading of window) {
-    const currentMs = Date.parse(reading.created_at);
+  if (
+    !Number.isFinite(currentMs) ||
+    typeof currentInletC !== "number" ||
+    !Number.isFinite(currentInletC) ||
+    currentInletC > maxConfirmedColdC
+  ) {
+    return false;
+  }
+
+  // Confirmation must be a contiguous cold dwell that ends at the current
+  // sample. An older completed dwell in the retained candidate window cannot
+  // validate a later isolated cold dip.
+  let dwellStartMs = currentMs;
+  let laterMs = currentMs;
+
+  for (let index = window.length - 2; index >= 0; index -= 1) {
+    const reading = window[index];
+    const readingMs = Date.parse(reading.created_at);
     const inletC = reading.inlet_temp;
+    const gapMinutes = (laterMs - readingMs) / 60_000;
 
-    if (!Number.isFinite(currentMs)) {
-      coldStartMs = null;
-      previousMs = null;
-      continue;
-    }
-
-    const isCold =
+    const isContiguousCold =
+      Number.isFinite(readingMs) &&
       typeof inletC === "number" &&
       Number.isFinite(inletC) &&
-      inletC <= maxConfirmedColdC;
-    const gapMinutes =
-      previousMs === null ? null : (currentMs - previousMs) / 60_000;
-    const contiguousWithPrevious =
-      gapMinutes !== null &&
+      inletC <= maxConfirmedColdC &&
       Number.isFinite(gapMinutes) &&
       gapMinutes > 0 &&
       gapMinutes <= MAX_SEGMENT_MINUTES;
 
-    if (!isCold) {
-      coldStartMs = null;
-      previousMs = currentMs;
-      continue;
+    if (!isContiguousCold) {
+      break;
     }
 
-    // A gap breaks the old dwell, but the first valid cold sample after the
-    // gap is itself the start of a new dwell interval.
-    if (!contiguousWithPrevious) {
-      coldStartMs = currentMs;
-      previousMs = currentMs;
-      continue;
-    }
-
-    coldStartMs ??= currentMs;
-    previousMs = currentMs;
-
-    if (
-      currentMs - coldStartMs >=
-      MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
-    ) {
-      return true;
-    }
+    dwellStartMs = readingMs;
+    laterMs = readingMs;
   }
 
-  return false;
+  return (
+    currentMs - dwellStartMs >=
+    MIN_INLET_DRAW_CONFIRM_DURATION_MINUTES * 60_000
+  );
 }
 
 function isHeaterOnlyInletOscillation(window: LiveDrawReading[]) {
