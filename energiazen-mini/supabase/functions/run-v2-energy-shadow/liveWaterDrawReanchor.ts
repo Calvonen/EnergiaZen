@@ -135,6 +135,7 @@ export function resolveLiveDrawReanchors({
       reanchorIndexes.push(index);
       mode = "normal";
       warmRecoveryStartMs = null;
+    }
   }
 
   return {
