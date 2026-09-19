@@ -280,6 +280,35 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "irrelevant pre-heating sample cannot turn heater-only oscillation into an unlabeled draw",
   );
 
+  // An older labeled draw retained in the lookup window must not hide a newer
+  // unlabeled drop whose own cold dwell is what reaches the current sample.
+  const labeledOldThenUnlabeledNew = [
+    reading(30, 35.0, 20, false),
+    reading(31, 34.8, 12.4, false),
+    reading(32, 34.7, 12.3, false),
+    reading(33, 34.7, 20, false),
+    reading(34, 34.7, 20, false),
+    reading(35, 34.7, 20, false),
+    reading(36, 34.5, 12.4, false),
+    reading(37, 34.4, 12.3, false),
+  ];
+  const labeledOldThenUnlabeledNewResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: labeledOldThenUnlabeledNew,
+    reliableDraws: [{
+      event_started_at: reading(26, 35, 20, false).created_at,
+      event_ended_at: reading(26, 35, 20, false).created_at,
+    }],
+  });
+  assert(
+    labeledOldThenUnlabeledNewResult.unresolved,
+    "newer unlabeled draw cannot inherit the older labeled candidate",
+  );
+  assert(
+    labeledOldThenUnlabeledNewResult.detectedUnlabeledDrawCount === 1,
+    "newer trailing dwell is counted as its own unlabeled draw",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
