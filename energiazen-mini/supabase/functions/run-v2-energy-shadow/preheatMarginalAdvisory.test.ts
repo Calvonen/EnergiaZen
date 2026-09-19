@@ -408,6 +408,49 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected price tolerance to affect only horizon soft-fill ranking",
   );
 
+  const laterScheduleTiePrices = [
+    hourly("2026-09-17T13:00:00.000Z", 2.0),
+    hourly("2026-09-17T14:00:00.000Z", 2.0),
+    hourly("2026-09-17T15:00:00.000Z", 2.0),
+    hourly("2026-09-17T18:00:00.000Z", 2.0),
+    ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+  ];
+  const laterSchedulePriceById = new Map(
+    laterScheduleTiePrices.map((price) => [price.starts_at, price.spot_price_cents_kwh]),
+  );
+  const laterScheduleTie = buildV2MarginalPreheatAdvisory({
+    baselinePlan: baseline([]),
+    conservativeEnergyKwh: 12,
+    energyCapacityKwh: 20,
+    heaterPowerKw: 3,
+    maxPreheatHours: 2,
+    now,
+    prices: laterScheduleTiePrices,
+    priceReferencePrices: [
+      ...completeTodayForTolerance,
+      ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
+    ],
+    priceToleranceCents: 1,
+    recommendedPreheatPercent: 90,
+    remainingEnergyKwh: 12,
+    evaluateHourSelection: (selectedHourIds) => ({
+      ...baseline(selectedHourIds),
+      finalConservativeEnergyKwh: selectedHourIds.length >= 2 ? 18.5 : 14,
+      totalCostCents: selectedHourIds.reduce(
+        (sum, hourId) => sum + (laterSchedulePriceById.get(hourId) ?? 0),
+        0,
+      ),
+    }),
+  });
+  assert(
+    JSON.stringify(laterScheduleTie.recommendedPreheatHourIds) ===
+      JSON.stringify([
+        "2026-09-17T13:00:00.000Z",
+        "2026-09-17T18:00:00.000Z",
+      ]),
+    "expected tolerance tie-break to compare from the latest hour and prefer the schedule with the later final heating hour",
+  );
+
   const noFutureHeat = buildV2MarginalPreheatAdvisory({
     baselinePlan: baseline([]),
     conservativeEnergyKwh: 12,
