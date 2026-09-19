@@ -253,6 +253,29 @@ export function runLiveWaterDrawReanchorUnitTests() {
     "matched reliable draw is never reclassified as unlabeled after dwell confirmation",
   );
 
+  // An unrelated pre-heating sample retained only for candidate lookup must
+  // not disable heater-only suppression for the actual comparator-to-dwell
+  // interval.
+  const preHeatingSampleThenHeaterOnlyDrop = [
+    reading(29, 34.8, 19.9, false),
+    reading(30, 35.0, 20, true),
+    reading(35, 35.5, 12.5, true),
+    reading(36, 35.7, 12.4, true),
+  ];
+  const preHeatingSampleThenHeaterOnlyDropResult = resolveLiveDrawReanchors({
+    coldInletBaselineC: 12.2,
+    readings: preHeatingSampleThenHeaterOnlyDrop,
+    reliableDraws: [],
+  });
+  assert(
+    !preHeatingSampleThenHeaterOnlyDropResult.unresolved,
+    "heater-only suppression is scoped to the selected drop comparator interval",
+  );
+  assert(
+    preHeatingSampleThenHeaterOnlyDropResult.detectedUnlabeledDrawCount === 0,
+    "irrelevant pre-heating sample cannot turn heater-only oscillation into an unlabeled draw",
+  );
+
   // Real shower-shaped inlet behavior reaches the cold baseline and stays
   // there across two one-minute samples, so it remains fail-closed.
   const confirmedIdleDraw = [
