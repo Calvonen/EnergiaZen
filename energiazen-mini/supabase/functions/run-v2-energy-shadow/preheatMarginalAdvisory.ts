@@ -114,6 +114,7 @@ export function buildV2MarginalPreheatAdvisory({
     !horizon.available &&
     horizon.reason === "tomorrow_prices_incomplete" &&
     Boolean(evaluateHourSelection) &&
+    baselinePlan.selectedHeatingHourIds.length === 0 &&
     horizon.futureTodayHourIds.length > 0;
   if (!horizon.available && !tomorrowOnlySoftFill && !todayOnlySoftFill) {
     return unavailable(horizon.reason, level);
