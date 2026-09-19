@@ -90,6 +90,7 @@ export function useV2ScenarioPreview({
           {
             body: {
               automaticMaxHeatingHours: settings.automaticMaxHeatingHours,
+              fullTankAverageTemperature: settings.fullTankAverageTemperature,
               maxTankTemperature: settings.maxTankTemperature,
               v2SafetyReservePercent: settings.v2SafetyReservePercent,
               v2TargetReservePercent: settings.v2TargetReservePercent,
@@ -146,6 +147,7 @@ export function useV2ScenarioPreview({
   }, [
     enabled,
     settings.automaticMaxHeatingHours,
+    settings.fullTankAverageTemperature,
     settings.maxTankTemperature,
     settings.v2SafetyReservePercent,
     settings.v2TargetReservePercent,
