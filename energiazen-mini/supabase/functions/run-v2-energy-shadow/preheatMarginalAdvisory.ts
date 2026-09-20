@@ -142,6 +142,33 @@ export function buildV2MarginalPreheatAdvisory({
       !requiredHeatingHourIds.has(hourId),
   );
 
+  // A soft preheat target must never create heating demand by itself.
+  // Preheat is only economical when it can move heating that the safety
+  // baseline already needs later in the horizon to an earlier cheaper hour.
+  // If the baseline needs no future heat, keep the advisory off even when the
+  // forecast ends below the soft target. This prevents horizon_soft_fill from
+  // turning the advisory percentage into a de-facto terminal reserve target.
+  if (displacedFutureHeatingHourIds.length === 0) {
+    return advisoryUnavailable({
+      candidatePreheatHourIds,
+      displacedFutureHeatingHourIds: [],
+      level,
+      marginalCost: {
+        available: false,
+        pairs: [],
+        reason: "no_future_heating_to_displace",
+      },
+      maxPreheatHoursByHeadroom: 0,
+      reason: "no_future_heating_to_displace",
+      recommendedPreheatHourIds: [],
+      retainedBaselineHeatingEnergyKwh: 0,
+      retainedBaselineHeatingHourIds: [...baselineSelectedHourIds].sort(
+        (left, right) => Date.parse(left) - Date.parse(right),
+      ),
+      strategy: null,
+    });
+  }
+
   const configuredHourCap = Math.floor(maxPreheatHours);
   const physicalHeadroomKwh =
     Number.isFinite(remainingEnergyKwh) &&
