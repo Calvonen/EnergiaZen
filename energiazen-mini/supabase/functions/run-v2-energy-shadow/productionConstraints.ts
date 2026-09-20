@@ -62,9 +62,19 @@ export function resolveV2HeatingConstraints({
   };
 
   const currentId = ordered[currentIndex];
+  const currentHourStartMs = Date.parse(currentId);
+  const currentHourHasStartedHeating = readings.some((reading) => {
+    const readingMs = Date.parse(reading.created_at);
+    return (
+      Number.isFinite(readingMs) &&
+      readingMs >= currentHourStartMs &&
+      readingMs <= nowMs &&
+      reading.heating === true
+    );
+  });
   if (
     latest.top_temp >= safetyTopTemperatureC &&
-    latest.heating === true &&
+    currentHourHasStartedHeating &&
     isStoredAutomaticHour(currentId)
   ) {
     const requiredHeatingHourIds: string[] = [];
