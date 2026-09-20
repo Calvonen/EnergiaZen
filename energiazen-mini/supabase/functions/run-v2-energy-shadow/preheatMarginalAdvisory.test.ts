@@ -515,8 +515,8 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     remainingEnergyKwh: 12,
   });
   assert(
-    !noBaselineAndCheaperTomorrow.available && noBaselineAndCheaperTomorrow.reason === "no_cheaper_preheat_interval",
-    "expected soft fill to stay off when tomorrow is cheaper than every remaining hour today",
+    !noBaselineAndCheaperTomorrow.available && noBaselineAndCheaperTomorrow.reason === "no_future_heating_to_displace",
+    "expected no baseline future heat to keep standalone soft fill disabled regardless of price spread",
   );
   assert(noBaselineAndCheaperTomorrow.recommendedPreheatHourIds.length === 0, "expected no standalone fill hours when there is no economic advantage");
 
