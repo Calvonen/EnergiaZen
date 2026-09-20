@@ -29,6 +29,27 @@ export function runProductionConstraintUnitTests() {
   assertArray(active.requiredHeatingHourIds, ids.slice(0, 2), "active block must remain required");
   assertArray(active.forbiddenHeatingHourIds, [ids[2]], "first hour after active block must be forbidden");
 
+  const startedThenRelayOff = resolveV2HeatingConstraints({
+    now: new Date("2026-09-15T11:49:00.000Z"),
+    priceHourIds: ids,
+    readings: [
+      reading("2026-09-15T11:44:00.000Z", true),
+      reading("2026-09-15T11:46:00.000Z", false),
+      reading("2026-09-15T11:48:00.000Z", false),
+    ],
+    storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "automatic" }],
+  });
+  assertArray(
+    startedThenRelayOff.requiredHeatingHourIds,
+    ids.slice(0, 2),
+    "started automatic hour must stay required after a later relay-off sample",
+  );
+  assertArray(
+    startedThenRelayOff.forbiddenHeatingHourIds,
+    [ids[2]],
+    "started automatic block must keep its end boundary after relay-off",
+  );
+
   const safetyOverride = resolveV2HeatingConstraints({
     now,
     priceHourIds: ids,
