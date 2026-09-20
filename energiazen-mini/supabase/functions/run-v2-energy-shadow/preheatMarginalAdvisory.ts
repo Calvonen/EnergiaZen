@@ -142,6 +142,32 @@ export function buildV2MarginalPreheatAdvisory({
       !requiredHeatingHourIds.has(hourId),
   );
 
+  const softTargetKwh = level.recommendedPreheatTargetKwh;
+  if (
+    softTargetKwh !== null &&
+    baselinePlan.finalConservativeEnergyKwh !== null &&
+    baselinePlan.finalConservativeEnergyKwh + 1e-9 >= softTargetKwh
+  ) {
+    return advisoryUnavailable({
+      candidatePreheatHourIds,
+      displacedFutureHeatingHourIds,
+      level,
+      marginalCost: {
+        available: false,
+        pairs: [],
+        reason: "preheat_not_needed",
+      },
+      maxPreheatHoursByHeadroom: 0,
+      reason: "preheat_not_needed",
+      recommendedPreheatHourIds: [],
+      retainedBaselineHeatingEnergyKwh: baselinePlan.selectedHeatingEnergyKwh,
+      retainedBaselineHeatingHourIds: [...baselineSelectedHourIds].sort(
+        (left, right) => Date.parse(left) - Date.parse(right),
+      ),
+      strategy: null,
+    });
+  }
+
   // A soft preheat target must never create heating demand by itself.
   // Preheat is only economical when it can move heating that the safety
   // baseline already needs later in the horizon to an earlier cheaper hour.
