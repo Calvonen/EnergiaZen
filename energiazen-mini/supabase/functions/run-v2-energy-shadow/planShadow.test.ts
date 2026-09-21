@@ -329,8 +329,8 @@ export function runLivePlanShadowUnitTests() {
   assertEqual(quarterHealthy.candidateCount, 40, "quarter-hour horizon keeps every 15-minute candidate");
   assertEqual(quarterHealthy.selectedHeatingHourIds.length, 0, "healthy quarter-hour horizon does not add heating");
   assert(
-    quarterHealthy.evaluatedCombinationCount <= 17,
-    "large quarter-hour horizon uses bounded safety search instead of combinatorial enumeration",
+    quarterHealthy.evaluatedCombinationCount <= 2000,
+    "quarter-hour Pareto DP remains bounded well below combinatorial enumeration",
   );
 
 
