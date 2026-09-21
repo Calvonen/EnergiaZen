@@ -297,8 +297,8 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     },
   });
   assert(
-    !midnightSoftFill.available && midnightSoftFill.reason === "no_future_heating_to_displace",
-    "expected a soft target not to create heating when the safety baseline needs no future heat",
+    midnightSoftFill.available && midnightSoftFill.strategy === "horizon_soft_fill",
+    "expected midnight soft fill to keep optimizing remaining current-day prices when next-day prices are missing",
   );
 
   const incompleteTomorrowWithBaseline = buildV2MarginalPreheatAdvisory({
@@ -323,8 +323,12 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     "expected incomplete next-day prices to remain fail-closed when a baseline future hour could be displaced",
   );
   assert(
-    midnightSoftFill.recommendedPreheatHourIds.length === 0,
-    "expected no standalone soft-fill hours after date rollover",
+    JSON.stringify(midnightSoftFill.recommendedPreheatHourIds) === JSON.stringify([
+      "2026-09-19T09:00:00.000Z",
+      "2026-09-19T10:00:00.000Z",
+      "2026-09-19T11:00:00.000Z",
+    ]),
+    "expected the pre-midnight midday plan to survive the date rollover instead of becoming an empty plan",
   );
 
   const todayStartUtc = Date.parse("2026-09-16T21:00:00.000Z");
@@ -372,9 +376,9 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     evaluateHourSelection: evaluateToleranceSelection,
   });
   assert(
-    !zeroToleranceSoftFill.available &&
-      zeroToleranceSoftFill.reason === "no_future_heating_to_displace",
-    "expected price ranking not to manufacture demand without baseline future heat",
+    zeroToleranceSoftFill.recommendedPreheatHourIds[0] ===
+      "2026-09-17T13:00:00.000Z",
+    "expected zero tolerance to preserve raw-cost ranking",
   );
 
   const oneCentToleranceSoftFill = buildV2MarginalPreheatAdvisory({
@@ -395,13 +399,13 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     evaluateHourSelection: evaluateToleranceSelection,
   });
   assert(
-    !oneCentToleranceSoftFill.available &&
-      oneCentToleranceSoftFill.reason === "no_future_heating_to_displace",
-    "expected tolerance not to manufacture demand without baseline future heat",
+    oneCentToleranceSoftFill.recommendedPreheatHourIds[0] ===
+      "2026-09-17T14:00:00.000Z",
+    "expected one-cent tolerance to treat near-minimum hours as equal and prefer the later schedule",
   );
   assert(
-    oneCentToleranceSoftFill.strategy === null,
-    "expected no standalone horizon soft-fill strategy",
+    oneCentToleranceSoftFill.strategy === "horizon_soft_fill",
+    "expected price tolerance to affect only horizon soft-fill ranking",
   );
 
   const laterScheduleTiePrices = [
@@ -439,9 +443,12 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     }),
   });
   assert(
-    laterScheduleTie.recommendedPreheatHourIds.length === 0 &&
-      laterScheduleTie.reason === "no_future_heating_to_displace",
-    "expected tie-breaking to stay irrelevant when no future baseline heat exists",
+    JSON.stringify(laterScheduleTie.recommendedPreheatHourIds) ===
+      JSON.stringify([
+        "2026-09-17T15:00:00.000Z",
+        "2026-09-17T18:00:00.000Z",
+      ]),
+    "expected tolerance tie-break to compare from the latest hour and prefer the latest eligible two-hour schedule",
   );
 
   const noFutureHeat = buildV2MarginalPreheatAdvisory({
@@ -455,13 +462,16 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     remainingEnergyKwh: 12,
   });
   assert(
-    !noFutureHeat.available && noFutureHeat.reason === "no_future_heating_to_displace",
-    "expected soft target alone not to create heating even when today is cheaper",
+    noFutureHeat.available && noFutureHeat.reason === "recommended",
+    "expected economic soft fill when no baseline heating exists but today is cheaper than tomorrow",
   );
-  assert(noFutureHeat.strategy === null, "expected standalone soft fill to stay disabled");
+  assert(noFutureHeat.strategy === "soft_fill", "expected standalone 90% fill to be identified separately from marginal displacement");
   assert(
-    noFutureHeat.recommendedPreheatHourIds.length === 0,
-    "expected no heating hours when there is no future baseline heat to displace",
+    JSON.stringify(noFutureHeat.recommendedPreheatHourIds) === JSON.stringify([
+      "2026-09-17T13:00:00.000Z",
+      "2026-09-17T14:00:00.000Z",
+    ]),
+    "expected soft fill to choose the two cheap future-today hours allowed by 6 kWh headroom",
   );
   assert(
     noFutureHeat.marginalCost.reason === "no_future_heating_to_displace",
@@ -515,8 +525,8 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     remainingEnergyKwh: 12,
   });
   assert(
-    !noBaselineAndCheaperTomorrow.available && noBaselineAndCheaperTomorrow.reason === "no_future_heating_to_displace",
-    "expected no baseline future heat to keep standalone soft fill disabled regardless of price spread",
+    !noBaselineAndCheaperTomorrow.available && noBaselineAndCheaperTomorrow.reason === "no_cheaper_preheat_interval",
+    "expected soft fill to stay off when tomorrow is cheaper than every remaining hour today",
   );
   assert(noBaselineAndCheaperTomorrow.recommendedPreheatHourIds.length === 0, "expected no standalone fill hours when there is no economic advantage");
 
@@ -548,16 +558,16 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     },
   });
   assert(
-    !boundedSearch.available && boundedSearch.reason === "no_future_heating_to_displace",
-    "expected unreachable soft target not to trigger standalone heating",
+    boundedSearch.available && boundedSearch.strategy === "horizon_soft_fill",
+    "expected bounded horizon search to return the best partial fill when the 90% target cannot be reached",
   );
   assert(
-    boundedEvaluations === 0,
-    `expected no forecast search without future baseline heat, got ${boundedEvaluations}`,
+    boundedEvaluations <= 3000,
+    `expected bounded horizon search to cap forecast evaluations, got ${boundedEvaluations}`,
   );
   assert(
-    boundedSearch.recommendedPreheatHourIds.length === 0,
-    "expected unreachable soft target to add no heating hours",
+    boundedSearch.recommendedPreheatHourIds.length === 4,
+    "expected unreachable target to use the configured four-hour cap",
   );
 
 
@@ -617,17 +627,20 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     },
   });
   assert(
-    !tomorrowOnlySoftFill.available &&
-      tomorrowOnlySoftFill.reason === "no_future_heating_to_displace",
-    "expected complete tomorrow prices not to create demand by themselves",
+    tomorrowOnlySoftFill.available &&
+      tomorrowOnlySoftFill.strategy === "horizon_soft_fill",
+    "expected complete tomorrow prices to support soft fill after today's final price-hour start",
   );
   assert(
-    tomorrowOnlySoftFill.recommendedPreheatHourIds.length === 0,
-    "expected tomorrow-only soft target to add no heating hours",
+    tomorrowOnlySoftFill.recommendedPreheatHourIds.length === 2 &&
+      tomorrowOnlySoftFill.recommendedPreheatHourIds.every(
+        (hourId) => Date.parse(hourId) >= Date.parse("2026-09-17T21:00:00.000Z"),
+      ),
+    "expected tomorrow-only soft fill to select tomorrow hours needed to reach 90%",
   );
   assert(
-    tomorrowOnlyEvaluations === 0,
-    "expected no tomorrow-only forecast search without baseline demand",
+    tomorrowOnlyEvaluations > 0,
+    "expected tomorrow-only horizon to run bounded forecast evaluation",
   );
 
   const invalidBaseline = buildV2MarginalPreheatAdvisory({
