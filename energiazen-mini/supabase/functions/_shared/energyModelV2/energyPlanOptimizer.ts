@@ -171,7 +171,9 @@ function optimizeLargeIntervalHorizon({
   thresholds?: EnergyReserveThresholds;
 }): EnergyPlanOptimizationResult {
   const selected = new Set(required);
-  const releasedPartialIds = new Set<string>();
+  const visitedSelections = new Set<string>();
+  const selectionKey = (ids: Set<string>) => [...ids].sort().join("|");
+  visitedSelections.add(selectionKey(selected));
   let selectedHours = ordered
     .filter((segment) => selected.has(segment.id))
     .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
@@ -191,7 +193,7 @@ function optimizeLargeIntervalHorizon({
     const violationMs = Date.parse(evaluated.forecast.firstSafetyViolationAt);
     const candidates = ordered
       .filter((segment) => {
-        if (selected.has(segment.id) || forbidden.has(segment.id) || releasedPartialIds.has(segment.id)) return false;
+        if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
         const duration = clamp(segment.segmentHours, 0, 1);
         if (selectedHours + duration > maxSelectedHours + 1e-9) return false;
         const startsAtViolation = Date.parse(segment.startDate) === violationMs;
@@ -241,7 +243,7 @@ function optimizeLargeIntervalHorizon({
         ) < (thresholds?.safetyEnergyKwh ?? 0) - 1e-9;
       const replacementCandidates = ordered
         .filter((segment) => {
-          if (selected.has(segment.id) || forbidden.has(segment.id) || releasedPartialIds.has(segment.id)) return false;
+          if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
           const duration = clamp(segment.segmentHours, 0, 1);
           const startMs = Date.parse(segment.startDate);
           return (violationWasBeforeHeating ? startMs < violationMs : startMs <= violationMs) &&
@@ -375,22 +377,33 @@ function optimizeLargeIntervalHorizon({
         if (!coordinated) break;
         coordinated.remove.forEach((segment) => {
           selected.delete(segment.id);
-          releasedPartialIds.add(segment.id);
+          // Removed intervals remain eligible for later coordinated recovery;
+          // complete-selection tracking prevents cycles.
         });
         coordinated.add.forEach((segment) => selected.add(segment.id));
         selectedHours = ordered
           .filter((segment) => selected.has(segment.id))
           .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+        const coordinatedKey = selectionKey(selected);
+        if (visitedSelections.has(coordinatedKey)) break;
+        visitedSelections.add(coordinatedKey);
         evaluated = coordinated.result;
         continue;
       }
       selected.delete(replaceablePartial.id);
-      releasedPartialIds.add(replaceablePartial.id);
+      const replacementKey = (() => {
+        const trial = new Set(selected);
+        trial.delete(replaceablePartial.id);
+        if (replacementCandidate) trial.add(replacementCandidate.id);
+        return selectionKey(trial);
+      })();
+      if (visitedSelections.has(replacementKey)) break;
       selectedHours -= clamp(replaceablePartial.segmentHours, 0, 1);
       if (replacementCandidate) {
         selected.add(replacementCandidate.id);
         selectedHours += clamp(replacementCandidate.segmentHours, 0, 1);
       }
+      visitedSelections.add(selectionKey(selected));
       evaluated = evaluateSelection({
         energyCapacityKwh,
         heaterPowerKw,
