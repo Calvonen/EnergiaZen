@@ -216,12 +216,20 @@ function optimizeLargeIntervalHorizon({
       // duration cap and prevent the final full interval from fitting. If that
       // partial interval is optional, drop it and retry so the bounded search
       // can use the complete cap instead of failing because of fragmentation.
-      const replaceablePartial = ordered
-        .filter((segment) =>
-          selected.has(segment.id) &&
-          !required.has(segment.id) &&
-          clamp(segment.segmentHours, 0, 1) > 0 &&
-          clamp(segment.segmentHours, 0, 1) < 0.25 - 1e-9)
+      const selectedOptional = ordered.filter(
+        (segment) => selected.has(segment.id) && !required.has(segment.id),
+      );
+      const forecastById = new Map(
+        evaluated.forecast.points.map((point) => [point.id, point]),
+      );
+      const replaceablePartial = selectedOptional
+        .filter((segment) => {
+          const duration = clamp(segment.segmentHours, 0, 1);
+          const point = forecastById.get(segment.id);
+          const deliveredKwh = point?.heatingEnergyKwh ?? Math.max(0, heaterPowerKw) * duration;
+          const requestedKwh = Math.max(0, heaterPowerKw) * duration;
+          return duration < 0.25 - 1e-9 || deliveredKwh + 1e-9 < requestedKwh;
+        })
         .sort((left, right) => Date.parse(left.startDate) - Date.parse(right.startDate))[0];
       if (!replaceablePartial) break;
       selected.delete(replaceablePartial.id);
