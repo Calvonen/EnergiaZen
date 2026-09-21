@@ -210,7 +210,7 @@ Deno.serve(async (request) => {
     const preheatAdvisory = buildV2MarginalPreheatAdvisory({
       baselinePlan: plan,
       conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
-      constraints,
+      constraints: plan.effectiveConstraints ?? constraints,
       energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
@@ -228,9 +228,14 @@ Deno.serve(async (request) => {
           constraintsAreExactIntervals: true,
           constraints: {
             requiredHeatingHourIds: selectedHourIds,
-            forbiddenHeatingHourIds: prices
-              .map((price) => price.starts_at)
-              .filter((hourId) => !selected.has(hourId)),
+            forbiddenHeatingHourIds: [
+              ...new Set([
+                ...(plan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
+                ...prices
+                  .map((price) => price.starts_at)
+                  .filter((hourId) => !selected.has(hourId)),
+              ]),
+            ],
           },
           energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
           inletBaselineC,
@@ -274,9 +279,14 @@ Deno.serve(async (request) => {
       constraintsAreExactIntervals: true,
       constraints: {
         requiredHeatingHourIds: publicationSelectedHeatingHourIds,
-        forbiddenHeatingHourIds: prices
-          .map((price) => price.starts_at)
-          .filter((hourId) => !publicationHourIdSet.has(hourId)),
+        forbiddenHeatingHourIds: [
+          ...new Set([
+            ...(plan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
+            ...prices
+              .map((price) => price.starts_at)
+              .filter((hourId) => !publicationHourIdSet.has(hourId)),
+          ]),
+        ],
       },
       energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
