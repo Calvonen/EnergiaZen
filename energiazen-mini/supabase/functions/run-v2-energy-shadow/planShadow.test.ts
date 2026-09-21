@@ -312,7 +312,7 @@ export function runLivePlanShadowUnitTests() {
   assertEqual(advisoryTargetAboveCurrentReserve.reason, null, "safe below-target plan has no violation reason");
   const quarterHorizon = Array.from({ length: 40 }, (_, index) =>
     quarterPrice(
-      new Date(Date.parse("2026-09-15T05:15:00.000Z") + index * 15 * 60_000).toISOString(),
+      new Date(Date.parse("2026-09-15T05:30:00.000Z") + index * 15 * 60_000).toISOString(),
       index === 4 ? 1 : 10,
     ),
   );
