@@ -327,8 +327,12 @@ function optimizeLargeIntervalHorizon({
         // Enumerate bounded equal-size exchanges over a small frontier. The
         // horizon remains polynomially bounded in practice while supporting
         // the 3-for-3 cases that defeat greedy and pair recovery.
-        const optionalPool = selectedOptional.slice(0, 6);
-        const candidatePool = replacementCandidates.slice(0, 8);
+        // The selected side is naturally bounded by the configured heating
+        // duration cap. Do not price-truncate the candidate side: a later,
+        // dearer interval can be the only physically feasible replacement
+        // because timing and capacity clipping dominate price during recovery.
+        const optionalPool = selectedOptional;
+        const candidatePool = replacementCandidates;
         let coordinated: { remove: EnergyPlanCandidateSegment[]; add: EnergyPlanCandidateSegment[]; result: EvaluatedPlan } | null = null;
         const combinations = <T,>(items: T[], count: number): T[][] => {
           const out: T[][] = [];
