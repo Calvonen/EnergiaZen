@@ -42,6 +42,7 @@ export function evaluateV2MarginalPreheatCost({
   preheatCandidateHourIds,
   prices,
   requireExactPairCount = false,
+  resolutionMinutes: requestedResolutionMinutes,
 }: {
   displacedFutureHeatingHourIds: string[];
   excludedPairKeys?: string[];
@@ -49,6 +50,7 @@ export function evaluateV2MarginalPreheatCost({
   preheatCandidateHourIds: string[];
   prices: ShadowElectricityPrice[];
   requireExactPairCount?: boolean;
+  resolutionMinutes?: 15 | 60;
 }): V2MarginalPreheatCostResult {
   if (!Number.isFinite(maxPreheatHours) || maxPreheatHours < 0) {
     return unavailable("invalid_max_preheat_hours");
@@ -67,8 +69,12 @@ export function evaluateV2MarginalPreheatCost({
       )
     )
   );
-  if (matchingResolutions.length !== 1) return unavailable("price_data_missing");
-  const resolutionMinutes = matchingResolutions[0];
+  const resolutionMinutes = requestedResolutionMinutes ??
+    (matchingResolutions.length === 1 ? matchingResolutions[0] : undefined);
+  if (
+    (resolutionMinutes !== 15 && resolutionMinutes !== 60) ||
+    !matchingResolutions.includes(resolutionMinutes)
+  ) return unavailable("price_data_missing");
   const priceById = new Map(
     prices
       .filter((price) => price.resolution_minutes === resolutionMinutes)
