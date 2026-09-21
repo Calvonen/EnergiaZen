@@ -175,15 +175,15 @@ export function runLivePlanShadowUnitTests() {
     reserve: reserve(3.4),
   });
   assert(needsSafetyHeat.available, "safety-threatened reserve still has a plan shadow");
-  assert(needsSafetyHeat.valid === true, "optimizer finds a safety-preserving recovery plan");
-  assertEqual(needsSafetyHeat.selectedHeatingHourIds.length, 1, "one segment is enough to preserve safety");
+  assert(needsSafetyHeat.valid === true, "optimizer finds a target-restoring recovery plan");
+  assertEqual(needsSafetyHeat.selectedHeatingHourIds.length, 2, "two segments are needed to restore the configured target");
   assertEqual(
     needsSafetyHeat.selectedHeatingHourIds[0],
     "2026-09-15T05:00:00.000Z",
     "billed tariff keeps the shorter current interval cheapest when safety requires heat",
   );
-  assertEqual(needsSafetyHeat.selectedHeatingEnergyKwh, 1.5, "safety recovery may use the partial 1.5 kWh segment");
-  assertEqual(needsSafetyHeat.totalCostCents, 27.93, "safety recovery cost includes spot margin plus grid and tax");
+  assertEqual(needsSafetyHeat.selectedHeatingEnergyKwh, 4.5, "target recovery combines the partial current segment with one full hour");
+  assertEqual(needsSafetyHeat.totalCostCents, 59.79, "target recovery cost includes both selected billed-tariff segments");
 
   const winterSpike = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
