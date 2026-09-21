@@ -225,6 +225,7 @@ Deno.serve(async (request) => {
         const selected = new Set(selectedHourIds);
         return runLiveEnergyPlanShadow({
           automaticMaxHeatingHours,
+          constraintsAreExactIntervals: true,
           constraints: {
             requiredHeatingHourIds: selectedHourIds,
             forbiddenHeatingHourIds: prices
@@ -270,6 +271,7 @@ Deno.serve(async (request) => {
     const publicationHourIdSet = new Set(publicationSelectedHeatingHourIds);
     const publicationPlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
+      constraintsAreExactIntervals: true,
       constraints: {
         requiredHeatingHourIds: publicationSelectedHeatingHourIds,
         forbiddenHeatingHourIds: prices
