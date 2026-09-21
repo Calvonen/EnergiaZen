@@ -74,6 +74,7 @@ export function resolveV2HeatingConstraints({
   });
   if (
     latest.top_temp >= safetyTopTemperatureC &&
+    typeof latest.heating === "boolean" &&
     currentHourHasStartedHeating &&
     isStoredAutomaticHour(currentId)
   ) {
