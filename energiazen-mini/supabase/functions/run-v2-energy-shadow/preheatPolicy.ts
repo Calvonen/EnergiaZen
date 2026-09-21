@@ -78,7 +78,14 @@ export function evaluateV2PreheatHorizon({
         helsinkiDateKey(new Date(price.starts_at)) === today &&
         Date.parse(price.starts_at) > nowMs,
     );
-    return hasFutureToday && hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
+    const noFutureTodayAtAnyResolution = !prices.some(
+      (price) =>
+        (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs,
+    );
+    return (hasFutureToday || noFutureTodayAtAnyResolution) &&
+      hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
   }) ?? null;
 
   if (resolutionMinutes === null) {
