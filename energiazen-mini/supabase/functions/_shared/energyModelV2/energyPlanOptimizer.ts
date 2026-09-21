@@ -199,7 +199,15 @@ function optimizeLargeIntervalHorizon({
           (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
         );
         const violationWasBeforeHeating =
-          startsAtViolation && (violationPoint?.frontLoadedDemandKwh ?? 0) > 0;
+          startsAtViolation &&
+          (violationPoint?.frontLoadedDemandKwh ?? 0) > 0 &&
+          violationPoint !== undefined &&
+          Math.max(
+            violationPoint.remainingEnergyBeforeKwh -
+              violationPoint.frontLoadedDemandKwh -
+              violationPoint.uncertaintyAfterKwh,
+            0,
+          ) < (thresholds?.safetyEnergyKwh ?? 0) - 1e-9;
         return violationWasBeforeHeating
           ? Date.parse(segment.startDate) < violationMs
           : Date.parse(segment.startDate) <= violationMs;
@@ -232,7 +240,8 @@ function optimizeLargeIntervalHorizon({
                 point.remainingEnergyAfterKwh -
                   point.remainingEnergyBeforeKwh +
                   point.modeledHeatLossKwh +
-                  point.acceptedRemovalKwh,
+                  point.acceptedRemovalKwh +
+                  point.frontLoadedDemandKwh,
                 0,
               )
             : requestedKwh;
