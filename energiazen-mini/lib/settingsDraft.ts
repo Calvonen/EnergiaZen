@@ -90,7 +90,7 @@ export function validateSettingsDraft(
   ) {
     errors.push({
       field: "v2TargetReservePercent",
-      message: `Esilämmityssuosituksen pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
+      message: `Tavoitevaran pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
     });
   }
 
@@ -179,7 +179,7 @@ export function validateSettingsDraft(
   ) {
     warnings.push({
       field: "v2SafetyReservePercent",
-      message: "V2-turvaraja on hyvin lähellä esilämmityssuositusta.",
+      message: "V2-turvaraja on hyvin lähellä tavoitevaraa.",
     });
   }
 
