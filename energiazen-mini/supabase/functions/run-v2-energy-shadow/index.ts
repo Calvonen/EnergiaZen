@@ -194,7 +194,7 @@ Deno.serve(async (request) => {
     const result = applyReserveThresholds(baseResult, safetyEnergyKwh, targetEnergyKwh);
     const constraints = resolveV2HeatingConstraints({
       now,
-      priceHourIds: prices.map((price) => price.starts_at),
+      priceHourIds: publicationPrices.map((price) => price.starts_at),
       readings,
       safetyTopTemperatureC: activeBlockSafetyTopTemperatureC,
       storedPlans,
