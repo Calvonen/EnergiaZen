@@ -280,9 +280,37 @@ function optimizeLargeIntervalHorizon({
                 thresholds,
               });
               evaluatedCombinationCount += 1;
-              return trialResult.valid ||
-                trialResult.forecast.firstSafetyViolationAt === null ||
-                Date.parse(trialResult.forecast.firstSafetyViolationAt) > violationMs;
+              if (trialResult.valid || trialResult.forecast.firstSafetyViolationAt === null) return true;
+              const trialViolationMs = Date.parse(trialResult.forecast.firstSafetyViolationAt);
+              if (trialViolationMs > violationMs) return true;
+              if (trialViolationMs !== violationMs) return false;
+              const currentPoint = evaluated.forecast.points.find(
+                (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
+              );
+              const trialPoint = trialResult.forecast.points.find(
+                (point) => point.startDate === trialResult.forecast.firstSafetyViolationAt,
+              );
+              if (!currentPoint || !trialPoint) return false;
+              const currentPreDemandKwh = Math.max(
+                currentPoint.remainingEnergyBeforeKwh -
+                  currentPoint.frontLoadedDemandKwh -
+                  currentPoint.uncertaintyAfterKwh,
+                0,
+              );
+              const trialPreDemandKwh = Math.max(
+                trialPoint.remainingEnergyBeforeKwh -
+                  trialPoint.frontLoadedDemandKwh -
+                  trialPoint.uncertaintyAfterKwh,
+                0,
+              );
+              const safetyFloor = thresholds?.safetyEnergyKwh ?? 0;
+              const currentIsPreDemand = currentPoint.frontLoadedDemandKwh > 0 &&
+                currentPreDemandKwh < safetyFloor - 1e-9;
+              const trialIsPreDemand = trialPoint.frontLoadedDemandKwh > 0 &&
+                trialPreDemandKwh < safetyFloor - 1e-9;
+              return (currentIsPreDemand && !trialIsPreDemand) ||
+                trialPoint.conservativeEnergyAfterKwh >
+                  currentPoint.conservativeEnergyAfterKwh + 1e-9;
             });
         if (replacement) {
           replacementCandidate = candidate;
