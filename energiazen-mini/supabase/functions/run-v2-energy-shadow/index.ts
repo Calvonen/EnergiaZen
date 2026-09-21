@@ -401,11 +401,11 @@ Deno.serve(async (request) => {
     if (
       v2PublicationCutoverEnabled &&
       controlPlaneState.heating_need_mode === "automatic" &&
-      (!result.available || !publicationPlan.available)
+      (!result.available || !hourlyPublicationPlan.available)
     ) {
       const unavailableReason =
         result.reason ??
-        publicationPlan.reason ??
+        hourlyPublicationPlan.reason ??
         "plan_unavailable";
       const { error: heartbeatError } = await supabase
         .from("backend_heating_optimizer_state")
