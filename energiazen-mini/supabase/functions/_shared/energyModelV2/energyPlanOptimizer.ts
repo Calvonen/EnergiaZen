@@ -171,6 +171,7 @@ function optimizeLargeIntervalHorizon({
   thresholds?: EnergyReserveThresholds;
 }): EnergyPlanOptimizationResult {
   const selected = new Set(required);
+  const releasedPartialIds = new Set<string>();
   let selectedHours = ordered
     .filter((segment) => selected.has(segment.id))
     .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
@@ -190,7 +191,7 @@ function optimizeLargeIntervalHorizon({
     const violationMs = Date.parse(evaluated.forecast.firstSafetyViolationAt);
     const candidates = ordered
       .filter((segment) => {
-        if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
+        if (selected.has(segment.id) || forbidden.has(segment.id) || releasedPartialIds.has(segment.id)) return false;
         const duration = clamp(segment.segmentHours, 0, 1);
         if (selectedHours + duration > maxSelectedHours + 1e-9) return false;
         const startsAtViolation = Date.parse(segment.startDate) === violationMs;
@@ -224,6 +225,7 @@ function optimizeLargeIntervalHorizon({
         .sort((left, right) => Date.parse(left.startDate) - Date.parse(right.startDate))[0];
       if (!replaceablePartial) break;
       selected.delete(replaceablePartial.id);
+      releasedPartialIds.add(replaceablePartial.id);
       selectedHours -= clamp(replaceablePartial.segmentHours, 0, 1);
       evaluated = evaluateSelection({
         energyCapacityKwh,
