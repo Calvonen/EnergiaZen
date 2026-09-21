@@ -77,7 +77,9 @@ export function optimizeEnergyPlan({
   // sub-hour feed from spacing between candidate starts instead; this keeps
   // live 60-minute production horizons on the exact optimizer.
   const orderedStartTimes = ordered
-    .map((segment) => Date.parse(segment.startDate))
+    // id is the immutable source interval start; startDate may be moved to
+    // "now" for the partially elapsed current interval.
+    .map((segment) => Date.parse(segment.id))
     .filter(Number.isFinite)
     .sort((left, right) => left - right);
   const usesSubHourlyFeed = orderedStartTimes.some(
