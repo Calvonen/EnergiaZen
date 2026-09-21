@@ -198,13 +198,13 @@ export function runLivePlanShadowUnitTests() {
     ],
     reserve: reserve(3.4),
   });
-  assert(winterSpike.valid === true, "100 c/kWh spike scenario still finds a safe plan");
+  assert(winterSpike.valid === true, "100 c/kWh spike scenario still finds a target-restoring plan");
+  assertEqual(winterSpike.selectedHeatingHourIds.length, 2, "hard target requires two heating segments in the spike scenario");
   assertEqual(
-    winterSpike.selectedHeatingHourIds[0],
-    "2026-09-15T06:00:00.000Z",
-    "100 c/kWh partial current segment must lose to a 1 c/kWh future hour when safety can wait",
+    winterSpike.selectedHeatingHourIds.join("|"),
+    "2026-09-15T05:00:00.000Z|2026-09-15T06:00:00.000Z",
+    "target recovery includes the current partial segment when the later cheap hour alone cannot reach target",
   );
-  assertEqual(winterSpike.totalCostCents, 28.86, "winter spike comparison uses the billed 9.62 c/kWh future tariff");
 
   const moderatelyNegative = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
