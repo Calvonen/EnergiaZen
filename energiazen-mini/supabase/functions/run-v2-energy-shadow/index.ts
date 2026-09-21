@@ -39,6 +39,22 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
 });
 
+function composePublicationSelection(
+  baselineIds: string[],
+  advisory: ReturnType<typeof buildV2MarginalPreheatAdvisory>,
+) {
+  if (!advisory.available || advisory.reason !== "recommended") return [...baselineIds];
+  const displaced = new Set(
+    advisory.strategy === "marginal_displacement" && advisory.marginalCost.available
+      ? advisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
+      : [],
+  );
+  return [...new Set([
+    ...baselineIds.filter((id) => !displaced.has(id)),
+    ...advisory.recommendedPreheatHourIds,
+  ])].sort((left, right) => Date.parse(left) - Date.parse(right));
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { headers: jsonHeaders, status });
 }
