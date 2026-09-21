@@ -140,7 +140,7 @@ export function WarmWaterCard({ onPress }: WarmWaterCardProps) {
     return {
       accessibilityLabel: waterDrawFallback
         ? `Lämminvesivaraus, viimeisin luotettava arvio ${Math.round(reservePresentation.percent)} prosenttia, vedenotto havaittu ja arvio päivittyy`
-        : `Lämminvesivaraus ${Math.round(reservePresentation.percent)} prosenttia, ${formatKwh(reservePresentation.energyKwh)} kilowattituntia ${formatKwh(reservePresentation.capacityKwh)} kilowattitunnista. Pehmeä esilämmityssuositus ${Math.round(reservePresentation.recommendedPreheatPercent)} prosenttia. Turvaraja ${Math.round(reservePresentation.safetyReservePercent ?? 0)} prosenttia.`,
+        : `Lämminvesivaraus ${Math.round(reservePresentation.percent)} prosenttia, ${formatKwh(reservePresentation.energyKwh)} kilowattituntia ${formatKwh(reservePresentation.capacityKwh)} kilowattitunnista. Tavoitevara ${Math.round(reservePresentation.recommendedPreheatPercent)} prosenttia. Turvaraja ${Math.round(reservePresentation.safetyReservePercent ?? 0)} prosenttia.`,
       energyLabel: waterDrawFallback ? `Viimeisin luotettava · ${energyLabel}` : energyLabel,
       fillPercent: reservePresentation.fillPercent,
       percentLabel: `${Math.round(reservePresentation.percent)} %`,

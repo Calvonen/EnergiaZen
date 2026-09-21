@@ -196,7 +196,7 @@ Deno.serve(async (request) => {
       maxTankTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const hardTargetPercent = reservePercents.safetyPercent;
+    const hardTargetPercent = reservePercents.targetPercent;
     const safetyEnergyKwh =
       reserveCapacityKwh === null
         ? null

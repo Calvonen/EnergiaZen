@@ -262,8 +262,8 @@ export async function runSettingsDraftUnitTests() {
     const validation = validateSettingsDraft(independentV2Draft, savedSettings);
     assertEqual(
       validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
-      false,
-      "V2 turvaraja ei riipu piilotetusta legacy-targetista",
+      true,
+      "V2 turvaraja ei voi ylittaa tavoitevaraa",
     );
   }
 
@@ -276,8 +276,8 @@ export async function runSettingsDraftUnitTests() {
     const validation = validateSettingsDraft(visibleMaximumDraft, savedSettings);
     assertEqual(
       validation.errors.some((issue) => issue.field === "v2SafetyReservePercent"),
-      false,
-      "V2 turvarajan nakyva 95 prosentin vaihtoehto voidaan tallentaa",
+      true,
+      "95 prosentin turvaraja hylataan, kun tavoitevara on 70 prosenttia",
     );
   }
 

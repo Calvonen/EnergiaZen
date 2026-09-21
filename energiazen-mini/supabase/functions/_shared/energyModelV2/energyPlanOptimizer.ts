@@ -156,12 +156,10 @@ function evaluateSelection({
     return sum + Math.max(0, heaterPowerKw) * clamp(segment.segmentHours, 0, 1) * finitePrice(billedPrice);
   }, 0);
 
-  // Safety is the only hard energy requirement. The target threshold remains in
-  // the forecast as advisory/preheat metadata, but being below it must not force
-  // the optimizer to buy electricity. A later price-horizon policy decides when
-  // voluntarily preheating above safety is economically worthwhile.
+  const finalTargetSatisfied =
+    forecast.finalConservativeEnergyKwh >= forecast.thresholds.targetEnergyKwh;
   const safetySatisfied = forecast.firstSafetyViolationAt === null;
-  const valid = safetySatisfied;
+  const valid = safetySatisfied && finalTargetSatisfied;
 
   return {
     forecast,
@@ -169,7 +167,11 @@ function evaluateSelection({
     selectedHeatingHourIds: selectedSegments.map((segment) => segment.id),
     totalCostCents,
     valid,
-    violationReason: safetySatisfied ? null : "safety_reserve_would_be_violated",
+    violationReason: !safetySatisfied
+      ? "safety_reserve_would_be_violated"
+      : !finalTargetSatisfied
+        ? "target_reserve_not_reached"
+        : null,
   };
 }
 

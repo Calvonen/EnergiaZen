@@ -90,7 +90,7 @@ export function validateSettingsDraft(
   ) {
     errors.push({
       field: "v2TargetReservePercent",
-      message: `Esilämmityssuosituksen pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
+      message: `Tavoitevaran pitää olla välillä ${minV2TargetReservePercent}–${maxV2TargetReservePercent} %.`,
     });
   }
 
@@ -102,6 +102,17 @@ export function validateSettingsDraft(
     errors.push({
       field: "v2SafetyReservePercent",
       message: `V2-turvarajan pitää olla välillä 0–${maxV2SafetyReservePercent} %.`,
+    });
+  }
+
+  if (
+    isFiniteNumber(v2SafetyReservePercent) &&
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2SafetyReservePercent > v2TargetReservePercent
+  ) {
+    errors.push({
+      field: "v2SafetyReservePercent",
+      message: "V2-turvaraja ei voi ylittää tavoitevaraa.",
     });
   }
 
@@ -179,7 +190,7 @@ export function validateSettingsDraft(
   ) {
     warnings.push({
       field: "v2SafetyReservePercent",
-      message: "V2-turvaraja on hyvin lähellä esilämmityssuositusta.",
+      message: "V2-turvaraja on hyvin lähellä tavoitevaraa.",
     });
   }
 
