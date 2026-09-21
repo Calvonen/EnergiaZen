@@ -54,19 +54,31 @@ export function evaluateV2MarginalPreheatCost({
     return unavailable("invalid_max_preheat_hours");
   }
 
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const requestedIds = [...new Set([
+    ...preheatCandidateHourIds,
+    ...displacedFutureHeatingHourIds,
+  ])];
+  const matchingResolutions = ([15, 60] as const).filter((resolutionMinutes) =>
+    requestedIds.every((id) =>
+      prices.some((price) =>
+        price.starts_at === id &&
+        price.resolution_minutes === resolutionMinutes &&
+        isUsableIntervalPrice(price)
+      )
+    )
+  );
+  if (matchingResolutions.length !== 1) return unavailable("price_data_missing");
+  const resolutionMinutes = matchingResolutions[0];
+  const priceById = new Map(
+    prices
+      .filter((price) => price.resolution_minutes === resolutionMinutes)
+      .map((price) => [price.starts_at, price]),
+  );
   const pricedPreheat = priceIds(preheatCandidateHourIds, priceById);
   const pricedFuture = priceIds(displacedFutureHeatingHourIds, priceById);
   if (!pricedPreheat || !pricedFuture) {
     return unavailable("price_data_missing");
   }
-  const resolutions = new Set(
-    [...preheatCandidateHourIds, ...displacedFutureHeatingHourIds]
-      .map((id) => priceById.get(id)?.resolution_minutes),
-  );
-  if (resolutions.size !== 1) return unavailable("price_data_missing");
-  const resolutionMinutes = [...resolutions][0];
-  if (resolutionMinutes !== 15 && resolutionMinutes !== 60) return unavailable("price_data_missing");
   const maxIntervals = Math.floor(maxPreheatHours / (resolutionMinutes / 60));
   if (!preheatCandidateHourIds.length || maxIntervals === 0) {
     return unavailable("no_preheat_candidates");
