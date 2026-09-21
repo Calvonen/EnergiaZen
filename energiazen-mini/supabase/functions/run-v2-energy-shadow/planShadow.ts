@@ -35,7 +35,7 @@ export type LiveEnergyPlanShadowResult = {
   learnedDropProfileDate: string | null;
   learnedDropProfileAgeDays: number | null;
   maximumModeledLossKwhPerHour: number | null;
-  effectiveConstraints: V2HeatingConstraints | null;
+  effectiveConstraints?: V2HeatingConstraints | null;
 };
 
 const assumption = "standing_loss_only_no_future_draws" as const;
@@ -295,18 +295,18 @@ function validateExactIntervalConstraints(
 
 function expandHourlyConstraints(
   constraints: V2HeatingConstraints,
-  candidateIds: string[],
+  candidates: Array<{ id: string; durationMs: number }>,
   now: Date,
 ):
   | ({ ok: true } & V2HeatingConstraints)
   | { ok: false; reason: "required_hour_missing" } {
-  const orderedCandidates = [...new Set(candidateIds)]
-    .filter((id) => Number.isFinite(Date.parse(id)))
+  const candidateDurationById = new Map(
+    candidates
+      .filter((candidate) => Number.isFinite(Date.parse(candidate.id)) && candidate.durationMs > 0)
+      .map((candidate) => [candidate.id, candidate.durationMs]),
+  );
+  const orderedCandidates = [...candidateDurationById.keys()]
     .sort((left, right) => Date.parse(left) - Date.parse(right));
-  const candidateDurationMs =
-    orderedCandidates.length >= 2
-      ? Date.parse(orderedCandidates[1]) - Date.parse(orderedCandidates[0])
-      : 60 * 60 * 1000;
   const expand = (hourIds: string[]) => {
     const starts = hourIds
       .map((id) => Date.parse(id))
@@ -327,7 +327,7 @@ function expandHourlyConstraints(
         const start = Date.parse(candidateId);
         return start >= requiredStart && start < requiredStart + 60 * 60 * 1000;
       })
-      .length * candidateDurationMs;
+      .reduce((sum, candidateId) => sum + (candidateDurationById.get(candidateId) ?? 0), 0);
     const hourEnd = requiredStart + 60 * 60 * 1000;
     const expectedCoverageStart = Math.max(requiredStart, now.getTime());
     const expectedCoverageMs = Math.max(hourEnd - expectedCoverageStart, 0);
