@@ -217,7 +217,10 @@ export function evaluateV2PreheatOpportunity({
   prices: ShadowElectricityPrice[];
 }): V2PreheatOpportunity {
   const horizon = evaluateV2PreheatHorizon({ now, prices });
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const selectedPrices = horizon.resolutionMinutes === null
+    ? []
+    : prices.filter((price) => isUsablePrice(price, horizon.resolutionMinutes!));
+  const priceById = new Map(selectedPrices.map((price) => [price.starts_at, price]));
   const tomorrowBilledPrices = horizon.tomorrowHourIds
     .map((hourId) => priceById.get(hourId))
     .filter((price): price is ShadowElectricityPrice => Boolean(price))
