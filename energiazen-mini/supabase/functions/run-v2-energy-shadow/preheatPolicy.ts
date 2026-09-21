@@ -80,10 +80,14 @@ export function evaluateV2PreheatHorizon({
       )
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
     const hasFutureToday = futureToday.length > 0;
-    const futureTodayCoverageIsCoherent = !hasFutureToday || futureToday.every(
-      (price, index) =>
-        index === 0 ||
-        Date.parse(futureToday[index - 1].ends_at) === Date.parse(price.starts_at),
+    const nextBoundaryMs = Math.ceil(nowMs / (resolution * 60_000)) * resolution * 60_000;
+    const futureTodayCoverageIsCoherent = !hasFutureToday || (
+      Date.parse(futureToday[0].starts_at) <= nextBoundaryMs &&
+      futureToday.every(
+        (price, index) =>
+          index === 0 ||
+          Date.parse(futureToday[index - 1].ends_at) === Date.parse(price.starts_at),
+      )
     );
     const noFutureTodayAtAnyResolution = !prices.some(
       (price) =>
