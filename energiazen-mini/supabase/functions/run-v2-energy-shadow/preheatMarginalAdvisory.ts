@@ -193,7 +193,12 @@ export function buildV2MarginalPreheatAdvisory({
   const wholeHourHeadroomCap = Math.floor(
     (immediateWholeHourHeadroomKwh + 1e-9) / intervalEnergyKwh,
   );
-  const initialPairCap = Math.min(configuredHourCap, wholeHourHeadroomCap);
+  const initialPairCap = Math.min(
+    configuredHourCap,
+    wholeHourHeadroomCap,
+    candidatePreheatHourIds.length,
+    displacedFutureHeatingHourIds.length,
+  );
 
   if (initialPairCap <= 0) {
     return advisoryUnavailable({
@@ -554,25 +559,22 @@ function evaluateMatchingHeadroom({
   };
 }
 
-function combinations<T>(values: T[], count: number): T[][] {
-  if (count === 0) return [[]];
-  if (count < 0 || count > values.length) return [];
-
-  const result: T[][] = [];
-  const choose = (start: number, selected: T[]) => {
-    if (selected.length === count) {
-      result.push([...selected]);
-      return;
-    }
-    const remainingNeeded = count - selected.length;
-    for (let index = start; index <= values.length - remainingNeeded; index += 1) {
-      selected.push(values[index]);
-      choose(index + 1, selected);
-      selected.pop();
-    }
-  };
-  choose(0, []);
-  return result;
+function* combinations<T>(
+  values: T[],
+  count: number,
+  start = 0,
+  selected: T[] = [],
+): Generator<T[]> {
+  if (count === 0) {
+    yield [...selected];
+    return;
+  }
+  if (count < 0 || count > values.length - start) return;
+  for (let index = start; index <= values.length - count; index += 1) {
+    selected.push(values[index]);
+    yield* combinations(values, count - 1, index + 1, selected);
+    selected.pop();
+  }
 }
 
 function billedPrice(
