@@ -307,8 +307,12 @@ function findBestSafeMatching({
     (left, right) => Date.parse(left) - Date.parse(right),
   );
 
+  // Keep quarter-hour advisory work bounded. Marginal cost already uses DP;
+  // here evaluate a small deterministic frontier of cheap/early candidate
+  // subsets instead of every C(n,k) combination.
+  const candidateSubsets = boundedCandidateSubsets(candidates, pairCap, priceById);
   let best: SafeMatching | null = null;
-  for (const candidateHourIds of combinations(candidates, pairCap)) {
+  for (const candidateHourIds of candidateSubsets) {
     const displacedHourIds = findBestDisplacementsForCandidates({
       baselineSelectedHourIds,
       candidateHourIds,
@@ -551,30 +555,39 @@ function evaluateMatchingHeadroom({
   return {
     marginalCost,
     maxPreheatHoursByHeadroom: Math.min(
-      configuredHourCap,
-      safeWholeHourCapacityAfterRetained,
+      configuredHourCap * matchedIntervalHours,
+      safeWholeHourCapacityAfterRetained * matchedIntervalHours,
     ),
     retainedBaselineHeatingEnergyKwh,
     retainedBaselineHeatingHourIds,
   };
 }
 
-function* combinations<T>(
-  values: T[],
+function boundedCandidateSubsets(
+  candidates: string[],
   count: number,
-  start = 0,
-  selected: T[] = [],
-): Generator<T[]> {
-  if (count === 0) {
-    yield [...selected];
-    return;
+  priceById: Map<string, ShadowElectricityPrice>,
+): string[][] {
+  if (count <= 0 || count > candidates.length) return [];
+  const byPrice = [...candidates].sort((left, right) => {
+    const leftPrice = billedPrice(left, priceById) ?? Number.POSITIVE_INFINITY;
+    const rightPrice = billedPrice(right, priceById) ?? Number.POSITIVE_INFINITY;
+    return leftPrice - rightPrice || Date.parse(left) - Date.parse(right);
+  });
+  const byTime = [...candidates].sort((left, right) => Date.parse(left) - Date.parse(right));
+  const windows: string[][] = [];
+  const add = (ids: string[]) => {
+    const normalized = [...ids].sort((left, right) => Date.parse(left) - Date.parse(right));
+    const key = normalized.join("|");
+    if (!windows.some((existing) => existing.join("|") === key)) windows.push(normalized);
+  };
+  add(byPrice.slice(0, count));
+  add(byTime.slice(0, count));
+  const frontier = byPrice.slice(0, Math.min(byPrice.length, count + 8));
+  for (let offset = 0; offset <= Math.min(8, frontier.length - count); offset += 1) {
+    add(frontier.slice(offset, offset + count));
   }
-  if (count < 0 || count > values.length - start) return;
-  for (let index = start; index <= values.length - count; index += 1) {
-    selected.push(values[index]);
-    yield* combinations(values, count - 1, index + 1, selected);
-    selected.pop();
-  }
+  return windows;
 }
 
 function billedPrice(
