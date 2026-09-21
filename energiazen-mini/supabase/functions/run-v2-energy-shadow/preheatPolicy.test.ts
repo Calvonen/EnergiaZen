@@ -109,7 +109,7 @@ export function runV2PreheatPolicyUnitTests() {
 
   const noFutureToday = evaluateV2PreheatOpportunity({
     now: new Date("2026-09-17T20:30:00.000Z"), // 23:30 Helsinki
-    prices: tomorrow,
+    prices: [price("2026-09-17T20:00:00.000Z", 30), ...tomorrow],
   });
   assert(!noFutureToday.available, "no remaining today interval cannot create a preheat recommendation");
   assertEqual(noFutureToday.reason, "no_future_today_prices", "late-day branch stays explicit");
