@@ -272,6 +272,7 @@ function optimizeLargeIntervalHorizon({
               const trial = new Set(selected);
               trial.delete(segment.id);
               trial.add(candidate.id);
+              if (visitedSelections.has(selectionKey(trial))) return false;
               const trialResult = evaluateSelection({
                 energyCapacityKwh,
                 heaterPowerKw,
@@ -394,7 +395,12 @@ function optimizeLargeIntervalHorizon({
       replacementSelection.delete(replaceablePartial.id);
       if (replacementCandidate) replacementSelection.add(replacementCandidate.id);
       const replacementKey = selectionKey(replacementSelection);
-      if (visitedSelections.has(replacementKey)) break;
+      if (visitedSelections.has(replacementKey)) {
+        // The candidate search above normally excludes visited transitions.
+        // If state changed unexpectedly, fall through to another recovery
+        // iteration instead of terminating the whole bounded search.
+        continue;
+      }
       selected.clear();
       replacementSelection.forEach((id) => selected.add(id));
       selectedHours = ordered
