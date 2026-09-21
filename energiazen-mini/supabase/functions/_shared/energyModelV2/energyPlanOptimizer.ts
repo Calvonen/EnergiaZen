@@ -46,7 +46,11 @@ export function optimizeEnergyPlan({
   const forbidden = new Set(forbiddenHeatingHourIds);
   const required = new Set(requiredHeatingHourIds);
   const byId = new Map(ordered.map((segment) => [segment.id, segment]));
-  const maxSelected = Math.max(0, Math.floor(maxHeatingHours));
+  const maxSelectedHours = Math.max(0, maxHeatingHours);
+  const requiredHours = [...required].reduce(
+    (sum, id) => sum + clamp(byId.get(id)?.segmentHours ?? 0, 0, 1),
+    0,
+  );
 
   if ([...required].some((id) => forbidden.has(id))) {
     return invalidResult("required_hour_is_forbidden", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
@@ -54,7 +58,7 @@ export function optimizeEnergyPlan({
   if ([...required].some((id) => !byId.has(id))) {
     return invalidResult("required_hour_missing", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
-  if (required.size > maxSelected) {
+  if (requiredHours > maxSelectedHours + 1e-9) {
     return invalidResult("required_hours_exceed_max", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
 
@@ -62,6 +66,27 @@ export function optimizeEnergyPlan({
     .map((segment) => segment.id)
     .filter((id) => !required.has(id) && !forbidden.has(id));
 
+  // Exhaustive combinations are useful for the legacy hourly horizon, but a
+  // 15-minute day can contain 96 candidates. Use a deadline-driven safety
+  // search for larger horizons: start with required intervals, then repeatedly
+  // add the cheapest still-available interval no later than the first safety
+  // violation. Every returned winner is still validated by the full forecast,
+  // so this path can fail closed but can never publish an unsafe plan.
+  if (ordered.length > 32) {
+    return optimizeLargeIntervalHorizon({
+      energyCapacityKwh,
+      forbidden,
+      heaterPowerKw,
+      initialRemainingEnergyKwh,
+      initialUncertaintyKwh,
+      maxSelectedHours,
+      ordered,
+      required,
+      thresholds,
+    });
+  }
+
+  const maxSelected = Math.max(0, Math.floor(maxSelectedHours));
   let evaluatedCombinationCount = 0;
   let bestValid: EvaluatedPlan | null = null;
   let bestFallback: EvaluatedPlan | null = null;
@@ -108,6 +133,86 @@ export function optimizeEnergyPlan({
     totalCostCents: round(winner.totalCostCents),
     valid: winner.valid,
     violationReason: winner.valid ? null : winner.violationReason,
+  };
+}
+
+function optimizeLargeIntervalHorizon({
+  energyCapacityKwh,
+  forbidden,
+  heaterPowerKw,
+  initialRemainingEnergyKwh,
+  initialUncertaintyKwh,
+  maxSelectedHours,
+  ordered,
+  required,
+  thresholds,
+}: {
+  energyCapacityKwh?: number;
+  forbidden: Set<string>;
+  heaterPowerKw: number;
+  initialRemainingEnergyKwh: number;
+  initialUncertaintyKwh: number;
+  maxSelectedHours: number;
+  ordered: EnergyPlanCandidateSegment[];
+  required: Set<string>;
+  thresholds?: EnergyReserveThresholds;
+}): EnergyPlanOptimizationResult {
+  const selected = new Set(required);
+  let selectedHours = ordered
+    .filter((segment) => selected.has(segment.id))
+    .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+  let evaluatedCombinationCount = 0;
+  let evaluated = evaluateSelection({
+    energyCapacityKwh,
+    heaterPowerKw,
+    initialRemainingEnergyKwh,
+    initialUncertaintyKwh,
+    ordered,
+    selected,
+    thresholds,
+  });
+  evaluatedCombinationCount += 1;
+
+  while (!evaluated.valid && evaluated.forecast.firstSafetyViolationAt !== null) {
+    const violationMs = Date.parse(evaluated.forecast.firstSafetyViolationAt);
+    const candidates = ordered
+      .filter((segment) => {
+        if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
+        const duration = clamp(segment.segmentHours, 0, 1);
+        if (selectedHours + duration > maxSelectedHours + 1e-9) return false;
+        return Date.parse(segment.startDate) <= violationMs;
+      })
+      .sort((left, right) => {
+        const leftPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(left.priceCentsPerKwh));
+        const rightPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(right.priceCentsPerKwh));
+        return leftPrice - rightPrice || Date.parse(left.startDate) - Date.parse(right.startDate);
+      });
+
+    const next = candidates[0];
+    if (!next) break;
+    selected.add(next.id);
+    selectedHours += clamp(next.segmentHours, 0, 1);
+    evaluated = evaluateSelection({
+      energyCapacityKwh,
+      heaterPowerKw,
+      initialRemainingEnergyKwh,
+      initialUncertaintyKwh,
+      ordered,
+      selected,
+      thresholds,
+    });
+    evaluatedCombinationCount += 1;
+  }
+
+  return {
+    candidateCount: ordered.length,
+    evaluatedCombinationCount,
+    forecast: evaluated.forecast,
+    selectedHeatingEnergyKwh: round(evaluated.selectedHeatingEnergyKwh),
+    selectedHeatingHourIds: evaluated.selectedHeatingHourIds,
+    totalCostCents: round(evaluated.totalCostCents),
+    valid: evaluated.valid,
+    violationReason: evaluated.valid ? null : evaluated.violationReason,
   };
 }
 
