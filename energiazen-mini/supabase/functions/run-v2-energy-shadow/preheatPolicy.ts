@@ -65,15 +65,20 @@ export function evaluateV2PreheatHorizon({
   // back to the legacy hourly feed so this shadow-only change is backwards
   // compatible while production remains on 60-minute publication.
   const resolutionMinutes = ([15, 60] as const).find((resolution) => {
-    const tomorrowPrices = prices
-      .filter((price) => isUsablePrice(price, resolution))
+    const usable = prices.filter((price) => isUsablePrice(price, resolution));
+    const tomorrowPrices = usable
       .filter((price) => {
         const start = Date.parse(price.starts_at);
         const end = Date.parse(price.ends_at);
         return start >= tomorrowStartMs && end <= tomorrowEndMs;
       })
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
-    return hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
+    const hasFutureToday = usable.some(
+      (price) =>
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs,
+    );
+    return hasFutureToday && hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
   }) ?? null;
 
   if (resolutionMinutes === null) {
