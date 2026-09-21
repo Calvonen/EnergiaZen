@@ -587,6 +587,22 @@ function boundedCandidateSubsets(
   for (let offset = 0; offset <= Math.min(8, frontier.length - count); offset += 1) {
     add(frontier.slice(offset, offset + count));
   }
+
+  // Preserve bounded work while covering viable early candidates that can be
+  // hidden behind many cheaper-but-too-late intervals. For each chronological
+  // prefix, evaluate its cheapest count-sized subset. This adds at most O(n)
+  // deterministic candidates instead of enumerating C(n,k).
+  for (let end = count; end <= byTime.length; end += 1) {
+    const cheapestPrefix = byTime
+      .slice(0, end)
+      .sort((left, right) => {
+        const leftPrice = billedPrice(left, priceById) ?? Number.POSITIVE_INFINITY;
+        const rightPrice = billedPrice(right, priceById) ?? Number.POSITIVE_INFINITY;
+        return leftPrice - rightPrice || Date.parse(left) - Date.parse(right);
+      })
+      .slice(0, count);
+    add(cheapestPrefix);
+  }
   return windows;
 }
 
