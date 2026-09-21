@@ -89,11 +89,31 @@ export function evaluateV2PreheatHorizon({
   }) ?? null;
 
   if (resolutionMinutes === null) {
+    // Tomorrow may legitimately be incomplete before the day-ahead publication
+    // is available. Preserve a coherent set of remaining-today candidates for
+    // the bounded same-day soft-fill path instead of discarding them.
+    const todayResolution = ([15, 60] as const).find((resolution) =>
+      prices.some((price) =>
+        isUsablePrice(price, resolution) &&
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs
+      )
+    ) ?? null;
+    const futureTodayHourIds = todayResolution === null
+      ? []
+      : prices
+          .filter((price) =>
+            isUsablePrice(price, todayResolution) &&
+            helsinkiDateKey(new Date(price.starts_at)) === today &&
+            Date.parse(price.starts_at) > nowMs
+          )
+          .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
+          .map((price) => price.starts_at);
     return {
       available: false,
-      futureTodayHourIds: [],
+      futureTodayHourIds,
       reason: "tomorrow_prices_incomplete",
-      resolutionMinutes: null,
+      resolutionMinutes: todayResolution,
       tomorrowHourIds: [],
     };
   }
