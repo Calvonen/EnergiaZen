@@ -154,10 +154,9 @@ Deno.serve(async (request) => {
       safetyPercent: Number(settingsResult.data.v2_safety_reserve_percent),
     });
     const recommendedPreheatPercent = reservePercents.targetPercent;
-    // The ordered reserve-threshold model now represents hard safety only.
-    // Keep its target equal to the safety floor and carry the configurable
-    // economic preheat recommendation separately into advisory telemetry.
-    const hardTargetPercent = reservePercents.safetyPercent;
+    // Restore the configured target as the optimizer target. Safety remains the
+    // hard floor; the existing advisory can still use the same configured target.
+    const hardTargetPercent = reservePercents.targetPercent;
     const priceCeilingSetting = buildV2PriceCeilingSettingTelemetry(
       settingsResult.data.v2_max_billed_price_cents_kwh,
     );
