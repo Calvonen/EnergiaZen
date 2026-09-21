@@ -72,7 +72,8 @@ export function optimizeEnergyPlan({
   // add the cheapest still-available interval no later than the first safety
   // violation. Every returned winner is still validated by the full forecast,
   // so this path can fail closed but can never publish an unsafe plan.
-  if (ordered.length > 32) {
+  const usesSubHourlySegments = ordered.some((segment) => clamp(segment.segmentHours, 0, 1) < 1 - 1e-9);
+  if (usesSubHourlySegments) {
     return optimizeLargeIntervalHorizon({
       energyCapacityKwh,
       forbidden,
@@ -180,7 +181,15 @@ function optimizeLargeIntervalHorizon({
         if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
         const duration = clamp(segment.segmentHours, 0, 1);
         if (selectedHours + duration > maxSelectedHours + 1e-9) return false;
-        return Date.parse(segment.startDate) <= violationMs;
+        const startsAtViolation = Date.parse(segment.startDate) === violationMs;
+        const violationPoint = evaluated.forecast.points.find(
+          (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
+        );
+        const violationWasBeforeHeating =
+          startsAtViolation && (violationPoint?.frontLoadedDemandKwh ?? 0) > 0;
+        return violationWasBeforeHeating
+          ? Date.parse(segment.startDate) < violationMs
+          : Date.parse(segment.startDate) <= violationMs;
       })
       .sort((left, right) => {
         const leftPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(left.priceCentsPerKwh));
