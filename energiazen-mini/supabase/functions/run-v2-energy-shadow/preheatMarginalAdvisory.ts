@@ -177,7 +177,8 @@ export function buildV2MarginalPreheatAdvisory({
     });
   }
 
-  const configuredHourCap = Math.floor(maxPreheatHours);
+  const intervalHours = horizon.resolutionMinutes === 15 ? 0.25 : 1;
+  const configuredHourCap = Math.floor(maxPreheatHours / intervalHours);
   const physicalHeadroomKwh =
     Number.isFinite(remainingEnergyKwh) &&
       Number.isFinite(physicalEnergyCapacityKwh) &&
@@ -188,7 +189,10 @@ export function buildV2MarginalPreheatAdvisory({
     level.recommendedPreheatEnergyKwh,
     physicalHeadroomKwh,
   );
-  const wholeHourHeadroomCap = Math.floor(immediateWholeHourHeadroomKwh / heaterPowerKw);
+  const intervalEnergyKwh = heaterPowerKw * intervalHours;
+  const wholeHourHeadroomCap = Math.floor(
+    (immediateWholeHourHeadroomKwh + 1e-9) / intervalEnergyKwh,
+  );
   const initialPairCap = Math.min(configuredHourCap, wholeHourHeadroomCap);
 
   if (initialPairCap <= 0) {
@@ -447,9 +451,12 @@ function checkpointFitsHeadroom({
       (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
       0,
     );
-  const preheatEnergyBeforeCheckpoint = candidateHourIds.filter(
-    (hourId) => Date.parse(hourId) < checkpointMs,
-  ).length * heaterPowerKw;
+  const preheatEnergyBeforeCheckpoint = candidateHourIds
+    .filter((hourId) => Date.parse(hourId) < checkpointMs)
+    .reduce(
+      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+      0,
+    );
 
   return (
     baselineEnergyBeforeCheckpoint - displacedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint <=
@@ -494,9 +501,12 @@ function evaluateMatchingHeadroom({
       (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
       0,
     );
-    const preheatEnergyBeforeCheckpoint = marginalCost.pairs.filter(
-      (pair) => Date.parse(pair.preheatHourId) < checkpointMs,
-    ).length * heaterPowerKw;
+    const preheatEnergyBeforeCheckpoint = marginalCost.pairs
+      .filter((pair) => Date.parse(pair.preheatHourId) < checkpointMs)
+      .reduce(
+        (sum, pair) => sum + retainedHeatingEnergyKwh(pair.preheatHourId, nowMs, heaterPowerKw, prices),
+        0,
+      );
 
     if (
       retainedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint >
@@ -518,11 +528,18 @@ function evaluateMatchingHeadroom({
     (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
     0,
   ));
+  const matchedIntervalId = marginalCost.pairs[0]?.preheatHourId ?? null;
+  const matchedPrice = matchedIntervalId
+    ? prices.find((row) => row.starts_at === matchedIntervalId)
+    : null;
+  const matchedIntervalHours =
+    matchedPrice?.resolution_minutes === 15 ? 0.25 : 1;
+  const matchedIntervalEnergyKwh = heaterPowerKw * matchedIntervalHours;
   const safeWholeHourCapacityAfterRetained = Math.max(
     0,
     Math.floor(
       (immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh + 1e-9) /
-        heaterPowerKw,
+        matchedIntervalEnergyKwh,
     ),
   );
 
