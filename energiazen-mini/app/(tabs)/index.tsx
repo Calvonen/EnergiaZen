@@ -3672,7 +3672,7 @@ export default function HomeScreen() {
                       V2-rajat
                     </Text>
                     <Text style={styles.heatingPlanLimitsText}>
-                      Suositus {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
+                      Tavoite {formatFinnishDecimal(scenarioSettings.v2TargetReservePercent)} % · turvaraja {formatFinnishDecimal(scenarioSettings.v2SafetyReservePercent)} %
                     </Text>
                     <Text style={styles.heatingPlanInfoReason}>
                       Esikatselu ei tallenna asetuksia eikä muuta Shellyn käytössä olevaa suunnitelmaa.
