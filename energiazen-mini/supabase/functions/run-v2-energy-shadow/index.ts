@@ -75,11 +75,11 @@ Deno.serve(async (request) => {
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
-        .eq("region", "FI").eq("resolution_minutes", 60).gt("ends_at", now.toISOString())
+        .eq("region", "FI").in("resolution_minutes", [15, 60]).gt("ends_at", now.toISOString())
         .lte("starts_at", priceFetchEnd.toISOString()).order("starts_at", { ascending: true }),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
-        .eq("region", "FI").eq("resolution_minutes", 60)
+        .eq("region", "FI").in("resolution_minutes", [15, 60])
         .gte("starts_at", priceReferenceStart.toISOString())
         .lte("starts_at", priceFetchEnd.toISOString())
         .order("starts_at", { ascending: true }),
