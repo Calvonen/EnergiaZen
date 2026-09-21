@@ -64,7 +64,10 @@ export function buildV2SoftPreheatPlan({
     };
   }
 
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const opportunityPrices = prices.filter((price) =>
+    isUsablePrice(price, opportunity.resolutionMinutes)
+  );
+  const priceById = new Map(opportunityPrices.map((price) => [price.starts_at, price]));
   const eligible = opportunity.eligiblePreheatHourIds.map((id) => {
     const price = priceById.get(id);
     if (!price || !isUsablePrice(price, opportunity.resolutionMinutes)) return null;
