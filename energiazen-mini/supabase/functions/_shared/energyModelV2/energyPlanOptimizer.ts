@@ -226,9 +226,17 @@ function optimizeLargeIntervalHorizon({
         .filter((segment) => {
           const duration = clamp(segment.segmentHours, 0, 1);
           const point = forecastById.get(segment.id);
-          const deliveredKwh = point?.heatingEnergyKwh ?? Math.max(0, heaterPowerKw) * duration;
           const requestedKwh = Math.max(0, heaterPowerKw) * duration;
-          return duration < 0.25 - 1e-9 || deliveredKwh + 1e-9 < requestedKwh;
+          const actualNetGainKwh = point
+            ? Math.max(
+                point.remainingEnergyAfterKwh -
+                  point.remainingEnergyBeforeKwh +
+                  point.modeledHeatLossKwh +
+                  point.acceptedRemovalKwh,
+                0,
+              )
+            : requestedKwh;
+          return duration < 0.25 - 1e-9 || actualNetGainKwh + 1e-9 < requestedKwh;
         })
         .sort((left, right) => Date.parse(left.startDate) - Date.parse(right.startDate))[0];
       if (!replaceablePartial) break;
