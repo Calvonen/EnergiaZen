@@ -330,7 +330,6 @@ Deno.serve(async (request) => {
     // economic preheat advisory. Only baseline hours that the advisory actually
     // pairs for displacement may be removed; every unmatched safety hour is
     // preserved. Production cutover remains disabled here.
-    const hourlyPublicationSelectedHeatingHourIds = hourlyPublicationPlan.selectedHeatingHourIds;
     const publicationCandidate = captureV2PublicationCandidate(
       validatedHourlyPublicationPlan,
       hourlyPublicationSelectedHeatingHourIds,
