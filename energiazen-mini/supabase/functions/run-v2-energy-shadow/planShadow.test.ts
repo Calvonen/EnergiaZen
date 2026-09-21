@@ -297,7 +297,7 @@ export function runLivePlanShadowUnitTests() {
     reserve: reserve(9.4, 0.6, 10),
   });
   assert(advisoryTargetAboveCurrentReserve.available, "capacity-bound forecast remains available");
-  assert(advisoryTargetAboveCurrentReserve.valid === true, "safe plan remains valid even when advisory target is not reached");
-  assertEqual(advisoryTargetAboveCurrentReserve.selectedHeatingHourIds.length, 0, "advisory target does not force capacity-filling heat");
-  assertEqual(advisoryTargetAboveCurrentReserve.reason, null, "safe below-target plan has no violation reason");
+  assert(advisoryTargetAboveCurrentReserve.valid === true, "available capacity can restore the configured target");
+  assertEqual(advisoryTargetAboveCurrentReserve.selectedHeatingHourIds.length, 1, "hard target uses the available heating slot");
+  assertEqual(advisoryTargetAboveCurrentReserve.reason, null, "target-restoring plan has no violation reason");
 }
