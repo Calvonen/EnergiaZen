@@ -232,7 +232,7 @@ export function buildV2MarginalPreheatAdvisory({
       nowMs,
       pairCap,
       prices,
-      resolutionMinutes: horizon.resolutionMinutes,
+      resolutionMinutes: horizon.resolutionMinutes ?? undefined,
     });
     if (safeMatching) {
       return {
@@ -257,7 +257,7 @@ export function buildV2MarginalPreheatAdvisory({
       maxPreheatHours: pairCap,
       preheatCandidateHourIds: candidatePreheatHourIds,
       prices,
-      resolutionMinutes: horizon.resolutionMinutes,
+      resolutionMinutes: horizon.resolutionMinutes ?? undefined,
     });
     lastMarginalCost = fallback;
     if (!fallback.available) break;
@@ -329,7 +329,7 @@ function findBestSafeMatching({
       immediateWholeHourHeadroomKwh,
       nowMs,
       priceById,
-      prices,
+      prices: selectedFeedPrices,
     });
     if (!displacedHourIds) continue;
 
@@ -350,7 +350,7 @@ function findBestSafeMatching({
       immediateWholeHourHeadroomKwh,
       marginalCost,
       nowMs,
-      prices,
+      prices: selectedFeedPrices,
     });
     if (!safety) continue;
 
