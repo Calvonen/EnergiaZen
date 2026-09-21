@@ -70,6 +70,16 @@ function price(startsAt: string, cents: number): ShadowElectricityPrice {
   };
 }
 
+function quarterPrice(startsAt: string, cents: number): ShadowElectricityPrice {
+  const start = Date.parse(startsAt);
+  return {
+    starts_at: startsAt,
+    ends_at: new Date(start + 15 * 60 * 1000).toISOString(),
+    resolution_minutes: 15,
+    spot_price_cents_kwh: cents,
+  };
+}
+
 export function runLivePlanShadowUnitTests() {
   const now = new Date("2026-09-15T05:30:00.000Z");
   const contiguous = [
@@ -300,4 +310,28 @@ export function runLivePlanShadowUnitTests() {
   assert(advisoryTargetAboveCurrentReserve.valid === true, "safe plan remains valid even when advisory target is not reached");
   assertEqual(advisoryTargetAboveCurrentReserve.selectedHeatingHourIds.length, 0, "advisory target does not force capacity-filling heat");
   assertEqual(advisoryTargetAboveCurrentReserve.reason, null, "safe below-target plan has no violation reason");
+  const quarterHorizon = Array.from({ length: 40 }, (_, index) =>
+    quarterPrice(
+      new Date(Date.parse("2026-09-15T05:15:00.000Z") + index * 15 * 60_000).toISOString(),
+      index === 4 ? 1 : 10,
+    ),
+  );
+  const quarterHealthy = runLiveEnergyPlanShadow({
+    automaticMaxHeatingHours: 4,
+    energyCapacityKwh: 16.864,
+    inletBaselineC: 12,
+    maxTankTemperatureC: 65,
+    now,
+    prices: quarterHorizon,
+    reserve: reserve(13),
+  });
+  assert(quarterHealthy.available, "continuous quarter-hour price horizon is available");
+  assertEqual(quarterHealthy.candidateCount, 40, "quarter-hour horizon keeps every 15-minute candidate");
+  assertEqual(quarterHealthy.selectedHeatingHourIds.length, 0, "healthy quarter-hour horizon does not add heating");
+  assert(
+    quarterHealthy.evaluatedCombinationCount <= 17,
+    "large quarter-hour horizon uses bounded safety search instead of combinatorial enumeration",
+  );
+
+
 }
