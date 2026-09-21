@@ -115,6 +115,9 @@ Deno.serve(async (request) => {
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const priceReferencePrices = (priceReferenceResult.data ?? []) as ShadowElectricityPrice[];
+    // Staged publication is still an hourly production contract in PR1.
+    // Quarter rows are available only to V2 shadow/advisory planning.
+    const publicationPrices = prices.filter((price) => price.resolution_minutes === 60);
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
     const learnedDropProfile = temperatureDropProfileResult.data
@@ -325,7 +328,7 @@ Deno.serve(async (request) => {
         latestUsableReadingAt: latestPublishableReadingAt,
         now,
         plan: publicationPlan,
-        prices,
+        prices: publicationPrices,
         priceFetchEnd,
         readings,
         replayStart,
