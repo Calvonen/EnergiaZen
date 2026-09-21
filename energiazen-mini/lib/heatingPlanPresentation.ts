@@ -361,8 +361,8 @@ export function buildStoredHeatingPlanPresentation({
   const safetyReservePercent = v2EnergyReserve.safetyReservePercent;
   const limitsSummary =
     typeof safetyReservePercent === "number" && Number.isFinite(safetyReservePercent)
-      ? `Suositus ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja ${formatFinnishDecimal(safetyReservePercent)} %`
-      : `Pehmeä esilämmityssuositus ${formatFinnishDecimal(recommendedPreheatPercent)} %. Turvaraja ei ole juuri nyt saatavilla.`;
+      ? `Tavoite ${formatFinnishDecimal(recommendedPreheatPercent)} % · turvaraja ${formatFinnishDecimal(safetyReservePercent)} %`
+      : `Tavoitevara ${formatFinnishDecimal(recommendedPreheatPercent)} %. Turvaraja ei ole juuri nyt saatavilla.`;
 
   return {
     emptyPlanLabel:
@@ -377,7 +377,7 @@ export function buildStoredHeatingPlanPresentation({
     limitsSectionLabel: "V2-rajat",
     limitsSummary,
     priceToleranceSummary: null,
-    reason: `V2 optimoi energiavaran turvallisuusrajan ja hinnan perusteella; ${formatFinnishDecimal(recommendedPreheatPercent)} % on pehmeä esilämmityssuositus.`,
+    reason: `V2 optimoi hinnan perusteella lämmitystunnit, joilla energiavara saavuttaa ${formatFinnishDecimal(recommendedPreheatPercent)} % tavoitteen ennustehorisontin loppuun mennessä; turvaraja toimii kovana alarajana.`,
     reasonKind: selectedHours.length === 0 ? "no-heating" : "standard",
     selectedHours: selectedHours.map(formatSelectedHour),
     statusSummary: v2ForecastAvailable
