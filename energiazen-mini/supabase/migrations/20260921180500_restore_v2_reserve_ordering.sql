@@ -14,7 +14,7 @@ alter table public.heating_control_settings
   drop constraint if exists heating_control_settings_v2_reserve_percent_order_check,
   add constraint heating_control_settings_v2_target_reserve_percent_check
     check (
-      v2_target_reserve_percent >= 70
+      v2_target_reserve_percent >= 5
       and v2_target_reserve_percent <= 95
       and mod(v2_target_reserve_percent::numeric, 5) = 0
     ),
