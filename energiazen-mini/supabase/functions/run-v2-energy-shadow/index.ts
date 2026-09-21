@@ -401,7 +401,7 @@ Deno.serve(async (request) => {
     if (
       v2PublicationCutoverEnabled &&
       controlPlaneState.heating_need_mode === "automatic" &&
-      (!result.available || !hourlyPublicationPlan.available)
+      (!result.available || !hourlyPublicationPlan.available || hourlyPublicationPlan.valid !== true)
     ) {
       const unavailableReason =
         result.reason ??
