@@ -73,10 +73,17 @@ export function evaluateV2PreheatHorizon({
         return start >= tomorrowStartMs && end <= tomorrowEndMs;
       })
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
-    const hasFutureToday = usable.some(
-      (price) =>
+    const futureToday = usable
+      .filter((price) =>
         helsinkiDateKey(new Date(price.starts_at)) === today &&
         Date.parse(price.starts_at) > nowMs,
+      )
+      .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+    const hasFutureToday = futureToday.length > 0;
+    const futureTodayCoverageIsCoherent = !hasFutureToday || futureToday.every(
+      (price, index) =>
+        index === 0 ||
+        Date.parse(futureToday[index - 1].ends_at) === Date.parse(price.starts_at),
     );
     const noFutureTodayAtAnyResolution = !prices.some(
       (price) =>
@@ -84,7 +91,17 @@ export function evaluateV2PreheatHorizon({
         helsinkiDateKey(new Date(price.starts_at)) === today &&
         Date.parse(price.starts_at) > nowMs,
     );
-    return (hasFutureToday || noFutureTodayAtAnyResolution) &&
+    const laterFutureTodayAtOtherResolution = prices.some((price) =>
+      (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
+      price.resolution_minutes !== resolution &&
+      isUsablePrice(price, price.resolution_minutes) &&
+      helsinkiDateKey(new Date(price.starts_at)) === today &&
+      Date.parse(price.starts_at) > nowMs &&
+      (!hasFutureToday ||
+        Date.parse(price.ends_at) > Date.parse(futureToday[futureToday.length - 1].ends_at)),
+    );
+    return (noFutureTodayAtAnyResolution ||
+        (hasFutureToday && futureTodayCoverageIsCoherent && !laterFutureTodayAtOtherResolution)) &&
       hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
   }) ?? null;
 
