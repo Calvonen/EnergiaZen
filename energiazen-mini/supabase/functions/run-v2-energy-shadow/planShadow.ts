@@ -35,6 +35,7 @@ export type LiveEnergyPlanShadowResult = {
   learnedDropProfileDate: string | null;
   learnedDropProfileAgeDays: number | null;
   maximumModeledLossKwhPerHour: number | null;
+  effectiveConstraints: V2HeatingConstraints | null;
 };
 
 const assumption = "standing_loss_only_no_future_draws" as const;
@@ -158,6 +159,10 @@ export function runLiveEnergyPlanShadow({
     learnedDropProfileDate: learnedDropProfileUsed ? learnedDropProfile?.profile_date ?? null : null,
     learnedDropProfileAgeDays,
     maximumModeledLossKwhPerHour: horizon.maximumModeledLossKwhPerHour,
+    effectiveConstraints: {
+      requiredHeatingHourIds: shadowConstraints.requiredHeatingHourIds,
+      forbiddenHeatingHourIds: shadowConstraints.forbiddenHeatingHourIds,
+    },
   };
 }
 
@@ -405,6 +410,7 @@ function unavailable(reason: string, standingLossKwhPerHour: number | null = nul
     learnedDropProfileDate: null,
     learnedDropProfileAgeDays: null,
     maximumModeledLossKwhPerHour: standingLossKwhPerHour === null ? null : round(standingLossKwhPerHour),
+    effectiveConstraints: null,
   };
 }
 
