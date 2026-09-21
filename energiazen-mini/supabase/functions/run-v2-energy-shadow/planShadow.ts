@@ -104,6 +104,9 @@ export function runLiveEnergyPlanShadow({
     constraints,
     horizon.segments.map((segment) => segment.id),
   );
+  if (!shadowConstraints.ok) {
+    return unavailable(shadowConstraints.reason, standingLossKwhPerHour);
+  }
   const requiredHeatingHours = horizon.segments
     .filter((segment) => shadowConstraints.requiredHeatingHourIds.includes(segment.id))
     .reduce((sum, segment) => sum + segment.segmentHours, 0);
@@ -168,14 +171,37 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
     Number.isFinite(Date.parse(price.ends_at)) &&
     Date.parse(price.ends_at) > nowMs &&
     [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at))));
-  const resolutionMinutes = relevant.some((price) => price.resolution_minutes === 15) ? 15 : 60;
-  const ordered = relevant
-    .filter((price) =>
-      price.resolution_minutes === resolutionMinutes &&
-      Date.parse(price.ends_at) - Date.parse(price.starts_at) === resolutionMinutes * 60_000)
-    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
-  if (!ordered.length) return { ok: false, reason: "no_price_hours_available" };
+  const horizonForResolution = (resolutionMinutes: 15 | 60) => {
+    const rows = relevant
+      .filter((price) =>
+        price.resolution_minutes === resolutionMinutes &&
+        Date.parse(price.ends_at) - Date.parse(price.starts_at) === resolutionMinutes * 60_000)
+      .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+    if (!rows.length) return null;
+    const firstStart = Date.parse(rows[0].starts_at);
+    const firstEnd = Date.parse(rows[0].ends_at);
+    if (!(firstStart <= nowMs && firstEnd > nowMs)) return null;
+    for (let index = 1; index < rows.length; index += 1) {
+      if (Date.parse(rows[index - 1].ends_at) !== Date.parse(rows[index].starts_at)) return null;
+    }
+    return rows;
+  };
+
+  const quarterHorizon = horizonForResolution(15);
+  const hourlyHorizon = horizonForResolution(60);
+  // During rollout, only prefer quarters when they cover at least as far as the
+  // complete hourly fallback. A partial quarter feed must not shorten safety
+  // forecasting simply because one 15-minute row has arrived.
+  const ordered =
+    quarterHorizon &&
+      (!hourlyHorizon ||
+        Date.parse(quarterHorizon[quarterHorizon.length - 1].ends_at) >=
+          Date.parse(hourlyHorizon[hourlyHorizon.length - 1].ends_at))
+      ? quarterHorizon
+      : hourlyHorizon ?? quarterHorizon;
+
+  if (!ordered?.length) return { ok: false, reason: "no_price_hours_available" };
   const firstStart = Date.parse(ordered[0].starts_at);
   const firstEnd = Date.parse(ordered[0].ends_at);
   if (!(firstStart <= nowMs && firstEnd > nowMs)) return { ok: false, reason: "current_price_hour_missing" };
@@ -196,7 +222,9 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
           helsinkiHour(new Date(price.starts_at))
         ] ?? 0
       : 0;
-    const learnedHourKey = `${helsinkiDateKey(new Date(price.starts_at))}:${helsinkiHour(new Date(price.starts_at))}`;
+    const absoluteHourStartMs =
+      Math.floor(Date.parse(price.starts_at) / 3_600_000) * 3_600_000;
+    const learnedHourKey = String(absoluteHourStartMs);
     const learnedDemandKwh = learnedDemandAppliedHours.has(learnedHourKey)
       ? 0
       : Math.max(learnedLossKwhPerHour - standingLossKwhPerHour, 0);
@@ -228,21 +256,43 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
 function expandHourlyConstraints(
   constraints: V2HeatingConstraints,
   candidateIds: string[],
-): V2HeatingConstraints {
+):
+  | ({ ok: true } & V2HeatingConstraints)
+  | { ok: false; reason: "required_hour_missing" } {
+  const orderedCandidates = [...new Set(candidateIds)]
+    .filter((id) => Number.isFinite(Date.parse(id)))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  const candidateDurationMs =
+    orderedCandidates.length >= 2
+      ? Date.parse(orderedCandidates[1]) - Date.parse(orderedCandidates[0])
+      : 60 * 60 * 1000;
   const expand = (hourIds: string[]) => {
     const starts = hourIds
       .map((id) => Date.parse(id))
       .filter((value) => Number.isFinite(value));
-    return candidateIds.filter((candidateId) => {
+    return orderedCandidates.filter((candidateId) => {
       const candidateStart = Date.parse(candidateId);
       return starts.some(
         (hourStart) => candidateStart >= hourStart && candidateStart < hourStart + 60 * 60 * 1000,
       );
     });
   };
+  const requiredHeatingHourIds = expand(constraints.requiredHeatingHourIds);
+  for (const requiredId of constraints.requiredHeatingHourIds) {
+    const requiredStart = Date.parse(requiredId);
+    if (!Number.isFinite(requiredStart)) return { ok: false, reason: "required_hour_missing" };
+    const covered = requiredHeatingHourIds
+      .filter((candidateId) => {
+        const start = Date.parse(candidateId);
+        return start >= requiredStart && start < requiredStart + 60 * 60 * 1000;
+      })
+      .length * candidateDurationMs;
+    if (covered < 60 * 60 * 1000) return { ok: false, reason: "required_hour_missing" };
+  }
   return {
+    ok: true,
     forbiddenHeatingHourIds: expand(constraints.forbiddenHeatingHourIds),
-    requiredHeatingHourIds: expand(constraints.requiredHeatingHourIds),
+    requiredHeatingHourIds,
   };
 }
 
