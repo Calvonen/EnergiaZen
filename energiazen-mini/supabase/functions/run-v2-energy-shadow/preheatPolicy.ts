@@ -4,6 +4,7 @@ import type { ShadowElectricityPrice } from "./planShadow.ts";
 export type V2PreheatOpportunity = {
   available: boolean;
   eligiblePreheatHourIds: string[];
+  resolutionMinutes: 15 | 60 | null;
   reason:
     | "recommended"
     | "tomorrow_prices_incomplete"
@@ -17,12 +18,14 @@ export type V2PreheatHorizon =
     available: true;
     futureTodayHourIds: string[];
     reason: "available";
+    resolutionMinutes: 15 | 60;
     tomorrowHourIds: string[];
   }
   | {
     available: false;
     futureTodayHourIds: string[];
     reason: "tomorrow_prices_incomplete" | "no_future_today_prices";
+    resolutionMinutes: 15 | 60 | null;
     tomorrowHourIds: string[];
   };
 
@@ -52,21 +55,102 @@ export function evaluateV2PreheatHorizon({
   prices: ShadowElectricityPrice[];
 }): V2PreheatHorizon {
   const today = helsinkiDateKey(now);
-  const nowMs = now.getTime();
-  const futureTodayPrices = prices
-    .filter((price) => isUsableHourlyPrice(price))
-    .filter((price) =>
-      helsinkiDateKey(new Date(price.starts_at)) === today && Date.parse(price.starts_at) > nowMs
-    )
-    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
-
   const tomorrow = helsinkiDateKeyOffset(now, 1);
   const dayAfterTomorrow = helsinkiDateKeyOffset(now, 2);
   const tomorrowStartMs = helsinkiDateStartMs(tomorrow);
   const tomorrowEndMs = helsinkiDateStartMs(dayAfterTomorrow);
+  const nowMs = now.getTime();
 
-  const tomorrowPrices = prices
-    .filter((price) => isUsableHourlyPrice(price))
+  // Prefer quarter-hour prices when a complete tomorrow horizon exists. Fall
+  // back to the legacy hourly feed so this shadow-only change is backwards
+  // compatible while production remains on 60-minute publication.
+  const resolutionMinutes = ([15, 60] as const).find((resolution) => {
+    const usable = prices.filter((price) => isUsablePrice(price, resolution));
+    const tomorrowPrices = usable
+      .filter((price) => {
+        const start = Date.parse(price.starts_at);
+        const end = Date.parse(price.ends_at);
+        return start >= tomorrowStartMs && end <= tomorrowEndMs;
+      })
+      .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+    const futureToday = usable
+      .filter((price) =>
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs,
+      )
+      .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+    const hasFutureToday = futureToday.length > 0;
+    const intervalMs = resolution * 60_000;
+    const nextBoundaryMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+    const hasCurrentInterval = usable.some((price) =>
+      Date.parse(price.starts_at) <= nowMs && Date.parse(price.ends_at) > nowMs,
+    );
+    const futureTodayCoverageIsCoherent = !hasFutureToday || (
+      Date.parse(futureToday[0].starts_at) <= nextBoundaryMs &&
+      futureToday.every(
+        (price, index) =>
+          index === 0 ||
+          Date.parse(futureToday[index - 1].ends_at) === Date.parse(price.starts_at),
+      )
+    );
+    const noFutureTodayAtAnyResolution = !prices.some(
+      (price) =>
+        (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs,
+    );
+    const laterFutureTodayAtOtherResolution = prices.some((price) =>
+      (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
+      price.resolution_minutes !== resolution &&
+      isUsablePrice(price, price.resolution_minutes) &&
+      helsinkiDateKey(new Date(price.starts_at)) === today &&
+      Date.parse(price.starts_at) > nowMs &&
+      (!hasFutureToday ||
+        Date.parse(price.ends_at) > Date.parse(futureToday[futureToday.length - 1].ends_at)),
+    );
+    return hasCurrentInterval &&
+      (noFutureTodayAtAnyResolution ||
+        (hasFutureToday && futureTodayCoverageIsCoherent && !laterFutureTodayAtOtherResolution)) &&
+      hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
+  }) ?? null;
+
+  if (resolutionMinutes === null) {
+    // Tomorrow may legitimately be incomplete before the day-ahead publication
+    // is available. Preserve a coherent set of remaining-today candidates for
+    // the bounded same-day soft-fill path instead of discarding them.
+    const todayResolution = ([15, 60] as const).find((resolution) =>
+      prices.some((price) =>
+        isUsablePrice(price, resolution) &&
+        helsinkiDateKey(new Date(price.starts_at)) === today &&
+        Date.parse(price.starts_at) > nowMs
+      )
+    ) ?? null;
+    const futureTodayHourIds = todayResolution === null
+      ? []
+      : prices
+          .filter((price) =>
+            isUsablePrice(price, todayResolution) &&
+            helsinkiDateKey(new Date(price.starts_at)) === today &&
+            Date.parse(price.starts_at) > nowMs
+          )
+          .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at))
+          .map((price) => price.starts_at);
+    return {
+      available: false,
+      futureTodayHourIds,
+      reason: "tomorrow_prices_incomplete",
+      resolutionMinutes: todayResolution,
+      tomorrowHourIds: [],
+    };
+  }
+
+  const usable = prices.filter((price) => isUsablePrice(price, resolutionMinutes));
+  const futureTodayPrices = usable
+    .filter((price) =>
+      helsinkiDateKey(new Date(price.starts_at)) === today && Date.parse(price.starts_at) > nowMs
+    )
+    .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
+  const tomorrowPrices = usable
     .filter((price) => {
       const start = Date.parse(price.starts_at);
       const end = Date.parse(price.ends_at);
@@ -74,20 +158,12 @@ export function evaluateV2PreheatHorizon({
     })
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
-  if (!hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs)) {
-    return {
-      available: false,
-      futureTodayHourIds: futureTodayPrices.map((price) => price.starts_at),
-      reason: "tomorrow_prices_incomplete",
-      tomorrowHourIds: [],
-    };
-  }
-
   if (!futureTodayPrices.length) {
     return {
       available: false,
       futureTodayHourIds: [],
       reason: "no_future_today_prices",
+      resolutionMinutes,
       tomorrowHourIds: tomorrowPrices.map((price) => price.starts_at),
     };
   }
@@ -96,6 +172,7 @@ export function evaluateV2PreheatHorizon({
     available: true,
     futureTodayHourIds: futureTodayPrices.map((price) => price.starts_at),
     reason: "available",
+    resolutionMinutes,
     tomorrowHourIds: tomorrowPrices.map((price) => price.starts_at),
   };
 }
@@ -105,7 +182,7 @@ export function getCompleteHelsinkiDayMinimumBilledPrices(
 ): Map<string, number> {
   const grouped = new Map<string, ShadowElectricityPrice[]>();
   for (const price of prices) {
-    if (!isUsableHourlyPrice(price)) continue;
+    if (!isUsablePrice(price)) continue;
     const key = helsinkiDateKey(new Date(price.starts_at));
     if (!key) continue;
     const bucket = grouped.get(key) ?? [];
@@ -140,7 +217,10 @@ export function evaluateV2PreheatOpportunity({
   prices: ShadowElectricityPrice[];
 }): V2PreheatOpportunity {
   const horizon = evaluateV2PreheatHorizon({ now, prices });
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const selectedPrices = horizon.resolutionMinutes === null
+    ? []
+    : prices.filter((price) => isUsablePrice(price, horizon.resolutionMinutes!));
+  const priceById = new Map(selectedPrices.map((price) => [price.starts_at, price]));
   const tomorrowBilledPrices = horizon.tomorrowHourIds
     .map((hourId) => priceById.get(hourId))
     .filter((price): price is ShadowElectricityPrice => Boolean(price))
@@ -172,20 +252,26 @@ export function evaluateV2PreheatOpportunity({
   return {
     available: true,
     eligiblePreheatHourIds,
+    resolutionMinutes: horizon.resolutionMinutes,
     reason: "recommended",
     tomorrowCheapestBilledCentsPerKwh: round(tomorrowCheapestBilledCentsPerKwh),
   };
 }
 
-function isUsableHourlyPrice(price: ShadowElectricityPrice) {
+function isUsablePrice(
+  price: ShadowElectricityPrice,
+  requiredResolution?: 15 | 60,
+) {
   const start = Date.parse(price.starts_at);
   const end = Date.parse(price.ends_at);
+  const resolution = price.resolution_minutes;
   return (
-    price.resolution_minutes === 60 &&
+    (resolution === 15 || resolution === 60) &&
+    (requiredResolution === undefined || resolution === requiredResolution) &&
     Number.isFinite(price.spot_price_cents_kwh) &&
     Number.isFinite(start) &&
     Number.isFinite(end) &&
-    end - start === 60 * 60 * 1000
+    end - start === resolution * 60 * 1000
   );
 }
 
@@ -253,6 +339,7 @@ function unavailable(
   return {
     available: false,
     eligiblePreheatHourIds: [],
+    resolutionMinutes: null,
     reason,
     tomorrowCheapestBilledCentsPerKwh:
       tomorrowCheapestBilledCentsPerKwh === null

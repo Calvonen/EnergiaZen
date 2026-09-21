@@ -177,7 +177,8 @@ export function buildV2MarginalPreheatAdvisory({
     });
   }
 
-  const configuredHourCap = Math.floor(maxPreheatHours);
+  const intervalHours = horizon.resolutionMinutes === 15 ? 0.25 : 1;
+  const configuredHourCap = Math.floor(maxPreheatHours / intervalHours);
   const physicalHeadroomKwh =
     Number.isFinite(remainingEnergyKwh) &&
       Number.isFinite(physicalEnergyCapacityKwh) &&
@@ -188,8 +189,16 @@ export function buildV2MarginalPreheatAdvisory({
     level.recommendedPreheatEnergyKwh,
     physicalHeadroomKwh,
   );
-  const wholeHourHeadroomCap = Math.floor(immediateWholeHourHeadroomKwh / heaterPowerKw);
-  const initialPairCap = Math.min(configuredHourCap, wholeHourHeadroomCap);
+  const intervalEnergyKwh = heaterPowerKw * intervalHours;
+  const wholeHourHeadroomCap = Math.floor(
+    (immediateWholeHourHeadroomKwh + 1e-9) / intervalEnergyKwh,
+  );
+  const initialPairCap = Math.min(
+    configuredHourCap,
+    wholeHourHeadroomCap,
+    candidatePreheatHourIds.length,
+    displacedFutureHeatingHourIds.length,
+  );
 
   if (initialPairCap <= 0) {
     return advisoryUnavailable({
@@ -223,6 +232,7 @@ export function buildV2MarginalPreheatAdvisory({
       nowMs,
       pairCap,
       prices,
+      resolutionMinutes: horizon.resolutionMinutes,
     });
     if (safeMatching) {
       return {
@@ -247,6 +257,7 @@ export function buildV2MarginalPreheatAdvisory({
       maxPreheatHours: pairCap,
       preheatCandidateHourIds: candidatePreheatHourIds,
       prices,
+      resolutionMinutes: horizon.resolutionMinutes ?? undefined,
     });
     lastMarginalCost = fallback;
     if (!fallback.available) break;
@@ -279,6 +290,7 @@ function findBestSafeMatching({
   nowMs,
   pairCap,
   prices,
+  resolutionMinutes,
 }: {
   baselineSelectedHourIds: Set<string>;
   candidatePreheatHourIds: string[];
@@ -289,8 +301,13 @@ function findBestSafeMatching({
   nowMs: number;
   pairCap: number;
   prices: ShadowElectricityPrice[];
+  resolutionMinutes: 15 | 60 | null;
 }): SafeMatching | null {
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  if (resolutionMinutes !== 15 && resolutionMinutes !== 60) return null;
+  const selectedFeedPrices = prices.filter(
+    (price) => price.resolution_minutes === resolutionMinutes,
+  );
+  const priceById = new Map(selectedFeedPrices.map((price) => [price.starts_at, price]));
   const candidates = [...candidatePreheatHourIds].sort(
     (left, right) => Date.parse(left) - Date.parse(right),
   );
@@ -298,8 +315,12 @@ function findBestSafeMatching({
     (left, right) => Date.parse(left) - Date.parse(right),
   );
 
+  // Keep quarter-hour advisory work bounded. Marginal cost already uses DP;
+  // here evaluate a small deterministic frontier of cheap/early candidate
+  // subsets instead of every C(n,k) combination.
+  const candidateSubsets = boundedCandidateSubsets(candidates, pairCap, priceById);
   let best: SafeMatching | null = null;
-  for (const candidateHourIds of combinations(candidates, pairCap)) {
+  for (const candidateHourIds of candidateSubsets) {
     const displacedHourIds = findBestDisplacementsForCandidates({
       baselineSelectedHourIds,
       candidateHourIds,
@@ -308,7 +329,7 @@ function findBestSafeMatching({
       immediateWholeHourHeadroomKwh,
       nowMs,
       priceById,
-      prices,
+      prices: selectedFeedPrices,
     });
     if (!displacedHourIds) continue;
 
@@ -318,6 +339,7 @@ function findBestSafeMatching({
       preheatCandidateHourIds: candidateHourIds,
       prices,
       requireExactPairCount: true,
+      resolutionMinutes,
     });
     if (!marginalCost.available || marginalCost.pairs.length !== pairCap) continue;
 
@@ -328,7 +350,7 @@ function findBestSafeMatching({
       immediateWholeHourHeadroomKwh,
       marginalCost,
       nowMs,
-      prices,
+      prices: selectedFeedPrices,
     });
     if (!safety) continue;
 
@@ -447,9 +469,12 @@ function checkpointFitsHeadroom({
       (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
       0,
     );
-  const preheatEnergyBeforeCheckpoint = candidateHourIds.filter(
-    (hourId) => Date.parse(hourId) < checkpointMs,
-  ).length * heaterPowerKw;
+  const preheatEnergyBeforeCheckpoint = candidateHourIds
+    .filter((hourId) => Date.parse(hourId) < checkpointMs)
+    .reduce(
+      (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
+      0,
+    );
 
   return (
     baselineEnergyBeforeCheckpoint - displacedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint <=
@@ -494,9 +519,12 @@ function evaluateMatchingHeadroom({
       (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
       0,
     );
-    const preheatEnergyBeforeCheckpoint = marginalCost.pairs.filter(
-      (pair) => Date.parse(pair.preheatHourId) < checkpointMs,
-    ).length * heaterPowerKw;
+    const preheatEnergyBeforeCheckpoint = marginalCost.pairs
+      .filter((pair) => Date.parse(pair.preheatHourId) < checkpointMs)
+      .reduce(
+        (sum, pair) => sum + retainedHeatingEnergyKwh(pair.preheatHourId, nowMs, heaterPowerKw, prices),
+        0,
+      );
 
     if (
       retainedEnergyBeforeCheckpoint + preheatEnergyBeforeCheckpoint >
@@ -518,44 +546,73 @@ function evaluateMatchingHeadroom({
     (sum, hourId) => sum + retainedHeatingEnergyKwh(hourId, nowMs, heaterPowerKw, prices),
     0,
   ));
+  const matchedIntervalId = marginalCost.pairs[0]?.preheatHourId ?? null;
+  const matchedPrice = matchedIntervalId
+    ? prices.find((row) => row.starts_at === matchedIntervalId)
+    : null;
+  const matchedIntervalHours =
+    matchedPrice?.resolution_minutes === 15 ? 0.25 : 1;
+  const matchedIntervalEnergyKwh = heaterPowerKw * matchedIntervalHours;
   const safeWholeHourCapacityAfterRetained = Math.max(
     0,
     Math.floor(
       (immediateWholeHourHeadroomKwh - retainedBaselineHeatingEnergyKwh + 1e-9) /
-        heaterPowerKw,
+        matchedIntervalEnergyKwh,
     ),
   );
 
   return {
     marginalCost,
     maxPreheatHoursByHeadroom: Math.min(
-      configuredHourCap,
-      safeWholeHourCapacityAfterRetained,
+      configuredHourCap * matchedIntervalHours,
+      safeWholeHourCapacityAfterRetained * matchedIntervalHours,
     ),
     retainedBaselineHeatingEnergyKwh,
     retainedBaselineHeatingHourIds,
   };
 }
 
-function combinations<T>(values: T[], count: number): T[][] {
-  if (count === 0) return [[]];
-  if (count < 0 || count > values.length) return [];
-
-  const result: T[][] = [];
-  const choose = (start: number, selected: T[]) => {
-    if (selected.length === count) {
-      result.push([...selected]);
-      return;
-    }
-    const remainingNeeded = count - selected.length;
-    for (let index = start; index <= values.length - remainingNeeded; index += 1) {
-      selected.push(values[index]);
-      choose(index + 1, selected);
-      selected.pop();
-    }
+function boundedCandidateSubsets(
+  candidates: string[],
+  count: number,
+  priceById: Map<string, ShadowElectricityPrice>,
+): string[][] {
+  if (count <= 0 || count > candidates.length) return [];
+  const byPrice = [...candidates].sort((left, right) => {
+    const leftPrice = billedPrice(left, priceById) ?? Number.POSITIVE_INFINITY;
+    const rightPrice = billedPrice(right, priceById) ?? Number.POSITIVE_INFINITY;
+    return leftPrice - rightPrice || Date.parse(left) - Date.parse(right);
+  });
+  const byTime = [...candidates].sort((left, right) => Date.parse(left) - Date.parse(right));
+  const windows: string[][] = [];
+  const add = (ids: string[]) => {
+    const normalized = [...ids].sort((left, right) => Date.parse(left) - Date.parse(right));
+    const key = normalized.join("|");
+    if (!windows.some((existing) => existing.join("|") === key)) windows.push(normalized);
   };
-  choose(0, []);
-  return result;
+  add(byPrice.slice(0, count));
+  add(byTime.slice(0, count));
+  const frontier = byPrice.slice(0, Math.min(byPrice.length, count + 8));
+  for (let offset = 0; offset <= Math.min(8, frontier.length - count); offset += 1) {
+    add(frontier.slice(offset, offset + count));
+  }
+
+  // Preserve bounded work while covering viable early candidates that can be
+  // hidden behind many cheaper-but-too-late intervals. For each chronological
+  // prefix, evaluate its cheapest count-sized subset. This adds at most O(n)
+  // deterministic candidates instead of enumerating C(n,k).
+  for (let end = count; end <= byTime.length; end += 1) {
+    const cheapestPrefix = byTime
+      .slice(0, end)
+      .sort((left, right) => {
+        const leftPrice = billedPrice(left, priceById) ?? Number.POSITIVE_INFINITY;
+        const rightPrice = billedPrice(right, priceById) ?? Number.POSITIVE_INFINITY;
+        return leftPrice - rightPrice || Date.parse(left) - Date.parse(right);
+      })
+      .slice(0, count);
+    add(cheapestPrefix);
+  }
+  return windows;
 }
 
 function billedPrice(

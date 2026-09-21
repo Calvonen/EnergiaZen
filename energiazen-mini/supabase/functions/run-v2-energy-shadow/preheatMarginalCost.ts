@@ -42,6 +42,7 @@ export function evaluateV2MarginalPreheatCost({
   preheatCandidateHourIds,
   prices,
   requireExactPairCount = false,
+  resolutionMinutes: requestedResolutionMinutes,
 }: {
   displacedFutureHeatingHourIds: string[];
   excludedPairKeys?: string[];
@@ -49,24 +50,47 @@ export function evaluateV2MarginalPreheatCost({
   preheatCandidateHourIds: string[];
   prices: ShadowElectricityPrice[];
   requireExactPairCount?: boolean;
+  resolutionMinutes?: 15 | 60;
 }): V2MarginalPreheatCostResult {
   if (!Number.isFinite(maxPreheatHours) || maxPreheatHours < 0) {
     return unavailable("invalid_max_preheat_hours");
   }
 
-  const maxHours = Math.floor(maxPreheatHours);
-  if (!preheatCandidateHourIds.length || maxHours === 0) {
-    return unavailable("no_preheat_candidates");
-  }
-  if (!displacedFutureHeatingHourIds.length) {
-    return unavailable("no_future_heating_to_displace");
-  }
-
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const requestedIds = [...new Set([
+    ...preheatCandidateHourIds,
+    ...displacedFutureHeatingHourIds,
+  ])];
+  const matchingResolutions = ([15, 60] as const).filter((resolutionMinutes) =>
+    requestedIds.every((id) =>
+      prices.some((price) =>
+        price.starts_at === id &&
+        price.resolution_minutes === resolutionMinutes &&
+        isUsableIntervalPrice(price)
+      )
+    )
+  );
+  const resolutionMinutes = requestedResolutionMinutes ??
+    (matchingResolutions.length === 1 ? matchingResolutions[0] : undefined);
+  if (
+    (resolutionMinutes !== 15 && resolutionMinutes !== 60) ||
+    !matchingResolutions.includes(resolutionMinutes)
+  ) return unavailable("price_data_missing");
+  const priceById = new Map(
+    prices
+      .filter((price) => price.resolution_minutes === resolutionMinutes)
+      .map((price) => [price.starts_at, price]),
+  );
   const pricedPreheat = priceIds(preheatCandidateHourIds, priceById);
   const pricedFuture = priceIds(displacedFutureHeatingHourIds, priceById);
   if (!pricedPreheat || !pricedFuture) {
     return unavailable("price_data_missing");
+  }
+  const maxIntervals = Math.floor(maxPreheatHours / (resolutionMinutes / 60));
+  if (!preheatCandidateHourIds.length || maxIntervals === 0) {
+    return unavailable("no_preheat_candidates");
+  }
+  if (!displacedFutureHeatingHourIds.length) {
+    return unavailable("no_future_heating_to_displace");
   }
 
   const candidates = [...pricedPreheat].sort(
@@ -78,7 +102,7 @@ export function evaluateV2MarginalPreheatCost({
   const pairs = findBestMatching(
     candidates,
     displaced,
-    maxHours,
+    maxIntervals,
     new Set(excludedPairKeys),
     requireExactPairCount,
   );
@@ -193,7 +217,7 @@ function priceIds(
   const result: PricedHour[] = [];
   for (const hourId of [...new Set(hourIds)]) {
     const price = priceById.get(hourId);
-    if (!price || !isUsableHourlyPrice(price)) return null;
+    if (!price || !isUsableIntervalPrice(price)) return null;
     const billed = calculateBilledElectricityPriceCentsPerKwh(
       price.spot_price_cents_kwh,
     );
@@ -203,17 +227,17 @@ function priceIds(
   return result;
 }
 
-function isUsableHourlyPrice(price: ShadowElectricityPrice) {
+function isUsableIntervalPrice(price: ShadowElectricityPrice) {
   const start = Date.parse(price.starts_at);
   const end = Date.parse(price.ends_at);
   return (
-    price.resolution_minutes === 60 &&
+    (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
     Number.isFinite(price.spot_price_cents_kwh) &&
     Number.isFinite(start) &&
     Number.isFinite(end) &&
-    end - start === 60 * 60 * 1000 &&
-    start % (60 * 60 * 1000) === 0 &&
-    end % (60 * 60 * 1000) === 0
+    end - start === price.resolution_minutes * 60 * 1000 &&
+    start % (price.resolution_minutes * 60 * 1000) === 0 &&
+    end % (price.resolution_minutes * 60 * 1000) === 0
   );
 }
 

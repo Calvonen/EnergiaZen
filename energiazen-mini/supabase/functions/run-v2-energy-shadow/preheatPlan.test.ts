@@ -25,6 +25,7 @@ function opportunity(ids: string[]): V2PreheatOpportunity {
   return {
     available: true,
     eligiblePreheatHourIds: ids,
+    resolutionMinutes: 60,
     reason: "recommended",
     tomorrowCheapestBilledCentsPerKwh: 25,
   };
@@ -34,6 +35,7 @@ function unavailableOpportunity(): V2PreheatOpportunity {
   return {
     available: false,
     eligiblePreheatHourIds: [],
+    resolutionMinutes: null,
     reason: "tomorrow_prices_incomplete",
     tomorrowCheapestBilledCentsPerKwh: null,
   };
@@ -111,6 +113,7 @@ export function runV2PreheatPlanUnitTests() {
     opportunity: {
       available: false,
       eligiblePreheatHourIds: [],
+      resolutionMinutes: null,
       reason: "no_cheaper_preheat_interval",
       tomorrowCheapestBilledCentsPerKwh: 10,
     },
@@ -167,4 +170,36 @@ export function runV2PreheatPlanUnitTests() {
   });
   assert(!offClockPlan.available, "off-clock hourly interval fails closed before publication");
   assertEqual(offClockPlan.reason, "eligible_price_data_missing", "off-clock hourly interval is rejected explicitly");
+  const quarterPrice = (startsAt: string, cents: number): ShadowElectricityPrice => ({
+    starts_at: startsAt,
+    ends_at: new Date(Date.parse(startsAt) + 15 * 60_000).toISOString(),
+    resolution_minutes: 15,
+    spot_price_cents_kwh: cents,
+  });
+  const quarterPrices = [
+    quarterPrice("2026-09-17T15:00:00.000Z", 4),
+    quarterPrice("2026-09-17T15:15:00.000Z", 1),
+    quarterPrice("2026-09-17T15:30:00.000Z", 3),
+    quarterPrice("2026-09-17T15:45:00.000Z", 2),
+  ];
+  const quarterPlan = buildV2SoftPreheatPlan({
+    heaterPowerKw: 3,
+    level: level(1.4),
+    maxPreheatHours: 1,
+    opportunity: {
+      available: true,
+      eligiblePreheatHourIds: quarterPrices.map((item) => item.starts_at),
+      resolutionMinutes: 15,
+      reason: "recommended",
+      tomorrowCheapestBilledCentsPerKwh: 25,
+    },
+    prices: quarterPrices,
+  });
+  assert(quarterPlan.available, "quarter-hour preheat plan is available");
+  assertEqual(quarterPlan.recommendedHeatingHourIds.length, 2, "1.4 kWh request needs two quarter-hour intervals");
+  assertEqual(quarterPlan.recommendedHeatingEnergyKwh, 1.5, "two 3 kW quarter-hours deliver 1.5 kWh");
+  assertEqual(quarterPlan.expectedOvershootKwh, 0.1, "quarter-hour granularity limits overshoot to 0.1 kWh");
+  assertEqual(quarterPlan.recommendedHeatingHourIds[0], quarterPrices[1].starts_at, "cheapest quarter is selected first");
+  assertEqual(quarterPlan.recommendedHeatingHourIds[1], quarterPrices[3].starts_at, "second-cheapest quarter is selected second");
+
 }

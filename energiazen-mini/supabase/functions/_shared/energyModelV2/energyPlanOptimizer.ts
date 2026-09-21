@@ -46,7 +46,11 @@ export function optimizeEnergyPlan({
   const forbidden = new Set(forbiddenHeatingHourIds);
   const required = new Set(requiredHeatingHourIds);
   const byId = new Map(ordered.map((segment) => [segment.id, segment]));
-  const maxSelected = Math.max(0, Math.floor(maxHeatingHours));
+  const maxSelectedHours = Math.max(0, maxHeatingHours);
+  const requiredHours = [...required].reduce(
+    (sum, id) => sum + clamp(byId.get(id)?.segmentHours ?? 0, 0, 1),
+    0,
+  );
 
   if ([...required].some((id) => forbidden.has(id))) {
     return invalidResult("required_hour_is_forbidden", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
@@ -54,7 +58,7 @@ export function optimizeEnergyPlan({
   if ([...required].some((id) => !byId.has(id))) {
     return invalidResult("required_hour_missing", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
-  if (required.size > maxSelected) {
+  if (requiredHours > maxSelectedHours + 1e-9) {
     return invalidResult("required_hours_exceed_max", ordered, heaterPowerKw, initialRemainingEnergyKwh, initialUncertaintyKwh, thresholds, energyCapacityKwh);
   }
 
@@ -62,6 +66,40 @@ export function optimizeEnergyPlan({
     .map((segment) => segment.id)
     .filter((id) => !required.has(id) && !forbidden.has(id));
 
+  // Exhaustive combinations are useful for the legacy hourly horizon, but a
+  // 15-minute day can contain 96 candidates. Use a deadline-driven safety
+  // search for larger horizons: start with required intervals, then repeatedly
+  // add the cheapest still-available interval no later than the first safety
+  // violation. Every returned winner is still validated by the full forecast,
+  // so this path can fail closed but can never publish an unsafe plan.
+  // The current segment is prorated after its interval has begun, so its
+  // segmentHours alone cannot identify the source resolution. Infer a
+  // sub-hour feed from spacing between candidate starts instead; this keeps
+  // live 60-minute production horizons on the exact optimizer.
+  const orderedStartTimes = ordered
+    // id is the immutable source interval start; startDate may be moved to
+    // "now" for the partially elapsed current interval.
+    .map((segment) => Date.parse(segment.id))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const usesSubHourlyFeed = orderedStartTimes.some(
+    (start, index) => index > 0 && start - orderedStartTimes[index - 1] < 60 * 60 * 1000,
+  );
+  if (usesSubHourlyFeed) {
+    return optimizeLargeIntervalHorizon({
+      energyCapacityKwh,
+      forbidden,
+      heaterPowerKw,
+      initialRemainingEnergyKwh,
+      initialUncertaintyKwh,
+      maxSelectedHours,
+      ordered,
+      required,
+      thresholds,
+    });
+  }
+
+  const maxSelected = Math.max(0, Math.floor(maxSelectedHours));
   let evaluatedCombinationCount = 0;
   let bestValid: EvaluatedPlan | null = null;
   let bestFallback: EvaluatedPlan | null = null;
@@ -98,6 +136,149 @@ export function optimizeEnergyPlan({
     selected: required,
     thresholds,
   });
+
+  return {
+    candidateCount: ordered.length,
+    evaluatedCombinationCount,
+    forecast: winner.forecast,
+    selectedHeatingEnergyKwh: round(winner.selectedHeatingEnergyKwh),
+    selectedHeatingHourIds: winner.selectedHeatingHourIds,
+    totalCostCents: round(winner.totalCostCents),
+    valid: winner.valid,
+    violationReason: winner.valid ? null : winner.violationReason,
+  };
+}
+
+function optimizeLargeIntervalHorizon({
+  energyCapacityKwh,
+  forbidden,
+  heaterPowerKw,
+  initialRemainingEnergyKwh,
+  initialUncertaintyKwh,
+  maxSelectedHours,
+  ordered,
+  required,
+  thresholds,
+}: {
+  energyCapacityKwh?: number;
+  forbidden: Set<string>;
+  heaterPowerKw: number;
+  initialRemainingEnergyKwh: number;
+  initialUncertaintyKwh: number;
+  maxSelectedHours: number;
+  ordered: EnergyPlanCandidateSegment[];
+  required: Set<string>;
+  thresholds?: EnergyReserveThresholds;
+}): EnergyPlanOptimizationResult {
+  type State = {
+    selected: Set<string>;
+    selectedHours: number;
+    costCents: number;
+    remainingKwh: number;
+    conservativeKwh: number;
+  };
+
+  let evaluatedCombinationCount = 0;
+  let states: State[] = [{
+    selected: new Set<string>(),
+    selectedHours: 0,
+    costCents: 0,
+    remainingKwh: initialRemainingEnergyKwh,
+    conservativeKwh: Math.max(initialRemainingEnergyKwh - initialUncertaintyKwh, 0),
+  }];
+
+  // Streaming Pareto DP. Unsafe prefixes are terminal because later heating
+  // cannot repair an earlier hard-safety violation. For each used-duration
+  // bucket retain only states that are not dominated simultaneously on cost,
+  // nominal energy and conservative energy. This searches all physically
+  // distinct viable paths without enumerating coordinated swap combinations.
+  for (let index = 0; index < ordered.length; index += 1) {
+    const segment = ordered[index];
+    const prefix = ordered.slice(0, index + 1);
+    const duration = clamp(segment.segmentHours, 0, 1);
+    const mustHeat = required.has(segment.id);
+    const mayHeat = !forbidden.has(segment.id);
+    const nextStates: State[] = [];
+
+    for (const state of states) {
+      const choices = mustHeat ? [true] : mayHeat ? [false, true] : [false];
+      for (const heat of choices) {
+        const selectedHours = state.selectedHours + (heat ? duration : 0);
+        if (selectedHours > maxSelectedHours + 1e-9) continue;
+        const selected = new Set(state.selected);
+        if (heat) selected.add(segment.id);
+        const evaluated = evaluateSelection({
+          energyCapacityKwh,
+          heaterPowerKw,
+          initialRemainingEnergyKwh,
+          initialUncertaintyKwh,
+          ordered: prefix,
+          selected,
+          thresholds,
+        });
+        evaluatedCombinationCount += 1;
+        if (!evaluated.valid) continue;
+        const point = evaluated.forecast.points[evaluated.forecast.points.length - 1];
+        nextStates.push({
+          selected,
+          selectedHours,
+          costCents: evaluated.totalCostCents,
+          remainingKwh: point?.rawRemainingEnergyAfterKwh ?? initialRemainingEnergyKwh,
+          conservativeKwh: point?.rawConservativeEnergyAfterKwh ??
+            Math.max(initialRemainingEnergyKwh - initialUncertaintyKwh, 0),
+        });
+      }
+    }
+
+    const buckets = new Map<string, State[]>();
+    for (const state of nextStates) {
+      const key = state.selectedHours.toFixed(6);
+      const bucket = buckets.get(key) ?? [];
+      const dominated = bucket.some((other) =>
+        other.costCents <= state.costCents + 1e-9 &&
+        other.remainingKwh >= state.remainingKwh - 1e-9 &&
+        other.conservativeKwh >= state.conservativeKwh - 1e-9
+      );
+      if (dominated) continue;
+      const survivors = bucket.filter((other) => !(
+        state.costCents <= other.costCents + 1e-9 &&
+        state.remainingKwh >= other.remainingKwh - 1e-9 &&
+        state.conservativeKwh >= other.conservativeKwh - 1e-9
+      ));
+      survivors.push(state);
+      buckets.set(key, survivors);
+    }
+    states = [...buckets.values()].flat();
+    if (states.length === 0) break;
+  }
+
+  let bestValid: EvaluatedPlan | null = null;
+  for (const state of states) {
+    const evaluated = evaluateSelection({
+      energyCapacityKwh,
+      heaterPowerKw,
+      initialRemainingEnergyKwh,
+      initialUncertaintyKwh,
+      ordered,
+      selected: state.selected,
+      thresholds,
+    });
+    evaluatedCombinationCount += 1;
+    if (evaluated.valid && (!bestValid || compareValidPlans(evaluated, bestValid) < 0)) {
+      bestValid = evaluated;
+    }
+  }
+
+  const winner = bestValid ?? evaluateSelection({
+    energyCapacityKwh,
+    heaterPowerKw,
+    initialRemainingEnergyKwh,
+    initialUncertaintyKwh,
+    ordered,
+    selected: required,
+    thresholds,
+  });
+  if (!bestValid) evaluatedCombinationCount += 1;
 
   return {
     candidateCount: ordered.length,

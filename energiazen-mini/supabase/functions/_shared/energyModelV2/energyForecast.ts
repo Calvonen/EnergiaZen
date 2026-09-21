@@ -30,6 +30,8 @@ export type EnergyForecastPoint = {
   segmentHours: number;
   startDate: string;
   uncertaintyAfterKwh: number;
+  rawRemainingEnergyAfterKwh: number;
+  rawConservativeEnergyAfterKwh: number;
 };
 
 export type EnergyForecastResult = {
@@ -174,6 +176,8 @@ export function forecastEnergyHorizon({
       segmentHours: round(segmentHours),
       startDate: segment.startDate,
       uncertaintyAfterKwh: round(uncertaintyKwh),
+      rawRemainingEnergyAfterKwh: remainingEnergyKwh,
+      rawConservativeEnergyAfterKwh: reserve.conservativeEnergyKwh,
     };
   });
 

@@ -39,6 +39,22 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
 });
 
+function composePublicationSelection(
+  baselineIds: string[],
+  advisory: ReturnType<typeof buildV2MarginalPreheatAdvisory>,
+) {
+  if (!advisory.available || advisory.reason !== "recommended") return [...baselineIds];
+  const displaced = new Set(
+    advisory.strategy === "marginal_displacement" && advisory.marginalCost.available
+      ? advisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
+      : [],
+  );
+  return [...new Set([
+    ...baselineIds.filter((id) => !displaced.has(id)),
+    ...advisory.recommendedPreheatHourIds,
+  ])].sort((left, right) => Date.parse(left) - Date.parse(right));
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { headers: jsonHeaders, status });
 }
@@ -75,11 +91,11 @@ Deno.serve(async (request) => {
         .eq("id", 1).maybeSingle(),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
-        .eq("region", "FI").eq("resolution_minutes", 60).gt("ends_at", now.toISOString())
+        .eq("region", "FI").in("resolution_minutes", [15, 60]).gt("ends_at", now.toISOString())
         .lte("starts_at", priceFetchEnd.toISOString()).order("starts_at", { ascending: true }),
       supabase.from("electricity_prices")
         .select("starts_at,ends_at,spot_price_cents_kwh,resolution_minutes")
-        .eq("region", "FI").eq("resolution_minutes", 60)
+        .eq("region", "FI").in("resolution_minutes", [15, 60])
         .gte("starts_at", priceReferenceStart.toISOString())
         .lte("starts_at", priceFetchEnd.toISOString())
         .order("starts_at", { ascending: true }),
@@ -115,6 +131,9 @@ Deno.serve(async (request) => {
     const v1Shadow = (v1Result.data ?? null) as V1ShadowSnapshot | null;
     const prices = (pricesResult.data ?? []) as ShadowElectricityPrice[];
     const priceReferencePrices = (priceReferenceResult.data ?? []) as ShadowElectricityPrice[];
+    // Staged publication is still an hourly production contract in PR1.
+    // Quarter rows are available only to V2 shadow/advisory planning.
+    const publicationPrices = prices.filter((price) => price.resolution_minutes === 60);
     const storedPlans = (heatingPlansResult.data ?? []) as ShadowStoredHeatingPlan[];
     const storedStagedVersions = (stagedVersionsResult.data ?? []) as StoredStagedPlanVersion[];
     const learnedDropProfile = temperatureDropProfileResult.data
@@ -191,7 +210,7 @@ Deno.serve(async (request) => {
     const result = applyReserveThresholds(baseResult, safetyEnergyKwh, targetEnergyKwh);
     const constraints = resolveV2HeatingConstraints({
       now,
-      priceHourIds: prices.map((price) => price.starts_at),
+      priceHourIds: publicationPrices.map((price) => price.starts_at),
       readings,
       safetyTopTemperatureC: activeBlockSafetyTopTemperatureC,
       storedPlans,
@@ -210,7 +229,7 @@ Deno.serve(async (request) => {
     const preheatAdvisory = buildV2MarginalPreheatAdvisory({
       baselinePlan: plan,
       conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
-      constraints,
+      constraints: plan.effectiveConstraints ?? constraints,
       energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
@@ -225,11 +244,17 @@ Deno.serve(async (request) => {
         const selected = new Set(selectedHourIds);
         return runLiveEnergyPlanShadow({
           automaticMaxHeatingHours,
+          constraintsAreExactIntervals: true,
           constraints: {
             requiredHeatingHourIds: selectedHourIds,
-            forbiddenHeatingHourIds: prices
-              .map((price) => price.starts_at)
-              .filter((hourId) => !selected.has(hourId)),
+            forbiddenHeatingHourIds: [
+              ...new Set([
+                ...(plan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
+                ...prices
+                  .map((price) => price.starts_at)
+                  .filter((hourId) => !selected.has(hourId)),
+              ]),
+            ],
           },
           energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
           inletBaselineC,
@@ -242,45 +267,58 @@ Deno.serve(async (request) => {
       },
     });
 
-    const publicationSelectedHeatingHourIds = (() => {
-      if (!preheatAdvisory.available || preheatAdvisory.reason !== "recommended") {
-        return [...plan.selectedHeatingHourIds];
-      }
-
-      const actuallyDisplacedBaselineHourIds = new Set(
-        preheatAdvisory.strategy === "marginal_displacement" && preheatAdvisory.marginalCost.available
-          ? preheatAdvisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
-          : [],
-      );
-      const preservedBaselineHourIds = plan.selectedHeatingHourIds.filter(
-        (hourId) => !actuallyDisplacedBaselineHourIds.has(hourId),
-      );
-
-      return [...new Set([
-        ...preservedBaselineHourIds,
-        ...preheatAdvisory.recommendedPreheatHourIds,
-      ])].sort((left, right) => Date.parse(left) - Date.parse(right));
-    })();
-
-    // Re-run the forecast with the exact composed publication hours forced as
-    // required and every other priced hour forbidden. This makes validation,
-    // persisted shadow telemetry, Home forecast and the staged candidate all
-    // describe the same plan instead of mixing the safety baseline forecast
-    // with a different advisory-composed publication schedule.
-    const publicationHourIdSet = new Set(publicationSelectedHeatingHourIds);
-    const publicationPlan = runLiveEnergyPlanShadow({
+    // PR1 keeps production publication independently hourly even when shadow
+    // planning selects quarter intervals. Preserve the existing economic
+    // preheat behavior by composing and validating a separate hourly advisory.
+    const hourlyPublicationPlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
+      constraints,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      inletBaselineC,
+      maxTankTemperatureC,
+      now,
+      prices: publicationPrices,
+      reserve: result,
+      learnedDropProfile,
+    });
+    const hourlyPreheatAdvisory = buildV2MarginalPreheatAdvisory({
+      baselinePlan: hourlyPublicationPlan,
+      conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
+      constraints: hourlyPublicationPlan.effectiveConstraints ?? constraints,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
+      maxPreheatHours: automaticMaxHeatingHours,
+      now,
+      prices: publicationPrices,
+      priceReferencePrices: priceReferencePrices.filter((price) => price.resolution_minutes === 60),
+      priceToleranceCents: Number(settingsResult.data.price_tolerance_cents ?? 0),
+      recommendedPreheatPercent,
+      remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
+    });
+    const hourlyPublicationSelectedHeatingHourIds = composePublicationSelection(
+      hourlyPublicationPlan.selectedHeatingHourIds,
+      hourlyPreheatAdvisory,
+    );
+    const hourlyPublicationHourIdSet = new Set(hourlyPublicationSelectedHeatingHourIds);
+    const validatedHourlyPublicationPlan = runLiveEnergyPlanShadow({
+      automaticMaxHeatingHours,
+      constraintsAreExactIntervals: true,
       constraints: {
-        requiredHeatingHourIds: publicationSelectedHeatingHourIds,
-        forbiddenHeatingHourIds: prices
-          .map((price) => price.starts_at)
-          .filter((hourId) => !publicationHourIdSet.has(hourId)),
+        requiredHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
+        forbiddenHeatingHourIds: [
+          ...new Set([
+            ...(hourlyPublicationPlan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
+            ...publicationPrices.map((price) => price.starts_at)
+              .filter((hourId) => !hourlyPublicationHourIdSet.has(hourId)),
+          ]),
+        ],
       },
       energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
-      prices,
+      prices: publicationPrices,
       reserve: result,
       learnedDropProfile,
     });
@@ -293,15 +331,15 @@ Deno.serve(async (request) => {
     // pairs for displacement may be removed; every unmatched safety hour is
     // preserved. Production cutover remains disabled here.
     const publicationCandidate = captureV2PublicationCandidate(
-      publicationPlan,
-      publicationSelectedHeatingHourIds,
+      validatedHourlyPublicationPlan,
+      hourlyPublicationSelectedHeatingHourIds,
     );
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2StagedPublicationEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: publicationPlan,
+      plan: validatedHourlyPublicationPlan,
       publicationCandidate,
     });
     let stagedPublicationResult: string | null = null;
@@ -312,8 +350,8 @@ Deno.serve(async (request) => {
         draws,
         latestUsableReadingAt: latestPublishableReadingAt,
         now,
-        plan: publicationPlan,
-        prices,
+        plan: validatedHourlyPublicationPlan,
+        prices: publicationPrices,
         priceFetchEnd,
         readings,
         replayStart,
@@ -353,10 +391,10 @@ Deno.serve(async (request) => {
 
     const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: publicationPlan,
+      plan: validatedHourlyPublicationPlan,
       publicationCandidate,
     });
 
@@ -371,11 +409,11 @@ Deno.serve(async (request) => {
     if (
       v2PublicationCutoverEnabled &&
       controlPlaneState.heating_need_mode === "automatic" &&
-      (!result.available || !publicationPlan.available)
+      (!result.available || !validatedHourlyPublicationPlan.available || validatedHourlyPublicationPlan.valid !== true)
     ) {
       const unavailableReason =
         result.reason ??
-        publicationPlan.reason ??
+        validatedHourlyPublicationPlan.reason ??
         "plan_unavailable";
       const { error: heartbeatError } = await supabase
         .from("backend_heating_optimizer_state")
@@ -411,22 +449,22 @@ Deno.serve(async (request) => {
       v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
       v1_shadow_run_id: v1Shadow?.id ?? null, v1_run_at: v1Shadow?.run_at ?? null,
       v1_target_hours: v1Shadow?.target_hours ?? null, v1_needs_energy_recovery: null,
-      comparison: "v1_unavailable", plan_available: publicationPlan.available, plan_valid: publicationPlan.valid,
-      plan_unavailable_reason: publicationPlan.available ? null : publicationPlan.reason, plan_assumption: publicationPlan.assumption,
-      forecast_horizon_end_at: publicationPlan.forecastHorizonEndAt,
-      forecast_standing_loss_kwh_per_hour: publicationPlan.standingLossKwhPerHour,
-      forecast_final_conservative_energy_kwh: publicationPlan.finalConservativeEnergyKwh,
-      forecast_min_conservative_energy_kwh: publicationPlan.minimumConservativeEnergyKwh,
-      forecast_first_target_miss_at: publicationPlan.firstTargetMissAt,
-      forecast_first_safety_violation_at: publicationPlan.firstSafetyViolationAt,
-      plan_selected_heating_hour_ids: publicationPlan.selectedHeatingHourIds,
-      plan_selected_heating_energy_kwh: publicationPlan.selectedHeatingEnergyKwh,
-      plan_total_cost_cents: publicationPlan.totalCostCents, plan_candidate_count: publicationPlan.candidateCount,
-      plan_evaluated_combination_count: publicationPlan.evaluatedCombinationCount,
-      learned_drop_profile_used: publicationPlan.learnedDropProfileUsed,
-      learned_drop_profile_date: publicationPlan.learnedDropProfileDate,
-      learned_drop_profile_age_days: publicationPlan.learnedDropProfileAgeDays,
-      maximum_modeled_loss_kwh_per_hour: publicationPlan.maximumModeledLossKwhPerHour,
+      comparison: "v1_unavailable", plan_available: plan.available, plan_valid: plan.valid,
+      plan_unavailable_reason: plan.available ? null : plan.reason, plan_assumption: plan.assumption,
+      forecast_horizon_end_at: plan.forecastHorizonEndAt,
+      forecast_standing_loss_kwh_per_hour: plan.standingLossKwhPerHour,
+      forecast_final_conservative_energy_kwh: plan.finalConservativeEnergyKwh,
+      forecast_min_conservative_energy_kwh: plan.minimumConservativeEnergyKwh,
+      forecast_first_target_miss_at: plan.firstTargetMissAt,
+      forecast_first_safety_violation_at: plan.firstSafetyViolationAt,
+      plan_selected_heating_hour_ids: plan.selectedHeatingHourIds,
+      plan_selected_heating_energy_kwh: plan.selectedHeatingEnergyKwh,
+      plan_total_cost_cents: plan.totalCostCents, plan_candidate_count: plan.candidateCount,
+      plan_evaluated_combination_count: plan.evaluatedCombinationCount,
+      learned_drop_profile_used: plan.learnedDropProfileUsed,
+      learned_drop_profile_date: plan.learnedDropProfileDate,
+      learned_drop_profile_age_days: plan.learnedDropProfileAgeDays,
+      maximum_modeled_loss_kwh_per_hour: plan.maximumModeledLossKwhPerHour,
       preheat_advisory: preheatAdvisory,
       staged_publication_ready: stagedPublicationReadiness.ready,
       staged_publication_ready_reason: stagedPublicationReadiness.reason,
@@ -450,20 +488,20 @@ Deno.serve(async (request) => {
       heater_delivery_uncertainty_kwh: result.heaterDeliveryUncertaintyKwh,
       heater_credit_guard_top_temp_c: result.heaterCreditGuardTopTempC,
       v2_band: result.v2Band, v2_needs_energy_recovery: result.v2NeedsEnergyRecovery,
-      v1_needs_energy_recovery: null, reason: result.reason, plan_available: publicationPlan.available,
-      plan_valid: publicationPlan.valid, plan_reason: publicationPlan.reason,
+      v1_needs_energy_recovery: null, reason: result.reason, plan_available: validatedHourlyPublicationPlan.available,
+      plan_valid: validatedHourlyPublicationPlan.valid, plan_reason: validatedHourlyPublicationPlan.reason,
       plan_required_heating_hour_ids: constraints.requiredHeatingHourIds,
       plan_forbidden_heating_hour_ids: constraints.forbiddenHeatingHourIds,
-      plan_selected_heating_hour_ids: publicationPlan.selectedHeatingHourIds,
-      plan_selected_heating_energy_kwh: publicationPlan.selectedHeatingEnergyKwh,
-      plan_total_cost_cents: publicationPlan.totalCostCents, forecast_horizon_end_at: publicationPlan.forecastHorizonEndAt,
-      forecast_final_conservative_energy_kwh: publicationPlan.finalConservativeEnergyKwh,
-      forecast_min_conservative_energy_kwh: publicationPlan.minimumConservativeEnergyKwh,
+      plan_selected_heating_hour_ids: validatedHourlyPublicationPlan.selectedHeatingHourIds,
+      plan_selected_heating_energy_kwh: validatedHourlyPublicationPlan.selectedHeatingEnergyKwh,
+      plan_total_cost_cents: validatedHourlyPublicationPlan.totalCostCents, forecast_horizon_end_at: validatedHourlyPublicationPlan.forecastHorizonEndAt,
+      forecast_final_conservative_energy_kwh: validatedHourlyPublicationPlan.finalConservativeEnergyKwh,
+      forecast_min_conservative_energy_kwh: validatedHourlyPublicationPlan.minimumConservativeEnergyKwh,
       preheat_advisory: preheatAdvisory,
-      learned_drop_profile_used: publicationPlan.learnedDropProfileUsed,
-      learned_drop_profile_date: publicationPlan.learnedDropProfileDate,
-      learned_drop_profile_age_days: publicationPlan.learnedDropProfileAgeDays,
-      maximum_modeled_loss_kwh_per_hour: publicationPlan.maximumModeledLossKwhPerHour,
+      learned_drop_profile_used: validatedHourlyPublicationPlan.learnedDropProfileUsed,
+      learned_drop_profile_date: validatedHourlyPublicationPlan.learnedDropProfileDate,
+      learned_drop_profile_age_days: validatedHourlyPublicationPlan.learnedDropProfileAgeDays,
+      maximum_modeled_loss_kwh_per_hour: validatedHourlyPublicationPlan.maximumModeledLossKwhPerHour,
       price_ceiling_setting: priceCeilingSetting,
       staged_publication_enabled: v2StagedPublicationEnabled,
       staged_publication_ready: stagedPublicationReadiness.ready,

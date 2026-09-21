@@ -53,8 +53,7 @@ export function buildV2SoftPreheatPlan({
     return unavailable("invalid_max_preheat_hours");
   }
 
-  const maxHours = Math.floor(maxPreheatHours);
-  if (maxHours === 0) {
+  if (maxPreheatHours === 0) {
     return {
       available: true,
       expectedOvershootKwh: 0,
@@ -65,13 +64,16 @@ export function buildV2SoftPreheatPlan({
     };
   }
 
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  const opportunityPrices = prices.filter((price) =>
+    isUsablePrice(price, opportunity.resolutionMinutes)
+  );
+  const priceById = new Map(opportunityPrices.map((price) => [price.starts_at, price]));
   const eligible = opportunity.eligiblePreheatHourIds.map((id) => {
     const price = priceById.get(id);
-    if (!price || !isUsableHourlyPrice(price)) return null;
+    if (!price || !isUsablePrice(price, opportunity.resolutionMinutes)) return null;
     const billed = calculateBilledElectricityPriceCentsPerKwh(price.spot_price_cents_kwh);
     if (billed === null || !Number.isFinite(billed)) return null;
-    return { billed, id, startsAtMs: Date.parse(price.starts_at) };
+    return { billed, durationHours: price.resolution_minutes / 60, id, startsAtMs: Date.parse(price.starts_at) };
   });
 
   if (eligible.some((item) => item === null)) {
@@ -82,9 +84,16 @@ export function buildV2SoftPreheatPlan({
     .filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((left, right) => left.billed - right.billed || left.startsAtMs - right.startsAtMs);
 
-  const hoursNeeded = Math.ceil(level.recommendedPreheatEnergyKwh / heaterPowerKw);
-  const selected = ordered.slice(0, Math.min(hoursNeeded, maxHours));
-  const deliveredEnergyKwh = selected.length * heaterPowerKw;
+  const selected: typeof ordered = [];
+  let selectedHours = 0;
+  let deliveredEnergyKwh = 0;
+  for (const interval of ordered) {
+    if (deliveredEnergyKwh >= level.recommendedPreheatEnergyKwh) break;
+    if (selectedHours + interval.durationHours > maxPreheatHours + 1e-9) continue;
+    selected.push(interval);
+    selectedHours += interval.durationHours;
+    deliveredEnergyKwh += heaterPowerKw * interval.durationHours;
+  }
 
   return {
     available: true,
@@ -96,25 +105,30 @@ export function buildV2SoftPreheatPlan({
   };
 }
 
-function isUsableHourlyPrice(price: ShadowElectricityPrice) {
+function isUsablePrice(
+  price: ShadowElectricityPrice,
+  requiredResolution: 15 | 60 | null,
+) {
   const start = Date.parse(price.starts_at);
   const end = Date.parse(price.ends_at);
+  const resolution = price.resolution_minutes;
   return (
-    price.resolution_minutes === 60 &&
+    (resolution === 15 || resolution === 60) &&
+    (requiredResolution === null || resolution === requiredResolution) &&
     Number.isFinite(price.spot_price_cents_kwh) &&
     Number.isFinite(start) &&
     Number.isFinite(end) &&
     end > start &&
-    end - start === 60 * 60 * 1000 &&
-    isUtcClockHour(start) &&
-    isUtcClockHour(end)
+    end - start === resolution * 60 * 1000 &&
+    isUtcIntervalBoundary(start, resolution) &&
+    isUtcIntervalBoundary(end, resolution)
   );
 }
 
-function isUtcClockHour(timestampMs: number) {
+function isUtcIntervalBoundary(timestampMs: number, resolutionMinutes: 15 | 60) {
   const date = new Date(timestampMs);
   return (
-    date.getUTCMinutes() === 0 &&
+    date.getUTCMinutes() % resolutionMinutes === 0 &&
     date.getUTCSeconds() === 0 &&
     date.getUTCMilliseconds() === 0
   );
