@@ -390,20 +390,17 @@ function optimizeLargeIntervalHorizon({
         evaluated = coordinated.result;
         continue;
       }
-      selected.delete(replaceablePartial.id);
-      const replacementKey = (() => {
-        const trial = new Set(selected);
-        trial.delete(replaceablePartial.id);
-        if (replacementCandidate) trial.add(replacementCandidate.id);
-        return selectionKey(trial);
-      })();
+      const replacementSelection = new Set(selected);
+      replacementSelection.delete(replaceablePartial.id);
+      if (replacementCandidate) replacementSelection.add(replacementCandidate.id);
+      const replacementKey = selectionKey(replacementSelection);
       if (visitedSelections.has(replacementKey)) break;
-      selectedHours -= clamp(replaceablePartial.segmentHours, 0, 1);
-      if (replacementCandidate) {
-        selected.add(replacementCandidate.id);
-        selectedHours += clamp(replacementCandidate.segmentHours, 0, 1);
-      }
-      visitedSelections.add(selectionKey(selected));
+      selected.clear();
+      replacementSelection.forEach((id) => selected.add(id));
+      selectedHours = ordered
+        .filter((segment) => selected.has(segment.id))
+        .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+      visitedSelections.add(replacementKey);
       evaluated = evaluateSelection({
         energyCapacityKwh,
         heaterPowerKw,
