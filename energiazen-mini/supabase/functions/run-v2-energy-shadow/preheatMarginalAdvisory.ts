@@ -232,7 +232,7 @@ export function buildV2MarginalPreheatAdvisory({
       nowMs,
       pairCap,
       prices,
-      resolutionMinutes: horizon.resolutionMinutes ?? undefined,
+      resolutionMinutes: horizon.resolutionMinutes,
     });
     if (safeMatching) {
       return {
