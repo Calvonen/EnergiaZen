@@ -170,282 +170,125 @@ function optimizeLargeIntervalHorizon({
   required: Set<string>;
   thresholds?: EnergyReserveThresholds;
 }): EnergyPlanOptimizationResult {
-  const selected = new Set(required);
-  const visitedSelections = new Set<string>();
-  const selectionKey = (ids: Set<string>) => [...ids].sort().join("|");
-  visitedSelections.add(selectionKey(selected));
-  let selectedHours = ordered
-    .filter((segment) => selected.has(segment.id))
-    .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+  type State = {
+    selected: Set<string>;
+    selectedHours: number;
+    costCents: number;
+    remainingKwh: number;
+    conservativeKwh: number;
+  };
+
   let evaluatedCombinationCount = 0;
-  let evaluated = evaluateSelection({
-    energyCapacityKwh,
-    heaterPowerKw,
-    initialRemainingEnergyKwh,
-    initialUncertaintyKwh,
-    ordered,
-    selected,
-    thresholds,
-  });
-  evaluatedCombinationCount += 1;
+  let states: State[] = [{
+    selected: new Set<string>(),
+    selectedHours: 0,
+    costCents: 0,
+    remainingKwh: initialRemainingEnergyKwh,
+    conservativeKwh: Math.max(initialRemainingEnergyKwh - initialUncertaintyKwh, 0),
+  }];
 
-  while (!evaluated.valid && evaluated.forecast.firstSafetyViolationAt !== null) {
-    const violationMs = Date.parse(evaluated.forecast.firstSafetyViolationAt);
-    const candidates = ordered
-      .filter((segment) => {
-        if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
-        const duration = clamp(segment.segmentHours, 0, 1);
-        if (selectedHours + duration > maxSelectedHours + 1e-9) return false;
-        const startsAtViolation = Date.parse(segment.startDate) === violationMs;
-        const violationPoint = evaluated.forecast.points.find(
-          (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
-        );
-        const violationWasBeforeHeating =
-          startsAtViolation &&
-          (violationPoint?.frontLoadedDemandKwh ?? 0) > 0 &&
-          violationPoint !== undefined &&
-          Math.max(
-            violationPoint.remainingEnergyBeforeKwh -
-              violationPoint.frontLoadedDemandKwh -
-              violationPoint.uncertaintyAfterKwh,
-            0,
-          ) < (thresholds?.safetyEnergyKwh ?? 0) - 1e-9;
-        return violationWasBeforeHeating
-          ? Date.parse(segment.startDate) < violationMs
-          : Date.parse(segment.startDate) <= violationMs;
-      })
-      .sort((left, right) => {
-        const leftPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(left.priceCentsPerKwh));
-        const rightPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(right.priceCentsPerKwh));
-        return leftPrice - rightPrice || Date.parse(left.startDate) - Date.parse(right.startDate);
-      });
+  // Streaming Pareto DP. Unsafe prefixes are terminal because later heating
+  // cannot repair an earlier hard-safety violation. For each used-duration
+  // bucket retain only states that are not dominated simultaneously on cost,
+  // nominal energy and conservative energy. This searches all physically
+  // distinct viable paths without enumerating coordinated swap combinations.
+  for (let index = 0; index < ordered.length; index += 1) {
+    const segment = ordered[index];
+    const prefix = ordered.slice(0, index + 1);
+    const duration = clamp(segment.segmentHours, 0, 1);
+    const mustHeat = required.has(segment.id);
+    const mayHeat = !forbidden.has(segment.id);
+    const nextStates: State[] = [];
 
-    let next = candidates[0];
-    if (!next) {
-      // A partially elapsed current interval can consume a fraction of the
-      // duration cap and prevent the final full interval from fitting. If that
-      // partial interval is optional, drop it and retry so the bounded search
-      // can use the complete cap instead of failing because of fragmentation.
-      const selectedOptional = ordered.filter(
-        (segment) => selected.has(segment.id) && !required.has(segment.id),
-      );
-      const violationPoint = evaluated.forecast.points.find(
-        (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
-      );
-      const violationWasBeforeHeating =
-        (violationPoint?.frontLoadedDemandKwh ?? 0) > 0 &&
-        violationPoint !== undefined &&
-        Math.max(
-          violationPoint.remainingEnergyBeforeKwh -
-            violationPoint.frontLoadedDemandKwh -
-            violationPoint.uncertaintyAfterKwh,
-          0,
-        ) < (thresholds?.safetyEnergyKwh ?? 0) - 1e-9;
-      const replacementCandidates = ordered
-        .filter((segment) => {
-          if (selected.has(segment.id) || forbidden.has(segment.id)) return false;
-          const duration = clamp(segment.segmentHours, 0, 1);
-          const startMs = Date.parse(segment.startDate);
-          return (violationWasBeforeHeating ? startMs < violationMs : startMs <= violationMs) &&
-            selectedHours + duration <= maxSelectedHours + 0.25 + 1e-9;
-        })
-        .sort((left, right) => {
-          const leftPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(left.priceCentsPerKwh));
-          const rightPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(right.priceCentsPerKwh));
-          return leftPrice - rightPrice || Date.parse(left.startDate) - Date.parse(right.startDate);
+    for (const state of states) {
+      const choices = mustHeat ? [true] : mayHeat ? [false, true] : [false];
+      for (const heat of choices) {
+        const selectedHours = state.selectedHours + (heat ? duration : 0);
+        if (selectedHours > maxSelectedHours + 1e-9) continue;
+        const selected = new Set(state.selected);
+        if (heat) selected.add(segment.id);
+        const evaluated = evaluateSelection({
+          energyCapacityKwh,
+          heaterPowerKw,
+          initialRemainingEnergyKwh,
+          initialUncertaintyKwh,
+          ordered: prefix,
+          selected,
+          thresholds,
         });
-      let replacementCandidate: EnergyPlanCandidateSegment | undefined;
-      let replaceablePartial: EnergyPlanCandidateSegment | undefined;
-      for (const candidate of replacementCandidates) {
-        const replacement = selectedOptional
-            .filter((segment) =>
-              selectedHours -
-                clamp(segment.segmentHours, 0, 1) +
-                clamp(candidate.segmentHours, 0, 1) <=
-              maxSelectedHours + 1e-9)
-            .sort((left, right) => {
-              const leftDuration = clamp(left.segmentHours, 0, 1);
-              const rightDuration = clamp(right.segmentHours, 0, 1);
-              return leftDuration - rightDuration || Date.parse(left.startDate) - Date.parse(right.startDate);
-            })
-            .find((segment) => {
-              const trial = new Set(selected);
-              trial.delete(segment.id);
-              trial.add(candidate.id);
-              if (visitedSelections.has(selectionKey(trial))) return false;
-              const trialResult = evaluateSelection({
-                energyCapacityKwh,
-                heaterPowerKw,
-                initialRemainingEnergyKwh,
-                initialUncertaintyKwh,
-                ordered,
-                selected: trial,
-                thresholds,
-              });
-              evaluatedCombinationCount += 1;
-              if (trialResult.valid || trialResult.forecast.firstSafetyViolationAt === null) return true;
-              const trialViolationMs = Date.parse(trialResult.forecast.firstSafetyViolationAt);
-              if (trialViolationMs > violationMs) return true;
-              if (trialViolationMs !== violationMs) return false;
-              const currentPoint = evaluated.forecast.points.find(
-                (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
-              );
-              const trialPoint = trialResult.forecast.points.find(
-                (point) => point.startDate === trialResult.forecast.firstSafetyViolationAt,
-              );
-              if (!currentPoint || !trialPoint) return false;
-              const currentPreDemandKwh = Math.max(
-                currentPoint.remainingEnergyBeforeKwh -
-                  currentPoint.frontLoadedDemandKwh -
-                  currentPoint.uncertaintyAfterKwh,
-                0,
-              );
-              const trialPreDemandKwh = Math.max(
-                trialPoint.remainingEnergyBeforeKwh -
-                  trialPoint.frontLoadedDemandKwh -
-                  trialPoint.uncertaintyAfterKwh,
-                0,
-              );
-              const safetyFloor = thresholds?.safetyEnergyKwh ?? 0;
-              const currentIsPreDemand = currentPoint.frontLoadedDemandKwh > 0 &&
-                currentPreDemandKwh < safetyFloor - 1e-9;
-              const trialIsPreDemand = trialPoint.frontLoadedDemandKwh > 0 &&
-                trialPreDemandKwh < safetyFloor - 1e-9;
-              return (currentIsPreDemand && !trialIsPreDemand) ||
-                trialPoint.conservativeEnergyAfterKwh >
-                  currentPoint.conservativeEnergyAfterKwh + 1e-9;
-            });
-        if (replacement) {
-          replacementCandidate = candidate;
-          replaceablePartial = replacement;
-          break;
-        }
-      }
-      if (!replaceablePartial) {
-        // A feasible quarter schedule can require several coordinated swaps
-        // where no smaller intermediate schedule improves the first violation.
-        // Enumerate bounded equal-size exchanges over a small frontier. The
-        // horizon remains polynomially bounded in practice while supporting
-        // the 3-for-3 cases that defeat greedy and pair recovery.
-        // The selected side is naturally bounded by the configured heating
-        // duration cap. Do not price-truncate the candidate side: a later,
-        // dearer interval can be the only physically feasible replacement
-        // because timing and capacity clipping dominate price during recovery.
-        const optionalPool = selectedOptional;
-        const candidatePool = replacementCandidates;
-        let coordinated: { remove: EnergyPlanCandidateSegment[]; add: EnergyPlanCandidateSegment[]; result: EvaluatedPlan } | null = null;
-        const combinations = <T,>(items: T[], count: number): T[][] => {
-          const out: T[][] = [];
-          const visit = (from: number, chosen: T[]) => {
-            if (chosen.length === count) {
-              out.push([...chosen]);
-              return;
-            }
-            for (let i = from; i <= items.length - (count - chosen.length); i += 1) {
-              chosen.push(items[i]);
-              visit(i + 1, chosen);
-              chosen.pop();
-            }
-          };
-          visit(0, []);
-          return out;
-        };
-        const maxExchange = Math.min(optionalPool.length, candidatePool.length);
-        for (let exchange = 2; exchange <= maxExchange && !coordinated; exchange += 1) {
-          for (const remove of combinations(optionalPool, exchange)) {
-            if (coordinated) break;
-            for (const add of combinations(candidatePool, exchange)) {
-              const nextHours = selectedHours -
-                remove.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0) +
-                add.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
-              if (nextHours > maxSelectedHours + 1e-9) continue;
-              const trial = new Set(selected);
-              remove.forEach((segment) => trial.delete(segment.id));
-              add.forEach((segment) => trial.add(segment.id));
-              const trialResult = evaluateSelection({
-                energyCapacityKwh,
-                heaterPowerKw,
-                initialRemainingEnergyKwh,
-                initialUncertaintyKwh,
-                ordered,
-                selected: trial,
-                thresholds,
-              });
-              evaluatedCombinationCount += 1;
-              if (trialResult.valid) {
-                coordinated = { remove, add, result: trialResult };
-                break;
-              }
-            }
-          }
-        }
-        if (!coordinated) break;
-        coordinated.remove.forEach((segment) => {
-          selected.delete(segment.id);
-          // Removed intervals remain eligible for later coordinated recovery;
-          // complete-selection tracking prevents cycles.
+        evaluatedCombinationCount += 1;
+        if (!evaluated.valid) continue;
+        const point = evaluated.forecast.points[evaluated.forecast.points.length - 1];
+        nextStates.push({
+          selected,
+          selectedHours,
+          costCents: evaluated.totalCostCents,
+          remainingKwh: point?.remainingEnergyAfterKwh ?? initialRemainingEnergyKwh,
+          conservativeKwh: point?.conservativeEnergyAfterKwh ??
+            Math.max(initialRemainingEnergyKwh - initialUncertaintyKwh, 0),
         });
-        coordinated.add.forEach((segment) => selected.add(segment.id));
-        selectedHours = ordered
-          .filter((segment) => selected.has(segment.id))
-          .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
-        const coordinatedKey = selectionKey(selected);
-        if (visitedSelections.has(coordinatedKey)) break;
-        visitedSelections.add(coordinatedKey);
-        evaluated = coordinated.result;
-        continue;
       }
-      const replacementSelection = new Set(selected);
-      replacementSelection.delete(replaceablePartial.id);
-      if (replacementCandidate) replacementSelection.add(replacementCandidate.id);
-      const replacementKey = selectionKey(replacementSelection);
-      if (visitedSelections.has(replacementKey)) {
-        // The candidate search above normally excludes visited transitions.
-        // If state changed unexpectedly, fall through to another recovery
-        // iteration instead of terminating the whole bounded search.
-        continue;
-      }
-      selected.clear();
-      replacementSelection.forEach((id) => selected.add(id));
-      selectedHours = ordered
-        .filter((segment) => selected.has(segment.id))
-        .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
-      visitedSelections.add(replacementKey);
-      evaluated = evaluateSelection({
-        energyCapacityKwh,
-        heaterPowerKw,
-        initialRemainingEnergyKwh,
-        initialUncertaintyKwh,
-        ordered,
-        selected,
-        thresholds,
-      });
-      evaluatedCombinationCount += 1;
-      continue;
     }
-    selected.add(next.id);
-    selectedHours += clamp(next.segmentHours, 0, 1);
-    evaluated = evaluateSelection({
+
+    const buckets = new Map<string, State[]>();
+    for (const state of nextStates) {
+      const key = state.selectedHours.toFixed(6);
+      const bucket = buckets.get(key) ?? [];
+      const dominated = bucket.some((other) =>
+        other.costCents <= state.costCents + 1e-9 &&
+        other.remainingKwh >= state.remainingKwh - 1e-9 &&
+        other.conservativeKwh >= state.conservativeKwh - 1e-9
+      );
+      if (dominated) continue;
+      const survivors = bucket.filter((other) => !(
+        state.costCents <= other.costCents + 1e-9 &&
+        state.remainingKwh >= other.remainingKwh - 1e-9 &&
+        state.conservativeKwh >= other.conservativeKwh - 1e-9
+      ));
+      survivors.push(state);
+      buckets.set(key, survivors);
+    }
+    states = [...buckets.values()].flat();
+    if (states.length === 0) break;
+  }
+
+  let bestValid: EvaluatedPlan | null = null;
+  for (const state of states) {
+    const evaluated = evaluateSelection({
       energyCapacityKwh,
       heaterPowerKw,
       initialRemainingEnergyKwh,
       initialUncertaintyKwh,
       ordered,
-      selected,
+      selected: state.selected,
       thresholds,
     });
     evaluatedCombinationCount += 1;
+    if (evaluated.valid && (!bestValid || compareValidPlans(evaluated, bestValid) < 0)) {
+      bestValid = evaluated;
+    }
   }
+
+  const winner = bestValid ?? evaluateSelection({
+    energyCapacityKwh,
+    heaterPowerKw,
+    initialRemainingEnergyKwh,
+    initialUncertaintyKwh,
+    ordered,
+    selected: required,
+    thresholds,
+  });
+  if (!bestValid) evaluatedCombinationCount += 1;
 
   return {
     candidateCount: ordered.length,
     evaluatedCombinationCount,
-    forecast: evaluated.forecast,
-    selectedHeatingEnergyKwh: round(evaluated.selectedHeatingEnergyKwh),
-    selectedHeatingHourIds: evaluated.selectedHeatingHourIds,
-    totalCostCents: round(evaluated.totalCostCents),
-    valid: evaluated.valid,
-    violationReason: evaluated.valid ? null : evaluated.violationReason,
+    forecast: winner.forecast,
+    selectedHeatingEnergyKwh: round(winner.selectedHeatingEnergyKwh),
+    selectedHeatingHourIds: winner.selectedHeatingHourIds,
+    totalCostCents: round(winner.totalCostCents),
+    valid: winner.valid,
+    violationReason: winner.valid ? null : winner.violationReason,
   };
 }
 
