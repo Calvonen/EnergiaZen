@@ -12,9 +12,8 @@ export type EnergyReserveCapacityInput = {
 };
 
 // v2TargetReservePercent is retained as the persisted/backend field name for
-// compatibility, but its V2 policy meaning is the soft/economic preheat
-// recommendation. It is not a hard planner-validity target. safetyPercent is
-// the independent hard floor.
+// compatibility. It is the planner's terminal reserve target; safetyPercent is
+// the hard floor and must not exceed the target.
 export const recommendedV2PreheatPercent = 90;
 export const minV2TargetReservePercent = 70;
 export const maxV2TargetReservePercent = 95;
@@ -91,7 +90,10 @@ export function normalizeV2ReservePercents({
     minV2SafetyReservePercent,
     maxV2SafetyReservePercent,
   );
-  return { safetyPercent: safety, targetPercent: target };
+  return {
+    safetyPercent: Math.min(safety, target),
+    targetPercent: target,
+  };
 }
 
 function clampAndRoundPercent(
