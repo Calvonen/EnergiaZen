@@ -96,23 +96,30 @@ export function runLiveEnergyPlanShadow({
   });
   if (!horizon.ok) return unavailable(horizon.reason, standingLossKwhPerHour);
 
-  // A production-locked active block is authoritative even if it is longer than
-  // the current configured daily maximum (for example after a mid-block setting
-  // reduction or across midnight). Preserve every required hour while keeping
-  // the normal combinatorial cap for optional optimizer selections.
+  // Production constraints are still hour-based. When shadowing quarter-hour
+  // prices, expand each locked/forbidden production hour to the quarter-hour
+  // candidates that fall inside it. This preserves the authoritative active
+  // block without changing the stored production contract.
+  const shadowConstraints = expandHourlyConstraints(
+    constraints,
+    horizon.segments.map((segment) => segment.id),
+  );
+  const requiredHeatingHours = horizon.segments
+    .filter((segment) => shadowConstraints.requiredHeatingHourIds.includes(segment.id))
+    .reduce((sum, segment) => sum + segment.segmentHours, 0);
   const effectiveMaxHeatingHours = Math.max(
     automaticMaxHeatingHours,
-    constraints.requiredHeatingHourIds.length,
+    requiredHeatingHours,
   );
 
   const plan = optimizeEnergyPlan({
     energyCapacityKwh,
-    forbiddenHeatingHourIds: constraints.forbiddenHeatingHourIds,
+    forbiddenHeatingHourIds: shadowConstraints.forbiddenHeatingHourIds,
     heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
     initialRemainingEnergyKwh: reserve.remainingEnergyKwh,
     initialUncertaintyKwh: reserve.balanceUncertaintyKwh,
     maxHeatingHours: effectiveMaxHeatingHours,
-    requiredHeatingHourIds: constraints.requiredHeatingHourIds,
+    requiredHeatingHourIds: shadowConstraints.requiredHeatingHourIds,
     segments: horizon.segments,
     thresholds: {
       safetyEnergyKwh: reserve.safetyEnergyKwh,
@@ -215,6 +222,27 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
     horizonEndAt: ordered[ordered.length - 1].ends_at,
     maximumModeledLossKwhPerHour: round(maximumModeledLossKwhPerHour),
     segments,
+  };
+}
+
+function expandHourlyConstraints(
+  constraints: V2HeatingConstraints,
+  candidateIds: string[],
+): V2HeatingConstraints {
+  const expand = (hourIds: string[]) => {
+    const starts = hourIds
+      .map((id) => Date.parse(id))
+      .filter((value) => Number.isFinite(value));
+    return candidateIds.filter((candidateId) => {
+      const candidateStart = Date.parse(candidateId);
+      return starts.some(
+        (hourStart) => candidateStart >= hourStart && candidateStart < hourStart + 60 * 60 * 1000,
+      );
+    });
+  };
+  return {
+    forbiddenHeatingHourIds: expand(constraints.forbiddenHeatingHourIds),
+    requiredHeatingHourIds: expand(constraints.requiredHeatingHourIds),
   };
 }
 
