@@ -103,6 +103,7 @@ export function runLiveEnergyPlanShadow({
   const shadowConstraints = expandHourlyConstraints(
     constraints,
     horizon.segments.map((segment) => segment.id),
+    now,
   );
   if (!shadowConstraints.ok) {
     return unavailable(shadowConstraints.reason, standingLossKwhPerHour);
@@ -178,14 +179,14 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
         price.resolution_minutes === resolutionMinutes &&
         Date.parse(price.ends_at) - Date.parse(price.starts_at) === resolutionMinutes * 60_000)
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
-    if (!rows.length) return null;
+    if (!rows.length) return { rows, hasCurrent: false };
     const firstStart = Date.parse(rows[0].starts_at);
     const firstEnd = Date.parse(rows[0].ends_at);
-    if (!(firstStart <= nowMs && firstEnd > nowMs)) return null;
+    if (!(firstStart <= nowMs && firstEnd > nowMs)) return { rows, hasCurrent: false };
     for (let index = 1; index < rows.length; index += 1) {
       if (Date.parse(rows[index - 1].ends_at) !== Date.parse(rows[index].starts_at)) return null;
     }
-    return rows;
+    return { rows, hasCurrent: true };
   };
 
   const quarterHorizon = horizonForResolution(15);
@@ -193,15 +194,20 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
   // During rollout, only prefer quarters when they cover at least as far as the
   // complete hourly fallback. A partial quarter feed must not shorten safety
   // forecasting simply because one 15-minute row has arrived.
+  const quarterRows = quarterHorizon?.hasCurrent ? quarterHorizon.rows : null;
+  const hourlyRows = hourlyHorizon?.hasCurrent ? hourlyHorizon.rows : null;
   const ordered =
-    quarterHorizon &&
-      (!hourlyHorizon ||
-        Date.parse(quarterHorizon[quarterHorizon.length - 1].ends_at) >=
-          Date.parse(hourlyHorizon[hourlyHorizon.length - 1].ends_at))
-      ? quarterHorizon
-      : hourlyHorizon ?? quarterHorizon;
+    quarterRows &&
+      (!hourlyRows ||
+        Date.parse(quarterRows[quarterRows.length - 1].ends_at) >=
+          Date.parse(hourlyRows[hourlyRows.length - 1].ends_at))
+      ? quarterRows
+      : hourlyRows ?? quarterRows;
 
-  if (!ordered?.length) return { ok: false, reason: "no_price_hours_available" };
+  if (!ordered?.length) {
+    const hasUsableRows = Boolean(quarterHorizon?.rows.length || hourlyHorizon?.rows.length);
+    return { ok: false, reason: hasUsableRows ? "current_price_hour_missing" : "no_price_hours_available" };
+  }
   const firstStart = Date.parse(ordered[0].starts_at);
   const firstEnd = Date.parse(ordered[0].ends_at);
   if (!(firstStart <= nowMs && firstEnd > nowMs)) return { ok: false, reason: "current_price_hour_missing" };
@@ -256,6 +262,7 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
 function expandHourlyConstraints(
   constraints: V2HeatingConstraints,
   candidateIds: string[],
+  now: Date,
 ):
   | ({ ok: true } & V2HeatingConstraints)
   | { ok: false; reason: "required_hour_missing" } {
@@ -287,7 +294,10 @@ function expandHourlyConstraints(
         return start >= requiredStart && start < requiredStart + 60 * 60 * 1000;
       })
       .length * candidateDurationMs;
-    if (covered < 60 * 60 * 1000) return { ok: false, reason: "required_hour_missing" };
+    const hourEnd = requiredStart + 60 * 60 * 1000;
+    const expectedCoverageStart = Math.max(requiredStart, now.getTime());
+    const expectedCoverageMs = Math.max(hourEnd - expectedCoverageStart, 0);
+    if (covered < expectedCoverageMs) return { ok: false, reason: "required_hour_missing" };
   }
   return {
     ok: true,
