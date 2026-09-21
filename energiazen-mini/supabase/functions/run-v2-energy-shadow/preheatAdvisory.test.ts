@@ -31,7 +31,7 @@ export function runV2PreheatAdvisoryUnitTests() {
   const todayCheapA = price("2026-09-17T13:00:00.000Z", 2);
   const todayCheapB = price("2026-09-17T14:00:00.000Z", 3);
   const tomorrow = completeTomorrow("2026-09-17T21:00:00.000Z", 10);
-  const prices = [todayCheapA, todayCheapB, ...tomorrow];
+  const prices = [price("2026-09-17T12:00:00.000Z", 30), todayCheapA, todayCheapB, ...tomorrow];
 
   const advisory = buildV2LivePreheatAdvisory({
     conservativeEnergyKwh: 12,
