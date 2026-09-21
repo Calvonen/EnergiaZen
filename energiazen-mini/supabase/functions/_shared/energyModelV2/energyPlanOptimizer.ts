@@ -227,24 +227,39 @@ function optimizeLargeIntervalHorizon({
       const selectedOptional = ordered.filter(
         (segment) => selected.has(segment.id) && !required.has(segment.id),
       );
-      const replacementCandidate = ordered
+      const violationPoint = evaluated.forecast.points.find(
+        (point) => point.startDate === evaluated.forecast.firstSafetyViolationAt,
+      );
+      const violationWasBeforeHeating =
+        (violationPoint?.frontLoadedDemandKwh ?? 0) > 0 &&
+        violationPoint !== undefined &&
+        Math.max(
+          violationPoint.remainingEnergyBeforeKwh -
+            violationPoint.frontLoadedDemandKwh -
+            violationPoint.uncertaintyAfterKwh,
+          0,
+        ) < (thresholds?.safetyEnergyKwh ?? 0) - 1e-9;
+      const replacementCandidates = ordered
         .filter((segment) => {
           if (selected.has(segment.id) || forbidden.has(segment.id) || releasedPartialIds.has(segment.id)) return false;
           const duration = clamp(segment.segmentHours, 0, 1);
-          return Date.parse(segment.startDate) <= violationMs &&
+          const startMs = Date.parse(segment.startDate);
+          return (violationWasBeforeHeating ? startMs < violationMs : startMs <= violationMs) &&
             selectedHours + duration <= maxSelectedHours + 0.25 + 1e-9;
         })
         .sort((left, right) => {
           const leftPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(left.priceCentsPerKwh));
           const rightPrice = finitePrice(calculateBilledElectricityPriceCentsPerKwh(right.priceCentsPerKwh));
           return leftPrice - rightPrice || Date.parse(left.startDate) - Date.parse(right.startDate);
-        })[0];
-      const replaceablePartial = replacementCandidate
-        ? selectedOptional
+        });
+      let replacementCandidate: EnergyPlanCandidateSegment | undefined;
+      let replaceablePartial: EnergyPlanCandidateSegment | undefined;
+      for (const candidate of replacementCandidates) {
+        const replacement = selectedOptional
             .filter((segment) =>
               selectedHours -
                 clamp(segment.segmentHours, 0, 1) +
-                clamp(replacementCandidate.segmentHours, 0, 1) <=
+                clamp(candidate.segmentHours, 0, 1) <=
               maxSelectedHours + 1e-9)
             .sort((left, right) => {
               const leftDuration = clamp(left.segmentHours, 0, 1);
@@ -254,7 +269,7 @@ function optimizeLargeIntervalHorizon({
             .find((segment) => {
               const trial = new Set(selected);
               trial.delete(segment.id);
-              trial.add(replacementCandidate.id);
+              trial.add(candidate.id);
               const trialResult = evaluateSelection({
                 energyCapacityKwh,
                 heaterPowerKw,
@@ -268,8 +283,13 @@ function optimizeLargeIntervalHorizon({
               return trialResult.valid ||
                 trialResult.forecast.firstSafetyViolationAt === null ||
                 Date.parse(trialResult.forecast.firstSafetyViolationAt) > violationMs;
-            })
-        : undefined;
+            });
+        if (replacement) {
+          replacementCandidate = candidate;
+          replaceablePartial = replacement;
+          break;
+        }
+      }
       if (!replaceablePartial) break;
       selected.delete(replaceablePartial.id);
       releasedPartialIds.add(replaceablePartial.id);
