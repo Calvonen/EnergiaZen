@@ -154,14 +154,18 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
   const today = helsinkiDateKey(now);
   const tomorrow = helsinkiDateKeyOffset(now, 1);
   const nowMs = now.getTime();
-  const ordered = prices
+  const relevant = prices.filter((price) =>
+    (price.resolution_minutes === 15 || price.resolution_minutes === 60) &&
+    Number.isFinite(price.spot_price_cents_kwh) &&
+    Number.isFinite(Date.parse(price.starts_at)) &&
+    Number.isFinite(Date.parse(price.ends_at)) &&
+    Date.parse(price.ends_at) > nowMs &&
+    [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at))));
+  const resolutionMinutes = relevant.some((price) => price.resolution_minutes === 15) ? 15 : 60;
+  const ordered = relevant
     .filter((price) =>
-      price.resolution_minutes === 60 &&
-      Number.isFinite(price.spot_price_cents_kwh) &&
-      Number.isFinite(Date.parse(price.starts_at)) &&
-      Number.isFinite(Date.parse(price.ends_at)) &&
-      Date.parse(price.ends_at) > nowMs &&
-      [today, tomorrow].includes(helsinkiDateKey(new Date(price.starts_at))))
+      price.resolution_minutes === resolutionMinutes &&
+      Date.parse(price.ends_at) - Date.parse(price.starts_at) === resolutionMinutes * 60_000)
     .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
 
   if (!ordered.length) return { ok: false, reason: "no_price_hours_available" };
@@ -175,6 +179,7 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
   }
 
   let maximumModeledLossKwhPerHour = standingLossKwhPerHour;
+  const learnedDemandAppliedHours = new Set<string>();
   const segments = ordered.map((price) => {
     const startMs = Math.max(Date.parse(price.starts_at), nowMs);
     const endMs = Date.parse(price.ends_at);
@@ -184,10 +189,11 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
           helsinkiHour(new Date(price.starts_at))
         ] ?? 0
       : 0;
-    const learnedDemandKwh = Math.max(
-      learnedLossKwhPerHour - standingLossKwhPerHour,
-      0,
-    );
+    const learnedHourKey = `${helsinkiDateKey(new Date(price.starts_at))}:${helsinkiHour(new Date(price.starts_at))}`;
+    const learnedDemandKwh = learnedDemandAppliedHours.has(learnedHourKey)
+      ? 0
+      : Math.max(learnedLossKwhPerHour - standingLossKwhPerHour, 0);
+    learnedDemandAppliedHours.add(learnedHourKey);
     maximumModeledLossKwhPerHour = Math.max(
       maximumModeledLossKwhPerHour,
       standingLossKwhPerHour + learnedDemandKwh,
