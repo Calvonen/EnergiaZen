@@ -91,8 +91,8 @@ export function normalizeV2ReservePercents({
     maxV2SafetyReservePercent,
   );
   return {
-    safetyPercent: Math.min(safety, target),
-    targetPercent: target,
+    safetyPercent: safety,
+    targetPercent: Math.max(target, safety),
   };
 }
 
