@@ -110,7 +110,10 @@ export function runLiveEnergyPlanShadow({
       )
     : expandHourlyConstraints(
         constraints,
-        horizon.segments.map((segment) => segment.id),
+        horizon.segments.map((segment) => ({
+          id: segment.id,
+          durationMs: Math.round(segment.segmentHours * 60 * 60 * 1000),
+        })),
         now,
       );
   if (!shadowConstraints.ok) {
