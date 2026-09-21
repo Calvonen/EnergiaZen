@@ -72,8 +72,18 @@ export function optimizeEnergyPlan({
   // add the cheapest still-available interval no later than the first safety
   // violation. Every returned winner is still validated by the full forecast,
   // so this path can fail closed but can never publish an unsafe plan.
-  const usesSubHourlySegments = ordered.some((segment) => clamp(segment.segmentHours, 0, 1) < 1 - 1e-9);
-  if (usesSubHourlySegments) {
+  // The current segment is prorated after its interval has begun, so its
+  // segmentHours alone cannot identify the source resolution. Infer a
+  // sub-hour feed from spacing between candidate starts instead; this keeps
+  // live 60-minute production horizons on the exact optimizer.
+  const orderedStartTimes = ordered
+    .map((segment) => Date.parse(segment.startDate))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const usesSubHourlyFeed = orderedStartTimes.some(
+    (start, index) => index > 0 && start - orderedStartTimes[index - 1] < 60 * 60 * 1000,
+  );
+  if (usesSubHourlyFeed) {
     return optimizeLargeIntervalHorizon({
       energyCapacityKwh,
       forbidden,
