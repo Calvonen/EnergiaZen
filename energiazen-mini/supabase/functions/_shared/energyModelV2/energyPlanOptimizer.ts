@@ -209,8 +209,34 @@ function optimizeLargeIntervalHorizon({
         return leftPrice - rightPrice || Date.parse(left.startDate) - Date.parse(right.startDate);
       });
 
-    const next = candidates[0];
-    if (!next) break;
+    let next = candidates[0];
+    if (!next) {
+      // A partially elapsed current interval can consume a fraction of the
+      // duration cap and prevent the final full interval from fitting. If that
+      // partial interval is optional, drop it and retry so the bounded search
+      // can use the complete cap instead of failing because of fragmentation.
+      const replaceablePartial = ordered
+        .filter((segment) =>
+          selected.has(segment.id) &&
+          !required.has(segment.id) &&
+          clamp(segment.segmentHours, 0, 1) > 0 &&
+          clamp(segment.segmentHours, 0, 1) < 0.25 - 1e-9)
+        .sort((left, right) => Date.parse(left.startDate) - Date.parse(right.startDate))[0];
+      if (!replaceablePartial) break;
+      selected.delete(replaceablePartial.id);
+      selectedHours -= clamp(replaceablePartial.segmentHours, 0, 1);
+      evaluated = evaluateSelection({
+        energyCapacityKwh,
+        heaterPowerKw,
+        initialRemainingEnergyKwh,
+        initialUncertaintyKwh,
+        ordered,
+        selected,
+        thresholds,
+      });
+      evaluatedCombinationCount += 1;
+      continue;
+    }
     selected.add(next.id);
     selectedHours += clamp(next.segmentHours, 0, 1);
     evaluated = evaluateSelection({
