@@ -343,7 +343,7 @@ function optimizeLargeIntervalHorizon({
           visit(0, []);
           return out;
         };
-        const maxExchange = Math.min(3, optionalPool.length, candidatePool.length);
+        const maxExchange = Math.min(optionalPool.length, candidatePool.length);
         for (let exchange = 2; exchange <= maxExchange && !coordinated; exchange += 1) {
           for (const remove of combinations(optionalPool, exchange)) {
             if (coordinated) break;
