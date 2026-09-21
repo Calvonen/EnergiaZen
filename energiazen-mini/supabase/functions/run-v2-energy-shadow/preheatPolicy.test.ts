@@ -34,6 +34,7 @@ export function runV2PreheatPolicyUnitTests() {
   const ordinary = evaluateV2PreheatOpportunity({
     now,
     prices: [
+      price("2026-09-17T12:00:00.000Z", 30),
       price("2026-09-17T13:00:00.000Z", 5), // 16-17 Helsinki, cheaper than every tomorrow hour
       price("2026-09-17T14:00:00.000Z", 25),
       ...tomorrow,
@@ -82,7 +83,7 @@ export function runV2PreheatPolicyUnitTests() {
 
   const tomorrowCheaper = evaluateV2PreheatOpportunity({
     now,
-    prices: [price("2026-09-17T13:00:00.000Z", 10), ...hourlyRange("2026-09-17T21:00:00.000Z", 24, 1)],
+    prices: [price("2026-09-17T12:00:00.000Z", 30), price("2026-09-17T13:00:00.000Z", 10), ...hourlyRange("2026-09-17T21:00:00.000Z", 24, 1)],
   });
   assert(!tomorrowCheaper.available, "cheaper tomorrow does not recommend preheat");
   assertEqual(
@@ -122,13 +123,13 @@ export function runV2PreheatPolicyUnitTests() {
   const dstTomorrow = hourlyRange("2026-10-24T21:00:00.000Z", 25, 20);
   const dstComplete = evaluateV2PreheatOpportunity({
     now: dstNow,
-    prices: [price("2026-10-24T13:00:00.000Z", 1), ...dstTomorrow],
+    prices: [price("2026-10-24T12:00:00.000Z", 30), price("2026-10-24T13:00:00.000Z", 1), ...dstTomorrow],
   });
   assert(dstComplete.available, "25-hour Helsinki fall-back day is accepted as complete");
 
   const dstMissingHour = evaluateV2PreheatOpportunity({
     now: dstNow,
-    prices: [price("2026-10-24T13:00:00.000Z", 1), ...dstTomorrow.slice(0, 24)],
+    prices: [price("2026-10-24T12:00:00.000Z", 30), price("2026-10-24T13:00:00.000Z", 1), ...dstTomorrow.slice(0, 24)],
   });
   assert(!dstMissingHour.available, "24 rows are incomplete on a 25-hour Helsinki day");
   assertEqual(dstMissingHour.reason, "tomorrow_prices_incomplete", "DST gap remains fail-closed");
