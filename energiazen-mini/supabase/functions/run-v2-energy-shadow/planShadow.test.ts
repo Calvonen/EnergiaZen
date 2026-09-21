@@ -225,7 +225,7 @@ export function runLivePlanShadowUnitTests() {
     "2026-09-15T05:00:00.000Z",
     "negative spot must still be compared using the positive billed tariff",
   );
-  assertEqual(moderatelyNegative.totalCostCents, 5.43, "-5 c/kWh spot still bills 3.62 c/kWh after tariff additions");
+  assertEqual(moderatelyNegative.totalCostCents, 19.29, "hard-target recovery bills all selected heating energy after tariff additions");
 
   const missingCurrent = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
