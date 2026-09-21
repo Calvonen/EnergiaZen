@@ -318,7 +318,54 @@ function optimizeLargeIntervalHorizon({
           break;
         }
       }
-      if (!replaceablePartial) break;
+      if (!replaceablePartial) {
+        // A feasible quarter schedule can require coordinated replacements
+        // where no single intermediate swap improves the first violation.
+        // Search a bounded pool around the selected/candidate frontier before
+        // abandoning the plan.
+        const optionalPool = selectedOptional.slice(0, 6);
+        const candidatePool = replacementCandidates.slice(0, 8);
+        let coordinated: { remove: EnergyPlanCandidateSegment[]; add: EnergyPlanCandidateSegment[]; result: EvaluatedPlan } | null = null;
+        for (let a = 0; a < optionalPool.length && !coordinated; a += 1) {
+          for (let b = a + 1; b < optionalPool.length && !coordinated; b += 1) {
+            for (let x = 0; x < candidatePool.length && !coordinated; x += 1) {
+              for (let y = x + 1; y < candidatePool.length && !coordinated; y += 1) {
+                const remove = [optionalPool[a], optionalPool[b]];
+                const add = [candidatePool[x], candidatePool[y]];
+                const nextHours = selectedHours -
+                  remove.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0) +
+                  add.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+                if (nextHours > maxSelectedHours + 1e-9) continue;
+                const trial = new Set(selected);
+                remove.forEach((segment) => trial.delete(segment.id));
+                add.forEach((segment) => trial.add(segment.id));
+                const trialResult = evaluateSelection({
+                  energyCapacityKwh,
+                  heaterPowerKw,
+                  initialRemainingEnergyKwh,
+                  initialUncertaintyKwh,
+                  ordered,
+                  selected: trial,
+                  thresholds,
+                });
+                evaluatedCombinationCount += 1;
+                if (trialResult.valid) coordinated = { remove, add, result: trialResult };
+              }
+            }
+          }
+        }
+        if (!coordinated) break;
+        coordinated.remove.forEach((segment) => {
+          selected.delete(segment.id);
+          releasedPartialIds.add(segment.id);
+        });
+        coordinated.add.forEach((segment) => selected.add(segment.id));
+        selectedHours = ordered
+          .filter((segment) => selected.has(segment.id))
+          .reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+        evaluated = coordinated.result;
+        continue;
+      }
       selected.delete(replaceablePartial.id);
       releasedPartialIds.add(replaceablePartial.id);
       selectedHours -= clamp(replaceablePartial.segmentHours, 0, 1);
