@@ -128,6 +128,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   );
 
   const retainedBaselinePrices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 1),
     hourly("2026-09-17T14:00:00.000Z", 2),
     hourly("2026-09-17T15:00:00.000Z", 3),
@@ -156,6 +157,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   assert(retainedBaseline.marginalCost.pairs.length === 1, "expected one safe displacement pair after retained heat is accounted for");
 
   const unmatchedBaselinePrices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 1),
     hourly("2026-09-17T14:00:00.000Z", 0),
     hourly("2026-09-17T15:00:00.000Z", 2),
@@ -262,7 +264,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     heaterPowerKw: 3,
     maxPreheatHours: 4,
     now,
-    prices: [hourly("2026-09-17T13:00:00.000Z", 2), ...tomorrow.slice(0, 23)],
+    prices: [hourly("2026-09-17T12:00:00.000Z", 30), hourly("2026-09-17T13:00:00.000Z", 2), ...tomorrow.slice(0, 23)],
     remainingEnergyKwh: 12,
   });
   assert(
@@ -339,6 +341,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     return hourly(startsAt, spot);
   });
   const toleranceFuturePrices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 2.0),
     hourly("2026-09-17T14:00:00.000Z", 2.6),
     ...completeTomorrow("2026-09-17T21:00:00.000Z", 20),
@@ -406,6 +409,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   );
 
   const laterScheduleTiePrices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 2.0),
     hourly("2026-09-17T14:00:00.000Z", 2.0),
     hourly("2026-09-17T15:00:00.000Z", 2.0),
@@ -486,6 +490,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   assert(oneHourHeadroom.marginalCost.pairs.length === 1, "expected one whole-hour pair under exact headroom cap");
 
   const expensiveTodayPrices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 20),
     hourly("2026-09-17T14:00:00.000Z", 21),
     ...completeTomorrow("2026-09-17T21:00:00.000Z", 1),
