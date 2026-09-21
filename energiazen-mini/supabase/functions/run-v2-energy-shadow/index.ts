@@ -252,7 +252,8 @@ Deno.serve(async (request) => {
     });
 
     // PR1 keeps production publication independently hourly even when shadow
-    // planning selects quarter intervals.
+    // planning selects quarter intervals. Preserve the existing economic
+    // preheat behavior by composing and validating a separate hourly advisory.
     const hourlyPublicationPlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraints,
@@ -264,44 +265,36 @@ Deno.serve(async (request) => {
       reserve: result,
       learnedDropProfile,
     });
-
-    const publicationSelectedHeatingHourIds = (() => {
-      if (!preheatAdvisory.available || preheatAdvisory.reason !== "recommended") {
-        return [...plan.selectedHeatingHourIds];
-      }
-
-      const actuallyDisplacedBaselineHourIds = new Set(
-        preheatAdvisory.strategy === "marginal_displacement" && preheatAdvisory.marginalCost.available
-          ? preheatAdvisory.marginalCost.pairs.map((pair) => pair.displacedFutureHourId)
-          : [],
-      );
-      const preservedBaselineHourIds = plan.selectedHeatingHourIds.filter(
-        (hourId) => !actuallyDisplacedBaselineHourIds.has(hourId),
-      );
-
-      return [...new Set([
-        ...preservedBaselineHourIds,
-        ...preheatAdvisory.recommendedPreheatHourIds,
-      ])].sort((left, right) => Date.parse(left) - Date.parse(right));
-    })();
-
-    // Re-run the forecast with the exact composed publication hours forced as
-    // required and every other priced hour forbidden. This makes validation,
-    // persisted shadow telemetry, Home forecast and the staged candidate all
-    // describe the same plan instead of mixing the safety baseline forecast
-    // with a different advisory-composed publication schedule.
-    const publicationHourIdSet = new Set(publicationSelectedHeatingHourIds);
-    const publicationPlan = runLiveEnergyPlanShadow({
+    const hourlyPreheatAdvisory = buildV2MarginalPreheatAdvisory({
+      baselinePlan: hourlyPublicationPlan,
+      conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
+      constraints: hourlyPublicationPlan.effectiveConstraints ?? constraints,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
+      maxPreheatHours: automaticMaxHeatingHours,
+      now,
+      prices: publicationPrices,
+      priceReferencePrices: priceReferencePrices.filter((price) => price.resolution_minutes === 60),
+      priceToleranceCents: Number(settingsResult.data.price_tolerance_cents ?? 0),
+      recommendedPreheatPercent,
+      remainingEnergyKwh: result.remainingEnergyKwh ?? Number.NaN,
+    });
+    const hourlyPublicationSelectedHeatingHourIds = composePublicationSelection(
+      hourlyPublicationPlan.selectedHeatingHourIds,
+      hourlyPreheatAdvisory,
+    );
+    const hourlyPublicationHourIdSet = new Set(hourlyPublicationSelectedHeatingHourIds);
+    const validatedHourlyPublicationPlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraintsAreExactIntervals: true,
       constraints: {
-        requiredHeatingHourIds: publicationSelectedHeatingHourIds,
+        requiredHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
         forbiddenHeatingHourIds: [
           ...new Set([
-            ...(plan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
-            ...prices
-              .map((price) => price.starts_at)
-              .filter((hourId) => !publicationHourIdSet.has(hourId)),
+            ...(hourlyPublicationPlan.effectiveConstraints?.forbiddenHeatingHourIds ?? []),
+            ...publicationPrices.map((price) => price.starts_at)
+              .filter((hourId) => !hourlyPublicationHourIdSet.has(hourId)),
           ]),
         ],
       },
@@ -309,7 +302,7 @@ Deno.serve(async (request) => {
       inletBaselineC,
       maxTankTemperatureC,
       now,
-      prices,
+      prices: publicationPrices,
       reserve: result,
       learnedDropProfile,
     });
@@ -323,7 +316,7 @@ Deno.serve(async (request) => {
     // preserved. Production cutover remains disabled here.
     const hourlyPublicationSelectedHeatingHourIds = hourlyPublicationPlan.selectedHeatingHourIds;
     const publicationCandidate = captureV2PublicationCandidate(
-      hourlyPublicationPlan,
+      validatedHourlyPublicationPlan,
       hourlyPublicationSelectedHeatingHourIds,
     );
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
@@ -331,7 +324,7 @@ Deno.serve(async (request) => {
       expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: hourlyPublicationPlan,
+      plan: validatedHourlyPublicationPlan,
       publicationCandidate,
     });
     let stagedPublicationResult: string | null = null;
@@ -342,7 +335,7 @@ Deno.serve(async (request) => {
         draws,
         latestUsableReadingAt: latestPublishableReadingAt,
         now,
-        plan: hourlyPublicationPlan,
+        plan: validatedHourlyPublicationPlan,
         prices: publicationPrices,
         priceFetchEnd,
         readings,
@@ -386,7 +379,7 @@ Deno.serve(async (request) => {
       expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: hourlyPublicationPlan,
+      plan: validatedHourlyPublicationPlan,
       publicationCandidate,
     });
 
@@ -401,11 +394,11 @@ Deno.serve(async (request) => {
     if (
       v2PublicationCutoverEnabled &&
       controlPlaneState.heating_need_mode === "automatic" &&
-      (!result.available || !hourlyPublicationPlan.available || hourlyPublicationPlan.valid !== true)
+      (!result.available || !validatedHourlyPublicationPlan.available || validatedHourlyPublicationPlan.valid !== true)
     ) {
       const unavailableReason =
         result.reason ??
-        hourlyPublicationPlan.reason ??
+        validatedHourlyPublicationPlan.reason ??
         "plan_unavailable";
       const { error: heartbeatError } = await supabase
         .from("backend_heating_optimizer_state")
