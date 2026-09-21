@@ -223,8 +223,8 @@ function optimizeLargeIntervalHorizon({
           selected,
           selectedHours,
           costCents: evaluated.totalCostCents,
-          remainingKwh: point?.remainingEnergyAfterKwh ?? initialRemainingEnergyKwh,
-          conservativeKwh: point?.conservativeEnergyAfterKwh ??
+          remainingKwh: point?.rawRemainingEnergyAfterKwh ?? initialRemainingEnergyKwh,
+          conservativeKwh: point?.rawConservativeEnergyAfterKwh ??
             Math.max(initialRemainingEnergyKwh - initialUncertaintyKwh, 0),
         });
       }
