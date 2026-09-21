@@ -106,6 +106,17 @@ export function validateSettingsDraft(
   }
 
   if (
+    isFiniteNumber(v2SafetyReservePercent) &&
+    isFiniteNumber(v2TargetReservePercent) &&
+    v2SafetyReservePercent > v2TargetReservePercent
+  ) {
+    errors.push({
+      field: "v2SafetyReservePercent",
+      message: "V2-turvaraja ei voi ylittää tavoitevaraa.",
+    });
+  }
+
+  if (
     isFiniteNumber(maxTankTemperature) &&
     isFiniteNumber(minTankTemperature) &&
     maxTankTemperature <= minTankTemperature
