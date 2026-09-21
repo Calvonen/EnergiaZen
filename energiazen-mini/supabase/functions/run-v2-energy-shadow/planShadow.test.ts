@@ -161,9 +161,9 @@ export function runLivePlanShadowUnitTests() {
     reserve: reserve(5.4),
   });
   assert(belowTargetButSafe.available, "below-target reserve still has a plan shadow");
-  assert(belowTargetButSafe.valid === true, "missing advisory target does not invalidate a safety-safe plan");
-  assertEqual(belowTargetButSafe.selectedHeatingHourIds.length, 0, "advisory target alone must not buy electricity");
-  assert(belowTargetButSafe.firstTargetMissAt !== null, "target miss remains visible as forecast metadata");
+  assert(belowTargetButSafe.valid === true, "optimizer finds a valid target-recovery plan");
+  assertEqual(belowTargetButSafe.selectedHeatingHourIds.length, 1, "one segment is enough to restore the configured target");
+  assertEqual(belowTargetButSafe.selectedHeatingHourIds[0], "2026-09-15T05:00:00.000Z", "cheapest billed target-restoring segment is selected");
 
   const needsSafetyHeat = runLiveEnergyPlanShadow({
     automaticMaxHeatingHours: 4,
