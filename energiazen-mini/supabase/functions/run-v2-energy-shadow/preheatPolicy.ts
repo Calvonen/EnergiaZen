@@ -80,7 +80,11 @@ export function evaluateV2PreheatHorizon({
       )
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
     const hasFutureToday = futureToday.length > 0;
-    const nextBoundaryMs = Math.ceil(nowMs / (resolution * 60_000)) * resolution * 60_000;
+    const intervalMs = resolution * 60_000;
+    const nextBoundaryMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+    const hasCurrentInterval = usable.some((price) =>
+      Date.parse(price.starts_at) <= nowMs && Date.parse(price.ends_at) > nowMs,
+    );
     const futureTodayCoverageIsCoherent = !hasFutureToday || (
       Date.parse(futureToday[0].starts_at) <= nextBoundaryMs &&
       futureToday.every(
@@ -104,7 +108,8 @@ export function evaluateV2PreheatHorizon({
       (!hasFutureToday ||
         Date.parse(price.ends_at) > Date.parse(futureToday[futureToday.length - 1].ends_at)),
     );
-    return (noFutureTodayAtAnyResolution ||
+    return hasCurrentInterval &&
+      (noFutureTodayAtAnyResolution ||
         (hasFutureToday && futureTodayCoverageIsCoherent && !laterFutureTodayAtOtherResolution)) &&
       hasCompleteCoverage(tomorrowPrices, tomorrowStartMs, tomorrowEndMs);
   }) ?? null;
