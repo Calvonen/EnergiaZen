@@ -50,6 +50,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
   const now = new Date("2026-09-17T12:15:00.000Z");
   const tomorrow = completeTomorrow();
   const prices = [
+    hourly("2026-09-17T12:00:00.000Z", 30),
     hourly("2026-09-17T13:00:00.000Z", 2),
     hourly("2026-09-17T14:00:00.000Z", 3),
     ...tomorrow,
