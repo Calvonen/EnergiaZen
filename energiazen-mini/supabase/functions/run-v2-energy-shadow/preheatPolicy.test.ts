@@ -132,4 +132,31 @@ export function runV2PreheatPolicyUnitTests() {
   });
   assert(!dstMissingHour.available, "24 rows are incomplete on a 25-hour Helsinki day");
   assertEqual(dstMissingHour.reason, "tomorrow_prices_incomplete", "DST gap remains fail-closed");
+  const quarterPrice = (startsAt: string, cents: number): ShadowElectricityPrice => ({
+    starts_at: startsAt,
+    ends_at: new Date(Date.parse(startsAt) + 15 * 60_000).toISOString(),
+    resolution_minutes: 15,
+    spot_price_cents_kwh: cents,
+  });
+  const quarterTomorrowStart = Date.parse("2026-09-17T21:00:00.000Z");
+  const quarterTomorrow = Array.from({ length: 96 }, (_, index) =>
+    quarterPrice(new Date(quarterTomorrowStart + index * 15 * 60_000).toISOString(), 20),
+  );
+  const quarterOpportunity = evaluateV2PreheatOpportunity({
+    now,
+    prices: [
+      quarterPrice("2026-09-17T12:45:00.000Z", 5),
+      quarterPrice("2026-09-17T13:00:00.000Z", 25),
+      ...quarterTomorrow,
+    ],
+  });
+  assert(quarterOpportunity.available, "complete 15-minute tomorrow horizon enables preheat");
+  assertEqual(quarterOpportunity.resolutionMinutes, 15, "quarter-hour horizon reports its resolution");
+  assertEqual(quarterOpportunity.eligiblePreheatHourIds.length, 1, "only cheaper future quarter is eligible");
+  assertEqual(
+    quarterOpportunity.eligiblePreheatHourIds[0],
+    "2026-09-17T12:45:00.000Z",
+    "quarter-hour opportunity preserves exact interval start",
+  );
+
 }
