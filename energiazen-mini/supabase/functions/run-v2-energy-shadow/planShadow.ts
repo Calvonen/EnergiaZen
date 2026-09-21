@@ -49,6 +49,7 @@ const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
 export function runLiveEnergyPlanShadow({
   automaticMaxHeatingHours,
   constraints = { forbiddenHeatingHourIds: [], requiredHeatingHourIds: [] },
+  constraintsAreExactIntervals = false,
   energyCapacityKwh,
   inletBaselineC,
   maxTankTemperatureC,
@@ -59,6 +60,7 @@ export function runLiveEnergyPlanShadow({
 }: {
   automaticMaxHeatingHours: number;
   constraints?: V2HeatingConstraints;
+  constraintsAreExactIntervals?: boolean;
   energyCapacityKwh: number;
   inletBaselineC: number;
   maxTankTemperatureC: number;
@@ -100,11 +102,16 @@ export function runLiveEnergyPlanShadow({
   // prices, expand each locked/forbidden production hour to the quarter-hour
   // candidates that fall inside it. This preserves the authoritative active
   // block without changing the stored production contract.
-  const shadowConstraints = expandHourlyConstraints(
-    constraints,
-    horizon.segments.map((segment) => segment.id),
-    now,
-  );
+  const shadowConstraints = constraintsAreExactIntervals
+    ? validateExactIntervalConstraints(
+        constraints,
+        horizon.segments.map((segment) => segment.id),
+      )
+    : expandHourlyConstraints(
+        constraints,
+        horizon.segments.map((segment) => segment.id),
+        now,
+      );
   if (!shadowConstraints.ok) {
     return unavailable(shadowConstraints.reason, standingLossKwhPerHour);
   }
@@ -179,14 +186,16 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
         price.resolution_minutes === resolutionMinutes &&
         Date.parse(price.ends_at) - Date.parse(price.starts_at) === resolutionMinutes * 60_000)
       .sort((left, right) => Date.parse(left.starts_at) - Date.parse(right.starts_at));
-    if (!rows.length) return { rows, hasCurrent: false };
+    if (!rows.length) return { rows, hasCurrent: false, hasGap: false };
     const firstStart = Date.parse(rows[0].starts_at);
     const firstEnd = Date.parse(rows[0].ends_at);
-    if (!(firstStart <= nowMs && firstEnd > nowMs)) return { rows, hasCurrent: false };
+    if (!(firstStart <= nowMs && firstEnd > nowMs)) return { rows, hasCurrent: false, hasGap: false };
     for (let index = 1; index < rows.length; index += 1) {
-      if (Date.parse(rows[index - 1].ends_at) !== Date.parse(rows[index].starts_at)) return null;
+      if (Date.parse(rows[index - 1].ends_at) !== Date.parse(rows[index].starts_at)) {
+        return { rows, hasCurrent: true, hasGap: true };
+      }
     }
-    return { rows, hasCurrent: true };
+    return { rows, hasCurrent: true, hasGap: false };
   };
 
   const quarterHorizon = horizonForResolution(15);
@@ -194,8 +203,8 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
   // During rollout, only prefer quarters when they cover at least as far as the
   // complete hourly fallback. A partial quarter feed must not shorten safety
   // forecasting simply because one 15-minute row has arrived.
-  const quarterRows = quarterHorizon?.hasCurrent ? quarterHorizon.rows : null;
-  const hourlyRows = hourlyHorizon?.hasCurrent ? hourlyHorizon.rows : null;
+  const quarterRows = quarterHorizon?.hasCurrent && !quarterHorizon.hasGap ? quarterHorizon.rows : null;
+  const hourlyRows = hourlyHorizon?.hasCurrent && !hourlyHorizon.hasGap ? hourlyHorizon.rows : null;
   const ordered =
     quarterRows &&
       (!hourlyRows ||
@@ -205,6 +214,8 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
       : hourlyRows ?? quarterRows;
 
   if (!ordered?.length) {
+    const hasGap = Boolean(quarterHorizon?.hasGap || hourlyHorizon?.hasGap);
+    if (hasGap) return { ok: false, reason: "price_horizon_gap" };
     const hasUsableRows = Boolean(quarterHorizon?.rows.length || hourlyHorizon?.rows.length);
     return { ok: false, reason: hasUsableRows ? "current_price_hour_missing" : "no_price_hours_available" };
   }
@@ -256,6 +267,24 @@ function buildPriceHorizon({ now, prices, standingLossKwhPerHour, learnedDropPro
     horizonEndAt: ordered[ordered.length - 1].ends_at,
     maximumModeledLossKwhPerHour: round(maximumModeledLossKwhPerHour),
     segments,
+  };
+}
+
+function validateExactIntervalConstraints(
+  constraints: V2HeatingConstraints,
+  candidateIds: string[],
+):
+  | ({ ok: true } & V2HeatingConstraints)
+  | { ok: false; reason: "required_hour_missing" } {
+  const candidates = new Set(candidateIds);
+  if (constraints.requiredHeatingHourIds.some((id) => !candidates.has(id))) {
+    return { ok: false, reason: "required_hour_missing" };
+  }
+  return {
+    ok: true,
+    requiredHeatingHourIds: [...new Set(constraints.requiredHeatingHourIds)],
+    forbiddenHeatingHourIds: [...new Set(constraints.forbiddenHeatingHourIds)]
+      .filter((id) => candidates.has(id)),
   };
 }
 
