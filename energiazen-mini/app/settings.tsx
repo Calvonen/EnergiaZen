@@ -420,9 +420,9 @@ export default function SettingsScreen() {
                 {
                   accent: "#36f4d4",
                   description:
-                    `Pehmeä esilämmityssuositus. V2 voi nostaa energiavaraa tätä tasoa kohti, kun halpa tunti voidaan hyödyntää taloudellisesti. Tämä ei ole kova vähimmäisraja. Oletus on ${V2_RECOMMENDED_PREHEAT_PERCENT} %.`,
+                    `V2-optimoinnin tavoitetaso. Optimointi suunnittelee lämmityksen niin, että konservatiivinen energiavara saavuttaa tämän tason ennustehorisontin loppuun mennessä, samalla kun turvaraja toimii kovana alarajana. Oletus on ${V2_RECOMMENDED_PREHEAT_PERCENT} %.`,
                   key: "v2TargetReservePercent",
-                  label: "Esilämmityssuositus",
+                  label: "Tavoitevara",
                   secondaryValue: formatV2ReserveKwh(settings.v2TargetReservePercent),
                   value: `${settings.v2TargetReservePercent} %`,
                 },
