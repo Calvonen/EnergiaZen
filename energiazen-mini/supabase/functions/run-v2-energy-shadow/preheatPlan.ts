@@ -53,8 +53,7 @@ export function buildV2SoftPreheatPlan({
     return unavailable("invalid_max_preheat_hours");
   }
 
-  const maxHours = Math.floor(maxPreheatHours);
-  if (maxHours === 0) {
+  if (maxPreheatHours === 0) {
     return {
       available: true,
       expectedOvershootKwh: 0,
