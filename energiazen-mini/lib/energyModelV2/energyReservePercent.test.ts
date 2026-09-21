@@ -63,8 +63,8 @@ export function runEnergyReservePercentUnitTests() {
   assert(rounded.safetyPercent === 30, "safety rounds to nearest 5 percent");
 
   const ordered = normalizeV2ReservePercents({ targetPercent: 70, safetyPercent: 95 });
-  assert(ordered.targetPercent === 70, "configured target keeps the lower visible value");
-  assert(ordered.safetyPercent === 70, "shared normalization never lets safety exceed target");
+  assert(ordered.targetPercent === 95, "shared normalization raises target to preserve an inverted safety floor");
+  assert(ordered.safetyPercent === 95, "shared normalization never lowers the configured safety floor");
 
   const boundedLow = normalizeV2ReservePercents({ targetPercent: -20, safetyPercent: -10 });
   assert(boundedLow.targetPercent === 70, "preheat recommendation is clamped to the 70 percent UI minimum");
