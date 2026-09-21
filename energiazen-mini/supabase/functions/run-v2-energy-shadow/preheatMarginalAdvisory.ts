@@ -232,6 +232,7 @@ export function buildV2MarginalPreheatAdvisory({
       nowMs,
       pairCap,
       prices,
+      resolutionMinutes: horizon.resolutionMinutes,
     });
     if (safeMatching) {
       return {
@@ -256,6 +257,7 @@ export function buildV2MarginalPreheatAdvisory({
       maxPreheatHours: pairCap,
       preheatCandidateHourIds: candidatePreheatHourIds,
       prices,
+      resolutionMinutes: horizon.resolutionMinutes,
     });
     lastMarginalCost = fallback;
     if (!fallback.available) break;
@@ -288,6 +290,7 @@ function findBestSafeMatching({
   nowMs,
   pairCap,
   prices,
+  resolutionMinutes,
 }: {
   baselineSelectedHourIds: Set<string>;
   candidatePreheatHourIds: string[];
@@ -298,8 +301,13 @@ function findBestSafeMatching({
   nowMs: number;
   pairCap: number;
   prices: ShadowElectricityPrice[];
+  resolutionMinutes: 15 | 60 | null;
 }): SafeMatching | null {
-  const priceById = new Map(prices.map((price) => [price.starts_at, price]));
+  if (resolutionMinutes !== 15 && resolutionMinutes !== 60) return null;
+  const selectedFeedPrices = prices.filter(
+    (price) => price.resolution_minutes === resolutionMinutes,
+  );
+  const priceById = new Map(selectedFeedPrices.map((price) => [price.starts_at, price]));
   const candidates = [...candidatePreheatHourIds].sort(
     (left, right) => Date.parse(left) - Date.parse(right),
   );
@@ -331,6 +339,7 @@ function findBestSafeMatching({
       preheatCandidateHourIds: candidateHourIds,
       prices,
       requireExactPairCount: true,
+      resolutionMinutes,
     });
     if (!marginalCost.available || marginalCost.pairs.length !== pairCap) continue;
 
