@@ -251,6 +251,20 @@ Deno.serve(async (request) => {
       },
     });
 
+    // PR1 keeps production publication independently hourly even when shadow
+    // planning selects quarter intervals.
+    const hourlyPublicationPlan = runLiveEnergyPlanShadow({
+      automaticMaxHeatingHours,
+      constraints,
+      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      inletBaselineC,
+      maxTankTemperatureC,
+      now,
+      prices: publicationPrices,
+      reserve: result,
+      learnedDropProfile,
+    });
+
     const publicationSelectedHeatingHourIds = (() => {
       if (!preheatAdvisory.available || preheatAdvisory.reason !== "recommended") {
         return [...plan.selectedHeatingHourIds];
@@ -307,16 +321,17 @@ Deno.serve(async (request) => {
     // economic preheat advisory. Only baseline hours that the advisory actually
     // pairs for displacement may be removed; every unmatched safety hour is
     // preserved. Production cutover remains disabled here.
+    const hourlyPublicationSelectedHeatingHourIds = hourlyPublicationPlan.selectedHeatingHourIds;
     const publicationCandidate = captureV2PublicationCandidate(
-      publicationPlan,
-      publicationSelectedHeatingHourIds,
+      hourlyPublicationPlan,
+      hourlyPublicationSelectedHeatingHourIds,
     );
     const stagedPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2StagedPublicationEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: publicationPlan,
+      plan: hourlyPublicationPlan,
       publicationCandidate,
     });
     let stagedPublicationResult: string | null = null;
@@ -327,7 +342,7 @@ Deno.serve(async (request) => {
         draws,
         latestUsableReadingAt: latestPublishableReadingAt,
         now,
-        plan: publicationPlan,
+        plan: hourlyPublicationPlan,
         prices: publicationPrices,
         priceFetchEnd,
         readings,
@@ -368,10 +383,10 @@ Deno.serve(async (request) => {
 
     const cutoverPublicationReadiness = evaluateV2PublicationGuard({
       enabled: v2PublicationCutoverEnabled,
-      expectedSelectedHeatingHourIds: publicationSelectedHeatingHourIds,
+      expectedSelectedHeatingHourIds: hourlyPublicationSelectedHeatingHourIds,
       latestTankReadingAt: latestPublishableReadingAt,
       now,
-      plan: publicationPlan,
+      plan: hourlyPublicationPlan,
       publicationCandidate,
     });
 
