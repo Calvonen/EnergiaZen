@@ -319,37 +319,55 @@ function optimizeLargeIntervalHorizon({
         }
       }
       if (!replaceablePartial) {
-        // A feasible quarter schedule can require coordinated replacements
-        // where no single intermediate swap improves the first violation.
-        // Search a bounded pool around the selected/candidate frontier before
-        // abandoning the plan.
+        // A feasible quarter schedule can require several coordinated swaps
+        // where no smaller intermediate schedule improves the first violation.
+        // Enumerate bounded equal-size exchanges over a small frontier. The
+        // horizon remains polynomially bounded in practice while supporting
+        // the 3-for-3 cases that defeat greedy and pair recovery.
         const optionalPool = selectedOptional.slice(0, 6);
         const candidatePool = replacementCandidates.slice(0, 8);
         let coordinated: { remove: EnergyPlanCandidateSegment[]; add: EnergyPlanCandidateSegment[]; result: EvaluatedPlan } | null = null;
-        for (let a = 0; a < optionalPool.length && !coordinated; a += 1) {
-          for (let b = a + 1; b < optionalPool.length && !coordinated; b += 1) {
-            for (let x = 0; x < candidatePool.length && !coordinated; x += 1) {
-              for (let y = x + 1; y < candidatePool.length && !coordinated; y += 1) {
-                const remove = [optionalPool[a], optionalPool[b]];
-                const add = [candidatePool[x], candidatePool[y]];
-                const nextHours = selectedHours -
-                  remove.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0) +
-                  add.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
-                if (nextHours > maxSelectedHours + 1e-9) continue;
-                const trial = new Set(selected);
-                remove.forEach((segment) => trial.delete(segment.id));
-                add.forEach((segment) => trial.add(segment.id));
-                const trialResult = evaluateSelection({
-                  energyCapacityKwh,
-                  heaterPowerKw,
-                  initialRemainingEnergyKwh,
-                  initialUncertaintyKwh,
-                  ordered,
-                  selected: trial,
-                  thresholds,
-                });
-                evaluatedCombinationCount += 1;
-                if (trialResult.valid) coordinated = { remove, add, result: trialResult };
+        const combinations = <T,>(items: T[], count: number): T[][] => {
+          const out: T[][] = [];
+          const visit = (from: number, chosen: T[]) => {
+            if (chosen.length === count) {
+              out.push([...chosen]);
+              return;
+            }
+            for (let i = from; i <= items.length - (count - chosen.length); i += 1) {
+              chosen.push(items[i]);
+              visit(i + 1, chosen);
+              chosen.pop();
+            }
+          };
+          visit(0, []);
+          return out;
+        };
+        const maxExchange = Math.min(3, optionalPool.length, candidatePool.length);
+        for (let exchange = 2; exchange <= maxExchange && !coordinated; exchange += 1) {
+          for (const remove of combinations(optionalPool, exchange)) {
+            if (coordinated) break;
+            for (const add of combinations(candidatePool, exchange)) {
+              const nextHours = selectedHours -
+                remove.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0) +
+                add.reduce((sum, segment) => sum + clamp(segment.segmentHours, 0, 1), 0);
+              if (nextHours > maxSelectedHours + 1e-9) continue;
+              const trial = new Set(selected);
+              remove.forEach((segment) => trial.delete(segment.id));
+              add.forEach((segment) => trial.add(segment.id));
+              const trialResult = evaluateSelection({
+                energyCapacityKwh,
+                heaterPowerKw,
+                initialRemainingEnergyKwh,
+                initialUncertaintyKwh,
+                ordered,
+                selected: trial,
+                thresholds,
+              });
+              evaluatedCombinationCount += 1;
+              if (trialResult.valid) {
+                coordinated = { remove, add, result: trialResult };
+                break;
               }
             }
           }
