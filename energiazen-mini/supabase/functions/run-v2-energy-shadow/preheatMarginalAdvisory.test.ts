@@ -611,7 +611,7 @@ export function runV2MarginalPreheatAdvisoryUnitTests() {
     heaterPowerKw: 3,
     maxPreheatHours: 4,
     now: lateEveningNow,
-    prices: completeTomorrow("2026-09-17T21:00:00.000Z", 1),
+    prices: [hourly("2026-09-17T20:00:00.000Z", 30), ...completeTomorrow("2026-09-17T21:00:00.000Z", 1)],
     remainingEnergyKwh: 12,
     evaluateHourSelection: (selectedHourIds) => {
       tomorrowOnlyEvaluations += 1;
