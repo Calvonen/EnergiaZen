@@ -50,6 +50,21 @@ export function runProductionConstraintUnitTests() {
     "started automatic block must keep its end boundary after relay-off",
   );
 
+  const unknownLatestRelay = resolveV2HeatingConstraints({
+    now: new Date("2026-09-15T11:49:00.000Z"),
+    priceHourIds: ids,
+    readings: [
+      reading("2026-09-15T11:44:00.000Z", true),
+      { ...reading("2026-09-15T11:48:00.000Z", false), heating: null },
+    ],
+    storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "automatic" }],
+  });
+  assertArray(
+    unknownLatestRelay.requiredHeatingHourIds,
+    [],
+    "unknown latest relay state must not latch future automatic hours",
+  );
+
   const safetyOverride = resolveV2HeatingConstraints({
     now,
     priceHourIds: ids,
