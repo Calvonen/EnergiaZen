@@ -146,6 +146,7 @@ export function runV2PreheatPolicyUnitTests() {
   const quarterOpportunity = evaluateV2PreheatOpportunity({
     now,
     prices: [
+      quarterPrice("2026-09-17T12:30:00.000Z", 30),
       quarterPrice("2026-09-17T12:45:00.000Z", 5),
       quarterPrice("2026-09-17T13:00:00.000Z", 25),
       ...quarterTomorrow,
