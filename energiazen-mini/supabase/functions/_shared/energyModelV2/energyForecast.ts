@@ -117,27 +117,42 @@ export function forecastEnergyHorizon({
       remainingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
       0,
     );
-    const acceptedHeatingEnergyKwh = Number.isFinite(physicalCapacityKwh)
-      ? Math.min(
-          deliveredHeatingEnergyKwh,
-          Math.max(physicalCapacityKwh - energyAfterLossesKwh, 0),
-        )
-      : deliveredHeatingEnergyKwh;
     const conservativeEnergyBeforeKwh = Math.max(
       remainingEnergyKwh - uncertaintyKwh,
       0,
     );
+    const conservativeEnergyAfterLossesKwh = Math.max(
+      conservativeEnergyBeforeKwh - modeledHeatLossKwh - acceptedRemovalKwh,
+      0,
+    );
+    // The calibrated full level limits real heater headroom. Uncertainty is
+    // not empty tank volume: heater credit may first close the conservative
+    // gap, but it must never raise the nominal physical ledger above the
+    // calibrated-full reference.
+    const physicalHeadroomKwh = Number.isFinite(physicalCapacityKwh)
+      ? Math.max(physicalCapacityKwh - energyAfterLossesKwh, 0)
+      : deliveredHeatingEnergyKwh;
+    const uncertaintyHeadroomKwh = Math.max(
+      energyAfterLossesKwh - conservativeEnergyAfterLossesKwh,
+      0,
+    );
+    const acceptedHeatingEnergyKwh = Math.min(
+      deliveredHeatingEnergyKwh,
+      physicalHeadroomKwh + uncertaintyHeadroomKwh,
+    );
+    const nominalHeatingEnergyKwh = Math.min(
+      acceptedHeatingEnergyKwh,
+      physicalHeadroomKwh,
+    );
     const conservativeEnergyAfterKwh = Math.max(
-      conservativeEnergyBeforeKwh -
-        modeledHeatLossKwh -
-        acceptedRemovalKwh +
+      conservativeEnergyAfterLossesKwh +
         acceptedHeatingEnergyKwh -
         nonNegative(segment.additionalUncertaintyKwh ?? 0),
       0,
     );
-    remainingEnergyKwh = energyAfterLossesKwh + acceptedHeatingEnergyKwh;
-    // Calibration is only a ceiling for new heater credit. Existing energy
-    // above the reference remains intact until modeled losses/demand consume it.
+    remainingEnergyKwh = energyAfterLossesKwh + nominalHeatingEnergyKwh;
+    // Calibration is only a ceiling for new nominal heater credit. Existing
+    // energy above the reference remains intact until losses/demand consume it.
     uncertaintyKwh = Math.max(
       remainingEnergyKwh - conservativeEnergyAfterKwh,
       0,
