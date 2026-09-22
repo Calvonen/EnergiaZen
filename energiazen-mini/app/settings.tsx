@@ -169,7 +169,7 @@ const editableSettings: Record<EditableSettingKey, EditableSettingOption> = {
   },
   v2TargetReservePercent: {
     max: 95,
-    min: 70,
+    min: 60,
     step: 5,
     unit: "%",
   },
