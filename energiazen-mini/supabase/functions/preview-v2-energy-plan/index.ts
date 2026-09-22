@@ -191,11 +191,6 @@ Deno.serve(async (request) => {
       fullTankAverageTemperatureC,
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const physicalEnergyCapacityKwh = calculateV2EnergyCapacityKwh({
-      inletTemperatureC: inletBaselineC,
-      maxTankTemperatureC,
-      tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
-    });
     const hardTargetPercent = reservePercents.targetPercent;
     const safetyEnergyKwh =
       reserveCapacityKwh === null
@@ -234,7 +229,7 @@ Deno.serve(async (request) => {
     const baselinePlan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraints,
-      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -248,7 +243,7 @@ Deno.serve(async (request) => {
       conservativeEnergyKwh: reserve.conservativeEnergyKwh ?? Number.NaN,
       constraints,
       energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
-      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
       maxPreheatHours: automaticMaxHeatingHours,
       now,
@@ -265,7 +260,7 @@ Deno.serve(async (request) => {
               .map((price) => price.starts_at)
               .filter((hourId) => !selected.has(hourId)),
           },
-          energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+          energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
           inletBaselineC,
           maxTankTemperatureC,
           now,
@@ -289,7 +284,7 @@ Deno.serve(async (request) => {
           .map((price) => price.starts_at)
           .filter((hourId) => !selected.has(hourId)),
       },
-      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
