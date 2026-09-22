@@ -71,7 +71,10 @@ export function reserveKwhToPercent(kwh: number, capacityKwh: number) {
   if (!Number.isFinite(kwh) || !Number.isFinite(capacityKwh) || capacityKwh <= 0) {
     return null;
   }
-  return round(clamp(kwh / capacityKwh * 100, 0, 100));
+  // 100% is the calibrated practical-full reference, not a hard physical
+  // ceiling. Values above it are meaningful and indicate that recalibration
+  // may be appropriate.
+  return round(Math.max(kwh / capacityKwh * 100, 0));
 }
 
 export function normalizeV2ReservePercents({

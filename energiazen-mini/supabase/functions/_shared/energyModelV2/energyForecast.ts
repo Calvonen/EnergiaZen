@@ -63,12 +63,12 @@ export function forecastEnergyHorizon({
     initialEnergyKwh - nonNegative(initialUncertaintyKwh),
     0,
   );
-  let remainingEnergyKwh = Math.min(initialEnergyKwh, physicalCapacityKwh);
-  // If the nominal ledger exceeds physical capacity, clip its uncertainty by
-  // the same overflow. This preserves the already-computed conservative lower
-  // bound instead of effectively subtracting delivery uncertainty twice.
+  // The calibrated full level is a heater-credit ceiling, not a hard clamp on
+  // measured/stored energy. A tank may legitimately sit above its calibration
+  // reference; keep that excess visible so >100% can signal recalibration.
+  let remainingEnergyKwh = initialEnergyKwh;
   let uncertaintyKwh = Math.max(
-    remainingEnergyKwh - Math.min(initialConservativeEnergyKwh, physicalCapacityKwh),
+    remainingEnergyKwh - initialConservativeEnergyKwh,
     0,
   );
   let minimumConservativeEnergyKwh = Math.max(remainingEnergyKwh - uncertaintyKwh, 0);
@@ -89,10 +89,9 @@ export function forecastEnergyHorizon({
     // before any same-segment heater credit and evaluate the hard reserve at
     // this intermediate point so later heat cannot hide a temporary violation.
     if (frontLoadedDemandKwh > 0) {
-      remainingEnergyKwh = clamp(
+      remainingEnergyKwh = Math.max(
         remainingEnergyKwh - frontLoadedDemandKwh,
         0,
-        physicalCapacityKwh,
       );
       const preHeatingReserve = evaluateEnergyReserve(
         {
@@ -114,27 +113,46 @@ export function forecastEnergyHorizon({
       }
     }
 
-    const energyDeltaKwh =
-      deliveredHeatingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh;
+    const energyAfterLossesKwh = Math.max(
+      remainingEnergyKwh - modeledHeatLossKwh - acceptedRemovalKwh,
+      0,
+    );
     const conservativeEnergyBeforeKwh = Math.max(
       remainingEnergyKwh - uncertaintyKwh,
       0,
     );
-    const conservativeEnergyAfterKwh = clamp(
-      conservativeEnergyBeforeKwh +
-        energyDeltaKwh -
+    const conservativeEnergyAfterLossesKwh = Math.max(
+      conservativeEnergyBeforeKwh - modeledHeatLossKwh - acceptedRemovalKwh,
+      0,
+    );
+    // The calibrated full level limits real heater headroom. Uncertainty is
+    // not empty tank volume: heater credit may first close the conservative
+    // gap, but it must never raise the nominal physical ledger above the
+    // calibrated-full reference.
+    const physicalHeadroomKwh = Number.isFinite(physicalCapacityKwh)
+      ? Math.max(physicalCapacityKwh - energyAfterLossesKwh, 0)
+      : deliveredHeatingEnergyKwh;
+    const uncertaintyHeadroomKwh = Math.max(
+      energyAfterLossesKwh - conservativeEnergyAfterLossesKwh,
+      0,
+    );
+    const acceptedHeatingEnergyKwh = Math.min(
+      deliveredHeatingEnergyKwh,
+      physicalHeadroomKwh + uncertaintyHeadroomKwh,
+    );
+    const nominalHeatingEnergyKwh = Math.min(
+      acceptedHeatingEnergyKwh,
+      physicalHeadroomKwh,
+    );
+    const conservativeEnergyAfterKwh = Math.max(
+      conservativeEnergyAfterLossesKwh +
+        acceptedHeatingEnergyKwh -
         nonNegative(segment.additionalUncertaintyKwh ?? 0),
       0,
-      physicalCapacityKwh,
     );
-    remainingEnergyKwh = clamp(
-      remainingEnergyKwh + energyDeltaKwh,
-      0,
-      physicalCapacityKwh,
-    );
-    // Saturation clips the nominal and conservative endpoints independently.
-    // Deriving uncertainty from those bounded endpoints prevents heater energy
-    // above physical capacity from being counted as uncertainty a second time.
+    remainingEnergyKwh = energyAfterLossesKwh + nominalHeatingEnergyKwh;
+    // Calibration is only a ceiling for new nominal heater credit. Existing
+    // energy above the reference remains intact until losses/demand consume it.
     uncertaintyKwh = Math.max(
       remainingEnergyKwh - conservativeEnergyAfterKwh,
       0,
@@ -165,7 +183,7 @@ export function forecastEnergyHorizon({
       frontLoadedDemandKwh: round(frontLoadedDemandKwh),
       bandAfter: reserve.band,
       conservativeEnergyAfterKwh: round(reserve.conservativeEnergyKwh),
-      deliveredHeatingEnergyKwh: round(deliveredHeatingEnergyKwh),
+      deliveredHeatingEnergyKwh: round(acceptedHeatingEnergyKwh),
       heatingSelected: segment.heatingSelected,
       id: segment.id,
       modeledHeatLossKwh: round(modeledHeatLossKwh),

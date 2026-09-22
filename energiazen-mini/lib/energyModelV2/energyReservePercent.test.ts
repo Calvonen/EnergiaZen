@@ -52,6 +52,12 @@ export function runEnergyReservePercentUnitTests() {
   assertClose(reservePercentToKwh(90, capacity as number), 15.178, 0.001, "90 percent preheat recommendation converts to kWh");
   assertClose(reservePercentToKwh(30, capacity as number), 5.059, 0.001, "30 percent safety converts to kWh");
   assertClose(reserveKwhToPercent(12.648, capacity as number), 75, 0.01, "kWh converts back to percent");
+  assertClose(
+    reserveKwhToPercent((calibratedCapacity as number) * 1.04, calibratedCapacity as number),
+    104,
+    0.01,
+    "reserve above calibrated full remains visible above 100 percent",
+  );
   assert(recommendedV2PreheatPercent === 90, "default soft preheat recommendation is 90 percent");
 
   const defaults = normalizeV2ReservePercents({});

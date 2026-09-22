@@ -48,10 +48,6 @@ export type V2HomeReservePresentation = {
   latestUnavailableReason: string | null;
 };
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
 function isValidRecommendation(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -177,9 +173,12 @@ export function buildV2HomeReservePresentation(
     };
   }
 
-  const percent = clamp((energy / capacity) * 100, 0, 100);
-  const forecastMinimumPercent = clamp((forecastMinimumEnergy / capacity) * 100, 0, 100);
-  const forecastFinalPercent = clamp((forecastFinalEnergy / capacity) * 100, 0, 100);
+  // 100% is the calibrated practical-full reference. Do not hide energy
+  // above that anchor; >100% is useful feedback that the tank can be
+  // recalibrated to a newer practical-full state.
+  const percent = Math.max((energy / capacity) * 100, 0);
+  const forecastMinimumPercent = Math.max((forecastMinimumEnergy / capacity) * 100, 0);
+  const forecastFinalPercent = Math.max((forecastFinalEnergy / capacity) * 100, 0);
   const latestRunAtMs = Date.parse(reserve?.latest_run_at ?? "");
   const sourceAgeMinutes = Number.isFinite(runAtMs) ? Math.max(0, (nowMs - runAtMs) / 60_000) : null;
   const isFallback = reserve?.latest_run_available === false ||
