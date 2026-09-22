@@ -48,10 +48,6 @@ export type V2HomeReservePresentation = {
   latestUnavailableReason: string | null;
 };
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
 function isValidRecommendation(value: unknown): value is number {
   return (
     typeof value === "number" &&
