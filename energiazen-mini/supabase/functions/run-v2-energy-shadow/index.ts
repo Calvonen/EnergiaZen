@@ -168,11 +168,6 @@ Deno.serve(async (request) => {
       fullTankAverageTemperatureC: Number(settingsResult.data.full_tank_average_temperature),
       tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
     });
-    const physicalEnergyCapacityKwh = calculateV2EnergyCapacityKwh({
-      inletTemperatureC: inletBaselineC,
-      maxTankTemperatureC,
-      tankVolumeLiters: sensorGeometryV2.tank.nominalVolumeLiters,
-    });
     const targetEnergyKwh = reserveCapacityKwh === null ? null : reservePercentToKwh(hardTargetPercent, reserveCapacityKwh);
     const safetyEnergyKwh = reserveCapacityKwh === null ? null : reservePercentToKwh(reservePercents.safetyPercent, reserveCapacityKwh);
 
@@ -198,7 +193,7 @@ Deno.serve(async (request) => {
     const plan = runLiveEnergyPlanShadow({
       automaticMaxHeatingHours,
       constraints,
-      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
@@ -211,7 +206,7 @@ Deno.serve(async (request) => {
       conservativeEnergyKwh: result.conservativeEnergyKwh ?? Number.NaN,
       constraints,
       energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
-      physicalEnergyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      physicalEnergyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       heaterPowerKw: liveReserveShadowConfig.heaterPowerKw,
       maxPreheatHours: automaticMaxHeatingHours,
       now,
@@ -230,7 +225,7 @@ Deno.serve(async (request) => {
               .map((price) => price.starts_at)
               .filter((hourId) => !selected.has(hourId)),
           },
-          energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+          energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
           inletBaselineC,
           maxTankTemperatureC,
           now,
@@ -275,7 +270,7 @@ Deno.serve(async (request) => {
           .map((price) => price.starts_at)
           .filter((hourId) => !publicationHourIdSet.has(hourId)),
       },
-      energyCapacityKwh: physicalEnergyCapacityKwh ?? Number.NaN,
+      energyCapacityKwh: reserveCapacityKwh ?? Number.NaN,
       inletBaselineC,
       maxTankTemperatureC,
       now,
