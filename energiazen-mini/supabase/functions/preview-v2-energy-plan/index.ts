@@ -322,15 +322,7 @@ Deno.serve(async (request) => {
       energy_capacity_kwh: reserveCapacityKwh,
       current_percent:
         reserve.conservativeEnergyKwh !== null && reserveCapacityKwh
-          ? round(
-              Math.min(
-                Math.max(
-                  (reserve.conservativeEnergyKwh / reserveCapacityKwh) * 100,
-                  0,
-                ),
-                100,
-              ),
-            )
+          ? round(Math.max((reserve.conservativeEnergyKwh / reserveCapacityKwh) * 100, 0))
           : null,
       safety_reserve_percent: reservePercents.safetyPercent,
       recommended_preheat_percent: reservePercents.targetPercent,
@@ -342,27 +334,11 @@ Deno.serve(async (request) => {
       forecast_horizon_end_at: previewPlan.forecastHorizonEndAt,
       forecast_min_percent:
         previewPlan.minimumConservativeEnergyKwh !== null && reserveCapacityKwh
-          ? round(
-              Math.min(
-                Math.max(
-                  (previewPlan.minimumConservativeEnergyKwh / reserveCapacityKwh) * 100,
-                  0,
-                ),
-                100,
-              ),
-            )
+          ? round(Math.max((previewPlan.minimumConservativeEnergyKwh / reserveCapacityKwh) * 100, 0))
           : null,
       forecast_final_percent:
         previewPlan.finalConservativeEnergyKwh !== null && reserveCapacityKwh
-          ? round(
-              Math.min(
-                Math.max(
-                  (previewPlan.finalConservativeEnergyKwh / reserveCapacityKwh) * 100,
-                  0,
-                ),
-                100,
-              ),
-            )
+          ? round(Math.max((previewPlan.finalConservativeEnergyKwh / reserveCapacityKwh) * 100, 0))
           : null,
       strategy: preheatAdvisory.strategy,
       plan_valid: previewPlan.valid,
