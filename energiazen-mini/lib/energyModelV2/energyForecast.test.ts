@@ -183,8 +183,8 @@ export function runEnergyForecastUnitTests() {
 
   assertClose(
     calibratedFullCeiling.points[0].deliveredHeatingEnergyKwh,
-    0,
-    "heater credit is blocked while reserve is above calibrated full",
+    0.25,
+    "heater credit may close uncertainty but cannot create physical headroom above calibrated full",
   );
   assertClose(
     calibratedFullCeiling.points[0].remainingEnergyAfterKwh,
@@ -193,8 +193,8 @@ export function runEnergyForecastUnitTests() {
   );
   assertClose(
     calibratedFullCeiling.points[1].deliveredHeatingEnergyKwh,
-    0.5,
-    "only real room below calibrated full can receive heater credit",
+    1,
+    "loss-created physical room can receive heater credit up to calibrated full",
   );
   assertClose(
     calibratedFullCeiling.finalRemainingEnergyKwh,
