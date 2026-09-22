@@ -193,8 +193,8 @@ export function runEnergyForecastUnitTests() {
   );
   assertClose(
     calibratedFullCeiling.points[1].deliveredHeatingEnergyKwh,
-    1,
-    "loss-created physical room can receive heater credit up to calibrated full",
+    0.5,
+    "only physical room below calibrated full receives nominal heater credit",
   );
   assertClose(
     calibratedFullCeiling.finalRemainingEnergyKwh,
