@@ -15,7 +15,7 @@ export type EnergyReserveCapacityInput = {
 // compatibility. It is the planner's terminal reserve target; safetyPercent is
 // the hard floor and must not exceed the target.
 export const recommendedV2PreheatPercent = 90;
-export const minV2TargetReservePercent = 70;
+export const minV2TargetReservePercent = 60;
 export const maxV2TargetReservePercent = 95;
 export const minV2SafetyReservePercent = 0;
 export const maxV2SafetyReservePercent = 95;
