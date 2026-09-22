@@ -146,58 +146,60 @@ export function runEnergyForecastUnitTests() {
     thresholds: { safetyEnergyKwh: 5.5, targetEnergyKwh: 17.5 },
   });
 
-  assertClose(overCapacityLedger.finalRemainingEnergyKwh, 18.5, "nominal energy is capped at capacity");
+  assertClose(
+    overCapacityLedger.finalRemainingEnergyKwh,
+    19.5,
+    "energy above calibrated full remains visible",
+  );
   assertClose(
     overCapacityLedger.finalConservativeEnergyKwh,
     18,
-    "capacity clipping preserves the pre-clamp conservative lower bound",
-  );
-  assert(
-    overCapacityLedger.firstTargetMissAt === null,
-    "clipping delivery uncertainty does not invent a target miss",
+    "energy above calibration preserves the conservative lower bound",
   );
 
-  const segmentSaturation = forecastEnergyHorizon({
+  const calibratedFullCeiling = forecastEnergyHorizon({
     energyCapacityKwh: 10,
     heaterPowerKw: 3,
-    initialRemainingEnergyKwh: 9,
-    initialUncertaintyKwh: 1,
+    initialRemainingEnergyKwh: 10.5,
+    initialUncertaintyKwh: 0.25,
     segments: [
       {
         heatingSelected: true,
-        id: "saturating-heat",
+        id: "already-over-full",
         modeledHeatLossKwh: 0,
         segmentHours: 1,
         startDate: "2026-09-15T08:00:00.000Z",
       },
       {
-        heatingSelected: false,
-        id: "after-saturation-loss",
-        modeledHeatLossKwh: 0.6,
+        heatingSelected: true,
+        id: "room-after-loss",
+        modeledHeatLossKwh: 1,
         segmentHours: 1,
         startDate: "2026-09-15T09:00:00.000Z",
       },
     ],
-    thresholds: { safetyEnergyKwh: 3, targetEnergyKwh: 9.5 },
+    thresholds: { safetyEnergyKwh: 3, targetEnergyKwh: 8 },
   });
 
   assertClose(
-    segmentSaturation.points[0].conservativeEnergyAfterKwh,
-    10,
-    "segment saturation caps the conservative endpoint independently",
-  );
-  assertClose(
-    segmentSaturation.points[0].uncertaintyAfterKwh,
+    calibratedFullCeiling.points[0].deliveredHeatingEnergyKwh,
     0,
-    "energy above capacity is not retained as delivery uncertainty",
+    "heater credit is blocked while reserve is above calibrated full",
   );
   assertClose(
-    segmentSaturation.points[1].conservativeEnergyAfterKwh,
-    9.4,
-    "post-saturation losses start from capacity rather than an impossible surplus",
+    calibratedFullCeiling.points[0].remainingEnergyAfterKwh,
+    10.5,
+    "above-100 reserve is not clamped away",
   );
-  assert(
-    segmentSaturation.firstTargetMissAt === "2026-09-15T09:00:00.000Z",
-    "saturating heat satisfies the target immediately but cannot bank overflow against a later loss",
+  assertClose(
+    calibratedFullCeiling.points[1].deliveredHeatingEnergyKwh,
+    0.5,
+    "only real room below calibrated full can receive heater credit",
   );
+  assertClose(
+    calibratedFullCeiling.finalRemainingEnergyKwh,
+    10,
+    "heating cannot create theoretical headroom above calibrated full",
+  );
+
 }
