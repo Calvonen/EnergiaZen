@@ -724,17 +724,20 @@ export default function SettingsScreen() {
   };
 
   const confirmFullTankCalibration = (candidate: CalibrationCandidate) => {
-    const roundedAverageTemp = Math.round(candidate.weightedTemp);
+    // Keep the calibration anchor precise enough that the same sensor state
+    // maps back to 100%. Whole-degree rounding can immediately turn a freshly
+    // calibrated full tank into a value below or above 100%.
+    const roundedAverageTemp = Math.round(candidate.weightedTemp * 100) / 100;
     const currentAverageTemp = settings.fullTankAverageTemperature;
     const calibrationDetails = [
-      `Löytyi korkein V2-geometrialla painotettu lämpö: ${roundedAverageTemp} °C`,
+      `Löytyi korkein V2-geometrialla painotettu lämpö: ${roundedAverageTemp.toFixed(2).replace(".", ",")} °C`,
       `Nykyinen asetus: ${currentAverageTemp} °C`,
       `Ylä: ${Math.round(candidate.topTemp)} °C`,
       `Ala: ${Math.round(candidate.bottomTemp)} °C`,
       `Ajankohta: ${formatCalibrationTime(candidate.createdAt)}`,
     ];
 
-    if (Math.abs(roundedAverageTemp - currentAverageTemp) < 1) {
+    if (Math.abs(roundedAverageTemp - currentAverageTemp) < 0.01) {
       Alert.alert(
         "Kalibroi täysi varaaja",
         [
