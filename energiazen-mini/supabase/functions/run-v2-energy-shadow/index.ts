@@ -34,6 +34,9 @@ const replayWindowHours = 6;
 const priceFetchWindowHours = 48;
 const pageSize = 1000;
 const activeBlockSafetyTopTemperatureC = 50;
+// Keep the legacy post-heating boundary available for rollback, but let the
+// current V2 optimizer decide whether the immediately following hour is useful.
+const postHeatingBlockEnabled = false;
 const v2StagedPublicationEnabled = true;
 const helsinkiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit", month: "2-digit", timeZone: "Europe/Helsinki", year: "numeric",
@@ -188,6 +191,7 @@ Deno.serve(async (request) => {
       priceHourIds: prices.map((price) => price.starts_at),
       readings,
       safetyTopTemperatureC: activeBlockSafetyTopTemperatureC,
+      postHeatingBlockEnabled,
       storedPlans,
     });
     const plan = runLiveEnergyPlanShadow({
