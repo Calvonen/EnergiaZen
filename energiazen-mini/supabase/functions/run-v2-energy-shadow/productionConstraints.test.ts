@@ -29,6 +29,24 @@ export function runProductionConstraintUnitTests() {
   assertArray(active.requiredHeatingHourIds, ids.slice(0, 2), "active block must remain required");
   assertArray(active.forbiddenHeatingHourIds, [ids[2]], "first hour after active block must be forbidden");
 
+  const activeWithoutPostHeatingBlock = resolveV2HeatingConstraints({
+    now,
+    priceHourIds: ids,
+    readings: [reading("2026-09-15T11:22:00.000Z", true)],
+    storedPlans: [{ plan_date: "2026-09-15", planned_hours: [14, 15], mode: "automatic" }],
+    postHeatingBlockEnabled: false,
+  });
+  assertArray(
+    activeWithoutPostHeatingBlock.requiredHeatingHourIds,
+    ids.slice(0, 2),
+    "disabling post-heating block must preserve the already-started contiguous block",
+  );
+  assertArray(
+    activeWithoutPostHeatingBlock.forbiddenHeatingHourIds,
+    [],
+    "disabling post-heating block must leave the following hour available to the optimizer",
+  );
+
   const startedThenRelayOff = resolveV2HeatingConstraints({
     now: new Date("2026-09-15T11:49:00.000Z"),
     priceHourIds: ids,

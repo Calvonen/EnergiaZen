@@ -26,12 +26,14 @@ export function resolveV2HeatingConstraints({
   readings,
   storedPlans,
   safetyTopTemperatureC = 50,
+  postHeatingBlockEnabled = true,
 }: {
   now: Date;
   priceHourIds: string[];
   readings: ShadowTankReading[];
   storedPlans: ShadowStoredHeatingPlan[];
   safetyTopTemperatureC?: number;
+  postHeatingBlockEnabled?: boolean;
 }): V2HeatingConstraints {
   const empty = { forbiddenHeatingHourIds: [], requiredHeatingHourIds: [] };
   const latest = readings[readings.length - 1];
@@ -92,7 +94,7 @@ export function resolveV2HeatingConstraints({
     return {
       requiredHeatingHourIds,
       forbiddenHeatingHourIds:
-        nextId && Date.parse(nextId) === expectedStart ? [nextId] : [],
+        postHeatingBlockEnabled && nextId && Date.parse(nextId) === expectedStart ? [nextId] : [],
     };
   }
 
